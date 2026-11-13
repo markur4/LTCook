@@ -52,8 +52,10 @@ jobs:
         run: |
           uv sync --locked --all-groups
           uv build --no-sources --no-build-logs
-      - name: Lint Python sources
-        run: uv run --locked ruff check src tests
+      - name: Check Python formatting and lint
+        run: |
+          uv run --locked ruff format --check src tests
+          uv run --locked ruff check src tests
       - name: Type-check Python sources
         run: uv run --locked pyright
       - name: Run quick Python tests

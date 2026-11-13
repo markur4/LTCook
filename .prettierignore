@@ -1,0 +1,9 @@
+node_modules/
+.venv/
+build/
+dist/
+runtime/dist/
+teams/*/dist/
+src/ltcook_distr/artifacts/
+src/ltcook_distr/bundle/
+src/ltcook_distr/payload/app_lifecycle/_support/

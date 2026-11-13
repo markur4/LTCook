@@ -753,8 +753,19 @@ diagnose:
 #     print('Hello from python!')
 
 [group('Checks')]
+format:
+    {{quote(BUN)}} run format
+    uv run --locked --no-sync ruff format src tests
+
+[group('Checks')]
+format-check:
+    {{quote(BUN)}} run format:check
+    uv run --locked --no-sync ruff format --check src tests
+
+[group('Checks')]
 check:
     {{quote(BUN)}} run check
+    uv run --locked --no-sync ruff format --check src tests
     uv run --locked --no-sync ruff check src tests
     uv run --locked --no-sync pyright
 
