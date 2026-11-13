@@ -13,75 +13,56 @@ from apprc.distribution import (
     DistributionSpec,
     PayloadTree,
     generate_artifacts,
-    install_support_files,
     inspect_capabilities,
+    install_support_files,
     read_project_metadata,
     write_artifacts,
 )
 from apprc.distribution.models import ProjectMetadata
 
-APPRC_COMMIT = "785e0407136230a8a26eae273e6aed20d148e4cc"
-
 
 def _payload(root: Path, metadata: ProjectMetadata) -> PayloadTree:
-    return PayloadTree(
-        root / metadata.distribution_path / "payload",
-        tuple(
-            PurePosixPath("app_lifecycle") / name
-            for name in (
-                "__init__.py",
-                "install.py",
-                "uninstall.py",
-                "actions.py",
-            )
-        ),
+    modules = tuple(
+        PurePosixPath("app_lifecycle") / name
+        for name in (
+            "__init__.py",
+            "install.py",
+            "uninstall.py",
+            "actions.py",
+            "_common.py",
+            "prepare_runtime.py",
+            "prepare_services.py",
+            "linux.py",
+            "macos.py",
+            "windows.py",
+        )
     )
+    return PayloadTree(root / metadata.distribution_path / "payload", modules)
 
 
-def distribution_spec(
-    root: Path, metadata: ProjectMetadata
-) -> DistributionSpec:
+def distribution_spec(root: Path, metadata: ProjectMetadata) -> DistributionSpec:
     """Build the sole source of distribution identity and runtime inputs."""
     if metadata.identity.apprc_reference is None:
         raise ValueError("tool.apprc.distribution.apprc-reference is required")
-    settings = tomllib.loads(
-        (root / "pyproject.toml").read_text(encoding="utf-8")
-    )
+    settings = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     project = cast(dict[str, object], settings["project"])
     module_name, object_name = metadata.identity.apprc_reference.split(":", 1)
     declaration = getattr(importlib.import_module(module_name), object_name)
     capabilities = inspect_capabilities(declaration)
-    declared_dependencies = project.get("dependencies", [])
-    gui_declared = isinstance(declared_dependencies, list) and any(
-        isinstance(requirement, str) and "apprc-gui" in requirement
-        for requirement in declared_dependencies
-    )
-    runtime_overrides = (
-        f"apprc-core @ git+https://github.com/HisQu/apprc.git@{APPRC_COMMIT}",
-        "apprc @ git+https://github.com/HisQu/apprc.git"
-        f"@{APPRC_COMMIT}#subdirectory=src/apprc_dev/packaging/terminal",
-    )
-    if gui_declared:
-        runtime_overrides = (
-            *runtime_overrides,
-            "apprc-gui @ git+https://github.com/HisQu/apprc.git"
-            f"@{APPRC_COMMIT}#subdirectory=src/apprc_dev/packaging/gui",
-        )
     dependencies = project.get("dependencies", [])
     if not isinstance(dependencies, list) or not all(
         isinstance(requirement, str) for requirement in dependencies
     ):
-        raise ValueError(
-            "Project dependencies must be a list of requirement strings."
-        )
+        raise ValueError("Project dependencies must be a list of requirement strings.")
     urls = project.get("urls", {})
     repository = urls.get("Repository") if isinstance(urls, dict) else None
     return DistributionSpec(
         metadata=metadata,
         capabilities=capabilities,
+        source_mode="checkout",
+        payload_format="zipapp",
         repository_url=repository,
         runtime_requirements=tuple(dependencies),
-        runtime_overrides=runtime_overrides,
     )
 
 

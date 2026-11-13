@@ -16,8 +16,7 @@ import tomllib
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Protocol
-from typing import Literal
+from typing import Literal, Protocol
 
 from .release_manifest import (
     MANIFEST_NAME,
@@ -26,7 +25,6 @@ from .release_manifest import (
     manifest_bytes,
     validate_manifest,
 )
-
 from .release_notes import validate_tag_version
 
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
@@ -84,8 +82,7 @@ class GitHubApi:
         result = subprocess.run(
             command,
             input=data,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
         if result.returncode:
@@ -113,17 +110,13 @@ def _json(
     api: Api, method: str, endpoint: str, payload: object | None = None
 ) -> object:
     body = (
-        None
-        if payload is None
-        else json.dumps(payload, separators=(",", ":")).encode()
+        None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
     )
     raw = api.request(method, endpoint, data=body)
     try:
         return json.loads(raw) if raw else {}
     except json.JSONDecodeError as exc:
-        raise ReleaseError(
-            f"GitHub returned invalid JSON for {endpoint}"
-        ) from exc
+        raise ReleaseError(f"GitHub returned invalid JSON for {endpoint}") from exc
 
 
 def _repository(value: str) -> str:
@@ -162,9 +155,7 @@ def _tag_commit(api: Api, identity: Identity) -> str:
     obj = ref["object"]
     object_type, object_sha = obj.get("type"), obj.get("sha")
     if not isinstance(object_sha, str) or not SHA_RE.fullmatch(object_sha):
-        raise ReleaseError(
-            f"Remote tag {identity.tag} has an invalid object SHA."
-        )
+        raise ReleaseError(f"Remote tag {identity.tag} has an invalid object SHA.")
     if object_type == "tag":
         annotated = _json(
             api, "GET", _endpoint(identity.repository, f"git/tags/{object_sha}")
@@ -172,9 +163,7 @@ def _tag_commit(api: Api, identity: Identity) -> str:
         if not isinstance(annotated, dict) or not isinstance(
             annotated.get("object"), dict
         ):
-            raise ReleaseError(
-                f"Annotated tag {identity.tag} cannot be peeled."
-            )
+            raise ReleaseError(f"Annotated tag {identity.tag} cannot be peeled.")
         peeled = annotated["object"]
         if peeled.get("type") != "commit":
             raise ReleaseError(
@@ -184,9 +173,7 @@ def _tag_commit(api: Api, identity: Identity) -> str:
     elif object_type == "commit":
         commit = object_sha
     else:
-        raise ReleaseError(
-            f"Remote tag {identity.tag} does not identify a commit."
-        )
+        raise ReleaseError(f"Remote tag {identity.tag} does not identify a commit.")
     if not isinstance(commit, str) or not SHA_RE.fullmatch(commit):
         raise ReleaseError(
             f"Remote tag {identity.tag} has an invalid peeled commit SHA."
@@ -230,9 +217,7 @@ def _release(api: Api, identity: Identity) -> dict[str, object]:
                     "GitHub release listing contains an invalid identifier."
                 )
             if release_id in seen_ids:
-                raise ReleaseError(
-                    "GitHub release listing repeats an identifier."
-                )
+                raise ReleaseError("GitHub release listing repeats an identifier.")
             seen_ids.add(release_id)
             if tag_name == identity.tag:
                 if match is not None:
@@ -245,9 +230,7 @@ def _release(api: Api, identity: Identity) -> dict[str, object]:
             break
         page += 1
     if match is None:
-        raise _ReleaseNotFound(
-            f"No GitHub release exists for tag {identity.tag}."
-        )
+        raise _ReleaseNotFound(f"No GitHub release exists for tag {identity.tag}.")
     if match.get("tag_name") != identity.tag:
         raise ReleaseError(
             f"GitHub release does not identify exact tag {identity.tag}."
@@ -257,9 +240,7 @@ def _release(api: Api, identity: Identity) -> dict[str, object]:
             f"Release {identity.tag} is published; refusing to mutate it."
         )
     if match.get("target_commitish") != identity.commit:
-        raise ReleaseError(
-            f"Draft {identity.tag} has an inconsistent target commit."
-        )
+        raise ReleaseError(f"Draft {identity.tag} has an inconsistent target commit.")
     if match.get("prerelease") is not False:
         raise ReleaseError(f"Draft {identity.tag} is marked as a prerelease.")
     return match
@@ -322,9 +303,7 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _metadata_matches(
-    data: bytes, name: str, version: str, filename: str
-) -> None:
+def _metadata_matches(data: bytes, name: str, version: str, filename: str) -> None:
     from email.parser import BytesParser
 
     metadata = BytesParser().parsebytes(data)
@@ -357,14 +336,10 @@ def _validate_package(
                             f"Wheel {path.name} contains a symbolic link."
                         )
                     if item.filename in names:
-                        raise ReleaseError(
-                            f"Wheel {path.name} has duplicate members."
-                        )
+                        raise ReleaseError(f"Wheel {path.name} has duplicate members.")
                     names.add(item.filename)
                 metadata_names = [
-                    item
-                    for item in names
-                    if item.endswith(".dist-info/METADATA")
+                    item for item in names if item.endswith(".dist-info/METADATA")
                 ]
                 if len(metadata_names) != 1:
                     raise ReleaseError(
@@ -376,9 +351,7 @@ def _validate_package(
         except (OSError, zipfile.BadZipFile) as exc:
             raise ReleaseError(f"Invalid wheel {path.name}.") from exc
         normalized = _normalize(path.name[:-4])
-        if not normalized.startswith(
-            f"{_normalize(name)}_{_normalize(version)}_"
-        ):
+        if not normalized.startswith(f"{_normalize(name)}_{_normalize(version)}_"):
             raise ReleaseError(
                 f"Wheel filename {path.name} does not match project/version."
             )
@@ -443,9 +416,7 @@ def _check_asset_names(names: list[str]) -> tuple[str, ...]:
     try:
         return expected_asset_names(
             names,
-            payload_format="zipapp"
-            if "main-installer.pyz" in names
-            else "script",
+            payload_format="zipapp" if "main-installer.pyz" in names else "script",
         )
     except ValueError as error:
         raise ReleaseError(str(error)) from error
@@ -471,9 +442,7 @@ def _validate_local_files(
     for filename in names:
         path = directory / filename
         if not path.is_file() or path.is_symlink():
-            raise ReleaseError(
-                f"Release asset is not a regular file: {filename}."
-            )
+            raise ReleaseError(f"Release asset is not a regular file: {filename}.")
         payload[filename] = path.read_bytes()
     try:
         validate_manifest(
@@ -518,16 +487,12 @@ def stage(
     try:
         expected_asset_names(complete, payload_format=payload_format)
         if {entry.name for entry in directory.iterdir()} - set(complete):
-            raise ReleaseError(
-                "Staging directory contains unexpected release files."
-            )
+            raise ReleaseError("Staging directory contains unexpected release files.")
         payload = {}
         for filename in names:
             path = directory / filename
             if not path.is_file() or path.is_symlink():
-                raise ReleaseError(
-                    f"Release asset is not a regular file: {filename}."
-                )
+                raise ReleaseError(f"Release asset is not a regular file: {filename}.")
             payload[filename] = path.read_bytes()
         for filename, content in payload.items():
             if filename.endswith((".whl", ".tar.gz")):
@@ -547,9 +512,7 @@ def stage(
     return tuple(sorted(complete))
 
 
-def _asset_bytes(
-    api: Api, identity: Identity, asset: dict[str, object]
-) -> bytes:
+def _asset_bytes(api: Api, identity: Identity, asset: dict[str, object]) -> bytes:
     asset_id = asset.get("id")
     if not isinstance(asset_id, int) or isinstance(asset_id, bool):
         raise ReleaseError("GitHub asset has an invalid identifier.")
@@ -562,18 +525,14 @@ def _asset_bytes(
 
 def _delete_asset(api: Api, identity: Identity, asset_id: int) -> None:
     _tag_commit(api, identity)
-    api.request(
-        "DELETE", _endpoint(identity.repository, f"releases/assets/{asset_id}")
-    )
+    api.request("DELETE", _endpoint(identity.repository, f"releases/assets/{asset_id}"))
 
 
 def _upload(
     api: Api, identity: Identity, release_id: int, name: str, data: bytes
 ) -> None:
     _tag_commit(api, identity)
-    encoded = __import__("urllib.parse", fromlist=["quote"]).quote(
-        name, safe=""
-    )
+    encoded = __import__("urllib.parse", fromlist=["quote"]).quote(name, safe="")
     api.request(
         "POST",
         f"https://uploads.github.com/repos/{identity.repository}/releases/{release_id}/assets?name={encoded}",
@@ -619,9 +578,7 @@ def _sync_asset(
                 f"GitHub stored an incorrect digest for uploaded asset {name}."
             )
     elif _asset_bytes(api, identity, uploaded) != data:
-        raise ReleaseError(
-            f"GitHub stored different bytes for uploaded asset {name}."
-        )
+        raise ReleaseError(f"GitHub stored different bytes for uploaded asset {name}.")
 
 
 def _asset_id(asset: dict[str, object]) -> int:
@@ -660,13 +617,8 @@ def prepare(
             },
         )
         if not isinstance(release, dict):
-            raise ReleaseError(
-                "GitHub did not return the created draft release."
-            )
-    if (
-        release.get("draft") is not True
-        or release.get("tag_name") != identity.tag
-    ):
+            raise ReleaseError("GitHub did not return the created draft release.")
+    if release.get("draft") is not True or release.get("tag_name") != identity.tag:
         raise ReleaseError("Prepared release is not the requested tag's draft.")
     if release.get("target_commitish") != identity.commit:
         raise ReleaseError("Draft release has an inconsistent target commit.")
@@ -703,9 +655,7 @@ def finalize(api: Api, repository: str, tag: str, commit: str) -> None:
     assets = _assets(release)
     names = set(assets)
     _check_asset_names(list(names))
-    with tempfile.TemporaryDirectory(
-        prefix="buildben-release-finalize-"
-    ) as temp:
+    with tempfile.TemporaryDirectory(prefix="buildben-release-finalize-") as temp:
         directory = Path(temp)
         for name, asset in assets.items():
             asset_basename(name, "GitHub asset name")
@@ -750,9 +700,7 @@ def wait_ci(
             raise ReleaseError("GitHub returned malformed CI workflow runs.")
         candidates: list[dict[str, object]] = []
         for run in data["workflow_runs"]:
-            run_repository = (
-                run.get("repository") if isinstance(run, dict) else None
-            )
+            run_repository = run.get("repository") if isinstance(run, dict) else None
             head_repository = (
                 run.get("head_repository") if isinstance(run, dict) else None
             )
@@ -789,11 +737,7 @@ def wait_ci(
                 reverse=True,
             )
             value = candidates[0].get("id")
-            if (
-                isinstance(value, int)
-                and not isinstance(value, bool)
-                and value > 0
-            ):
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                 run_id = value
                 break
         sleep(min(interval, max(0.0, deadline - clock())))
@@ -839,14 +783,10 @@ def verify_pypi_packages(
         or release.get("tag_name") != tag
         or release.get("draft") is not False
     ):
-        raise ReleaseError(
-            "Manual publication requires the exact non-draft release."
-        )
+        raise ReleaseError("Manual publication requires the exact non-draft release.")
     assets = _assets(release)
     _check_asset_names(list(assets))
-    with tempfile.TemporaryDirectory(
-        prefix="buildben-pypi-contract-"
-    ) as temporary:
+    with tempfile.TemporaryDirectory(prefix="buildben-pypi-contract-") as temporary:
         root = Path(temporary)
         for name, asset in assets.items():
             (root / name).write_bytes(_asset_bytes(api, identity, asset))
@@ -854,9 +794,7 @@ def verify_pypi_packages(
             root, sorted(assets), identity, expected_version=identity.tag[1:]
         )
         packages = tuple(
-            sorted(
-                name for name in payload if name.endswith((".whl", ".tar.gz"))
-            )
+            sorted(name for name in payload if name.endswith((".whl", ".tar.gz")))
         )
         if {entry.name for entry in directory.iterdir()} != set(packages):
             raise ReleaseError(
@@ -953,9 +891,7 @@ def main(argv: list[str] | None = None, *, api: Api | None = None) -> int:
             release = prepare(
                 client, args.repository, args.tag, args.commit, args.notes
             )
-            print(
-                f"Prepared draft release {args.tag} (id {_release_id(release)})."
-            )
+            print(f"Prepared draft release {args.tag} (id {_release_id(release)}).")
         elif args.command == "upload":
             upload(
                 client,

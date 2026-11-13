@@ -96,9 +96,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Smoke-test an installed distribution."
     )
-    parser.add_argument(
-        "--expected-version", help="Optional version to require."
-    )
+    parser.add_argument("--expected-version", help="Optional version to require.")
     return parser.parse_args(argv)
 
 

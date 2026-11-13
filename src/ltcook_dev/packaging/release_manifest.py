@@ -60,9 +60,7 @@ def expected_asset_names(
     wheels = [name for name in names if name.endswith(".whl")]
     sdists = [name for name in names if name.endswith(".tar.gz")]
     if len(wheels) != 1 or len(sdists) != 1:
-        raise ValueError(
-            "Release requires exactly one wheel and one source archive."
-        )
+        raise ValueError("Release requires exactly one wheel and one source archive.")
     if payload_format not in {"script", "zipapp"}:
         raise ValueError("Unsupported release payload format.")
     support = SCRIPT_SUPPORT if payload_format == "script" else ZIPAPP_SUPPORT
@@ -83,22 +81,13 @@ def _unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return value
 
 
-def _identity(
-    app_id: str, distribution: str, version: str, commit: str
-) -> None:
+def _identity(app_id: str, distribution: str, version: str, commit: str) -> None:
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", app_id) is None:
         raise ValueError("Release app_id must be one safe component.")
     if re.fullmatch(r"[a-z0-9][a-z0-9-]*", distribution) is None:
-        raise ValueError(
-            "Release distribution must be normalized with hyphens."
-        )
-    if (
-        not version
-        or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit) is None
-    ):
-        raise ValueError(
-            "Release requires an explicit version and immutable commit."
-        )
+        raise ValueError("Release distribution must be normalized with hyphens.")
+    if not version or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit) is None:
+        raise ValueError("Release requires an explicit version and immutable commit.")
 
 
 def manifest_bytes(
@@ -123,9 +112,7 @@ def manifest_bytes(
     _identity(app_id, distribution, version, commit)
     if MANIFEST_NAME in payload:
         raise ValueError("Manifest must not include its own digest.")
-    expected_asset_names(
-        (*payload, MANIFEST_NAME), payload_format=payload_format
-    )
+    expected_asset_names((*payload, MANIFEST_NAME), payload_format=payload_format)
     value = {
         "schema_version": 1,
         "app_id": app_id,
@@ -208,7 +195,7 @@ def validate_manifest(
     )
     assets = value["assets"]
     if not isinstance(assets, list):
-        raise ValueError("Release manifest assets must be a list.")
+        raise TypeError("Release manifest assets must be a list.")
     seen: set[str] = set()
     for asset in assets:
         if not isinstance(asset, dict) or set(asset) != {
@@ -216,9 +203,7 @@ def validate_manifest(
             "size",
             "sha256",
         }:
-            raise ValueError(
-                "Release manifest asset has missing or unknown fields."
-            )
+            raise ValueError("Release manifest asset has missing or unknown fields.")
         name = asset["filename"]
         if not isinstance(name, str) or name == MANIFEST_NAME or name in seen:
             raise ValueError(
@@ -228,9 +213,7 @@ def validate_manifest(
         seen.add(name)
         if name not in payload:
             raise ValueError("Release manifest names a missing asset.")
-        if type(asset["size"]) is not int or asset["size"] != len(
-            payload[name]
-        ):
+        if type(asset["size"]) is not int or asset["size"] != len(payload[name]):
             raise ValueError(f"Release asset size does not match: {name}.")
         if (
             not isinstance(asset["sha256"], str)

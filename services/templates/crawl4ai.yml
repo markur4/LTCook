@@ -1,0 +1,20 @@
+app:
+  title: "LTCook Crawl4AI"
+  host: "0.0.0.0"
+  port: 11235
+  workers: 1
+  timeout_keep_alive: 300
+limits:
+  max_pages: 2
+  max_depth: 2
+security:
+  enabled: true
+  jwt_enabled: false
+  trusted_hosts: ["localhost", "127.0.0.1", "crawl4ai"]
+crawler:
+  pool:
+    max_pages: 2
+    idle_ttl_sec: 300
+observability:
+  prometheus:
+    enabled: false

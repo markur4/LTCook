@@ -1,0 +1,32 @@
+services:
+  searxng:
+    image: docker.io/searxng/searxng@sha256:0b104e2e1117b0ca83a36f3ac6ecda7d9ee948ccea6ead74750a03e1b856229a
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./templates/settings.yml:/etc/searxng/settings.yml:ro,Z
+    environment:
+      SEARXNG_SETTINGS_PATH: /etc/searxng/settings.yml
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?Configure SEARXNG_SECRET in AppRC}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+  crawl4ai:
+    image: docker.io/unclecode/crawl4ai@sha256:385042cba2a216c257ccb77b0135dec5228ee25bf675edbc7487eb155bd5e644
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11235:11235"
+    volumes:
+      - ./templates/crawl4ai.yml:/app/config.yml:ro,Z
+    environment:
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:?Configure CRAWL4AI_API_TOKEN in AppRC}
+      SECRET_KEY: ${CRAWL4AI_API_TOKEN:?Configure CRAWL4AI_API_TOKEN in AppRC}
+      CRAWL4AI_CONFIG_PATH: /app/config.yml
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:11235/health', timeout=3)\""]
+      interval: 20s
+      timeout: 5s
+      retries: 8

@@ -17,6 +17,7 @@ from apprc.definition.installation import (
     InstallationIdentity,
     InstallationInspection,
     InstallationPlacement,
+    InstallationSource,
 )
 from apprc.definition.paths import Layout, Paths, ResourceKind
 from apprc.distribution.models import (
@@ -33,11 +34,13 @@ from apprc.distribution.runtime import (
 )
 from apprc.distribution.runtime.backend import select_uv_target
 from apprc.user_files.installation.discovery import (
-    installation_directory,
     inspect_installation,
+    installation_directory,
     native_user_directories,
 )
 from apprc.user_files.installation.operations import plan_install
+
+from .actions import initialize_service_secrets, prepare_project
 
 
 def _bundle() -> dict[str, Any]:
@@ -45,9 +48,7 @@ def _bundle() -> dict[str, Any]:
     path = Path(sys.path[0]) / "apprc/distribution/runtime/bundle.json"
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or not isinstance(value.get("app_id"), str):
-        raise RuntimeError(
-            "Embedded application bundle has an unsupported schema."
-        )
+        raise TypeError("Embedded application bundle has an unsupported schema.")
     return value
 
 
@@ -131,19 +132,13 @@ def _placement(
                 raise ValueError(
                     "Choose --layout native or --layout single-root --root PATH."
                 )
-            native = native_user_directories(
-                bundle["app_id"], environment=environment
-            )
+            native = native_user_directories(bundle["app_id"], environment=environment)
             print("Native resource locations:")
             for name, path in zip(resource_kinds, native[:4], strict=True):
                 if enabled[name]:
                     actual = path / "appdata" if name == "appdata" else path
                     print(f"  {name}: {actual}")
-            choice = (
-                input("Placement: [n]ative or [s]ingle-root? ")
-                .strip()
-                .casefold()
-            )
+            choice = input("Placement: [n]ative or [s]ingle-root? ").strip().casefold()
             if choice not in {"n", "s"}:
                 raise ValueError("Choose native or single-root placement.")
             if choice == "s":
@@ -158,9 +153,7 @@ def _placement(
     roots: dict[ResourceKind, Path]
     if arguments.layout == "single-root":
         if arguments.root is None or not arguments.root.is_absolute():
-            raise ValueError(
-                "--root must be absolute with --layout single-root"
-            )
+            raise ValueError("--root must be absolute with --layout single-root")
         layout = Layout.single_root(arguments.root)
         roots = {name: arguments.root / name for name in resource_kinds}
         logs_dir = roots["state"] / "logs"
@@ -168,9 +161,7 @@ def _placement(
         if arguments.root is not None:
             raise ValueError("--root is allowed only with --layout single-root")
         layout = Layout.native()
-        native = native_user_directories(
-            bundle["app_id"], environment=environment
-        )
+        native = native_user_directories(bundle["app_id"], environment=environment)
         roots = dict(zip(resource_kinds, native[:4], strict=True))
         roots["appdata"] = roots["appdata"] / "appdata"
         logs_dir = native[4]
@@ -184,9 +175,7 @@ def _placement(
         cache_dir=paths["cache"],
         state_dir=paths["state"],
         logs_dir=logs_dir if enabled["state"] else None,
-        capabilities=frozenset(
-            name for name, value in enabled.items() if value
-        ),
+        capabilities=frozenset(name for name, value in enabled.items() if value),
     )
 
 
@@ -220,9 +209,7 @@ def _support_files(app_id: str) -> dict[PurePosixPath, bytes]:
                 )
             content = path.read_bytes()
             if hashlib.sha256(content).hexdigest() != output.digest:
-                raise RuntimeError(
-                    f"Saved installation support changed: {relative}."
-                )
+                raise RuntimeError(f"Saved installation support changed: {relative}.")
             files[relative] = content
         if files:
             return files
@@ -233,9 +220,7 @@ def _support_files(app_id: str) -> dict[PurePosixPath, bytes]:
     files: dict[PurePosixPath, bytes] = {}
     for path in sorted(root.rglob("*")):
         if path.is_symlink():
-            raise RuntimeError(
-                f"Generated lifecycle support contains a link: {path}."
-            )
+            raise RuntimeError(f"Generated lifecycle support contains a link: {path}.")
         if path.is_dir():
             continue
         if not path.is_file():
@@ -259,9 +244,7 @@ def _resume_pending_migration(
         return inspection
     operation = record.operation
     if operation is None or operation.kind != "migrate":
-        raise RuntimeError(
-            "Staged migration has no matching pending operation."
-        )
+        raise RuntimeError("Staged migration has no matching pending operation.")
     if inspection.revision is None:
         raise RuntimeError("Pending migration has no authority revision.")
     return resume_migration(
@@ -288,8 +271,7 @@ def _validate_recovery_target(
         raise RuntimeError("Saved repair requires installation authority.")
     target = (
         record.operation.intended
-        if record.operation is not None
-        and record.operation.intended is not None
+        if record.operation is not None and record.operation.intended is not None
         else record.current or record.last_successful
     )
     if target is None or target.identity != spec.metadata.identity:
@@ -298,12 +280,9 @@ def _validate_recovery_target(
         arguments.layout is not None
         and arguments.layout != target.placement.layout.mode
     ) or (
-        arguments.root is not None
-        and arguments.root != target.placement.layout.root
+        arguments.root is not None and arguments.root != target.placement.layout.root
     ):
-        raise RuntimeError(
-            "Recovery uses the recorded placement; it cannot relocate."
-        )
+        raise RuntimeError("Recovery uses the recorded placement; it cannot relocate.")
     entry = Path(sys.argv[0]).absolute()
     if (
         entry.name in {"main-installer.py", "main-installer.pyz"}
@@ -320,9 +299,36 @@ def _validate_recovery_target(
             or target.source.matches_observation(selection.source)
         )
     ):
-        raise RuntimeError(
-            "External repair source differs from captured authority."
-        )
+        raise RuntimeError("External repair source differs from captured authority.")
+
+
+def _select_package_wheel(
+    spec: DistributionSpec,
+    selection: SourceSelection,
+    wheel: Path,
+    digest: str,
+) -> SourceSelection:
+    """Select an exact local wheel through AppRC's noneditable source type."""
+    if selection.package_path is not None or selection.source.kind != "editable":
+        raise ValueError("A package wheel cannot be combined with another source.")
+    if (
+        not wheel.is_absolute()
+        or wheel.is_symlink()
+        or wheel.suffix != ".whl"
+        or not wheel.is_file()
+    ):
+        raise ValueError("The package wheel must be an existing absolute wheel file.")
+    return dataclasses.replace(
+        selection,
+        source=InstallationSource(
+            kind="wheel",
+            requirement=str(wheel),
+            version=spec.metadata.version,
+            digest=digest,
+            runtime_requirements=spec.runtime_requirements,
+            runtime_overrides=spec.runtime_overrides,
+        ),
+    )
 
 
 def main() -> int:
@@ -340,12 +346,37 @@ def main() -> int:
     parser.add_argument("--root", type=Path)
     parser.add_argument("--repair", action="store_true")
     parser.add_argument("--directory", type=Path)
+    parser.add_argument("--package-wheel", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--package-wheel-sha256", help=argparse.SUPPRESS)
     arguments = parser.parse_args(list(remaining))
     saved_entry = Path(sys.argv[0]).absolute()
     if saved_entry.name == "repair-installer.py":
         arguments.repair = True
         if arguments.directory is None:
             arguments.directory = saved_entry.parent
+    if (arguments.package_wheel is None) != (arguments.package_wheel_sha256 is None):
+        parser.error(
+            "--package-wheel and --package-wheel-sha256 must be supplied together."
+        )
+    if arguments.package_wheel is not None:
+        if selection.package_path is not None or selection.source.kind != "editable":
+            parser.error("--package-wheel cannot be combined with another source.")
+        wheel = arguments.package_wheel
+        if not wheel.is_absolute() or wheel.is_symlink():
+            parser.error("--package-wheel must be an absolute, unlinked path.")
+        try:
+            wheel = wheel.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            parser.error(f"--package-wheel is unavailable: {error}")
+        try:
+            selection = _select_package_wheel(
+                spec,
+                selection,
+                wheel,
+                cast(str, arguments.package_wheel_sha256),
+            )
+        except ValueError as error:
+            parser.error(str(error))
     if arguments.repair and arguments.directory is None:
         parser.error("--repair requires --directory PATH.")
     if arguments.repair and (
@@ -378,9 +409,7 @@ def main() -> int:
             )
         directory = expected_directory
     else:
-        directory = installation_directory(
-            bundle["app_id"], environment=environment
-        )
+        directory = installation_directory(bundle["app_id"], environment=environment)
     inspection = inspect_installation(directory, app_id=bundle["app_id"])
     recovering_migration = (
         inspection.record is not None
@@ -391,22 +420,16 @@ def main() -> int:
         _validate_recovery_target(spec, inspection, arguments, selection)
     inspection = _resume_pending_migration(inspection)
     saved = inspection.record
-    prior = (
-        saved.current or saved.last_successful if saved is not None else None
-    )
+    prior = saved.current or saved.last_successful if saved is not None else None
     if arguments.repair:
         if saved is None:
             raise RuntimeError("Saved repair requires installation authority.")
         if saved.app_id != bundle["app_id"]:
-            raise RuntimeError(
-                "Saved repair identity differs from this installer."
-            )
+            raise RuntimeError("Saved repair identity differs from this installer.")
         if saved.operation is not None:
             prior = saved.operation.intended
         if prior is None or prior.identity != spec.metadata.identity:
-            raise RuntimeError(
-                "Saved repair identity or snapshot is unavailable."
-            )
+            raise RuntimeError("Saved repair identity or snapshot is unavailable.")
         selection = dataclasses.replace(selection, source=prior.source)
         placement = prior.placement
         backend = prior.backend
@@ -422,9 +445,7 @@ def main() -> int:
         if prior is not None:
             backend = prior.backend
         else:
-            selected_uv = environment.get("APPRC_UV_PATH") or environment.get(
-                "UV"
-            )
+            selected_uv = environment.get("APPRC_UV_PATH") or environment.get("UV")
             if selected_uv:
                 uv = Path(selected_uv)
                 if not uv.is_absolute() or not uv.is_file():
@@ -437,9 +458,7 @@ def main() -> int:
             else:
                 executable = shutil.which("uv")
                 if executable is None:
-                    raise RuntimeError(
-                        "uv is required for managed installation"
-                    )
+                    raise RuntimeError("uv is required for managed installation")
                 backend = select_uv_target(
                     Path(executable),
                     environment=environment,
@@ -452,12 +471,13 @@ def main() -> int:
             backend,
             inspection=inspection,
         )
-    probe_path = (
-        Path(sys.path[0]) / "apprc/distribution/runtime/installed_probe.py"
-    )
+    probe_path = Path(sys.path[0]) / "apprc/distribution/runtime/installed_probe.py"
     with tempfile.TemporaryDirectory(prefix="apprc-source-") as staging:
         prepared = selection.prepare(Path(staging).resolve())
-        install_prepared_application(
+        if placement.appdata_dir is None:
+            raise RuntimeError("LTCook appdata is required for runtime preparation.")
+        prepare_project(prepared, placement.appdata_dir, environment)
+        installed = install_prepared_application(
             plan,
             prepared,
             environment=environment,
@@ -465,6 +485,13 @@ def main() -> int:
             support_files=_support_files(bundle["app_id"]),
             python_requirement=spec.metadata.python_requirement,
         )
+    record = installed.record
+    snapshot = record.current if record is not None else None
+    if installed.status != "ready" or snapshot is None:
+        raise RuntimeError(
+            "AppRC did not return a ready installation for secret setup."
+        )
+    initialize_service_secrets(snapshot.interpreter, environment)
     return 0
 
 

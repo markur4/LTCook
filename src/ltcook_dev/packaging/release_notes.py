@@ -37,9 +37,7 @@ def build_release_notes(
     :return: GitHub Release body.
     """
     validate_version(version)
-    validate_unreleased_section(
-        markdown, allow_entries=allow_unreleased_entries
-    )
+    validate_unreleased_section(markdown, allow_entries=allow_unreleased_entries)
     match = _release_heading(markdown, version)
     _validate_toc_entry(markdown, match)
     next_heading = re.search(r"^# \[", markdown[match.end() :], re.MULTILINE)
@@ -115,9 +113,7 @@ def latest_release_version(markdown: str) -> str:
     )
 
 
-def validate_unreleased_section(
-    markdown: str, *, allow_entries: bool = False
-) -> None:
+def validate_unreleased_section(markdown: str, *, allow_entries: bool = False) -> None:
     """Require one complete ``[Unreleased]`` template and, by default, no entries.
 
     :param markdown: Complete changelog text.
@@ -125,15 +121,11 @@ def validate_unreleased_section(
     :return: None.
     """
     if markdown.count(UNRELEASED_HEADING) != 1:
-        raise ValueError(
-            "Changelog must contain exactly one [Unreleased] heading."
-        )
+        raise ValueError("Changelog must contain exactly one [Unreleased] heading.")
     start = markdown.index(UNRELEASED_HEADING) + len(UNRELEASED_HEADING)
     next_release = RELEASE_HEADING_RE.search(markdown, start)
     if next_release is None:
-        raise ValueError(
-            "Changelog has no released section after [Unreleased]."
-        )
+        raise ValueError("Changelog has no released section after [Unreleased].")
     section = markdown[start : next_release.start()]
     for heading in UNRELEASED_SECTIONS:
         if section.count(heading) != 1:
@@ -143,9 +135,7 @@ def validate_unreleased_section(
             )
     if not allow_entries:
         content_lines = [
-            line
-            for line in _content_lines(section)
-            if not line.startswith("### ")
+            line for line in _content_lines(section) if not line.startswith("### ")
         ]
         if content_lines:
             raise ValueError(
@@ -261,13 +251,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=ROOT / "CHANGELOG.md",
         help="Changelog source path.",
     )
-    parser.add_argument(
-        "--output", type=Path, required=True, help="Destination path."
-    )
+    parser.add_argument("--output", type=Path, required=True, help="Destination path.")
     parser.add_argument("--tag", help="Optional pushed tag to validate.")
-    parser.add_argument(
-        "--project-version", help="Project version to validate."
-    )
+    parser.add_argument("--project-version", help="Project version to validate.")
     parser.add_argument(
         "--allow-unreleased-entries",
         action="store_true",
@@ -292,9 +278,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.changelog.read_text(encoding="utf-8"),
         args.version,
         args.output,
-        allow_unreleased_entries=(
-            args.allow_unreleased_entries and args.tag is None
-        ),
+        allow_unreleased_entries=(args.allow_unreleased_entries and args.tag is None),
     )
     return 0
 
