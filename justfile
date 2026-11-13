@@ -721,9 +721,15 @@ gitactions:
 
 # Example: just run -- python -m yourpkg --help
 # Runs your package’s CLI or module under the locked environment.
+[positional-arguments]
 run *CMD:
+    #!/usr/bin/env bash
+    set -euo pipefail
     just _check-uv
-    uv run --locked -- {{CMD}}
+    if [[ "${1-}" == "--" ]]; then
+        shift
+    fi
+    exec uv run --locked -- "$@"
 
 # Print effective dependency tree (won’t modify lock when used with --locked)
 tree:
