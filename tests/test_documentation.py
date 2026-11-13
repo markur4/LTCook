@@ -8,7 +8,6 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 FENCE = re.compile(r"^```[^\n]*\n.*?^```\s*$", re.MULTILINE | re.DOTALL)
@@ -74,18 +73,14 @@ def test_documentation_links(path: Path) -> None:
         parsed = urlsplit(href)
         if parsed.scheme or parsed.netloc:
             continue
-        target = (
-            (path.parent / unquote(parsed.path)).resolve()
-            if parsed.path
-            else path
-        )
+        target = (path.parent / unquote(parsed.path)).resolve() if parsed.path else path
         if not target.exists():
             errors.append(f"{path.relative_to(ROOT)}: missing {href}")
-        elif parsed.fragment and target.suffix == ".md":
-            if unquote(parsed.fragment) not in _markdown_anchors(
-                target.read_text(encoding="utf-8")
-            ):
-                errors.append(
-                    f"{path.relative_to(ROOT)}: missing anchor {href}"
-                )
+        elif (
+            parsed.fragment
+            and target.suffix == ".md"
+            and unquote(parsed.fragment)
+            not in _markdown_anchors(target.read_text(encoding="utf-8"))
+        ):
+            errors.append(f"{path.relative_to(ROOT)}: missing anchor {href}")
     assert not errors, "\n".join(errors)

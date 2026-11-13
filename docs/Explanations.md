@@ -14,9 +14,14 @@
   - [Configuration tools](#configuration-tools)
   - [Config bundle](#config-bundle)
   - [Package layout and dependencies](#package-layout-and-dependencies)
+- [Agent runtime](#agent-runtime)
+  - [Pi and Paseo](#pi-and-paseo)
+  - [Interchangeable teams](#interchangeable-teams)
+  - [Coordination and recovery](#coordination-and-recovery)
+  - [Web services and diagnostics](#web-services-and-diagnostics)
 
-This page describes the generated application's components. As the application
-grows, explain each new component and connect it to these existing components.
+This page explains LTCook's configuration boundary and its native agent runtime.
+Python resolves settings and launches components; TypeScript owns coordination.
 
 <br>
 
@@ -28,8 +33,8 @@ The command-line application is the Typer `app` in
 [`cli/app.py`](../src/ltcook/cli/app.py). Both the console script and
 `python -m ltcook` run this object. AppRC mounts configuration and
 installation-management commands in its Maintenance help panel. Installation
-show, doctor, migration dry-run, repair, and uninstall preview are available
-without resolving ordinary business settings.
+inspection, repair and uninstall preview remain available without starting
+agents or the web-service stack.
 
 The optional `launcher` uses one Textual event loop for management and the
 installed application's command. It captures layout, workspace, dotenv, and
@@ -48,11 +53,16 @@ installation receipt cannot enable an undeclared path.
 
 ## Config sections
 
-A config section is a class of related business settings. The starter's
-[`AppSettings`](../src/ltcook/config/sections/app.py) contains `message`.
-Each `rc.field(...)` connects a Python attribute to an environment key and
-supplies its default and help text. Add fields here or add a focused section
-when the application needs more business settings.
+Config sections group settings by component and environment prefix. The
+[`LtcookConfig`](../src/ltcook/config/bundle.py) exposes `app`, `runtime`,
+`paseo`, `pi`, provider sections (`anthropic`, `openai`, `google`, `openrouter`),
+`context7`, `agent_browser`, and web-service sections (`web`, `searxng`,
+`crawl4ai`, `podman`, `container`, `playwright`). The native environment names
+remain those declared by each field; for example, `LtcookConfig` exposes
+`config.crawl4ai.api_token` for `CRAWL4AI_API_TOKEN`, while the AppRC manager path
+for that setting is `web.crawl4ai.api_token`.
+TypeScript consumes the resolved startup configuration; it does not maintain a
+second set of configuration defaults.
 
 Field `title`, `explanation_short`, and `explanation_long` are reused by the
 config editor. Use `secret=True` for redacted display of sensitive values; this
@@ -65,9 +75,10 @@ calls `APP_RC.resolve()` and stores the result as `state.resolved`.
 `resolved.build(LtcookConfig)` converts those inputs into the application's
 [config bundle](#config-bundle).
 
-For example, `LTCOOK_MESSAGE=hello` supplies a string to the `message`
-field. Each result retains the values it read; a later environment change does
-not mutate an earlier result or `os.environ`.
+Each result retains the values it read; a later environment change does not
+mutate an earlier result or `os.environ`. A workspace-bound agent receives a
+fresh resolution for its own repository, not the root workspace's settings
+relabelled as shell exports. Deliberate shell exports still take precedence.
 The [application-code guide](How-To-User-Guides.md#use-settings-in-application-code)
 shows how to construct settings explicitly outside the CLI.
 
@@ -77,11 +88,25 @@ shows how to construct settings explicitly outside the CLI.
 
 ## Configuration files
 
-The starter reads configuration from Python defaults, packaged defaults, the
-optional saved user dotenv, explicit dotenv files, and process environment.
-Later values replace earlier values for the same key. The configuration
-declaration controls which files are loaded; installation management does not
-require them to be readable.
+Configuration layers include Python and packaged defaults, AppRC's saved user
+and secret env files, registered workspace settings and secrets, explicit
+dotenv files, and the captured process environment. Repository settings can
+override user defaults; shell exports retain AppRC's normal final precedence.
+LTCook does not take ownership of arbitrary `.env` files.
+
+`PASEO_HOME` must resolve inside the current deployment and outside its
+immutable `<deployment>/app` tree; `PI_CODING_AGENT_DIR` must resolve inside
+the deployment. An invalid path is rejected with its variable name. The Node
+host is the sole writer of `<PASEO_HOME>/config.json`; it uses the final
+AppRC-resolved `PASEO_HOME`, even when `LTCOOK_JS_ROOT` points to source.
+Python's `write-native-config` command writes only the private
+`<PI_CODING_AGENT_DIR>/web-search.json`; it does not write Paseo configuration.
+
+The mutable Paseo home defaults to `<LTCOOK_DEPLOYMENT_DIR>/paseo`, outside the
+replaceable `<LTCOOK_DEPLOYMENT_DIR>/app` bundle. Pi homes default to
+`<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi`. Secret fields are
+redacted in diagnostics; raw component environment mappings are launch inputs,
+not material to print in logs or the status panel.
 
 ## Filesystem capabilities
 
@@ -106,28 +131,36 @@ record and saved management support required for repair and recovery.
 inspects settings, and plans edits. It provides the same operations to Python
 code and the interactive interfaces. Creating a manager does not write.
 
-The config CLI is the `config` command group mounted on Typer. `config doctor`
-reports missing values and source problems; `config set` saves an override;
-`config edit` opens the Textual config editor. The
-[editing guide](How-To-User-Guides.md#initialize-saved-preferences) shows which file changes.
+The `config` group is mounted by AppRC. `config doctor` reports missing values
+and source problems, `config set` saves a scoped override, and `config edit` opens
+the Textual configuration editor. The
+[editing guide](How-To-User-Guides.md#initialize-saved-preferences) shows how to
+initialize and save settings.
 
-The config editor displays effective values and their contributing layers. It
-can edit saved user or workspace overrides, but it does not rewrite packaged
-defaults or the parent shell's environment. Opening it writes nothing; setup and
-save are explicit actions.
+The editor displays effective values and contributing layers. It can edit saved
+user or workspace overrides, but it does not rewrite packaged defaults or the
+parent shell's environment. Opening it writes nothing; setup and save are
+explicit actions.
 
 ## Config bundle
 
-A config bundle is a dataclass containing config sections. The starter's
-[`LtcookConfig`](../src/ltcook/config/bundle.py) contains one `app`
-section. Adding another section gives application code another named attribute
-without mixing unrelated settings into one class.
+A config bundle is a dataclass containing the registered config sections. The
+[`LtcookConfig`](../src/ltcook/config/bundle.py) keeps those sections together
+while preserving their separate declarations and paths. Typed bundle fields
+include `config.runtime.api_token`, `config.crawl4ai.api_token`, and
+`config.searxng.secret`. The corresponding AppRC setting paths are
+`runtime.api_token`, `web.crawl4ai.api_token`, and `web.searxng.secret`.
+For a programmatic user-scoped secret write, call
+`manager.plan_update(ENV_NAME, value, scope='user')` with
+`LTCOOK_API_TOKEN`, `CRAWL4AI_API_TOKEN`, or `SEARXNG_SECRET`, then save the
+plan with `manager.apply_edit(plan)`. Update keys are environment names, not
+dotted paths.
 
 `@APP_RC.bundle` registers the dataclass. `resolved.build(LtcookConfig)`
-constructs its registered section factories from the same `ResolvedConfig`.
-The [two-section example](EXAMPLES.md#several-config-sections) shows the
-additional class and bundle field. Importing the bundle imports its sections;
-there is no separate config catalog.
+constructs its section factories from the same `ResolvedConfig`. The
+[settings example](EXAMPLES.md#resolve-settings-in-python) reads the existing
+team setting without replacing application modules. Importing the bundle imports
+its sections; there is no separate config catalog.
 
 ## Package layout and dependencies
 
@@ -136,11 +169,62 @@ commands import the declaration and bundle directly from their modules. The
 [project paths](References.md#project-paths) table identifies each source file,
 and [Development](Development.md#repository-routing) explains where to add code.
 
-`[project].dependencies` declares `apprc-core` and terminal `apprc` from the same
-immutable Git commit, so ordinary pip installations use matching SDK sources.
-The local `dev` dependency group adds `apprc-core[distribution]` from that commit
-for artifact generation; the optional GUI group uses its matching `apprc-gui`
-source. Runtime overrides preserve those source identities in uv-managed
-installations. Source pins can include unreleased fixes and do not imply that
-the published SDK version has the same code. Buildben itself keeps
-`dependencies=[]` and does not depend on AppRC at runtime.
+The application uses matching published AppRC core and terminal packages.
+The local `dev` group supplies authoring and verification tools; it is not
+required by the installed application. Runtime and team JavaScript packages
+are separate workspaces, with versions resolved in the root dependency locks.
+
+<br>
+
+# Agent runtime
+
+## Pi and Paseo
+
+Paseo provides chat, connectivity and native agent identities. Its built-in Pi
+provider runs the agents; LTCook does not implement another provider or chat
+interface. Conversations remain in native Pi/Paseo storage.
+
+The Python launch helper builds the component's environment from AppRC.
+The TypeScript host connects native agent operations to the
+[`RuntimeController`](../runtime/src/core/runtime.ts), keeping settings
+resolution separate from scheduling and coordination.
+
+## Interchangeable teams
+
+Each team exports `apiVersion`, `definition`, `activateService` and
+`activateAgent` through the [public team API](../runtime/src/api/team.ts).
+The host loads the selected package and uses its definition, not fixed role
+names or a fixed member count.
+
+The [default team](../teams/default) declares six persistent members and four
+explicitly temporary specialist variants. The
+[minimal team](../teams/default-minimal) declares exactly Main and Adjutant.
+Main performs absent specialists' work in the minimal team; self-inspection is
+not labelled an independent review. Team selection stays fixed for a session.
+
+## Coordination and recovery
+
+One runtime owns the SQLite coordination database. It records only sessions,
+passes, tasks, assignments, reports, applicable reviews, scoped user approvals
+and bindings to native agent identities. It is not a configuration database or
+transcript mirror.
+
+Recovery reconciles saved bindings with native agents before dispatching work.
+An uncertain external outcome is a blocker, not permission to resend an action.
+A restart does not mint approvals or silently replace the selected team.
+LTCook does not migrate application data during installation or reinstallation.
+
+## Web services and diagnostics
+
+Pi plans research and writes cited answers. pi-web-access searches only through
+SearXNG and reads pages through HTTP or Crawl4AI. The selected routes do not
+permit unconfigured hosted fallbacks or hidden answer/summary model calls.
+Lookup and Explore are research instructions, not a separate state machine.
+
+One Podman Compose project contains separate SearXNG and Crawl4AI services.
+Prerequisites are prepared by explicit setup, never by status inspection or
+directory entry. Cleanup targets LTCook's project, not shared Podman resources.
+
+The Paseo status panel reads the selected runtime's members and assignments.
+Local logs and Perfetto traces correlate operations without recording secret
+values or full prompts/transcripts by default. There is no observability server.

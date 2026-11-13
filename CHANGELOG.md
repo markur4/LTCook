@@ -31,7 +31,6 @@ All notable changes to `ltcook` will be documented in this file.
 1. [Changelog](#changelog)
    1. [Table Of Contents](#table-of-contents)
 2. [\[Unreleased\]](#unreleased)
-3. [\[0.1.0\] - 2026-11-13](#010---2026-11-13)
 
 <br>
 
@@ -45,17 +44,23 @@ All notable changes to `ltcook` will be documented in this file.
 
 <br>
 
-### 💥 Breaking Change Summary
+### 💥 Breaking changes
 
 <br>
-- Breaking: Buildben no longer adopts or replaces legacy installer receipts.
-  Affected: Users with installations managed by the legacy Buildben installer.
-  Migration: Install from an explicitly selected source and manage resources
-  through current AppRC installation authority.
 
 ### ➕ Added
 
 <br>
+- Initialized a separate `ltcook` application from Buildben, preserving the
+  existing `lcook` application and its data.
+- Added a Bun development workspace and packaged Node runtime using Pi agents
+  and Paseo's native chat and plugin interfaces.
+- Added interchangeable default and two-agent teams, durable SQLite coordination,
+  scoped agent commands and restart recovery without LCook compatibility code.
+- Added AppRC-managed settings, private dependency preparation and scoped
+  installation, service and cleanup helpers.
+- Added pinned SearXNG/Crawl4AI Compose configuration, optional research tools,
+  redacted local diagnostics and fast isolated behavior checks.
 
 ### 💔 Changed
 
@@ -66,7 +71,6 @@ All notable changes to `ltcook` will be documented in this file.
 <br>
 
 ### 🗑️ Removed
-- Removed legacy receipt migration and replacement options from installer wrappers.
 
 <br>
 
@@ -74,17 +78,11 @@ All notable changes to `ltcook` will be documented in this file.
 
 <br>
 
+### 🔒 Security
+
+<br>
+
 ---
 
 <br>
 
-<!-- ======================================================== -->
-
-# [0.1.0] - 2026-11-13
-
-<br>
-
-### ➕ Added
-
-- Released `ltcook`.
-- Added src-layout packaging, Typer CLI entrypoints, AppRC configuration, documentation, tests, and maintainer tooling.
