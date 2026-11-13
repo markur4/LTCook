@@ -32,7 +32,7 @@
 | [package.json](../package.json) | Bun workspaces, root scripts, and JavaScript development dependencies. |
 | [src/ltcook/config/app.py](../src/ltcook/config/app.py) | The single AppRC application declaration. |
 | [src/ltcook/config/sections](../src/ltcook/config/sections) | Registered settings declarations grouped by owning component and environment prefix. |
-| [src/ltcook/config/native.py](../src/ltcook/config/native.py) | Writes only the private Pi `web-search.json` native configuration. |
+| [src/ltcook/config/pi_config.py](../src/ltcook/config/pi_config.py) | Writes only the private Pi `web-search.json` native configuration. |
 | [src/ltcook/launch.py](../src/ltcook/launch.py) | Workspace-bound settings resolution and native process launch commands. |
 | [runtime/src/api/team.ts](../runtime/src/api/team.ts) | Version 1 public team and runtime API. |
 | [runtime/src/services/controller.ts](../runtime/src/services/controller.ts) | Internal local Compose controller used by the service commands. |
@@ -166,7 +166,8 @@ and `playwright` sections; their declarations are in
 | Name | Meaning |
 | --- | --- |
 | `LTCOOK_TEAM` | `AppSettings.team`; defaults to `default-minimal`. |
-| `LTCOOK_SESSION` | Optional stable session identifier; defaults to a stable workspace-derived identifier. |
+| `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a chat; unset launches create a fresh Session. |
+| `LTCOOK_TEAM_INSTANCE_ID` | Runtime-derived identifier for the persistent TeamInstance shared by Sessions on the same selected team and canonical workspace. |
 | `LTCOOK_JS_ROOT` | JavaScript runtime root; source development uses the checkout root, and installed launches use `<deployment>/app`. |
 | `LTCOOK_WORKSPACE` | Workspace selection supplied by the launch environment. |
 | `LTCOOK_DEPLOYMENT_DIR` | LTCook-owned deployment location, normally beneath AppRC appdata. |
@@ -216,6 +217,7 @@ not encryption of the AppRC-managed files.
 | `<appdata>/deployment` | Private Node, production application, service receipts, and coordination database. |
 | `<LTCOOK_DEPLOYMENT_DIR>/paseo/config.json` | Paseo configuration written by the Node host; the home also holds mutable Paseo data. |
 | `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` | Workspace-specific Pi home; `write-native-config` writes its private `web-search.json`. |
+| `<PI_CODING_AGENT_DIR>/settings.json.ltcook-extensions.json` | Versioned exact ownership of LTCook-managed extension paths; independent extensions remain in `settings.json`. |
 
 `resolve_launch()` uses AppRC `current_env_mapping()` for each section, scoped
 to its target workspace and original shell provenance. Shell exports retain their
@@ -231,7 +233,7 @@ A team module exposes this `TeamPackage` shape from
 | --- | --- | --- |
 | `apiVersion` | `1` | Fresh public API version; no old-version adapters are provided. |
 | `definition` | `TeamDefinition` | Team identity, members, resources, and review policy. |
-| `activateService(runtime)` | function | Registers the selected team's workflow policy through public operations. |
+| `activateService(runtime)` | function | Activates the selected team through scoped coordination and agent operations; policy comes from `definition`. |
 | `activateAgent(runtime)` | function | Registers instructions for the selected member. |
 
 The runtime recognizes built-in module aliases `default` and `default-minimal`;
@@ -239,6 +241,37 @@ other selections are dynamically imported module specifiers that must be install
 and resolvable. Team packages access coordination through the scoped public API,
 not SQL or runtime internals. The full team uses independent review; minimal uses
 a self-review policy and must not be described as independent specialist review.
+The runtime uses one TypeBox command schema in
+[`runtime/src/api/commands.ts`](../runtime/src/api/commands.ts) for both HTTP
+validation and Pi tool parameters; command types are inferred from that schema.
+API version remains `1`, with a clean cutover rather than compatibility adapters.
+Teams can create explicit Passes with an optional Plan reference, create Tasks
+with or without a Pass, and record ordered Steps within Tasks. Pass completion
+requires completed Tasks and, when policy requires it, an accepted whole-Pass
+review for the current revision. Task reviews are not the review gate.
+
+The API command union uses a `type` discriminator. Each item below is a separate
+`RuntimeCommand`; HTTP sends that command inside `{"command": ...}`:
+
+- Create an explicit Pass with a Plan reference:
+  `{"type":"pass.create","title":"Runtime integration","planRef":"docs/plan.md"}`
+- Create a standalone Task by omitting `passId`:
+  `{"type":"task.create","title":"Update docs","description":"Clarify runtime behavior","acceptance":"Examples match the current API"}`
+- Add an ordered Step to an existing Task:
+  `{"type":"step.create","taskId":"task-1","title":"Update the guide","position":1}`
+- Review the whole Pass, not a Task:
+  `{"type":"review.create","passId":"pass-1","outcome":"accepted","summary":"Current Pass revision reviewed"}`
+
+HTTP validates commands with `RuntimeCommandSchema` through `isRuntimeCommand`;
+Pi tool parameters use the `RuntimeCommandInputSchema` wrapper. Both derive from
+the same schema rather than separate hand-maintained command representations.
+A Task may also set `passId`, `phase`, and the native-message reference
+`requestId`.
+
+Whole-Pass review approval is tied to the current Pass revision. Task, Step, and
+report changes increment that revision, so an older accepted review does not
+authorize the changed work. A completed Pass is final; start a new Pass for later
+work rather than reopening or mutating the completed Pass.
 
 ## Dependency and lock files
 
@@ -247,6 +280,7 @@ a self-review policy and must not be described as independent specialist review.
 | [`package-lock.json`](../package-lock.json) | Node/npm production lock used by private deployment preparation. |
 | [`bun.lock`](../bun.lock) | Generated Bun lock used with `bun install --frozen-lockfile` for development. |
 | [`uv.lock`](../uv.lock) | Python and authoring dependency lock. |
+| [`pylock.toml`](../pylock.toml) | Portable Python lock export generated by `just lock`; `uv.lock` remains authoritative for uv. |
 | [`pyproject.toml`](../pyproject.toml) | Python runtime requirements and local `dev` dependency group. |
 | [`.node-version`](../.node-version) | Exact Node version selected for deployment and development. |
 
@@ -274,14 +308,19 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just runtime test` | Run runtime unit/native/integration and team contract tests. |
 | `just runtime test-integration` | Run runtime integration tests. |
 | `just runtime build` | Compile the runtime, Pi extension, and Paseo plugin. |
-| `just check` | Run root Bun checks, Ruff, and Pyright. |
+| `just check` | Enforce Prettier/Ruff formatting, TypeScript types, Python lint, and Pyright. |
 | `just test` | Run Bun unit/native/integration and team contract tests, plus Python tests excluding `integration` and `system`. |
 | `just test-integration` | Run marked Python and TypeScript integration tests. |
 | `just test-system` | Run marked Python system tests. |
 | `just build` | Build/stage runtime, team, and service production assets and the Python wheel/source distribution. |
-| `just sync` | Install frozen JavaScript locks, build, stage assets, and sync Python dependencies. |
+| `just sync`, `just install` | Prepare the checkout-local uv environment, install frozen locks, build, stage assets, and install the Python application. |
 | `just make-artifacts` | Generate AppRC lifecycle support files. |
 | `just check-artifacts` | Check generated lifecycle files without rewriting. |
+| `just format`, `just format-check` | Format authored TypeScript/Python or check the existing formatting. |
+| `just run -- COMMAND ...` | Run a command with preserved arguments in the locked uv environment. |
+
+Additional restored scaffold environment, worktree, lock, and asset-only release
+recipes are described in [Development](Development.md#maintainer-environment).
 
 Bun is selected by the root/runtime `BUN` variable; set `BUN=/absolute/path/to/bun`
 if the executable is not available by its default name. Development uses `bun.lock`;

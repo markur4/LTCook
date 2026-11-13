@@ -16,6 +16,7 @@
   - [Package layout and dependencies](#package-layout-and-dependencies)
 - [Agent runtime](#agent-runtime)
   - [Pi and Paseo](#pi-and-paseo)
+  - [Domain terminology](#domain-terminology)
   - [Interchangeable teams](#interchangeable-teams)
   - [Coordination and recovery](#coordination-and-recovery)
   - [Web services and diagnostics](#web-services-and-diagnostics)
@@ -189,6 +190,37 @@ The TypeScript host connects native agent operations to the
 [`RuntimeController`](../runtime/src/core/runtime.ts), keeping settings
 resolution separate from scheduling and coordination.
 
+## Domain terminology
+
+These terms describe work, not ten separate workflow engines or database tables:
+
+| Term | Meaning |
+| --- | --- |
+| Project | A logical collection of declared roots, repositories, Sessions, and Goals. It is not a filesystem sandbox. |
+| Session | A user-facing chat with its own native conversation history and bindings. |
+| Request | The native initiating message for work; a Task may reference its native message identifier. |
+| Plan | A document specifying intended work and integration strategy. LTCook references it rather than storing a second plan history. |
+| Pass | An explicitly created integration unit with a title and an optional Plan reference. |
+| Task | An owned piece of work, optionally associated with a Pass; standalone Tasks do not create a Pass. |
+| Step | Persisted, ordered progress within a Task. |
+| Action | A tool call, message, or other action recorded by native Pi/Paseo history, not a second LTCook transcript. |
+| Goal | A completion criterion spanning Passes and potentially multiple Sessions. |
+| Phase | A classification of a Task or commit, not an independent scheduling engine. |
+
+A TeamInstance is the persistent logical team for one selected team and canonical
+workspace root. Several Sessions can share that TeamInstance while retaining
+separate native agents and histories. Starting a chat does not create a new
+logical workspace team, and sharing a team must not merge chats.
+
+Worktree isolation belongs to a Task or Pass when the work needs it; a Project
+does not imply one shared sandbox. Phase names classify work rather than
+orchestrate it: `implementation` changes intended behavior, `review` examines
+work, `verification` runs checks, and `integration` combines completed changes.
+The fix phases identify what prompted a correction: `review-fix` addresses review
+findings, `verification-fix` addresses check failures, `integration-fix` resolves
+integration differences, and `system-fix` addresses a failure observed in the
+running system. These classifications do not grant approval or bypass review.
+
 ## Interchangeable teams
 
 Each team exports `apiVersion`, `definition`, `activateService` and
@@ -200,19 +232,37 @@ The [default team](../teams/default) declares six persistent members and four
 explicitly temporary specialist variants. The
 [minimal team](../teams/default-minimal) declares exactly Main and Adjutant.
 Main performs absent specialists' work in the minimal team; self-inspection is
-not labelled an independent review. Team selection stays fixed for a session.
+not labelled an independent review. Team selection stays fixed for a runtime.
 
 ## Coordination and recovery
 
-One runtime owns the SQLite coordination database. It records only sessions,
-passes, tasks, assignments, reports, applicable reviews, scoped user approvals
-and bindings to native agent identities. It is not a configuration database or
-transcript mirror.
+One runtime owns the SQLite coordination database. It records TeamInstances,
+Sessions, explicit Passes, optionally Pass-associated Tasks, ordered Steps,
+assignments, reports, whole-Pass reviews, scoped approvals, and native bindings.
+It is not a configuration database or transcript mirror.
 
+A Pass can reference a Plan document through `planRef`. Completing a Task does
+not require a separate reviewer. Completing a Pass requires its Tasks completed
+and, where the team's review policy requires it, an accepted review of the current
+whole-Pass revision. Task, Step, and report changes invalidate an earlier revision's
+approval. The full team requires independent review; the minimal team permits
+self-review without representing it as independent.
+A completed Pass is final and cannot be reopened or mutated; create another
+explicit Pass for later work. Starting a new Pass does not itself create a Plan
+or Task.
+
+Only the requested Session is initialized. Concurrent requests for that Session
+share initialization, and a transient initialization failure can be retried.
 Recovery reconciles saved bindings with native agents before dispatching work.
 An uncertain external outcome is a blocker, not permission to resend an action.
 A restart does not mint approvals or silently replace the selected team.
-LTCook does not migrate application data during installation or reinstallation.
+
+On an existing unversioned coordination database, runtime startup applies a
+transactional SQLite migration tracked by `PRAGMA user_version`; it rejects
+databases from unsupported newer versions. Existing Session identifiers, native
+bindings, and records are preserved. Legacy Task reviews remain historical and
+are not whole-Pass approvals. This coordination migration is distinct from
+installation and does not import an independent `lcook` application's data.
 
 ## Web services and diagnostics
 
@@ -225,6 +275,9 @@ One Podman Compose project contains separate SearXNG and Crawl4AI services.
 Prerequisites are prepared by explicit setup, never by status inspection or
 directory entry. Cleanup targets LTCook's project, not shared Podman resources.
 
-The Paseo status panel reads the selected runtime's members and assignments.
+The Paseo status panel projects member names, Pass/Task titles, ordered Step
+progress, assignment status, and issue counts. Tasks without a Pass are labelled
+explicitly. Descriptions, acceptance text, reports, handoff content, and raw blocker
+messages stay out of that projection; native UI remains the history authority.
 Local logs and Perfetto traces correlate operations without recording secret
 values or full prompts/transcripts by default. There is no observability server.

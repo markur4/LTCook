@@ -70,7 +70,9 @@ containing only Main and Adjutant.
 
 This is a new application named `ltcook`, not an upgrade or compatibility layer
 for `lcook`. Its setup and cleanup must leave existing `lcook` installations,
-settings and data alone. There are no data migrations.
+settings, and data alone. LTCook performs its own versioned coordination-database
+migrations while preserving LTCook Session identities and native bindings; it does
+not import or migrate data from an independent `lcook` installation.
 
 
 #### Main dependencies:
@@ -304,6 +306,12 @@ of absent specialists and does not claim an independent review.
 ```shell
 LTCOOK_TEAM=default-minimal ltcook launch runtime --workspace .
 ```
+
+Each launch without `LTCOOK_SESSION` starts a fresh chat Session. To resume a
+chat, explicitly set `LTCOOK_SESSION` to its existing identifier with the same
+workspace and team. Multiple Sessions in one workspace share a logical persistent
+TeamInstance but keep separate native conversations and agent bindings. See
+[domain terminology](docs/Explanations.md#domain-terminology).
 
 The selected team stays fixed for a running session. Coordination uses the
 selected package's public API, not imports of the default team's internals.

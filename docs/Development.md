@@ -26,17 +26,42 @@ layout, packaging boundary, verification limits, and current release workflow.
 ## Maintainer environment
 
 Use Python 3.12+, Bun 1.4.4+, the Node version in `.node-version`, uv, and just.
-The root [sync recipe](../justfile) is the supported locked full setup:
+The root [sync recipe](../justfile) is the supported locked full setup. Create the
+checkout's virtual environment explicitly when selecting an interpreter:
 
 ```shell
+uv venv --python 3.12 .venv
 just sync
 ```
 
-It installs `package-lock.json`/Bun's `bun.lock`, builds TypeScript packages,
-stages production assets, then syncs Python dependencies from `uv.lock`. Root
-`package-lock.json` is used by installed production deployment; `bun.lock` is
-the generated Bun development lock. `uv.lock` locks Python and authoring tools.
+`just sync` also creates the environment when it is absent. It installs Bun's
+frozen `bun.lock`, builds the TypeScript packages, installs locked Python
+development groups without the project, stages production assets, then installs
+the Python application into that same environment. `UV_PROJECT_ENVIRONMENT`
+defaults to this checkout's `.venv`; set it explicitly for an isolated environment.
+Directory entry does not create or activate a virtual environment.
+
+Root `package-lock.json` is used by installed production deployment; `bun.lock`
+locks JavaScript development, and `uv.lock` locks Python and authoring tools.
+`just lock` also exports `pylock.toml`; this export does not replace `uv.lock`.
 Set `BUN` to an absolute Bun executable path if it is not on PATH.
+
+The restored scaffold recipes remain available alongside LTCook's runtime module:
+
+| Commands | Purpose |
+| --- | --- |
+| `just sync`, `just install` | Prepare the complete locked, asset-aware development environment. |
+| `just reset-venv`, `just py-switch VERSION` | Recreate the environment or select another Python interpreter, then run the full sync. |
+| `just lock`, `just upgrade`, `just upgrade-repos`, `just uprep` | Intentionally update locks or Git-based dependencies; upgrades run the full sync afterward. |
+| `just run -- COMMAND ...`, `just tree`, `just diagnose` | Run a command in the locked environment or inspect dependencies and interpreter state. |
+| `just worktree-create BRANCH DESTINATION BASE`, `just worktree-remove DESTINATION` | Prepare a separate locked checkout or remove an eligible, merged checkout. |
+| `just clean` | Remove build/cache artifacts, including pruning the global uv cache; it does not delete the environment or lockfiles. |
+| `just format`, `just format-check` | Format authored TypeScript with Prettier and Python with Ruff, or check without rewriting. |
+
+> [!WARNING]
+> `reset-venv`, `py-switch`, and `clean` change local environment or cache state.
+> Lock and upgrade recipes intentionally change dependency resolutions. These
+> commands are not part of an ordinary verification loop.
 
 Before using the default checkout workspace, register this repository once from
 its root: `uv run ltcook workspace add ltcook . --yes`. AppRC's workspace marker
@@ -114,11 +139,17 @@ agent loops.
 ## Verification
 
 Use the root quick checks described in
-[Contributing](../CONTRIBUTING.md#run-checks). `just check` performs Bun type
-checks, Ruff, and Pyright; `just test` runs Bun runtime/native/team contracts and
-Python tests excluding `integration` and `system`. `just runtime test` is the
-focused runtime/native/team contract subset. `just build` is a packaging action,
-not a routine test.
+[Contributing](../CONTRIBUTING.md#run-checks). `just check` performs Prettier and
+TypeScript checks, Ruff formatting/lint checks, and Pyright; `just test` runs Bun
+runtime/native/team contracts and Python tests excluding `integration` and
+`system`. `just runtime test` is the focused runtime/native/team contract subset.
+`just build` is a packaging action, not a routine test.
+
+Prettier is pinned as a development-only JavaScript dependency. Its commands cover
+authored runtime, team, and test TypeScript, excluding generated distributions.
+Python formatting uses the existing Ruff configuration and generated-path
+exclusions. Normal checks enforce both formats; `just format` applies them.
+
 
 For changed behavior, choose the narrow existing relevant test and report what
 it establishes. Unit/contract tests do not prove native installer behavior,
@@ -192,6 +223,16 @@ AppRC installer support, and a portable PyApp bundle of three adjacent assets:
 the project version. It uploads a workflow artifact but does not create a tag,
 publish a GitHub Release, or publish to PyPI. Do not infer a release or a
 completed installation from a successful asset build.
+
+The scaffold's local release commands are adapted to this asset-only policy.
+`just build-release-inputs` builds packages and notes; `just release-check`
+rehearses the local checks without uploading. `just release-prepare LEVEL` creates
+a local version commit and annotated tag. `just release-push TAG` explicitly
+pushes the prepared refs and dispatches the manual asset workflow, while
+`just release LEVEL` combines those two operations. None creates a GitHub Release
+or publishes to PyPI. These mutation and remote operations require separate
+authorization; they are not ordinary checks. The incompatible scaffold
+`publish-pypi` recipe is deliberately absent.
 
 The PyApp builder validates the wheel's name, project version, and SHA-256.
 AppRC selects the adjacent wheel as a noneditable local package; this portable

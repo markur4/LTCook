@@ -57,10 +57,11 @@ The workspace must already have the AppRC registration shown in the preceding ex
 LTCOOK_SESSION=project-work ltcook launch runtime --workspace /path/to/project
 ```
 
-When `LTCOOK_SESSION` is unset, the launcher derives a stable identifier from
-the workspace. Reopening with the same identifier, workspace, and team resumes
-that session. A persisted session cannot be switched to another team or
-workspace.
+When `LTCOOK_SESSION` is unset, each launch creates a fresh chat Session. To
+resume, explicitly reuse the same `LTCOOK_SESSION`, workspace, and selected
+team. A Session cannot silently switch its workspace or team. Multiple Sessions
+in one workspace share its logical TeamInstance, but retain separate native
+conversations and agent bindings.
 
 Only one TypeScript runtime owns a coordination database. A later launch command
 contacts the running runtime to open the workspace session instead of starting a

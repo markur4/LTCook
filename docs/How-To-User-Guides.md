@@ -204,11 +204,11 @@ Other values are dynamically imported JavaScript module specifiers; the module
 must already be resolvable in the deployment and export an `apiVersion: 1` team.
 Changing the setting does not install a module.
 
-The launcher derives a stable session identifier from the workspace when
-`LTCOOK_SESSION` is unset. Set `LTCOOK_SESSION` to choose a different stable
-identifier explicitly. Reusing the same identifier, workspace, and selected
-team opens the saved session; a session cannot silently change its workspace or
-team.
+When `LTCOOK_SESSION` is unset, each launch creates a fresh chat Session. Set
+`LTCOOK_SESSION` explicitly to resume that Session with the same workspace and
+selected team; a Session cannot silently switch either. Multiple Sessions in one
+workspace share a persistent TeamInstance, while their native conversations and
+agent bindings remain separate.
 
 Only one runtime owns a coordination database. A later `ltcook launch runtime`
 command contacts that runtime to open the requested workspace session rather

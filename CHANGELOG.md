@@ -47,6 +47,15 @@ All notable changes to `ltcook` will be documented in this file.
 ### 💥 Breaking changes
 
 <br>
+- Breaking: Unset `LTCOOK_SESSION` now starts a new chat instead of selecting a
+  workspace-derived Session. To resume, set `LTCOOK_SESSION` to an existing saved
+  identifier; existing IDs and native bindings are preserved by migration.
+- Breaking: Team command consumers must create Passes explicitly, handle optional
+  `Task.passId`, and submit `review.create` with `passId` instead of `reportId`.
+  Review now gates the current whole-Pass revision. Teams must remove
+  `workflows.register` calls and use `TeamDefinition` as the policy authority.
+- Breaking: Python callers must import `ltcook.config.pi_config` instead of
+  `ltcook.config.native`. The unused `ltcook.utils` scaffold exports are removed.
 
 ### ➕ Added
 
@@ -55,12 +64,24 @@ All notable changes to `ltcook` will be documented in this file.
   existing `lcook` application and its data.
 - Added a Bun development workspace and packaged Node runtime using Pi agents
   and Paseo's native chat and plugin interfaces.
-- Added interchangeable default and two-agent teams, durable SQLite coordination,
-  scoped agent commands and restart recovery without LCook compatibility code.
+- Added interchangeable default and two-agent teams, versioned SQLite coordination,
+  distinct workspace TeamInstances and chat Sessions, explicit Passes, standalone
+  Tasks, ordered Steps, whole-Pass review, scoped commands, and lazy restart
+  recovery without LCook compatibility code.
 - Added AppRC-managed settings, private dependency preparation and scoped
   installation, service and cleanup helpers.
 - Added pinned SearXNG/Crawl4AI Compose configuration, optional research tools,
   redacted local diagnostics and fast isolated behavior checks.
+- Added readable Pass/Task/member status and ordered Step progress in the native
+  Paseo panel while excluding private task, report, handoff, and blocker text.
+- Added exact LTCook-owned Pi extension reconciliation with preserved independent
+  extensions, one shared TypeBox command schema, and focused package validation
+  used by the installer builder and release tooling.
+- Restored Buildben scaffold development recipes with checkout-local uv
+  environments and LTCook's asset-aware setup. Release recipes retain asset-only
+  behavior and disabled PyPI publication.
+- Added pinned Prettier development formatting and Ruff format checks for authored
+  source, with generated AppRC assets excluded and marked generated.
 
 ### 💔 Changed
 
