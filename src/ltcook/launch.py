@@ -14,11 +14,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
+from uuid import uuid4
 
 import typer
 
 from ltcook.config.bundle import LtcookConfig
-from ltcook.config.native import resolve_config, write_pi_config
+from ltcook.config.pi_config import resolve_config, write_pi_config
 
 services_cli = typer.Typer(no_args_is_help=True)
 launch_cli = typer.Typer(no_args_is_help=True)
@@ -82,7 +83,7 @@ def resolve_launch(
         str(Path(workspace_root).resolve()).encode()
     ).hexdigest()[:24]
     if not environment.get("LTCOOK_SESSION"):
-        environment["LTCOOK_SESSION"] = f"workspace-{workspace_id}"
+        environment["LTCOOK_SESSION"] = f"session-{uuid4()}"
     if not environment.get("LTCOOK_DEPLOYMENT_DIR"):
         environment["LTCOOK_DEPLOYMENT_DIR"] = str(deployment)
     if not environment.get("LTCOOK_PYTHON"):
@@ -236,7 +237,7 @@ def _open_existing_runtime(
 
 @launch_cli.command("runtime")
 def runtime_command(workspace: Annotated[Path, typer.Option("--workspace")]) -> None:
-    """Open or reuse this workspace's session in the single LTCook runtime.
+    """Open a new chat, or resume the explicitly selected Session, in one runtime.
 
     :param workspace: Workspace root selected by the CLI caller.
     :return: None.

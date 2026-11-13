@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import io
 import json
 import re
 import subprocess
@@ -13,11 +12,11 @@ import sys
 import tempfile
 import time
 import tomllib
-import zipfile
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Literal, Protocol
 
+from .package_validation import validate_package
 from .release_manifest import (
     MANIFEST_NAME,
     asset_basename,
@@ -268,10 +267,6 @@ def _assets(release: dict[str, object]) -> dict[str, dict[str, object]]:
     return result
 
 
-def _normalize(value: str) -> str:
-    return re.sub(r"[-_.]+", "_", value).lower()
-
-
 def _project() -> tuple[str, str]:
     try:
         with Path("pyproject.toml").open("rb") as stream:
@@ -286,115 +281,8 @@ def _project() -> tuple[str, str]:
     return name, version
 
 
-def _safe_member(value: str) -> PurePosixPath:
-    path = PurePosixPath(value)
-    if (
-        not value
-        or path.is_absolute()
-        or "\\" in value
-        or ".." in path.parts
-        or re.match(r"^[A-Za-z]:", value)
-    ):
-        raise ReleaseError(f"Unsafe archive member: {value!r}.")
-    return path
-
-
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def _metadata_matches(data: bytes, name: str, version: str, filename: str) -> None:
-    from email.parser import BytesParser
-
-    metadata = BytesParser().parsebytes(data)
-    if (
-        _normalize(metadata.get("Name", "")) != _normalize(name)
-        or metadata.get("Version") != version
-    ):
-        raise ReleaseError(
-            f"Package metadata in {filename} does not match {name} {version}."
-        )
-
-
-def _validate_package(
-    path: Path, name: str, version: str, data: bytes | None = None
-) -> bytes:
-    if not path.is_file() or path.is_symlink():
-        raise ReleaseError(
-            f"Release asset {path.name} is missing or not a regular file."
-        )
-    data = path.read_bytes() if data is None else data
-    if path.name.endswith(".whl"):
-        try:
-            with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                names = set()
-                for item in archive.infolist():
-                    _safe_member(item.filename.rstrip("/"))
-                    mode = item.external_attr >> 16
-                    if mode & 0o170000 == 0o120000:
-                        raise ReleaseError(
-                            f"Wheel {path.name} contains a symbolic link."
-                        )
-                    if item.filename in names:
-                        raise ReleaseError(f"Wheel {path.name} has duplicate members.")
-                    names.add(item.filename)
-                metadata_names = [
-                    item for item in names if item.endswith(".dist-info/METADATA")
-                ]
-                if len(metadata_names) != 1:
-                    raise ReleaseError(
-                        f"Wheel {path.name} must contain one METADATA file."
-                    )
-                _metadata_matches(
-                    archive.read(metadata_names[0]), name, version, path.name
-                )
-        except (OSError, zipfile.BadZipFile) as exc:
-            raise ReleaseError(f"Invalid wheel {path.name}.") from exc
-        normalized = _normalize(path.name[:-4])
-        if not normalized.startswith(f"{_normalize(name)}_{_normalize(version)}_"):
-            raise ReleaseError(
-                f"Wheel filename {path.name} does not match project/version."
-            )
-    else:
-        import tarfile
-
-        stem = path.name.removesuffix(".tar.gz")
-        if not stem.endswith("-" + version) or _normalize(
-            stem[: -(len(version) + 1)]
-        ) != _normalize(name):
-            raise ReleaseError(
-                f"Source archive filename {path.name} does not match project/version."
-            )
-        try:
-            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
-                roots: set[str] = set()
-                metadata = []
-                for member in archive.getmembers():
-                    safe = _safe_member(member.name)
-                    roots.add(safe.parts[0])
-                    if (
-                        member.issym()
-                        or member.islnk()
-                        or not (member.isfile() or member.isdir())
-                    ):
-                        raise ReleaseError(
-                            f"Source archive {path.name} contains a link or special file."
-                        )
-                    if len(safe.parts) == 2 and safe.parts[1] == "PKG-INFO":
-                        stream = archive.extractfile(member)
-                        if stream is None:
-                            raise ReleaseError(
-                                f"Cannot read PKG-INFO from {path.name}."
-                            )
-                        metadata.append(stream.read())
-                if len(roots) != 1 or len(metadata) != 1:
-                    raise ReleaseError(
-                        f"Source archive {path.name} must have one root and one PKG-INFO."
-                    )
-                _metadata_matches(metadata[0], name, version, path.name)
-        except (OSError, tarfile.TarError) as exc:
-            raise ReleaseError(f"Invalid source archive {path.name}.") from exc
-    return data
 
 
 def _project_app_id(distribution: str) -> str:
@@ -456,7 +344,7 @@ def _validate_local_files(
         raise ReleaseError(str(error)) from error
     for filename, content in payload.items():
         if filename.endswith((".whl", ".tar.gz")):
-            _validate_package(directory / filename, name, version, content)
+            validate_package(directory / filename, name, version, content)
     return payload
 
 
@@ -496,7 +384,7 @@ def stage(
             payload[filename] = path.read_bytes()
         for filename, content in payload.items():
             if filename.endswith((".whl", ".tar.gz")):
-                _validate_package(directory / filename, name, version, content)
+                validate_package(directory / filename, name, version, content)
         content = manifest_bytes(
             payload,
             app_id=_project_app_id(name),
