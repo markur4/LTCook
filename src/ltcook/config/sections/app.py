@@ -1,31 +1,17 @@
-"""Application settings registered with AppRC for ltcook."""
+"""Session and installation declarations shared by every launch."""
 
-from __future__ import annotations
-
-# == 3rd Party ===============================
 import apprc as rc
 
-# == Internal ================================
 from ltcook.config.app import APP_RC
 
 
-@APP_RC.config(
-    "app",
-    prefix="LTCOOK_",
-    title="App",
-    rc_path=("app",),
-)
+@APP_RC.config("app", prefix="LTCOOK_", title="Application", rc_path=("app",))
 class AppSettings(rc.Config):
-    """Typed application settings loaded from AppRC-managed env layers."""
+    """Select a fixed team and the application-owned deployment."""
 
-    message: str = rc.field(
-        "LTCOOK_MESSAGE",
-        default="Hello from ltcook",
-        title="Example message",
-        explanation_short="Small editable example setting.",
-        explanation_long=(
-            "This field exists so a new scaffold immediately demonstrates "
-            "`ltcook config set app.message VALUE` and the Textual "
-            "config editor. Replace it with real application settings."
-        ),
-    )
+    team: str = rc.field("LTCOOK_TEAM", default="default-minimal")
+    session: str = rc.field("LTCOOK_SESSION", default="")
+    deployment: str = rc.field("LTCOOK_DEPLOYMENT_DIR", default="")
+    python: str = rc.field("LTCOOK_PYTHON", default="")
+    node_executable: str = rc.field("LTCOOK_NODE_EXECUTABLE", default="")
+    workspace: str = rc.field("LTCOOK_WORKSPACE", default="")
