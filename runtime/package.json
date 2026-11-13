@@ -1,0 +1,39 @@
+{
+  "name": "@ltcook/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./api": { "types": "./src/api/team.ts", "bun": "./src/api/team.ts", "default": "./dist/api/team.js" }
+  },
+  "files": ["dist", "src/paseo-plugin/paseo-plugin.json"],
+  "scripts": {
+    "dev": "uv run --locked --no-sync python -m ltcook_dev.runtime --root .. --bun \"$npm_execpath\" --",
+    "dev:watch": "uv run --locked --no-sync python -m ltcook_dev.runtime --root .. --watch --bun \"$npm_execpath\" --",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "\"$npm_execpath\" test ../tests/runtime/unit ../tests/runtime/native ../tests/runtime/integration",
+    "test:integration": "\"$npm_execpath\" test ../tests/runtime/integration",
+    "build": "\"$npm_execpath\" build src/api/team.ts --target=node --format=esm --outfile=dist/api/team.js && \"$npm_execpath\" build src/main.ts --target=node --format=esm --packages=external --outfile=dist/main.js && \"$npm_execpath\" build src/integrations/pi-extension.ts --target=node --format=esm --packages=external --outfile=dist/integrations/pi-extension.js && rm -rf dist/paseo-plugin && mkdir -p dist/paseo-plugin && cp -R src/paseo-plugin/. dist/paseo-plugin/"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@getpaseo/client": "0.15.4",
+    "@getpaseo/plugin": "0.15.4",
+    "@getpaseo/server": "0.15.4",
+    "@ltcook/team-default": "0.1.0",
+    "@ltcook/team-default-minimal": "0.1.0",
+    "@nicknisi/pi-codesearch": "0.3.4",
+    "libsql": "0.5.29",
+    "pi-agent-browser-native": "0.9.24",
+    "pi-web-access": "0.47.0",
+    "agent-browser": "0.43.0",
+    "react": "19.3.1",
+    "react-native": "0.86.3",
+    "typebox": "1.3.27",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "typescript": "7.0.2"
+  }
+}

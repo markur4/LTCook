@@ -2,117 +2,105 @@
 
 [Documentation](README.md) · [Explanations](Explanations.md) · [How-to user guides](How-To-User-Guides.md) · [References](References.md) · [Development](Development.md)
 
-- [Read saved settings in Python](#read-saved-settings-in-python)
-- [An invocation override](#an-invocation-override)
-- [Several config sections](#several-config-sections)
+- [Choose a bundled team and workspace](#choose-a-bundled-team-and-workspace)
+- [Resume a named session](#resume-a-named-session)
+- [Resolve settings in Python](#resolve-settings-in-python)
+- [Inspect launch environment carefully](#inspect-launch-environment-carefully)
 
-These examples start from the installed generated project. Each states the
-files it changes and the result to expect. Use a disposable checkout when
-trying examples that replace Python modules.
+Examples describe declared interfaces; they have not been run as part of this documentation pass. Runtime startup additionally requires an installed deployment and configured provider.
 
 <br>
 
-# Read saved settings in Python
+# Choose a bundled team and workspace
 
-Save this program as `read_settings.py` in the project root:
+From an installed environment, select a team for this process and launch it in
+a workspace directory:
 
-<!-- example-file: read_settings.py -->
+Before the first workspace-targeted command, register the repository with AppRC:
+
+```shell
+ltcook workspace add project-name /path/to/project --yes
+```
+
+```shell
+LTCOOK_TEAM=default-minimal ltcook launch runtime --workspace /path/to/project
+```
+
+`default-minimal` is the default and contains only Main and Adjutant. Select the
+full bundled team with `LTCOOK_TEAM=default`. The full team includes six persistent
+members and four explicitly temporary variants; a temporary member must be
+spawned explicitly before assignment. Team aliases resolve to the bundled modules.
+An installed third-party module can also be selected by its resolvable module
+specifier, provided it exports the fresh public `apiVersion: 1` contract.
+
+The shell override applies only to this command. Save a user selection through
+AppRC instead:
+
+```shell
+ltcook config setup --yes
+ltcook config set app.team default-minimal --scope user
+```
+
+See [choose a team and resume a session](How-To-User-Guides.md#select-a-team-and-resume-a-session)
+for session identity and workspace constraints.
+
+<br>
+
+# Resume a named session
+
+A session is bound to its selected team and workspace. Set `LTCOOK_SESSION` to
+choose an explicit identifier:
+
+The workspace must already have the AppRC registration shown in the preceding example.
+
+```shell
+LTCOOK_SESSION=project-work ltcook launch runtime --workspace /path/to/project
+```
+
+When `LTCOOK_SESSION` is unset, the launcher derives a stable identifier from
+the workspace. Reopening with the same identifier, workspace, and team resumes
+that session. A persisted session cannot be switched to another team or
+workspace.
+
+Only one TypeScript runtime owns a coordination database. A later launch command
+contacts the running runtime to open the workspace session instead of starting a
+second owner. If no owner is running, it starts a runtime for the selected team.
+
+<br>
+
+# Resolve settings in Python
+
+This complete program reads `AppSettings.team` from the settings available to the
+current process. Save it as `read_team.py` in the installed Python environment:
+
 ```python
 from ltcook.config.app import APP_RC
 from ltcook.config.bundle import LtcookConfig
 
 resolved = APP_RC.resolve()
 config = resolved.build(LtcookConfig)
-print(config.app.message)
+print(config.app.team)
 ```
 
-Run `ltcook config setup --yes` and then
-`ltcook config set app.message "My saved message" --scope user` before
-running `python read_settings.py`. It prints the effective setting. A process
-environment override such as `LTCOOK_MESSAGE` takes precedence without
-changing the saved dotenv. See
-[configuration layers](Explanations.md#configuration-files) and the
-[configuration editor guide](How-To-User-Guides.md#initialize-saved-preferences).
+The value defaults to `default-minimal`; `LTCOOK_TEAM` can override the saved
+user setting for this invocation. For actual runtime startup, prefer
+`ltcook launch runtime --workspace ROOT`: it resolves the target workspace and
+preserves original shell-variable provenance before passing the environment to
+native processes. See [workspace configuration](Explanations.md#configuration-files).
 
 <br>
 
-# An invocation override
+# Inspect launch environment carefully
 
-With saved preferences from [Read saved settings in Python](#read-saved-settings-in-python),
-run this command from the project root:
-
-```shell
-LTCOOK_MESSAGE="Only for this command" python read_settings.py
-```
-
-The process receives the environment override, so the program prints
-`Only for this command` instead of the saved value. The saved user dotenv is
-unchanged. See [configuration layer precedence](Explanations.md#configuration-files).
-
-<br>
-
-# Several config sections
-
-Start from an unchanged generated project. Add this complete file at
-`src/ltcook/config/sections/client.py`:
-
-<!-- example-file: src/ltcook/config/sections/client.py -->
-```python
-import apprc as rc
-
-from ltcook.config.app import APP_RC
-
-
-@APP_RC.config("client", prefix="LTCOOK_")
-class ClientSettings(rc.Config):
-    timeout: int = rc.field(
-        "LTCOOK_TIMEOUT",
-        default=30,
-        explanation_short="Seconds to wait for a server response.",
-    )
-```
-
-Replace `src/ltcook/config/bundle.py` with:
-
-
-
-<!-- example-file: src/ltcook/config/bundle.py -->
-```python
-from dataclasses import dataclass, field
-
-from ltcook.config.app import APP_RC
-from ltcook.config.sections.app import AppSettings
-from ltcook.config.sections.client import ClientSettings
-
-
-@APP_RC.bundle
-@dataclass(kw_only=True)
-class LtcookConfig:
-    app: AppSettings = field(default_factory=AppSettings)
-    client: ClientSettings = field(default_factory=ClientSettings)
-```
-
-Save this complete program as `read_sections.py` in the project root:
-
-<!-- example-file: read_sections.py -->
-```python
-from ltcook.config.app import APP_RC
-from ltcook.config.bundle import LtcookConfig
-
-resolved = APP_RC.resolve()
-config = resolved.build(LtcookConfig)
-print(config.app.message)
-print(config.client.timeout)
-```
-
-Run the new program with a process-local override:
+The internal diagnostic command returns the resolved workspace and the child
+process environment:
 
 ```shell
-LTCOOK_TIMEOUT=10 python read_sections.py
+python -m ltcook.launch environment --workspace /path/to/project
 ```
 
-The output uses the new `client.timeout` value while preserving the default
-when the variable is absent. The [config bundle](Explanations.md#config-bundle)
-passes both sections together. Extend `_config_show_payload` in
-`src/ltcook/cli/app.py` if the application should include `client` in its
-`config show --json` output too.
+Its JSON can contain credentials. Use it only in a private terminal when
+necessary; never attach its output to an issue or paste it into shared logs.
+The public command `ltcook config show --json` is the safer way to inspect
+application settings and paths. Neither command proves that external services
+are reachable or that a model request succeeds.

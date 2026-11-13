@@ -17,20 +17,17 @@ from apprc.distribution import (
     read_project_metadata,
     render_bootstraps,
 )
-from ltcook_distr.make_artifacts import distribution_spec
+
 from ltcook_dev.packaging import release_assets
+from ltcook_distr.make_artifacts import distribution_spec
 
 REPOSITORY = "markur4/ltcook"
 
 
-def _package_files(
-    directory: Path, project: str, version: str
-) -> tuple[Path, Path]:
+def _package_files(directory: Path, project: str, version: str) -> tuple[Path, Path]:
     """Select and validate the unique built wheel and source archive."""
     packages = tuple(
-        path
-        for path in directory.iterdir()
-        if path.name.endswith((".whl", ".tar.gz"))
+        path for path in directory.iterdir() if path.name.endswith((".whl", ".tar.gz"))
     )
     wheels = tuple(path for path in packages if path.name.endswith(".whl"))
     sdists = tuple(path for path in packages if path.name.endswith(".tar.gz"))
@@ -73,9 +70,7 @@ def _locked_runtime_requirements(root: Path) -> tuple[str, ...]:
         if line.strip() and not line.lstrip().startswith("#")
     )
     if any(requirement.startswith("-") for requirement in constraints):
-        raise ValueError(
-            "Locked runtime export contains unsupported pip options."
-        )
+        raise ValueError("Locked runtime export contains unsupported pip options.")
     return tuple(dict.fromkeys(constraints))
 
 
@@ -96,16 +91,12 @@ def stage_release(
     """
     root = root.resolve()
     if root != Path.cwd().resolve():
-        raise ValueError(
-            "Run release staging from the application repository root."
-        )
+        raise ValueError("Run release staging from the application repository root.")
     name, version = release_assets._project()
     if tag != f"v{version}":
         raise ValueError("Release tag does not match project metadata.")
     wheel, sdist = _package_files(root / "dist", name, version)
-    asset = (
-        f"https://github.com/{repository}/releases/download/{tag}/{sdist.name}"
-    )
+    asset = f"https://github.com/{repository}/releases/download/{tag}/{sdist.name}"
     digest = hashlib.sha256(sdist.read_bytes()).hexdigest()
     metadata = read_project_metadata(root)
     base_spec = distribution_spec(root, metadata)
@@ -136,15 +127,11 @@ def stage_release(
             "actions.py",
         )
     )
-    with tempfile.TemporaryDirectory(
-        prefix="app-release-payload-"
-    ) as temporary:
+    with tempfile.TemporaryDirectory(prefix="app-release-payload-") as temporary:
         staged_payload = Path(temporary) / "payload"
         shutil.copytree(payload_root, staged_payload)
         base_payload = PayloadTree(staged_payload, modules)
-        for relative, content in install_support_files(
-            spec, base_payload
-        ).items():
+        for relative, content in install_support_files(spec, base_payload).items():
             resource = PurePosixPath("app_lifecycle/_support") / relative
             destination = staged_payload.joinpath(*resource.parts)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -164,9 +151,7 @@ def stage_release(
     artifacts = (*render_bootstraps(spec), installer)
     payload_format = spec.payload_format
     payload_filename = (
-        "main-installer.pyz"
-        if payload_format == "zipapp"
-        else "main-installer.py"
+        "main-installer.pyz" if payload_format == "zipapp" else "main-installer.py"
     )
     installer_path = (
         metadata.distribution_path / "artifacts/installer" / payload_filename

@@ -1,14 +1,13 @@
-"""AppRC declaration shared by ltcook settings and commands."""
-
-from __future__ import annotations
+"""The single AppRC declaration for LTCook-owned configuration and paths."""
 
 import apprc as rc
 
 APP_RC = rc.AppRC(
     app_id="ltcook",
-    display_name="ltcook",
-    paths=rc.Paths(config=True, appdata=True),
+    display_name="LTCook",
+    command_name="ltcook",
     config_package="ltcook.config",
     user_dotenv=rc.UserDotenv(),
-    command_name="ltcook",
+    workspaces=rc.Workspaces(),
+    paths=rc.Paths(config=True, appdata=True, cache=True, state=True),
 )

@@ -7,13 +7,15 @@
   - [Command reference](#command-reference)
   - [Installer reference](#installer-reference)
   - [Uninstaller reference](#uninstaller-reference)
-- [Configuration and Python interfaces](#configuration-and-python-interfaces)
+  - [Installation placement](#installation-placement)
+  - [Lifecycle and deployment assets](#lifecycle-and-deployment-assets)
+- [Configuration and public interfaces](#configuration-and-public-interfaces)
   - [Environment variables](#environment-variables)
   - [Configuration files](#configuration-files)
-  - [Public interfaces](#public-interfaces)
+  - [Team API](#team-api)
 - [Development reference](#development-reference)
-  - [Dependency declarations](#dependency-declarations)
-  - [Figure visual tokens](#figure-visual-tokens)
+  - [Dependency and lock files](#dependency-and-lock-files)
+  - [Task commands](#task-commands)
 
 <br>
 
@@ -23,206 +25,276 @@
 
 | Path | Responsibility |
 | --- | --- |
-| [README.md](../README.md) | Installation and first use. |
-| [CHANGELOG.md](../CHANGELOG.md) | Release history and migration notes. |
-| [BACKLOG.md](../BACKLOG.md) | Actionable work deferred from a change. |
-| [AGENTS.md](../AGENTS.md) | Local coding and documentation rules. |
-| [pyproject.toml](../pyproject.toml) | Package metadata, dependencies, and tool settings. |
-| [justfile](../justfile) | Commands for [development and releases](Development.md#releases). |
-| [cli/app.py](../src/ltcook/cli/app.py) | The [command-line application](Explanations.md#command-line-application). |
-| [config/app.py](../src/ltcook/config/app.py) | The shared [AppRC](Explanations.md#apprc) declaration. |
-| [config/sections/app.py](../src/ltcook/config/sections/app.py) | The `AppSettings` [config section](Explanations.md#config-sections). |
-| [config/bundle.py](../src/ltcook/config/bundle.py) | The application's [config bundle](Explanations.md#config-bundle). |
-| [`ltcook_distr`](../src/ltcook_distr) | Authored lifecycle payload, generator, and SDK-produced management artifacts. |
-| `app-install.sh` / `app-install.cmd` | Root install wrappers for POSIX and Windows. |
-| `app-launch.sh` / `app-launch.cmd` | Root launch wrappers for POSIX and Windows. |
-| `app-uninstall.sh` / `app-uninstall.cmd` | Root uninstall wrappers for POSIX and Windows. |
-| [tests](../tests) | Automated checks. |
-| [examples](../examples) | Small user-facing programs, described in [Examples](EXAMPLES.md). |
-| [docs](.) | Documentation, following the [authoring rules](README.md#documentation-rules). |
+| [README.md](../README.md) | Project overview, installation entry points, and curated navigation. |
+| [justfile](../justfile) | Root environment, checks, build, and runtime module tasks. |
+| [runtime/justfile](../runtime/justfile) | Grouped TypeScript runtime development, check, test, and build tasks. |
+| [pyproject.toml](../pyproject.toml) | Python package metadata, AppRC integration, and development tools. |
+| [package.json](../package.json) | Bun workspaces, root scripts, and JavaScript development dependencies. |
+| [src/ltcook/config/app.py](../src/ltcook/config/app.py) | The single AppRC application declaration. |
+| [src/ltcook/config/sections](../src/ltcook/config/sections) | Registered settings declarations grouped by owning component and environment prefix. |
+| [src/ltcook/config/native.py](../src/ltcook/config/native.py) | Writes only the private Pi `web-search.json` native configuration. |
+| [src/ltcook/launch.py](../src/ltcook/launch.py) | Workspace-bound settings resolution and native process launch commands. |
+| [runtime/src/api/team.ts](../runtime/src/api/team.ts) | Version 1 public team and runtime API. |
+| [runtime/src/services/controller.ts](../runtime/src/services/controller.ts) | Internal local Compose controller used by the service commands. |
+| [teams](../teams) | Bundled team packages and Markdown resources. |
+| [services](../services) | Pinned Compose services and their non-secret configuration. |
+| [src/ltcook_distr/payload/app_lifecycle](../src/ltcook_distr/payload/app_lifecycle) | Authored installation, preparation, and maintenance behavior. |
+| [src/ltcook_dev/packaging](../src/ltcook_dev/packaging) | Authoring, asset staging, and PyApp build helpers. |
+| [src/ltcook_dev/runtime.py](../src/ltcook_dev/runtime.py) | Resolves workspace AppRC settings before starting Bun against checkout source. |
+| [tests](../tests) | Python and TypeScript quick, integration, and system tests. |
 
 ## Command reference
 
-Run these commands from the [installed application environment](How-To-User-Guides.md#install-from-a-checkout).
-Application resources use declared paths captured for the invocation; see
-[configuration files](#configuration-files).
+Use `ltcook --help` for AppRC's mounted configuration commands. These implemented
+commands provide launch operations and diagnostics:
 
 | Command | Result |
 | --- | --- |
-| `ltcook --help` | Show business commands and AppRC's Maintenance management panel without requiring business setup. |
+| `ltcook --help` | Show application and mounted AppRC command help. |
 | `ltcook version` | Print the installed package version. |
-| `ltcook launcher` | Open the optional single-event-loop installed launcher. |
-| `ltcook installation show [--json]` | Inspect installation authority without mutation. |
-| `ltcook installation doctor [--json]` | Diagnose installation state without resolving business settings. |
-| `ltcook installation migrate --dry-run` | Preview an explicit resource or layout migration without writes. |
-| `ltcook installation repair [--installer PATH]` | Repair the saved installation using explicit matching support. |
-| `ltcook installation uninstall --dry-run` | Preview the selected uninstall without mutation. |
-| `ltcook config show --json` | Print the application config payload from its captured runtime snapshot. |
-| `ltcook config edit` | Open the optional config editor. |
+| `ltcook diagnose --json` | Report package, interpreter, and AppRC paths without writing files. |
+| `ltcook config setup --yes` | Initialize declared configuration files; it does not install Node or prepare services. |
+| `ltcook config show --json` | Show app settings, paths, and selected workspace. |
+| `ltcook config paths --json` | Show declared AppRC paths. |
+| `ltcook config doctor --json` | Diagnose configuration without writing. |
+| `ltcook config edit` | Open the AppRC terminal configuration editor. |
+| `ltcook workspace add NAME ROOT --yes` | Register a repository with AppRC and create its workspace marker before workspace-targeted commands. |
+| `ltcook launch runtime --workspace ROOT` | Resolve settings for `ROOT`, then open its session in the local runtime or start the runtime when none is available. |
+| `ltcook launch write-native-config --workspace ROOT` | Write the private Pi `web-search.json` under `PI_CODING_AGENT_DIR`; the Paseo config is not written by this command. |
+| `ltcook services start [--workspace ROOT]` | Start the LTCook Compose project in local mode. |
+| `ltcook services stop [--workspace ROOT]` | Stop the SearXNG and Crawl4AI containers in local mode. |
+| `ltcook services status [--workspace ROOT]` | Show local Compose status or the configured remote-service mode. |
+| `ltcook services logs [--workspace ROOT]` | Show recent local service logs. |
+| `ltcook launcher` | Open the optional AppRC management launcher. |
+| `python -m ltcook.launch runtime --workspace ROOT` | Internal module entry point for the same runtime launch. |
+| `python -m ltcook.launch environment --workspace ROOT` | Emit raw workspace-specific child environment JSON; may contain secrets. |
+| `python -m ltcook.launch write-native-config --workspace ROOT` | Internal entry point for the private Pi-only `web-search.json` writer. |
 
-`config show --json` contains package/version, paths, workspace selection, and
-the current config payload. Missing business settings do not disable installation
-show, doctor, dry-run, or repair management.
+Every target passed with `--workspace` must already be registered with AppRC.
+Commands do not create workspace markers automatically. Register each repository
+once with `ltcook workspace add NAME ROOT --yes` before its first use.
+
+The launch command requires a prepared deployment and an AppRC runtime token.
+It opens a workspace in the current runtime when available, otherwise starts
+the runtime; startup automatically starts the Compose project in `local` mode.
+The service commands also use the internal
+[`ServiceController`](../runtime/src/services/controller.ts). In `direct` and
+`paseo-tunnel` modes, operate remote services on their host; local commands do
+not control them or verify their health. Successful startup is not a health
+check for the services or proof that live research works.
 
 ## Installer reference
 
-`src/ltcook_distr/make_artifacts.py` composes the authored lifecycle
-payload with AppRC's deterministic generator. Run `just make-artifacts` after
-editing it, and `just check-artifacts` to check tracked files without rewriting
-them. The application wheel excludes `ltcook_distr`; the source archive
-includes the generator, payload, generated artifacts, and six root wrappers.
+The PyApp launcher executes a generated standalone AppRC installer; AppRC's
+`uv tool` backend owns the installed Python application. The current manual
+release workflow builds Linux installer assets, but no LTCook release is
+published. For checkout installation, follow the
+[installation guide](How-To-User-Guides.md#install-from-a-checkout). Do not treat
+an installer asset build as a completed installation or a release.
 
-| Path | Purpose |
-| --- | --- |
-| `app-install.sh`, `app-install.cmd` | Install a checkout or selected release source. |
-| `app-launch.sh`, `app-launch.cmd` | Launch the recorded installed command without environment recreation. |
-| `app-uninstall.sh`, `app-uninstall.cmd` | Invoke the saved authored uninstallation procedure. |
-| `src/ltcook_distr/payload/app_lifecycle/install.py` | Repository-owned source acquisition and installation composition. |
-| `src/ltcook_distr/payload/app_lifecycle/uninstall.py` | Repository-owned uninstall preview and handoff composition. |
-| `src/ltcook_distr/artifacts/` | SDK-generated checkout payload; PowerShell remains under this tree. |
+The portable PyApp bundle contains three adjacent assets: `ltcook-install`
+(`ltcook-install.exe` on native Windows), `main-installer.pyz`, and the canonical
+LTCook wheel matching the project version. Keep all three together and preserve
+the exact `.pyz` filename. The installer validates and selects the wheel for a
+noneditable AppRC install; it needs no checkout or source download.
 
-The default source is the current checkout when a local wrapper is used and the
-published release source when a release wrapper is used. `--version X.Y.Z`
-selects one published release. `--main` resolves remote `main` once to a full
-commit identity. `--github-client gh` selects authenticated GitHub CLI transport;
-it does not change source selection. For declared resource capabilities,
-choose `--layout native` or `--layout single-root --root ABSOLUTE_PATH`. A
-reinstall reuses saved absolute resource paths unless layout is explicitly
-overridden.
-
-An operating-system temporary directory may itself be a platform alias. The
-installer resolves its private staging directory and read-only bootstrap package
-transport paths before AppRC validation. Source identity and digest checks stay
-unchanged; this does not allow symlinks in installation metadata or managed
-application-resource paths.
-
-Release preparation uses `just check-artifacts`, builds one validated wheel
-and sdist, then runs `just stage-release-assets TAG FULL_COMMIT`. The helper
-stages only the exact package pair and SDK-generated script entries in
-`release/assets` and delegates manifest creation to the strict release asset
-contract. Package builds do not generate artifacts or access the network.
+`--root` sets only the single-root resource destination. `--directory` names the
+saved installation directory for `--repair`; neither option selects source. The
+native shell bootstrap remains a separate checkout-based route.
 
 ## Uninstaller reference
 
-`app-uninstall.sh` and `app-uninstall.cmd` route through the repository-authored
-uninstall module and saved AppRC controller. The default retains declared
-application resources and installation recovery support. Complete removal
-requires selection of every tracked root, or explicit retention consent through
-`--forget-retained`, followed by confirmation. A declared root is tracked even
-when its directory is currently absent.
-
-| Option | Effect |
-| --- | --- |
-| `--complete` | Remove lifecycle authority after every tracked root is selected or explicitly retained. |
-| `--category config\|appdata\|cache\|state` | Select one owned resource category; repeat as needed. |
-| `--forget-retained` | Consent to leaving unselected or unprovable files on disk while forgetting their installation authority. |
-| `--yes` | Confirm the requested uninstall without an interactive prompt. |
-
-The saved controller is kept under the fixed native
-`installation/` directory, separate from appdata. Inspection and recovery use
-`ltcook installation show`, `ltcook installation doctor`, and
-`ltcook installation repair`; these management commands do not require
-business settings to resolve.
-
-Project-specific cleanup belongs in ordinary repository functions called while
-the program remains installed. Without `--forget-retained`, cleanup that cannot
-prove ownership keeps the affected resource and installation authority for
-recovery. With that explicit consent, retained files are not deleted. External
-workspaces, shared uv, and shared Python are never inferred as removal targets.
+AppRC lifecycle management owns installation records and supported removal.
+LTCook's application-specific maintenance actions are limited to its deployment,
+cache, logs, and coordination state. Removing the program does not authorize
+purging unrelated Podman data, an external workspace, or an existing `lcook`
+installation. Inspect the installed AppRC help and removal preview before
+choosing resources to purge; malformed ownership records should preserve data
+for recovery rather than broaden cleanup.
 
 ## Installation placement
 
-The installer supports `native` paths or one explicit `single-root` layout.
-`--layout` and `--root` are installer options; `--root` is valid only with
-`--layout single-root` and must be absolute. The saved placement records enabled
-resource paths, which reinstallation reuses by default. This resource layout is
-separate from the program environment: `uv tool install` manages the application
-program in its tool environment, while `--layout` selects declared application
-resource locations. Changing layout does not move the installed program or
-automatically move existing resource contents.
+AppRC declares config, appdata, cache, and state as independent paths. The
+installation authority is a separate fixed native location. The deployment is
+normally under AppRC appdata; it contains the private Node executable, production
+application bundle, per-workspace Pi locations, service receipt, and SQLite
+coordination database. Use `ltcook config paths --json` and `ltcook installation
+show` to inspect the resolved locations. The installer may capture native paths
+or an explicit single-root layout; reinstallation should reuse recorded placement.
 
+## Lifecycle and deployment assets
 
-Buildben does not adopt legacy installer receipts. The installer uses current
-AppRC installation authority and lifecycle behavior; an old receipt is not a
-source of installation identity, ownership, or recovery state. Install or
-repair from an explicitly selected source rather than attempting receipt
-adoption.
+The authored lifecycle composition lives under
+[`src/ltcook_distr/payload/app_lifecycle`](../src/ltcook_distr/payload/app_lifecycle).
+The generated standalone AppRC support is under
+[`src/ltcook_distr/artifacts`](../src/ltcook_distr/artifacts); those files are not
+a second authored lifecycle implementation. The `BuildPy` hook in
+[`package_assets.py`](../src/ltcook_dev/packaging/package_assets.py) copies only
+a validated, explicitly staged production bundle into the built wheel.
 
-The current `installation migrate` management command is for explicit resource
-and layout migration. A recorded migration resumes from its current lifecycle
-authority after interruption. The fixed native `installation/` directory
-remains separate from appdata and other declared resource capabilities.
+The staged `src/ltcook_distr/bundle` contains the compiled runtime, Pi extension,
+Paseo panel plugin, built team packages and Markdown resources, Compose assets,
+root production manifests/lock, and selected Node version. It excludes development
+`node_modules`, tests, and Python development tools. The bundle is required wheel
+content, not a disposable build output. `src/ltcook_distr/artifacts/_support` is
+generated installer support, not runtime app payload.
 
-Config, appdata, cache, and state are independent declared capabilities.
-Disabled paths remain absent; an installation record does not enable appdata.
+`just build` stages the Python distribution artifacts from existing build output;
+it does not generate lifecycle artifacts. `just make-artifacts` explicitly
+generates those outputs. `just check-artifacts` validates generated lifecycle
+files without rewriting them. Installer preparation provisions a private Node
+runtime and application deployment; it does not install global npm dependencies
+or make PyApp a second Python environment owner.
+
+The current manual release workflow is Linux-only and builds a wheel, source
+archive, PyApp launcher, and generated installer asset. It does not publish a
+release, create a tag, or publish to PyPI. `RELEASE_PYPI := "false"` in the root
+`justfile`; no LTCook release is available.
 
 <br>
 
-# Configuration and Python interfaces
+# Configuration and public interfaces
 
 ## Environment variables
 
+AppRC resolves each exact declared environment name. The settings bundle exposes
+`app`, `runtime`, `paseo`, `pi`, `anthropic`, `openai`, `google`, `openrouter`,
+`context7`, `agent_browser`, `web`, `searxng`, `crawl4ai`, `podman`, `container`,
+and `playwright` sections; their declarations are in
+[`src/ltcook/config/sections`](../src/ltcook/config/sections).
+
 | Name | Meaning |
 | --- | --- |
-| `LTCOOK_MESSAGE` | Invocation override for `AppSettings.message`; see the [precedence example](EXAMPLES.md#an-invocation-override). |
+| `LTCOOK_TEAM` | `AppSettings.team`; defaults to `default-minimal`. |
+| `LTCOOK_SESSION` | Optional stable session identifier; defaults to a stable workspace-derived identifier. |
+| `LTCOOK_JS_ROOT` | JavaScript runtime root; source development uses the checkout root, and installed launches use `<deployment>/app`. |
+| `LTCOOK_WORKSPACE` | Workspace selection supplied by the launch environment. |
+| `LTCOOK_DEPLOYMENT_DIR` | LTCook-owned deployment location, normally beneath AppRC appdata. |
+| `LTCOOK_MODEL_SMART` | Provider model selected by the `smart` team alias. |
+| `LTCOOK_MODEL_SMOL` | Provider model selected by the `smol` alias; falls back to smart when empty. |
+| `LTCOOK_MODEL_PLAN` | Provider model selected by the `plan` alias; falls back to smart when empty. |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Optional provider credentials declared as secrets. Configure only the provider in use. |
+| `LTCOOK_API_TOKEN` | Runtime API credential, created in AppRC secret storage during explicit setup. |
+| `LTCOOK_PASEO_PASSWORD` | Optional secret for Paseo API and WebSocket authentication; it does not protect the static web UI. Never include it in a URL. |
+| `LTCOOK_PASEO_LISTEN` | Paseo listener address; defaults to `127.0.0.1:6767`. The runtime prints the actual listener at startup. |
+| `PASEO_HOME` | Mutable Paseo data home; defaults to `<LTCOOK_DEPLOYMENT_DIR>/paseo` and must stay inside deployment but outside `<LTCOOK_DEPLOYMENT_DIR>/app`. |
+| `PI_CODING_AGENT_DIR` | Workspace-specific Pi home; defaults to `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` and must remain within the deployment. |
+| `LTCOOK_SEARXNG_URL` | SearXNG endpoint; its declared default is `http://127.0.0.1:8888`. |
+| `LTCOOK_CRAWL4AI_URL` | Crawl4AI endpoint; defaults to `http://127.0.0.1:11235`. |
+| `CRAWL4AI_API_TOKEN`, `SEARXNG_SECRET` | Credentials passed to the Compose services and marked secret. |
+| `LTCOOK_SERVICE_CONNECTION` | Service mode: `local`, `direct`, or `paseo-tunnel`. |
+| `PODMAN_COMPOSE_PROVIDER` | Optional explicit Compose provider executable. |
+| `LTCOOK_SSRF_ALLOW_RANGES` | Narrow comma-separated private ranges allowed for configured service access. |
+| `LTCOOK_BROWSER_ENABLED` | Enable Pi browser extension integration; defaults to true. |
+| `LTCOOK_CODESEARCH_ENABLED` | Enable hosted public-code search; defaults to true. |
+| `LTCOOK_CONTEXT7_ENABLED` | Enable optional hosted Context7 MCP integration; defaults to false. |
 
-The application loads environment files only when its declaration enables them.
-Installer resource layout is selected with `--layout` and, for `single-root`,
-`--root`; these are command-line options, not environment variables.
+The runtime's ready line prints `Paseo <listen>`. Open `http://<listen>/` in a
+browser to use Paseo's bundled web UI; it is enabled by the runtime and needs no
+separate server, assets, or dependency.
+
+AppRC setting paths for these secrets are `runtime.api_token`,
+`web.crawl4ai.api_token`, and `web.searxng.secret`; the typed bundle fields are
+`config.runtime.api_token`, `config.crawl4ai.api_token`, and
+`config.searxng.secret`. Setting-update plans use the declared environment names
+`LTCOOK_API_TOKEN`, `CRAWL4AI_API_TOKEN`, and `SEARXNG_SECRET`, not the dotted paths.
+
+Other declarations across these sections configure Pi/Paseo paths and ports,
+diagnostics, browser paths, API listeners, and service configuration. See the
+source declarations for the complete exact names. Never print the raw
+launch environment: it can contain credentials. Secret redaction is presentation,
+not encryption of the AppRC-managed files.
 
 ## Configuration files
 
-| File | Meaning |
+| File or path | Meaning |
 | --- | --- |
-| [config/apprc.defaults.env](../src/ltcook/config/apprc.defaults.env) | Defaults included in the installed package. |
-| `<config path>/apprc.user.env` | Saved preferences only when user dotenv support is enabled. |
+| [`src/ltcook/config/apprc.defaults.env`](../src/ltcook/config/apprc.defaults.env) | Packaged AppRC defaults. |
+| AppRC user env and secret files | Saved user settings and credentials beneath declared AppRC paths. |
+| Registered workspace settings and secrets | Per-workspace overrides resolved for the launched repository. |
+| Arbitrary workspace `.env` files | Not owned or loaded by LTCook automatically. |
+| `<appdata>/deployment` | Private Node, production application, service receipts, and coordination database. |
+| `<LTCOOK_DEPLOYMENT_DIR>/paseo/config.json` | Paseo configuration written by the Node host; the home also holds mutable Paseo data. |
+| `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` | Workspace-specific Pi home; `write-native-config` writes its private `web-search.json`. |
 
-Resource locations are capabilities declared in `ltcook.config.app.APP_RC`.
-The saved installation authority records absolute paths for enabled resources;
-it does not turn disabled resources on.
+`resolve_launch()` uses AppRC `current_env_mapping()` for each section, scoped
+to its target workspace and original shell provenance. Shell exports retain their
+normal precedence; one workspace's merged environment is not used as the next
+workspace's shell input. See the [configuration explanation](Explanations.md#configuration-files).
 
-## Public interfaces
+## Team API
 
-| Name | Responsibility |
+A team module exposes this `TeamPackage` shape from
+[`runtime/src/api/team.ts`](../runtime/src/api/team.ts):
+
+| Member | Type | Purpose |
+| --- | --- | --- |
+| `apiVersion` | `1` | Fresh public API version; no old-version adapters are provided. |
+| `definition` | `TeamDefinition` | Team identity, members, resources, and review policy. |
+| `activateService(runtime)` | function | Registers the selected team's workflow policy through public operations. |
+| `activateAgent(runtime)` | function | Registers instructions for the selected member. |
+
+The runtime recognizes built-in module aliases `default` and `default-minimal`;
+other selections are dynamically imported module specifiers that must be installed
+and resolvable. Team packages access coordination through the scoped public API,
+not SQL or runtime internals. The full team uses independent review; minimal uses
+a self-review policy and must not be described as independent specialist review.
+
+## Dependency and lock files
+
+| File | Role |
 | --- | --- |
-| `ltcook.config.app.APP_RC` | The shared `rc.AppRC` declaration. |
-| `ltcook.config.sections.app.AppSettings` | Typed application message and other business settings. |
-| `ltcook.config.bundle.LtcookConfig` | Dataclass grouping application configuration sections. |
-| `ltcook.cli.app.app` | Typer command tree. |
-| `ltcook.main.main` | Entry point for the console script. |
+| [`package-lock.json`](../package-lock.json) | Node/npm production lock used by private deployment preparation. |
+| [`bun.lock`](../bun.lock) | Generated Bun lock used with `bun install --frozen-lockfile` for development. |
+| [`uv.lock`](../uv.lock) | Python and authoring dependency lock. |
+| [`pyproject.toml`](../pyproject.toml) | Python runtime requirements and local `dev` dependency group. |
+| [`.node-version`](../.node-version) | Exact Node version selected for deployment and development. |
 
-Import config classes from these modules. The
-[application-code guide](How-To-User-Guides.md#use-settings-in-application-code)
-shows how `APP_RC.resolve()` and `ResolvedConfig.build()` construct them. The
-[two-section example](EXAMPLES.md#several-config-sections) extends the bundle.
+The application runtime declares AppRC core and terminal packages at version 0.33.0.
+Do not add old Git pins, source overrides, migration layers, or a second Python
+environment owner.
 
 <br>
 
 # Development reference
 
-## Dependency declarations
+## Task commands
 
-| Declaration in `pyproject.toml` | Use |
+From the repository root, `just runtime <task>` invokes the grouped recipes in
+[`runtime/justfile`](../runtime/justfile). The development and watch recipes use
+`ltcook_dev.runtime` to resolve AppRC for the workspace before they start Bun on
+the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
+
+| Command | Purpose |
 | --- | --- |
-| `[project].dependencies` | Published runtime requirements, including matching immutable Git sources for `apprc-core` and terminal `apprc`, plus `typer`. |
-| `[project.optional-dependencies]` | Published extras for optional application features. |
-| `[dependency-groups].dev` | Local authoring requirements, including `apprc-core[distribution]` from the matching SDK source commit. |
+| `just runtime sync` | Install the frozen Bun workspace dependencies. |
+| `just runtime dev -- --help` | Display runtime help after resolving AppRC for the checkout workspace. |
+| `just runtime watch -- --help` | Display runtime help with Bun watch enabled and AppRC resolved. |
+| `just runtime check` | Type-check the runtime workspace. |
+| `just runtime test` | Run runtime unit/native/integration and team contract tests. |
+| `just runtime test-integration` | Run runtime integration tests. |
+| `just runtime build` | Compile the runtime, Pi extension, and Paseo plugin. |
+| `just check` | Run root Bun checks, Ruff, and Pyright. |
+| `just test` | Run Bun unit/native/integration and team contract tests, plus Python tests excluding `integration` and `system`. |
+| `just test-integration` | Run marked Python and TypeScript integration tests. |
+| `just test-system` | Run marked Python system tests. |
+| `just build` | Build/stage runtime, team, and service production assets and the Python wheel/source distribution. |
+| `just sync` | Install frozen JavaScript locks, build, stage assets, and sync Python dependencies. |
+| `just make-artifacts` | Generate AppRC lifecycle support files. |
+| `just check-artifacts` | Check generated lifecycle files without rewriting. |
 
-The scaffold pins AppRC core, terminal, and optional GUI sources to one immutable
-Git commit. Ordinary pip reads the runtime source requirements directly;
-runtime overrides preserve the same source identities in the uv-managed
-application installation. These pins can include unreleased fixes. Buildben
-itself keeps `dependencies=[]` and has no AppRC runtime reference or
-application-data capabilities.
+Bun is selected by the root/runtime `BUN` variable; set `BUN=/absolute/path/to/bun`
+if the executable is not available by its default name. Development uses `bun.lock`;
+production Node installation uses `package-lock.json`; Python dependencies use `uv.lock`.
 
-See the [package explanation](Explanations.md#package-layout-and-dependencies)
-for wheel/sdist boundaries and [Development](Development.md#maintainer-environment)
-for the locked authoring environment.
+Avoid running the separate marked Python integration and system groups as
+routine checks: they may require scenario-specific native prerequisites,
+network access, or an installer smoke source. The runtime integration contracts
+included in `just runtime test` and `just test` use fake agents and in-memory
+coordination; they do not start services or call models.
 
-## Figure visual tokens
-
-[Graphigs Theme](https://github.com/markur4/graphigs/blob/main/docs/Theme.md)
-owns figure colors, strokes, fills, and typography. Follow the
-[static figure rules](Development.md#static-figure-rules) when updating assets.
-Keep captions and asset names here as the application gains figures; do not copy
-the theme's rendered swatches into this repository.
+The quick Python lifecycle contract tests exercise preparation boundaries with
+isolated fakes and fixtures. They do not install Podman or Node. Running a live
+installer, Compose service, browser, or model-backed workflow is a separate
+integration/system activity, with explicit external prerequisites; no normal
+check runs a long model conversation.

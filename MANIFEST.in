@@ -4,6 +4,13 @@ include app-install.sh app-install.cmd
 include app-launch.sh app-launch.cmd
 include app-uninstall.sh app-uninstall.cmd
 
+include package.json package-lock.json .node-version
+recursive-include runtime/dist *
+recursive-include teams/default/dist *
+recursive-include teams/default/resources *
+recursive-include teams/default-minimal/dist *
+recursive-include teams/default-minimal/resources *
+recursive-include services *
 recursive-include src *
 
 prune INPUT

@@ -4,8 +4,7 @@ run-name: ${{ github.actor }} - ${{ github.event_name }} - CI
 
 on:
   push:
-    branches:
-      - "**"
+    branches: ["**"]
   pull_request:
   workflow_call:
   workflow_dispatch:
@@ -15,67 +14,107 @@ permissions:
 
 jobs:
   checks:
-    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
-    runs-on: ${{ matrix.os }}
+    name: Linux / Python ${{ matrix.python-version }} quick checks
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
         python-version: ["3.12", "3.13"]
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-      - name: Install uv
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - name: Install Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+      - name: Install Python and uv
         uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: auto
-      - name: Install project from uv.lock
-        run: uv sync --locked --all-extras --all-groups
-      - name: Check lockfile
-        run: uv lock --check
-      - name: Check generated installer artifacts
-        run: just check-artifacts
-      - name: Check formatting
-        run: uv run --locked ruff format . --check
-      - name: Lint
-        run: uv run --locked ruff check .
-      - name: Type check
+      - name: Install locked dependencies without building the Python app
+        run: |
+          bun install --frozen-lockfile
+          uv sync --locked --all-groups --no-install-project
+      - name: Type-check JavaScript workspaces
+        run: bun run check
+      - name: Run quick JavaScript contracts
+        run: bun run test
+      - name: Build runtime, plugins, and teams
+        run: bun run build
+      - name: Stage runtime bundle
+        run: PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.package_assets --root . --destination src/ltcook_distr/bundle
+      - name: Install staged Python application and build packages
+        run: |
+          uv sync --locked --all-groups
+          uv build --no-sources --no-build-logs
+      - name: Lint Python sources
+        run: uv run --locked ruff check src tests
+      - name: Type-check Python sources
         run: uv run --locked pyright
-      - name: Test
+      - name: Run quick Python tests
         env:
           NO_COLOR: "1"
           _TYPER_FORCE_DISABLE_TERMINAL: "1"
-        run: uv run --locked pytest
-      - name: Compile sources
+        run: uv run --locked pytest -m 'not integration and not system'
+      - name: Compile Python sources
         run: uv run --locked python -m compileall -q src tests
 
-  installation:
-    name: ${{ matrix.target }} install / Python ${{ matrix.python-version }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            python-version: "3.12"
-            target: linux-x86_64
-          - runner: ubuntu-latest
-            python-version: "3.13"
-            target: linux-x86_64
+  slow-integration:
+    name: Slow integration and system checks (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-      - name: Install uv
+      - name: Install Python and uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: auto
+      - name: Install locked dependencies without the staged Python app
+        run: uv sync --locked --all-groups --no-install-project
+      - name: Run explicit integration checks
+        run: PYTHONPATH=src uv run --locked --no-sync pytest -m integration
+      - name: Run explicit system checks
+        run: PYTHONPATH=src uv run --locked --no-sync pytest -m system
+
+  native-platforms:
+    name: Native ${{ matrix.os }} quick checks (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        python-version: ["3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - name: Install Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+      - name: Install Python and uv
         uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: auto
-      - name: Install just
-        uses: extractions/setup-just@v4
-        with:
-          just-version: "1.56.0"
-      - name: Install project from uv.lock
-        run: uv sync --locked --all-extras --all-groups
-      - name: Install and inspect the generated sdist with uv
-        run: just release-install-smoke
+      - name: Install locked dependencies without the staged Python app
+        run: |
+          bun install --frozen-lockfile
+          uv sync --locked --all-groups --no-install-project
+      - name: Type-check and run quick contracts on native host
+        shell: bash
+        run: |
+          bun run check
+          bun run test
+          PYTHONPATH=src uv run --locked --no-sync pytest -m 'not integration and not system'

@@ -46,9 +46,7 @@ class SourceFixture:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 path = urlsplit(self.path).path
-                if path.endswith("/releases/latest") or path.endswith(
-                    f"/releases/tags/{fixture.tag}"
-                ):
+                if path.endswith(("/releases/latest", f"/releases/tags/{fixture.tag}")):
                     body = fixture._release
                 elif path.endswith("/commits/main"):
                     with fixture._main_lock:
@@ -71,9 +69,7 @@ class SourceFixture:
                 elif path == "/main-installer.py":
                     body = fixture.main_installer
                 elif path.startswith("/assets/"):
-                    body = fixture.assets.get(
-                        unquote(path.removeprefix("/assets/"))
-                    )
+                    body = fixture.assets.get(unquote(path.removeprefix("/assets/")))
                 else:
                     body = None
                 if body is None:
@@ -89,9 +85,7 @@ class SourceFixture:
                 return
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base_url = f"http://127.0.0.1:{self.server.server_port}"
         self.api_url = "https://api.github.com"

@@ -15,6 +15,8 @@ import typer
 import ltcook
 from ltcook.config.app import APP_RC
 from ltcook.config.bundle import LtcookConfig
+from ltcook.launch import launch_cli, services_cli
+from ltcook_distr.payload.app_lifecycle.actions import maintenance_handlers
 
 PACKAGE_NAME = "ltcook"
 VERSION_FALLBACK = "0.1.0"
@@ -25,6 +27,12 @@ app = typer.Typer(
     help="Command-line tools for ltcook.",
     no_args_is_help=True,
     pretty_exceptions_show_locals=False,
+)
+app.add_typer(launch_cli, name="launch", help="Launch native runtime components.")
+app.add_typer(
+    services_cli,
+    name="services",
+    help="Manage local and configured remote service connections.",
 )
 
 
@@ -138,9 +146,9 @@ rc.cli.mount_app_cli(
         },
         extra_cli_flag_options={"--json"},
     ),
+    handlers=maintenance_handlers(),
     runtime_payload=_config_show_payload,
     setup_logging=_setup_app_logging,
-    logger=LOG,
 )
 
 

@@ -38,9 +38,7 @@ def main() -> int:
             timeout=30,
         ) as response:
             release = json.loads(response.read())
-        assets = [
-            asset for asset in release["assets"] if asset["name"] == pattern
-        ]
+        assets = [asset for asset in release["assets"] if asset["name"] == pattern]
         if len(assets) != 1:
             raise SystemExit("Fixture release asset selection was not unique.")
         with urllib.request.urlopen(

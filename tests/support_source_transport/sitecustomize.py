@@ -9,7 +9,6 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-
 _mapping_path = os.environ.get("INSTALLER_SMOKE_URL_MAP")
 if _mapping_path:
     _url_mapping = json.loads(Path(_mapping_path).read_text(encoding="utf-8"))
@@ -21,9 +20,7 @@ if _mapping_path:
     _urlopen = urllib.request.urlopen
 
     def _fixture_urlopen(url, *args, **kwargs):
-        original = (
-            url.full_url if isinstance(url, urllib.request.Request) else url
-        )
+        original = url.full_url if isinstance(url, urllib.request.Request) else url
         if not isinstance(original, str):
             return _urlopen(url, *args, **kwargs)
         parsed = urllib.parse.urlsplit(original)

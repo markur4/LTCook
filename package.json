@@ -1,0 +1,25 @@
+{
+  "name": "ltcook",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "bun@1.4.4",
+  "workspaces": ["runtime", "teams/*"],
+  "engines": { "node": ">=26.13.1", "bun": ">=1.4.4" },
+  "scripts": {
+    "dev": "uv run --locked --no-sync python -m ltcook_dev.runtime --root . --bun \"$npm_execpath\" --",
+    "dev:watch": "uv run --locked --no-sync python -m ltcook_dev.runtime --root . --watch --bun \"$npm_execpath\" --",
+    "check": "\"$npm_execpath\" run --cwd runtime check && \"$npm_execpath\" run --cwd teams/default check && \"$npm_execpath\" run --cwd teams/default-minimal check",
+    "test": "\"$npm_execpath\" test tests/runtime/unit tests/runtime/native tests/runtime/integration tests/teams/contract",
+    "test:integration": "\"$npm_execpath\" test tests/runtime/integration",
+    "build": "\"$npm_execpath\" run --cwd runtime build && \"$npm_execpath\" run --cwd teams/default build && \"$npm_execpath\" run --cwd teams/default-minimal build"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "react-native": "0.86.3",
+    "typescript": "7.0.2"
+  }
+}

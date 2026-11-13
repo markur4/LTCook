@@ -2,7 +2,7 @@
 
 These conventions apply to human contributors and coding agents. Start here for
 the normal contribution workflow; use [Development](docs/Development.md) for
-in-depth procedures and maintenance guides.
+detailed environment, packaging, and verification guidance.
 
 <br>
 
@@ -26,12 +26,10 @@ in-depth procedures and maintenance guides.
 
 # Before starting
 
-Check [existing issues](https://github.com/markur4/ltcook/issues)
-and [BACKLOG.md](BACKLOG.md) before starting overlapping work. Discuss substantial
-behavior or design changes before implementing them. Read the relevant component
-in [Explanations](docs/Explanations.md) and inspect nearby source and
-`git status --short`. Keep unrelated changes untouched, and explain the intended
-change before editing several files. Coding agents must also follow [AGENTS.md](AGENTS.md).
+Check [existing issues](https://github.com/markur4/LTCook/issues) and
+[BACKLOG.md](BACKLOG.md) for overlapping work. Read the relevant component in
+[Explanations](docs/Explanations.md), inspect its source and tests, and preserve
+unrelated changes. Coding agents must also follow [AGENTS.md](AGENTS.md).
 
 ---
 
@@ -41,63 +39,50 @@ change before editing several files. Coding agents must also follow [AGENTS.md](
 
 ## Set up development
 
-From the project root, use Python 3.12 or newer. Dependency groups require pip
-25.1 or newer; upgrade pip inside the virtual environment before installing.
-
-### For Linux & macOS
+The project requires Python 3.12+, Bun 1.4.4+, Node matching `.node-version`,
+uv, and just. From the project root:
 
 ```shell
-python -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -e "." --group dev
+just sync
 ```
 
-### For Windows PowerShell
+This installs the frozen Bun dependencies, builds runtime/team assets, stages the
+production bundle, then synchronizes the Python development environment from
+`uv.lock`. It does not install Podman or run application setup. You may use the
+normal Python package tooling without uv for Python-only work, but changes to the
+runtime bundle, Python lock, or packaged assets should use the locked root setup.
+If Bun is not on PATH, set `BUN` to its executable path for root and runtime tasks.
 
-```powershell
-py -m venv .venv
-& '.\.venv\Scripts\python.exe' -m pip install --upgrade pip
-& '.\.venv\Scripts\python.exe' -m pip install -e "." --group dev
-```
-
-This path does not require uv. The [maintainer environment](docs/Development.md#maintainer-environment)
-guide covers uv, optional extras, and dependency declarations.
+The [maintainer environment](docs/Development.md#maintainer-environment) guide
+explains the two lockfiles, staged wheel payload, and focused development choices.
+Entering the repository does not install or start Pi, Paseo, browser files, or
+containers.
 
 ## Run checks
 
-Run checks from the project root using the development environment.
-
-### For Linux & macOS
+The default quick checks are split by language:
 
 ```shell
-.venv/bin/ruff format --check .
-.venv/bin/ruff check .
-.venv/bin/pyright
-.venv/bin/python -m pytest
+just runtime check
+just runtime test
+just check
+just test
 ```
 
-### For Windows PowerShell
+`just check` runs root TypeScript checks plus Ruff and Pyright. `just test` runs
+Bun unit/native/runtime-integration/team-contract tests and Python tests excluding
+the `integration` and `system` markers. The runtime integration tests use fake
+agents and in-memory coordination; these quick commands do not start native
+agents, call models, or start containers. The separate marked Python integration
+and system commands are documented in the
+[verification guide](docs/Development.md#verification); use them only when their
+scenario prerequisites are available.
 
-```powershell
-& '.\.venv\Scripts\ruff.exe' format --check .
-& '.\.venv\Scripts\ruff.exe' check .
-& '.\.venv\Scripts\pyright.exe'
-& '.\.venv\Scripts\python.exe' -m pytest
-```
-
-Formatting checks do not modify files. Apply formatting fixes only to files you
-edited; do not include unrelated formatting changes. The [verification guide](docs/Development.md#verification)
-explains check selection and how to validate changed documentation and examples.
-For Windows installer changes, follow the canonical
-[Windows installer verification procedure](docs/Development.md#windows-installer-verification-procedure).
-Run Windows checks only in an independent native Windows environment; never
-launch native Windows verification executables from WSL. The existing Windows
-CI package-install smoke does not execute the installer entrypoints.
-
-For Unix staging changes, follow the
-[Unix installer staging verification procedure](docs/Development.md#unix-installer-staging-verification).
-Keep lifecycle link checks intact; direct-package smoke does not establish
-installer staging or saved-uninstaller behavior.
+Do not run installation smoke tests as a default loop. They require an explicit
+source commit/archive and external installer prerequisites. Windows and macOS
+behavior is not established by Linux execution. The detailed guides explain these
+limits; the [release guide](docs/Development.md#releases) describes the current
+Linux-only manual asset build, not publication.
 
 ---
 
@@ -105,42 +90,34 @@ installer staging or saved-uninstaller behavior.
 
 # Working conventions
 
-- Keep each change focused. Follow the [repository layout](docs/Development.md#repository-routing)
-  and ask before creating a top-level directory when an existing location fits.
-- Check `ltcook.config`, `ltcook.utils`, `apprc`, and `apprc.cli`
-  before adding helpers. Reuse existing implementations; place broadly reusable
-  behavior in the appropriate shared module.
-- App configuration belongs in `ltcook.config.sections`. Keep fields in
-  focused `rc.Config` classes with `rc.field(...)` declarations, assemble them
-  in `config.bundle`, and declare the shared `APP_RC` in `config.app`. Import
-  declarations and classes directly from their modules. Mount the shared
-  `config` group and capability groups declared by `APP_RC` together through
-  `rc.cli.mount_app_cli`; use `state.resolved` for runtime values. Keep
-  `RuntimeIndependentCommand` for commands that must work without resolved
-  runtime state, such as `appdata paths` and `appdata clean`:
-  `runtime_independent_commands={"appdata": rc.cli.RuntimeIndependentCommand(action_prefixes={("paths",), ("clean",)}, skip_empty=True)}`.
-- CLI behavior belongs in `ltcook.cli.app`; keep `ltcook.main` as a
-  thin public entry point wrapper. Add minimal `__main__` demo code only when it
-  improves discoverability or manual testing.
-- Use stdlib `logging` for application-owned logs. Start AppRC integration with
-  `import apprc as rc`.
-- Import local utility helpers with `import ltcook.utils as ut` and use
-  explicit `ut.` prefixes. Keep package initializers limited to imports and
-  module docstrings. For utility facades, use clean batch re-exports with
-  file-level `# ruff: noqa: F401`, not redundant `symbol as symbol` aliases.
-- Use exact attributes on known domain types. Model genuinely dynamic boundaries
-  explicitly instead of probing strict objects defensively. Tests should use
-  dedicated helpers rather than weaken production contracts to `Any`.
-- Use Sphinx-style docstrings to specify public behavior. Avoid speculative
-  abstractions and preserve public contracts unless the change explicitly
-  includes their migration.
+- Keep changes focused and follow the [repository layout](docs/Development.md#repository-routing).
+  Ask before creating a top-level directory if an existing owner fits.
+- AppRC is declared once in `ltcook.config.app.APP_RC`; settings belong in their
+  registered classes under `ltcook.config.sections`, and `LtcookConfig` groups
+  those declarations. Declare fields with `rc.field(...)`; register each new
+  section with `APP_RC.config(...)` and include it in the bundle. Use
+  `current_env_mapping()` when producing each workspace's child environment;
+  preserve original shell provenance between workspace resolutions.
+- Keep secret settings marked `secret=True`, and never log or document their
+  values. Redaction controls display; it does not encrypt the AppRC-managed file.
+- Keep Python launch/configuration concerns in `src/ltcook`, lifecycle and
+  installer ownership in `src/ltcook_distr`, and developer packaging helpers in
+  `src/ltcook_dev`. The wheel's `BuildPy` step copies only a validated staged
+  `src/ltcook_distr/bundle`.
+- Runtime and team packages are Bun workspaces. Teams implement the current
+  public `apiVersion: 1` interface in `runtime/src/api/team.ts`; use public team
+  operations rather than SQL or runtime internals. Do not add adapters for old
+  prototype versions.
+- Keep TypeScript coordination in the single runtime owner for its SQLite
+  database. Preserve workspace/team identity and never replay an uncertain
+  external action automatically.
+- Use precise domain attributes and established helpers. Add abstractions only
+  when they clarify a real shared responsibility. Preserve package initializer
+  boundaries and use Sphinx-style docstrings for public Python behavior.
 
-[BACKLOG.md](BACKLOG.md) holds durable actionable work not being handled now.
-Keep an active pass's `TODO.md` execution checklist beside its `PLAN.md`; do not
-create empty active artifacts or use TODO as a second backlog. Keep one
-authoritative checklist per action, not duplicate editable checkboxes in a plan.
-Before closing or archiving a pass, transfer unfinished work to the backlog or
-another pass, checking for existing entries first.
+[BACKLOG.md](BACKLOG.md) holds durable actionable work deferred from the current
+change. Keep active execution checklists beside their plan, not as a second
+repository backlog.
 
 ---
 
@@ -148,43 +125,28 @@ another pass, checking for existing entries first.
 
 # Documentation and generated files
 
-Update documentation when a change affects setup, commands, public APIs,
-environment variables, saved formats, or user-visible workflows. Record relevant
-user-visible changes in [CHANGELOG.md](CHANGELOG.md); breaking changes must
-identify affected users and explain migration when possible.
-
-Follow the [documentation rules](docs/README.md#documentation-rules) and use the
-[authoring guide](docs/Development.md#documentation-authoring) to carry them out.
-Maintain affected incoming and outgoing links in the same change as their targets.
+Update documentation when setup, commands, settings, public APIs, packaging, or
+user-visible behavior changes. Preserve the existing design of the root README,
+CONTRIBUTING, and six documentation pages. Follow the
+[documentation rules](docs/README.md#documentation-rules), and update affected
+incoming links and anchors in the same change.
 
 ## README maintenance
 
-The existing README is the project's chosen document design, not disposable
-scaffold boilerplate. Adapt it in place; never replace it with a generic README
-or regenerate it from scratch. Preserve CONTRIBUTING's established design too.
-
-- Read the complete document before editing. Preserve section order, heading
-  hierarchy and capitalization, HTML layout, badges, spacing elements, and useful
-  existing content.
-- Replace placeholders and starter descriptions with project-specific content.
-  Correct stale facts, commands, and links within the existing design.
-- Fit new information into existing sections unless they are unsuitable. Never
-  remove useful content merely for brevity, style normalization, or your preferred
-  format.
-- Substantial restructuring requires a concrete project need and explicit user
-  approval before editing. Explain what the current structure prevents and
-  propose the smallest necessary change. Personal preference, generic best
-  practices, and "cleaner formatting" are not sufficient reasons.
-- Routine navigation maintenance is expected: add, remove, or update relevant
-  entries and destinations when documents change. This is not a redesign and
-  does not require redesign approval. Preserve the established audience groups,
-  nesting, and presentation described in [README navigation](docs/README.md#readme-navigation).
+Adapt the root README in place. Read it completely before editing, preserve its
+section order, HTML layout, useful content, and curated navigation. Replace stale
+facts where they occur; do not replace it with generic boilerplate. A substantial
+redesign requires an explicit request. Preserve CONTRIBUTING's established design
+as well.
 
 ## Generated files
 
-When an asset has a source builder, edit that source and regenerate the output
-rather than hand-editing generated files. Follow the [static figure guide](docs/Development.md#static-figure-rules)
-for assets in `assets/` and `docs/assets/`, including Graphigs styling and captions.
+When an asset has a source builder, update the source and use its explicit
+regeneration command. `just make-artifacts` generates AppRC lifecycle support;
+`just check-artifacts` checks tracked outputs without rewriting them. `just build`
+stages the production runtime/team/service bundle into the wheel. Do not hand-edit
+generated support or stage incomplete assets into a distributable package. See
+[asset packaging](docs/Development.md#asset-packaging).
 
 ---
 
@@ -192,14 +154,12 @@ for assets in `assets/` and `docs/assets/`, including Graphigs styling and capti
 
 # Before submitting
 
-Review the diff for unrelated changes, duplicate helpers, naming drift, and
-unnecessary abstractions. Run the relevant checks and report commands, observed
-results, and any failed or omitted verification; do not imply unperformed checks
-passed.
+Review the changed files and relevant links for stale facts, unsupported claims,
+and unrelated edits. Run the relevant bounded checks; report exact commands and
+observed outcomes, including unrun integration/system behavior. Documentation
+examples are not evidence of successful execution unless they were actually run.
 
 A pull request should explain the problem, intended behavior, verification, and
-compatibility implications. Include affected documentation and changelog updates,
-and migration instructions for breaking changes. Transfer real unfinished work
-to the durable backlog instead of leaving misleading placeholders or claiming it
-is complete. Coding agents must respect the user's commit and publication
-permissions; a contribution guide does not grant release authorization.
+compatibility implications. Record relevant user-facing changes in
+[CHANGELOG.md](CHANGELOG.md); state breaking changes and migration instructions
+when applicable. Respect the user's commit, publication, and deployment permissions.

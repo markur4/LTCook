@@ -5,8 +5,8 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
 
 ## Release policy
 - Treat the committed `RELEASE_PYPI` value in `justfile` as a hard gate. When it is `"false"`, do not recommend or run a manual PyPI publish or retry command.
-- Manual PyPI publication requires `RELEASE_PYPI := "true"` in both the current committed `justfile` and the requested tag's committed `justfile`. A `just --set` override does not satisfy either check.
-- The manual workflow checks the selected workflow ref and target tag before it requests the PyPI environment or OIDC token. GitHub Release creation on a valid tag remains available when PyPI is disabled.
+- The current manual asset-build workflow creates no tags, GitHub Releases or PyPI publications.
+- Publishing requires separate explicit authorization; do not turn repository push permission into release permission.
 
 ## Repo routing and project rules
 - Follow [Working conventions](CONTRIBUTING.md#working-conventions) and the
@@ -20,7 +20,7 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
 ## Documentation rules
 - Follow the canonical [documentation rules](docs/README.md#documentation-rules),
   including component names, navigation, and
-  [installation instructions](docs/README.md#installation-instructions).
+  [installation instructions](docs/How-To-User-Guides.md#install-from-a-checkout).
 
 ## README maintenance
 - Adapt in place; never replace the README with a generic README. Before editing,
@@ -30,14 +30,14 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
 ## Verification
 - Review the diff for duplicate helpers, naming drift, unnecessary abstractions, and regressions.
 - Run the project’s relevant lint, type-check, and test commands before considering the task done.
-- Before Windows installer work, follow the canonical
-  [Windows installer verification procedure](docs/Development.md#windows-installer-verification-procedure).
+- Before native installer work, follow the
+  [integration and system procedures](docs/Development.md#integration-and-system-procedures).
 - From WSL, never launch native Windows verification executables, directly or
   through helpers: this includes PowerShell, Windows Python/pytest, `cmd.exe`,
   and Windows `uv`. Use independent native Windows CI, not a Windows virtual
   environment or executable launched from WSL.
-- For Unix installer changes, follow the
-  [Unix staging verification procedure](docs/Development.md#unix-installer-staging-verification).
+- For Unix installer changes, follow the same
+  [integration and system procedures](docs/Development.md#integration-and-system-procedures).
   Preserve lifecycle link checks and distinguish actual installer proof from
   the generated direct-package smoke.
 
