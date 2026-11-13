@@ -6,19 +6,25 @@
   "license": "MIT",
   "packageManager": "bun@1.4.4",
   "workspaces": ["runtime", "teams/*"],
-  "engines": { "node": ">=26.13.1", "bun": ">=1.4.4" },
+  "engines": {
+    "node": ">=26.13.1",
+    "bun": ">=1.4.4"
+  },
   "scripts": {
     "dev": "uv run --locked --no-sync python -m ltcook_dev.runtime --root . --bun \"$npm_execpath\" --",
     "dev:watch": "uv run --locked --no-sync python -m ltcook_dev.runtime --root . --watch --bun \"$npm_execpath\" --",
-    "check": "\"$npm_execpath\" run --cwd runtime check && \"$npm_execpath\" run --cwd teams/default check && \"$npm_execpath\" run --cwd teams/default-minimal check",
+    "check": "\"$npm_execpath\" run format:check && \"$npm_execpath\" run --cwd runtime check && \"$npm_execpath\" run --cwd teams/default check && \"$npm_execpath\" run --cwd teams/default-minimal check",
     "test": "\"$npm_execpath\" test tests/runtime/unit tests/runtime/native tests/runtime/integration tests/teams/contract",
     "test:integration": "\"$npm_execpath\" test tests/runtime/integration",
+    "format": "prettier --write \"runtime/src/**/*.{ts,tsx}\" \"teams/*/src/**/*.ts\" \"tests/{runtime,teams}/**/*.ts\"",
+    "format:check": "prettier --check \"runtime/src/**/*.{ts,tsx}\" \"teams/*/src/**/*.ts\" \"tests/{runtime,teams}/**/*.ts\"",
     "build": "\"$npm_execpath\" run --cwd runtime build && \"$npm_execpath\" run --cwd teams/default build && \"$npm_execpath\" run --cwd teams/default-minimal build"
   },
   "devDependencies": {
     "@types/bun": "1.4.4",
     "@types/node": "26.6.6",
     "@types/react": "19.3.0",
+    "prettier": "3.10.1",
     "react-native": "0.86.3",
     "typescript": "7.0.2"
   }

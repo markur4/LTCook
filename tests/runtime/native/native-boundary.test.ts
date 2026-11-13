@@ -1,42 +1,273 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { createServer } from 'node:net';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import * as fileSystem from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentBackend, RuntimeActor, RuntimeController, SessionSnapshot, TeamPackage } from '../../../runtime/src/api/team.js';
+import type {
+  AgentBackend,
+  RuntimeActor,
+  RuntimeController,
+  SessionSnapshot,
+  TeamPackage,
+} from '../../../runtime/src/api/team.js';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
-import { agentEnvironment, nativeToolAllowed } from '../../../runtime/src/integrations/native-policy.js';
+import {
+  agentEnvironment,
+  nativeToolAllowed,
+} from '../../../runtime/src/integrations/native-policy.js';
 import { panelSnapshot } from '../../../runtime/src/paseo-plugin/shared/panel-snapshot.js';
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { startPaseoHost } from '../../../runtime/src/integrations/paseo.js';
+import { configurePiExtensions } from '../../../runtime/src/integrations/pi-settings.js';
 
 const directories: string[] = [];
-afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
+afterEach(() => {
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
+});
 
 async function freePort(): Promise<number> {
   const server = createServer();
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('No local test port available');
-  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
   return address.port;
 }
-
-function snapshotFor(nativeAgentId: string, readOnly = true): SessionSnapshot {
+function snapshotFor(
+  nativeAgentId: string,
+  readOnly = true,
+  sessionId = 'session-1',
+  workspaceRoot = '/workspace',
+): SessionSnapshot {
   return {
-    session: { id: 'session-1', teamId: 'team-1', workspaceRoot: '/workspace', createdAt: '2026-01-01T00:00:00Z' },
-    definition: { id: 'team-1', name: 'Team', coordinatorKey: 'lead', members: [], resources: [], reviewPolicy: { mode: 'self', reviewerKeys: [], required: false } },
-    members: [{
-      member: { key: 'worker', name: 'Worker', lifetime: 'persistent', modelAlias: 'smart', thinking: '', readOnly, instructionPaths: [] },
-      binding: { sessionId: 'session-1', teamId: 'team-1', memberKey: 'worker', nativeAgentId, workspaceRoot: '/workspace', state: 'bound' }, nativeStatus: 'running',
-    }],
-    passes: [], tasks: [], assignments: [], reports: [], reviews: [], approvals: [], blockers: [],
+    session: {
+      id: sessionId,
+      teamId: 'team-1',
+      teamInstanceId: 'instance-1',
+      workspaceRoot,
+      createdAt: '2026-01-01T00:00:00Z',
+    },
+    definition: {
+      id: 'team-1',
+      name: 'Team',
+      coordinatorKey: 'lead',
+      members: [],
+      resources: [],
+      reviewPolicy: { mode: 'self', reviewerKeys: [], required: false },
+    },
+    members: [
+      {
+        member: {
+          key: 'worker',
+          name: 'Worker',
+          lifetime: 'persistent',
+          modelAlias: 'smart',
+          thinking: '',
+          readOnly,
+          instructionPaths: [],
+        },
+        binding: {
+          sessionId,
+          teamId: 'team-1',
+          memberKey: 'worker',
+          nativeAgentId,
+          workspaceRoot,
+          state: 'bound',
+        },
+        nativeStatus: 'running',
+      },
+    ],
+    passes: [],
+    tasks: [],
+    steps: [],
+    assignments: [],
+    reports: [],
+    reviews: [],
+    approvals: [],
+    blockers: [],
   };
 }
 
 describe('native runtime boundary', () => {
+  test('replaces recorded Pi extensions and preserves independent entries', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-pi-settings-'));
+    directories.push(directory);
+    const settingsPath = join(directory, 'settings.json');
+    const ownershipPath = `${settingsPath}.ltcook-extensions.json`;
+    const independent = '/user/extensions/custom.js';
+    const unrelatedIntegration = '/other-project/runtime/dist/integrations/private.js';
+    const unrelatedPackage = '/other-project/node_modules/pi-web-access/dist/index.js';
+    const previousAppExtension = '/old-deployment/runtime/dist/integrations/old-team.js';
+    const codeSearch = '/deployment/node_modules/@nicknisi/pi-codesearch/dist/index.js';
+    const webAccess = '/deployment/node_modules/pi-web-access/dist/index.js';
+    const appExtension = '/deployment/runtime/dist/integrations/pi-extension.js';
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        theme: 'dark',
+        extensions: [
+          independent,
+          unrelatedIntegration,
+          unrelatedPackage,
+          previousAppExtension,
+          codeSearch,
+          webAccess,
+        ],
+      }),
+    );
+    writeFileSync(
+      ownershipPath,
+      JSON.stringify({
+        version: 1,
+        paths: [previousAppExtension, codeSearch, webAccess],
+      }),
+    );
 
+    await configurePiExtensions(
+      settingsPath,
+      [appExtension, webAccess, codeSearch],
+      [appExtension, webAccess, codeSearch],
+    );
+    expect(JSON.parse(readFileSync(settingsPath, 'utf8'))).toEqual({
+      theme: 'dark',
+      extensions: [
+        independent,
+        unrelatedIntegration,
+        unrelatedPackage,
+        appExtension,
+        webAccess,
+        codeSearch,
+      ],
+    });
+
+    await configurePiExtensions(settingsPath, [appExtension, webAccess], [appExtension, webAccess]);
+    expect(JSON.parse(readFileSync(settingsPath, 'utf8')).extensions).toEqual([
+      independent,
+      unrelatedIntegration,
+      unrelatedPackage,
+      appExtension,
+      webAccess,
+    ]);
+    await configurePiExtensions(
+      settingsPath,
+      [appExtension, webAccess, codeSearch],
+      [appExtension, webAccess, codeSearch],
+    );
+    expect(JSON.parse(readFileSync(settingsPath, 'utf8')).extensions).toEqual([
+      independent,
+      unrelatedIntegration,
+      unrelatedPackage,
+      appExtension,
+      webAccess,
+      codeSearch,
+    ]);
+  });
+
+  test('retains extension ownership and settings after a failed replacement', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-pi-write-failure-'));
+    directories.push(directory);
+    const settingsPath = join(directory, 'settings.json');
+    const ownershipPath = `${settingsPath}.ltcook-extensions.json`;
+    const oldExtension = '/old/owned.js';
+    const newExtension = '/new/owned.js';
+    const independent = '/user/keep.js';
+    const original = JSON.stringify({ extensions: [independent, oldExtension] });
+    writeFileSync(settingsPath, original);
+    writeFileSync(ownershipPath, JSON.stringify({ version: 1, paths: [oldExtension] }));
+    const rename = fileSystem.rename;
+    const failure = spyOn(fileSystem, 'rename').mockImplementation(async (from, to) => {
+      if (to === settingsPath) throw new Error('simulated settings replacement failure');
+      return rename(from, to);
+    });
+    try {
+      await expect(configurePiExtensions(settingsPath, [newExtension], [])).rejects.toThrow(
+        'simulated settings replacement failure',
+      );
+      expect(readFileSync(settingsPath, 'utf8')).toBe(original);
+      expect(JSON.parse(readFileSync(ownershipPath, 'utf8')).paths).toEqual([
+        oldExtension,
+        newExtension,
+      ]);
+    } finally {
+      failure.mockRestore();
+    }
+    await configurePiExtensions(settingsPath, [], []);
+    expect(JSON.parse(readFileSync(settingsPath, 'utf8')).extensions).toEqual([independent]);
+  });
+
+  test('rejects a JSON null settings document without rewriting it', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-pi-null-'));
+    directories.push(directory);
+    const settingsPath = join(directory, 'settings.json');
+    writeFileSync(settingsPath, 'null\n');
+    await expect(configurePiExtensions(settingsPath, ['/owned.js'], [])).rejects.toThrow(
+      'Pi settings must contain a JSON object.',
+    );
+    expect(readFileSync(settingsPath, 'utf8')).toBe('null\n');
+  });
+
+  test('seeds only explicitly supplied current-app paths for a pre-marker settings file', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-pi-legacy-'));
+    directories.push(directory);
+    const settingsPath = join(directory, 'settings.json');
+    const currentAppPath = '/current-app/runtime/dist/integrations/pi-extension.js';
+    const unrelatedIntegration = '/other-app/runtime/dist/integrations/keep.js';
+    const unrelatedPackage = '/other-app/node_modules/pi-web-access/dist/index.js';
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        extensions: [currentAppPath, unrelatedIntegration, unrelatedPackage],
+      }),
+    );
+
+    await configurePiExtensions(
+      settingsPath,
+      ['/current-app/runtime/dist/integrations/pi-extension.js'],
+      [currentAppPath],
+    );
+    expect(new Set(JSON.parse(readFileSync(settingsPath, 'utf8')).extensions)).toEqual(
+      new Set([currentAppPath, unrelatedIntegration, unrelatedPackage]),
+    );
+  });
+
+  test('preserves wrong-element Pi settings and rejects malformed ownership', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-pi-malformed-'));
+    directories.push(directory);
+    const settingsPath = join(directory, 'settings.json');
+    const ownershipPath = `${settingsPath}.ltcook-extensions.json`;
+    const malformed = '{"extensions":["ok",12]}\n';
+    writeFileSync(settingsPath, malformed);
+    await expect(configurePiExtensions(settingsPath, ['/owned.js'], [])).rejects.toThrow(
+      'Pi settings extensions must be an array of strings.',
+    );
+    expect(readFileSync(settingsPath, 'utf8')).toBe(malformed);
+
+    writeFileSync(settingsPath, '{"extensions":["keep.js"]}\n');
+    writeFileSync(ownershipPath, '{"version":1,"paths":["/old.js",7]}');
+    const settingsBefore = readFileSync(settingsPath, 'utf8');
+    const ownershipBefore = readFileSync(ownershipPath, 'utf8');
+    await expect(configurePiExtensions(settingsPath, ['/owned.js'], [])).rejects.toThrow(
+      'Pi extension ownership record is malformed.',
+    );
+    expect(readFileSync(settingsPath, 'utf8')).toBe(settingsBefore);
+    expect(readFileSync(ownershipPath, 'utf8')).toBe(ownershipBefore);
+  });
+
+  test('preserves invalid JSON settings without rewriting them', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-pi-invalid-json-'));
+    directories.push(directory);
+    const settingsPath = join(directory, 'settings.json');
+    const malformed = '{ invalid json\n';
+    writeFileSync(settingsPath, malformed);
+    await expect(configurePiExtensions(settingsPath, ['/owned.js'], [])).rejects.toThrow();
+    expect(readFileSync(settingsPath, 'utf8')).toBe(malformed);
+    expect(() => readFileSync(`${settingsPath}.ltcook-extensions.json`, 'utf8')).toThrow();
+  });
   test('rejects Paseo homes outside the deployment and under immutable app', async () => {
     const deploymentRoot = mkdtempSync(join(tmpdir(), 'ltcook-deployment-'));
     const outsideHome = mkdtempSync(join(tmpdir(), 'ltcook-paseo-outside-'));
@@ -58,9 +289,7 @@ describe('native runtime boundary', () => {
     }
 
     expect(() => readFileSync(join(outsideHome, 'config.json'))).toThrow();
-    expect(() =>
-      readFileSync(join(deploymentRoot, 'app', 'paseo', 'config.json')),
-    ).toThrow();
+    expect(() => readFileSync(join(deploymentRoot, 'app', 'paseo', 'config.json'))).toThrow();
   });
 
   test('separates authenticated user authority from native-ID-bound agent authority', async () => {
@@ -70,101 +299,196 @@ describe('native runtime boundary', () => {
     const controller = {
       openSession: async () => snapshotFor(nativeAgentId, false),
       snapshot: () => snapshotFor(nativeAgentId, false),
-      execute: async (_session: string, actor: RuntimeActor) => { actors.push(actor); return actor; },
+      execute: async (_session: string, actor: RuntimeActor) => {
+        actors.push(actor);
+        return actor;
+      },
       close: async () => undefined,
     } as RuntimeController;
     const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
     api.setSession('/workspace', 'session-1');
     const endpoint = await api.listen();
     try {
-      const command = { type: 'task.create', title: 'Task', description: 'Work', acceptance: 'Done' };
+      const command = {
+        type: 'task.create',
+        title: 'Task',
+        description: 'Work',
+        acceptance: 'Done',
+      };
       const userResponse = await fetch(`${endpoint}/v1/command`, {
-        method: 'POST', headers: { authorization: `Bearer ${master}`, 'content-type': 'application/json' },
+        method: 'POST',
+        headers: { authorization: `Bearer ${master}`, 'content-type': 'application/json' },
         body: JSON.stringify({ sessionId: 'session-1', nativeAgentId, command }),
       });
       expect(userResponse.status).toBe(200);
-      expect((await userResponse.json() as { value: RuntimeActor }).value).toEqual({ kind: 'user' });
+      expect(((await userResponse.json()) as { value: RuntimeActor }).value).toEqual({
+        kind: 'user',
+      });
+      const inactiveUserResponse = await fetch(`${endpoint}/v1/command`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${master}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: 'inactive-session', command }),
+      });
+      expect(inactiveUserResponse.status).toBe(403);
 
       const agentResponse = await fetch(`${endpoint}/v1/command`, {
-        method: 'POST', headers: { authorization: `Bearer ${agentBearer(master, nativeAgentId)}`, 'content-type': 'application/json' },
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${agentBearer(master, nativeAgentId)}`,
+          'content-type': 'application/json',
+        },
         body: JSON.stringify({ sessionId: 'session-1', nativeAgentId, command }),
       });
       expect(agentResponse.status).toBe(200);
-      expect((await agentResponse.json() as { value: RuntimeActor }).value).toEqual({ kind: 'agent', nativeAgentId });
+      expect(((await agentResponse.json()) as { value: RuntimeActor }).value).toEqual({
+        kind: 'agent',
+        nativeAgentId,
+      });
 
       const wrongId = await fetch(`${endpoint}/v1/command`, {
-        method: 'POST', headers: { authorization: `Bearer ${agentBearer(master, 'other-agent')}`, 'content-type': 'application/json' },
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${agentBearer(master, 'other-agent')}`,
+          'content-type': 'application/json',
+        },
         body: JSON.stringify({ sessionId: 'session-1', nativeAgentId, command }),
       });
       expect(wrongId.status).toBe(401);
 
       const snapshotResponse = await fetch(`${endpoint}/v1/snapshot`, {
-        method: 'POST', headers: { authorization: `Bearer ${agentBearer(master, nativeAgentId)}`, 'content-type': 'application/json' },
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${agentBearer(master, nativeAgentId)}`,
+          'content-type': 'application/json',
+        },
         body: JSON.stringify({ sessionId: 'session-1', nativeAgentId }),
       });
       expect(snapshotResponse.status).toBe(200);
       expect(actors).toHaveLength(2);
-    } finally { await api.close(); }
+    } finally {
+      await api.close();
+    }
   });
   test('persists an assigned readonly report through the authenticated HTTP boundary', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-runtime-api-'));
     directories.push(directory);
     const nativeAgents = new Map<string, { id: string; status: string }>();
     const agents: AgentBackend = {
-      async list() { return [...nativeAgents.values()]; },
+      async list() {
+        return [...nativeAgents.values()];
+      },
       async create({ member }) {
         const agent = { id: `native-${member.key}`, status: 'running' };
         nativeAgents.set(agent.id, agent);
         return agent;
       },
-      async inspect(id) { return nativeAgents.get(id) ?? null; },
+      async inspect(id) {
+        return nativeAgents.get(id) ?? null;
+      },
       async send() {},
-      async close(id) { nativeAgents.delete(id); },
+      async close(id) {
+        nativeAgents.delete(id);
+      },
     };
     const reviewPolicy = { mode: 'self' as const, reviewerKeys: [] as string[], required: false };
     const team: TeamPackage = {
       apiVersion: 1,
       definition: {
-        id: 'native-api-test-team', name: 'Native API test team', coordinatorKey: 'lead',
+        id: 'native-api-test-team',
+        name: 'Native API test team',
+        coordinatorKey: 'lead',
         members: [
-          { key: 'lead', name: 'Lead', lifetime: 'persistent', modelAlias: 'smart', thinking: '', readOnly: false, instructionPaths: [] },
-          { key: 'explorer', name: 'Explorer', lifetime: 'persistent', modelAlias: 'smol', thinking: '', readOnly: true, instructionPaths: [] },
+          {
+            key: 'lead',
+            name: 'Lead',
+            lifetime: 'persistent',
+            modelAlias: 'smart',
+            thinking: '',
+            readOnly: false,
+            instructionPaths: [],
+          },
+          {
+            key: 'explorer',
+            name: 'Explorer',
+            lifetime: 'persistent',
+            modelAlias: 'smol',
+            thinking: '',
+            readOnly: true,
+            instructionPaths: [],
+          },
         ],
-        resources: [], reviewPolicy,
+        resources: [],
+        reviewPolicy,
       },
-      activateService({ workflows }) {
-        workflows.register({ coordinatorKey: 'lead', delegateKeys: ['explorer'], review: reviewPolicy });
-      },
+      activateService() {},
       async activateAgent() {},
     };
-    const runtime = createRuntime({ databasePath: join(directory, 'coordination.sqlite'), team, agents });
+    const runtime = createRuntime({
+      databasePath: join(directory, 'coordination.sqlite'),
+      team,
+      agents,
+    });
     let api: RuntimeApi | undefined;
     try {
-      const opened = await runtime.openSession({ id: 'report-session', workspaceRoot: '/workspace' });
-      const task = await runtime.execute(opened.session.id, { kind: 'user' }, {
-        type: 'task.create', title: 'Explore', description: 'Inspect files', acceptance: 'Report findings',
-      }) as { id: string };
-      const assignment = await runtime.execute(opened.session.id, { kind: 'user' }, {
-        type: 'assignment.create', taskId: task.id, memberKey: 'explorer', message: 'Inspect the workspace',
-      }) as { id: string };
-      const nativeAgentId = runtime.snapshot(opened.session.id).members
-        .find(member => member.member.key === 'explorer')?.binding?.nativeAgentId;
+      const opened = await runtime.openSession({
+        id: 'report-session',
+        workspaceRoot: '/workspace',
+      });
+      const task = (await runtime.execute(
+        opened.session.id,
+        { kind: 'user' },
+        {
+          type: 'task.create',
+          title: 'Explore',
+          description: 'Inspect files',
+          acceptance: 'Report findings',
+        },
+      )) as { id: string };
+      const assignment = (await runtime.execute(
+        opened.session.id,
+        { kind: 'user' },
+        {
+          type: 'assignment.create',
+          taskId: task.id,
+          memberKey: 'explorer',
+          message: 'Inspect the workspace',
+        },
+      )) as { id: string };
+      const nativeAgentId = runtime
+        .snapshot(opened.session.id)
+        .members.find((member) => member.member.key === 'explorer')?.binding?.nativeAgentId;
       if (!nativeAgentId) throw new Error('Readonly explorer was not bound');
       api = new RuntimeApi(runtime, 'readonly-report-user-secret', `127.0.0.1:${await freePort()}`);
       const endpoint = await api.listen();
-      const post = (command: unknown) => fetch(`${endpoint}/v1/command`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${agentBearer('readonly-report-user-secret', nativeAgentId)}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId: opened.session.id, nativeAgentId, command }),
-      });
+      const post = (command: unknown) =>
+        fetch(`${endpoint}/v1/command`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${agentBearer('readonly-report-user-secret', nativeAgentId)}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ sessionId: opened.session.id, nativeAgentId, command }),
+        });
 
-      const report = { type: 'report.create', assignmentId: assignment.id, summary: 'Found relevant files', evidence: 'Inspected source tree' };
+      const report = {
+        type: 'report.create',
+        assignmentId: assignment.id,
+        summary: 'Found relevant files',
+        evidence: 'Inspected source tree',
+      };
       const reportResponse = await post(report);
       expect(reportResponse.status).toBe(200);
-      expect(runtime.snapshot(opened.session.id).reports.map(value => value.summary)).toEqual(['Found relevant files']);
+      expect(runtime.snapshot(opened.session.id).reports.map((value) => value.summary)).toEqual([
+        'Found relevant files',
+      ]);
       expect(runtime.snapshot(opened.session.id).assignments[0]?.status).toBe('reported');
 
-      const schedulerResponse = await post({ type: 'task.create', title: 'Unauthorized', description: 'Schedule work', acceptance: 'Never' });
+      const schedulerResponse = await post({
+        type: 'task.create',
+        title: 'Unauthorized',
+        description: 'Schedule work',
+        acceptance: 'Never',
+      });
       expect(schedulerResponse.status).toBe(400);
       expect(runtime.snapshot(opened.session.id).tasks).toHaveLength(1);
     } finally {
@@ -173,31 +497,155 @@ describe('native runtime boundary', () => {
     }
   });
 
-
-  test('opens same-team workspace sessions once and keeps shell provenance scoped to memory', async () => {
+  test('opens multiple same-team Sessions per workspace with single-flight and authority boundaries', async () => {
     const master = 'test-master-secret';
-    const shellEnvironment = { LTCOOK_API_TOKEN: 'original-shell-token', LTCOOK_TEAM: 'default-minimal' };
-    const snapshot = snapshotFor('native-agent');
-    snapshot.session.id = 'workspace-session';
-    snapshot.session.workspaceRoot = '/new-workspace';
-    const opened: Array<{ workspaceRoot: string; sessionId: string; teamSelection: string; shellEnvironment: Record<string, string> }> = [];
-    const controller = { snapshot() { return snapshot; }, execute: async () => undefined } as unknown as RuntimeController;
+    const shellEnvironment = {
+      LTCOOK_API_TOKEN: 'original-shell-token',
+      LTCOOK_TEAM: 'default-minimal',
+    };
+    const opened: Array<{
+      workspaceRoot: string;
+      sessionId: string;
+      teamSelection: string;
+      shellEnvironment: Record<string, string>;
+    }> = [];
+    const snapshots = new Map<string, SessionSnapshot>();
+    const controller = {
+      snapshot(sessionId: string) {
+        const snapshot = snapshots.get(sessionId);
+        if (!snapshot) throw new Error('unknown session');
+        return snapshot;
+      },
+      execute: async () => undefined,
+    } as unknown as RuntimeController;
     const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
-    api.setOpenWorkspaceHandler('default-minimal', async request => { opened.push(request); return snapshot; });
+    api.setOpenWorkspaceHandler(
+      'default-minimal',
+      async (request) => {
+        opened.push(request);
+        const snapshot = snapshotFor(
+          `native-${request.sessionId}`,
+          true,
+          request.sessionId,
+          request.workspaceRoot,
+        );
+        snapshots.set(request.sessionId, snapshot);
+        return snapshot;
+      },
+      'team-1',
+    );
     const endpoint = await api.listen();
-    const post = (token: string, body: unknown) => fetch(`${endpoint}/v1/session/open`, {
-      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
-    });
-    const request = { workspaceRoot: '/new-workspace', sessionId: 'workspace-session', teamSelection: 'default-minimal', shellEnvironment };
+    const post = (token: string, body: unknown) =>
+      fetch(`${endpoint}/v1/session/open`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const first = {
+      workspaceRoot: '/new-workspace',
+      sessionId: 'workspace-session',
+      teamSelection: 'default-minimal',
+      shellEnvironment,
+    };
+    const second = { ...first, sessionId: 'workspace-session-2' };
     try {
-      const responses = await Promise.all([post(master, request), post(master, request)]);
-      expect(responses.map(response => response.status)).toEqual([200, 200]);
+      const firstResponses = await Promise.all([post(master, first), post(master, first)]);
+      expect(firstResponses.map((response) => response.status)).toEqual([200, 200]);
       expect(opened).toHaveLength(1);
       expect(opened[0]?.shellEnvironment).toEqual(shellEnvironment);
-      expect((await post(master, { ...request, teamSelection: 'different-team' })).status).toBe(409);
-      expect((await post(agentBearer(master, 'native-agent'), { ...request, nativeAgentId: 'native-agent' })).status).toBe(403);
-      expect(opened).toHaveLength(1);
-    } finally { await api.close(); }
+      expect((await post(master, second)).status).toBe(200);
+      expect(opened).toHaveLength(2);
+      expect(snapshots.get(first.sessionId)?.session.teamInstanceId).toBe(
+        snapshots.get(second.sessionId)?.session.teamInstanceId,
+      );
+      expect(snapshots.get(first.sessionId)?.members[0]?.binding?.nativeAgentId).not.toBe(
+        snapshots.get(second.sessionId)?.members[0]?.binding?.nativeAgentId,
+      );
+      expect((await post(master, { ...first, workspaceRoot: '/other-workspace' })).status).toBe(
+        409,
+      );
+      const snapshotResponse = await fetch(`${endpoint}/v1/snapshot`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${master}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceRoot: first.workspaceRoot, sessionId: second.sessionId }),
+      });
+      expect(snapshotResponse.status).toBe(200);
+      expect(((await snapshotResponse.json()) as SessionSnapshot).session.id).toBe(
+        second.sessionId,
+      );
+      const wrongWorkspaceSnapshot = await fetch(`${endpoint}/v1/snapshot`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${master}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceRoot: '/other-workspace', sessionId: second.sessionId }),
+      });
+      expect(wrongWorkspaceSnapshot.status).toBe(400);
+      const crossSessionAgentSnapshot = await fetch(`${endpoint}/v1/snapshot`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${agentBearer(master, `native-${first.sessionId}`)}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId: second.sessionId,
+          nativeAgentId: `native-${first.sessionId}`,
+        }),
+      });
+      expect(crossSessionAgentSnapshot.status).toBe(400);
+      expect((await post(master, { ...first, teamSelection: 'different-team' })).status).toBe(409);
+      expect(
+        (
+          await post(agentBearer(master, 'native-agent'), {
+            ...first,
+            nativeAgentId: 'native-agent',
+          })
+        ).status,
+      ).toBe(403);
+      expect(opened).toHaveLength(2);
+    } finally {
+      await api.close();
+    }
+  });
+  test('retries requested-session initialization after a transient failure', async () => {
+    const master = 'test-master-secret';
+    let attempts = 0;
+    let snapshot: SessionSnapshot | undefined;
+    const controller = {
+      snapshot(sessionId: string) {
+        if (!snapshot || snapshot.session.id !== sessionId) throw new Error('unknown session');
+        return snapshot;
+      },
+    } as unknown as RuntimeController;
+    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
+    api.setOpenWorkspaceHandler(
+      'default-minimal',
+      async (request) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('temporary activation failure');
+        snapshot = snapshotFor('native-agent', true, request.sessionId, request.workspaceRoot);
+        return snapshot;
+      },
+      'team-1',
+    );
+    const endpoint = await api.listen();
+    const request = {
+      workspaceRoot: '/retry-workspace',
+      sessionId: 'retry-session',
+      teamSelection: 'default-minimal',
+      shellEnvironment: {},
+    };
+    const post = () =>
+      fetch(`${endpoint}/v1/session/open`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${master}`, 'content-type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+    try {
+      expect((await post()).status).toBe(400);
+      expect((await post()).status).toBe(200);
+      expect(attempts).toBe(2);
+    } finally {
+      await api.close();
+    }
   });
   test('validates and dispatches the native team.close command', async () => {
     const master = 'test-master-secret';
@@ -205,39 +653,103 @@ describe('native runtime boundary', () => {
     const sent: unknown[] = [];
     const controller = {
       snapshot: () => snapshotFor(nativeAgentId, false),
-      execute: async (_session: string, _actor: RuntimeActor, command: unknown) => { sent.push(command); return command; },
+      execute: async (_session: string, _actor: RuntimeActor, command: unknown) => {
+        sent.push(command);
+        return command;
+      },
     } as unknown as RuntimeController;
     const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
     const endpoint = await api.listen();
-    const post = (command: unknown) => fetch(`${endpoint}/v1/command`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${agentBearer(master, nativeAgentId)}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: 'session-1', nativeAgentId, command }),
-    });
+    const post = (command: unknown) =>
+      fetch(`${endpoint}/v1/command`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${agentBearer(master, nativeAgentId)}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ sessionId: 'session-1', nativeAgentId, command }),
+      });
     const command = { type: 'team.close', memberKey: 'temporary-reviewer' };
     try {
       const response = await post(command);
       expect(response.status).toBe(200);
-      expect((await response.json() as { value: unknown }).value).toEqual(command);
+      expect(((await response.json()) as { value: unknown }).value).toEqual(command);
       expect(sent).toEqual([command]);
       expect((await post({ type: 'team.close' })).status).toBe(400);
+      expect((await post({ type: 'pass.create', title: 'Pass', extra: true })).status).toBe(400);
+      expect(
+        (
+          await post({
+            type: 'task.create',
+            title: 'Task',
+            description: 'Work',
+            acceptance: 'Done',
+            passTitle: 'legacy',
+          })
+        ).status,
+      ).toBe(400);
       expect(sent).toHaveLength(1);
-    } finally { await api.close(); }
+    } finally {
+      await api.close();
+    }
   });
 
-
-  test('projects safe task and assignment details without prompt or secret content', () => {
+  test('projects task titles, Pass and ordered Step progress without private work content', () => {
     const snapshot = snapshotFor('paseo-agent-42');
+    snapshot.passes.push({
+      id: 'pass-1',
+      sessionId: 'session-1',
+      title: 'Visible pass',
+      status: 'running',
+      revision: 3,
+      createdAt: '2026-01-01T00:00:00Z',
+    });
     snapshot.tasks.push({
-      id: 'task-1', sessionId: 'session-1', passId: 'pass-1',
-      title: 'private-prompt', description: 'private-description',
-      acceptance: 'private-acceptance', status: 'blocked', revision: 1,
+      id: 'task-1',
+      sessionId: 'session-1',
+      passId: 'pass-1',
+      title: 'Visible task',
+      description: 'private-description',
+      acceptance: 'private-acceptance',
+      status: 'blocked',
+      revision: 1,
       blocker: 'private-token',
     });
+    snapshot.tasks.push({
+      id: 'task-2',
+      sessionId: 'session-1',
+      title: 'Pass-less task',
+      description: 'another-private-description',
+      acceptance: 'another-private-acceptance',
+      status: 'running',
+      revision: 1,
+    });
+    snapshot.steps.push(
+      {
+        id: 'step-2',
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        title: 'Second step',
+        position: 2,
+        status: 'pending',
+      },
+      {
+        id: 'step-1',
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        title: 'First step',
+        position: 1,
+        status: 'completed',
+      },
+    );
     snapshot.assignments.push({
-      id: 'assignment-1', sessionId: 'session-1', taskId: 'task-1',
-      memberKey: 'worker', nativeAgentId: 'paseo-agent-42',
-      status: 'uncertain', handoff: 'private-handoff',
+      id: 'assignment-1',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      memberKey: 'worker',
+      nativeAgentId: 'paseo-agent-42',
+      status: 'uncertain',
+      handoff: 'private-handoff',
     });
     snapshot.blockers.push('private-prompt and private-token');
     const projected = panelSnapshot(snapshot);
@@ -245,20 +757,52 @@ describe('native runtime boundary', () => {
 
     expect(projected.teamId).toBe('team-1');
     expect(projected.members[0]).toMatchObject({
-      memberKey: 'worker', nativeAgentId: 'paseo-agent-42', status: 'running',
+      memberKey: 'worker',
+      name: 'Worker',
+      nativeAgentId: 'paseo-agent-42',
+      status: 'running',
     });
-    expect(projected.tasks).toEqual([{ taskId: 'task-1', status: 'blocked' }]);
-    expect(projected.assignments).toEqual([{
-      assignmentId: 'assignment-1', taskId: 'task-1',
-      memberKey: 'worker', status: 'uncertain',
-    }]);
+    expect(projected.passes).toEqual([
+      { passId: 'pass-1', title: 'Visible pass', status: 'running' },
+    ]);
+    expect(projected.tasks).toEqual([
+      {
+        taskId: 'task-1',
+        title: 'Visible task',
+        status: 'blocked',
+        passId: 'pass-1',
+        passTitle: 'Visible pass',
+        steps: [
+          { stepId: 'step-1', title: 'First step', status: 'completed', position: 1 },
+          { stepId: 'step-2', title: 'Second step', status: 'pending', position: 2 },
+        ],
+      },
+      {
+        taskId: 'task-2',
+        title: 'Pass-less task',
+        status: 'running',
+        passId: null,
+        passTitle: null,
+        steps: [],
+      },
+    ]);
+    expect(projected.assignments).toEqual([
+      {
+        assignmentId: 'assignment-1',
+        taskId: 'task-1',
+        taskTitle: 'Visible task',
+        memberName: 'Worker',
+        status: 'uncertain',
+      },
+    ]);
     expect(projected.issues).toContain('Blocked tasks: 1');
     expect(projected.issues).toContain('Assignments with uncertain delivery: 1');
     expect(projected.issues).toContain('Coordination blockers: 1');
-    expect(payload).not.toContain('private-prompt');
     expect(payload).not.toContain('private-description');
+    expect(payload).not.toContain('private-acceptance');
     expect(payload).not.toContain('private-token');
     expect(payload).not.toContain('private-handoff');
+    expect(payload).not.toContain('private-prompt');
   });
 
   test('keeps public Paseo agent lifecycle statuses, including initialization and error', () => {
@@ -312,9 +856,14 @@ describe('native runtime boundary', () => {
     span.end();
     span.end();
     await telemetry.exportTrace();
-    const exported = JSON.parse(readFileSync(trace, 'utf8')) as { traceEvents: Array<{ ph: string; args: { correlationId: string } }> };
-    expect(exported.traceEvents.map(event => event.ph)).toEqual(['B', 'E']);
-    expect(exported.traceEvents.map(event => event.args.correlationId)).toEqual(['span-1', 'span-1']);
+    const exported = JSON.parse(readFileSync(trace, 'utf8')) as {
+      traceEvents: Array<{ ph: string; args: { correlationId: string } }>;
+    };
+    expect(exported.traceEvents.map((event) => event.ph)).toEqual(['B', 'E']);
+    expect(exported.traceEvents.map((event) => event.args.correlationId)).toEqual([
+      'span-1',
+      'span-1',
+    ]);
   });
 
   test('redacts credentials and prompt content from structured logs and trace export', async () => {
@@ -324,7 +873,11 @@ describe('native runtime boundary', () => {
     const trace = join(directory, 'runtime.json');
     const telemetry = new Telemetry(logs, trace);
     const span = telemetry.begin('runtime.operation');
-    await telemetry.log('info', 'runtime.event', { apiToken: 'private-token', userPrompt: 'private-prompt', sessionId: 'session-1' });
+    await telemetry.log('info', 'runtime.event', {
+      apiToken: 'private-token',
+      userPrompt: 'private-prompt',
+      sessionId: 'session-1',
+    });
     span.end();
     await telemetry.exportTrace();
     const logText = readFileSync(logs, 'utf8');

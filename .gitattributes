@@ -1,2 +1,6 @@
 # -- Preserve SDK-generated Windows command scripts and honor Git whitespace checks.
 *.cmd -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+
+# -- AppRC owns these generated lifecycle artifacts.
+src/ltcook_distr/artifacts/** linguist-generated=true
+src/ltcook_distr/payload/app_lifecycle/_support/** linguist-generated=true

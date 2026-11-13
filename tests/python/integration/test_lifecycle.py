@@ -380,9 +380,7 @@ def test_service_secret_initialization_persists_app_rc_fields(
     }
     interpreter = Path(sys.executable)
     initialize_service_secrets(interpreter, environment)
-    configuration = (
-        APP_RC.manage(environment=environment).resolve().build(LtcookConfig)
-    )
+    configuration = APP_RC.manage(environment=environment).resolve().build(LtcookConfig)
     recorded = (
         configuration.runtime.api_token,
         configuration.crawl4ai.api_token,

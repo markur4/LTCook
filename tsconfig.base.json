@@ -3,6 +3,7 @@
     "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "noUnusedLocals": true,
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,

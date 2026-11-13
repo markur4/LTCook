@@ -1,0 +1,146 @@
+import { Type, type Static } from 'typebox';
+import { Value } from 'typebox/value';
+
+export const WorkStatusSchema = Type.Union([
+  Type.Literal('pending'),
+  Type.Literal('running'),
+  Type.Literal('blocked'),
+  Type.Literal('completed'),
+  Type.Literal('failed'),
+  Type.Literal('cancelled'),
+]);
+export const TaskPhaseSchema = Type.Union([
+  Type.Literal('implementation'),
+  Type.Literal('review'),
+  Type.Literal('verification'),
+  Type.Literal('integration'),
+  Type.Literal('integration-fix'),
+  Type.Literal('system-fix'),
+  Type.Literal('verification-fix'),
+  Type.Literal('review-fix'),
+]);
+export type WorkStatus = Static<typeof WorkStatusSchema>;
+export type TaskPhase = Static<typeof TaskPhaseSchema>;
+
+/** The single command definition used by HTTP, native tools, and public types. */
+export const RuntimeCommandSchema = Type.Union([
+  Type.Object(
+    {
+      type: Type.Literal('pass.create'),
+      title: Type.String(),
+      planRef: Type.Optional(Type.String()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { type: Type.Literal('pass.update'), passId: Type.String(), status: WorkStatusSchema },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal('task.create'),
+      passId: Type.Optional(Type.String()),
+      title: Type.String(),
+      description: Type.String(),
+      acceptance: Type.String(),
+      phase: Type.Optional(TaskPhaseSchema),
+      requestId: Type.Optional(Type.String()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal('task.update'),
+      taskId: Type.String(),
+      status: WorkStatusSchema,
+      blocker: Type.Optional(Type.String()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal('step.create'),
+      taskId: Type.String(),
+      title: Type.String(),
+      position: Type.Optional(Type.Integer({ minimum: 0 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { type: Type.Literal('step.update'), stepId: Type.String(), status: WorkStatusSchema },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal('assignment.create'),
+      taskId: Type.String(),
+      memberKey: Type.String(),
+      message: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal('report.create'),
+      assignmentId: Type.String(),
+      summary: Type.String(),
+      evidence: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal('review.create'),
+      passId: Type.String(),
+      outcome: Type.Union([Type.Literal('accepted'), Type.Literal('changes-requested')]),
+      summary: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal('approval.create'),
+      scope: Type.Object(
+        { action: Type.String(), resourceId: Type.String(), revision: Type.String() },
+        { additionalProperties: false },
+      ),
+      decision: Type.Union([Type.Literal('approved'), Type.Literal('rejected')]),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { type: Type.Literal('team.spawn'), memberKey: Type.String() },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { type: Type.Literal('team.message'), memberKey: Type.String(), message: Type.String() },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { type: Type.Literal('team.close'), memberKey: Type.String() },
+    { additionalProperties: false },
+  ),
+]);
+export type RuntimeCommand = Static<typeof RuntimeCommandSchema>;
+type CommandInput<T extends RuntimeCommand['type']> = Omit<
+  Extract<RuntimeCommand, { type: T }>,
+  'type'
+>;
+export type CreatePassInput = CommandInput<'pass.create'>;
+export type UpdatePassInput = CommandInput<'pass.update'>;
+export type CreateTaskInput = CommandInput<'task.create'>;
+export type UpdateTaskInput = CommandInput<'task.update'>;
+export type CreateStepInput = CommandInput<'step.create'>;
+export type UpdateStepInput = CommandInput<'step.update'>;
+export const RuntimeCommandInputSchema = Type.Object(
+  { command: RuntimeCommandSchema },
+  { additionalProperties: false },
+);
+export type RuntimeCommandInput = Static<typeof RuntimeCommandInputSchema>;
+export type CreateAssignmentInput = CommandInput<'assignment.create'>;
+export type CreateReportInput = CommandInput<'report.create'>;
+export type CreateReviewInput = CommandInput<'review.create'>;
+export type CreateApprovalInput = CommandInput<'approval.create'>;
+export function isRuntimeCommand(value: unknown): value is RuntimeCommand {
+  return Value.Check(RuntimeCommandSchema, value);
+}

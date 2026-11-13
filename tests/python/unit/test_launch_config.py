@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 import subprocess
@@ -8,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from ltcook import launch
-from ltcook.config.native import pi_documents, write_pi_config
+from ltcook.config.pi_config import pi_documents, write_pi_config
 
 
 class Section:
@@ -92,10 +91,25 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
     assert result.environment["LTCOOK_MODEL_SMOL"] == "workspace-model"
     assert result.environment["SHELL_ONLY"] == "preserved"
     assert "LTCOOK_SHELL_PROVENANCE" not in result.environment
-    expected_session = (
-        "workspace-" + hashlib.sha256(str(tmp_path.resolve()).encode()).hexdigest()[:24]
+    next_launch = launch.resolve_launch(
+        tmp_path, original_environment=process_environment
     )
-    assert result.environment["LTCOOK_SESSION"] == expected_session
+    assert (
+        result.environment["LTCOOK_SESSION"]
+        != next_launch.environment["LTCOOK_SESSION"]
+    )
+    resumed = launch.resolve_launch(
+        tmp_path,
+        original_environment={
+            **original,
+            "LTCOOK_SESSION": result.environment["LTCOOK_SESSION"],
+        },
+    )
+    assert resumed.environment["LTCOOK_SESSION"] == result.environment["LTCOOK_SESSION"]
+    assert (
+        resumed.environment["PI_CODING_AGENT_DIR"]
+        == result.environment["PI_CODING_AGENT_DIR"]
+    )
 
 
 def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_path):

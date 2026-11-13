@@ -19,6 +19,7 @@ from apprc.distribution import (
 )
 
 from ltcook_dev.packaging import release_assets
+from ltcook_dev.packaging.package_validation import validate_package
 from ltcook_distr.make_artifacts import distribution_spec
 
 REPOSITORY = "markur4/ltcook"
@@ -36,7 +37,7 @@ def _package_files(directory: Path, project: str, version: str) -> tuple[Path, P
             "Release staging requires exactly one wheel and one source archive."
         )
     for path in (*wheels, *sdists):
-        release_assets._validate_package(path, project, version)
+        validate_package(path, project, version)
     return wheels[0], sdists[0]
 
 

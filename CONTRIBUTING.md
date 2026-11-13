@@ -43,18 +43,21 @@ The project requires Python 3.12+, Bun 1.4.4+, Node matching `.node-version`,
 uv, and just. From the project root:
 
 ```shell
+uv venv --python 3.12 .venv
 just sync
 ```
 
-This installs the frozen Bun dependencies, builds runtime/team assets, stages the
-production bundle, then synchronizes the Python development environment from
-`uv.lock`. It does not install Podman or run application setup. You may use the
+This uses the checkout's `.venv` (or explicit `UV_PROJECT_ENVIRONMENT`), installs
+frozen Bun dependencies, builds and stages runtime/team assets, then synchronizes
+the Python environment from `uv.lock`. It does not install Podman or run
+application setup. You may use the
 normal Python package tooling without uv for Python-only work, but changes to the
 runtime bundle, Python lock, or packaged assets should use the locked root setup.
 If Bun is not on PATH, set `BUN` to its executable path for root and runtime tasks.
 
 The [maintainer environment](docs/Development.md#maintainer-environment) guide
-explains the two lockfiles, staged wheel payload, and focused development choices.
+explains the dependency locks, portable lock export, staged wheel payload, and
+restored scaffold recipes.
 Entering the repository does not install or start Pi, Paseo, browser files, or
 containers.
 
@@ -69,7 +72,8 @@ just check
 just test
 ```
 
-`just check` runs root TypeScript checks plus Ruff and Pyright. `just test` runs
+`just check` enforces Prettier and Ruff formatting, TypeScript types, Python lint,
+and Pyright. Use `just format` to apply formatting. `just test` runs
 Bun unit/native/runtime-integration/team-contract tests and Python tests excluding
 the `integration` and `system` markers. The runtime integration tests use fake
 agents and in-memory coordination; these quick commands do not start native
@@ -106,11 +110,16 @@ Linux-only manual asset build, not publication.
   `src/ltcook_distr/bundle`.
 - Runtime and team packages are Bun workspaces. Teams implement the current
   public `apiVersion: 1` interface in `runtime/src/api/team.ts`; use public team
-  operations rather than SQL or runtime internals. Do not add adapters for old
+  operations rather than SQL or runtime internals. Shared commands are defined
+  once in `runtime/src/api/commands.ts` and inferred from its TypeBox schema; do
+  not duplicate the command union or parameters. Do not add adapters for old
   prototype versions.
 - Keep TypeScript coordination in the single runtime owner for its SQLite
-  database. Preserve workspace/team identity and never replay an uncertain
-  external action automatically.
+  database. A persistent TeamInstance may back multiple Sessions, but native
+  bindings and chat histories remain Session-specific. Pi/Paseo owns message
+  history; LTCook records ordered Steps and Pass-level current-revision reviews.
+  Preserve workspace/team identity and never replay an uncertain external action
+  automatically.
 - Use precise domain attributes and established helpers. Add abstractions only
   when they clarify a real shared responsibility. Preserve package initializer
   boundaries and use Sphinx-style docstrings for public Python behavior.

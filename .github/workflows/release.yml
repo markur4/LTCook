@@ -57,6 +57,7 @@ jobs:
           PYTHONPATH=src uv run --locked python \
             -m ltcook_dev.packaging.build_pyapp \
             --pyapp-source pyapp-source \
+            --installer src/ltcook_distr/artifacts/installer/main-installer.pyz \
             --wheel "$1" \
             --output artifacts/ltcook-install
 

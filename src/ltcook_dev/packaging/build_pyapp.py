@@ -13,7 +13,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 
-from .release_assets import _validate_package
+from .package_validation import validate_package
 
 
 def _installer_sdk_requirement(project: dict[str, object]) -> str:
@@ -85,7 +85,7 @@ def build_pyapp(
     project = metadata.get("project", {})
     if project.get("name") != "ltcook" or not isinstance(project.get("version"), str):
         raise ValueError("Project metadata must declare LTCook's installer identity.")
-    wheel_bytes = _validate_package(wheel, project["name"], project["version"])
+    wheel_bytes = validate_package(wheel, project["name"], project["version"])
     wheel_digest = hashlib.sha256(wheel_bytes).hexdigest()
     cargo = shutil.which("cargo")
     if cargo is None:
