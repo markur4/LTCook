@@ -1,0 +1,81 @@
+name: CI
+
+run-name: ${{ github.actor }} - ${{ github.event_name }} - CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: auto
+      - name: Install project from uv.lock
+        run: uv sync --locked --all-extras --all-groups
+      - name: Check lockfile
+        run: uv lock --check
+      - name: Check generated installer artifacts
+        run: just check-artifacts
+      - name: Check formatting
+        run: uv run --locked ruff format . --check
+      - name: Lint
+        run: uv run --locked ruff check .
+      - name: Type check
+        run: uv run --locked pyright
+      - name: Test
+        env:
+          NO_COLOR: "1"
+          _TYPER_FORCE_DISABLE_TERMINAL: "1"
+        run: uv run --locked pytest
+      - name: Compile sources
+        run: uv run --locked python -m compileall -q src tests
+
+  installation:
+    name: ${{ matrix.target }} install / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            python-version: "3.12"
+            target: linux-x86_64
+          - runner: ubuntu-latest
+            python-version: "3.13"
+            target: linux-x86_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: auto
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: "1.56.0"
+      - name: Install project from uv.lock
+        run: uv sync --locked --all-extras --all-groups
+      - name: Install and inspect the generated sdist with uv
+        run: just release-install-smoke
