@@ -1,0 +1,35 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+BUN := env_var_or_default("BUN", "bun")
+
+[group('Runtime')]
+default:
+    @just --list
+
+[group('Runtime')]
+sync:
+    cd .. && {{quote(BUN)}} install --frozen-lockfile
+
+[group('Runtime')]
+dev *ARGS:
+    cd .. && PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.runtime --root . --bun {{quote(BUN)}} -- {{ARGS}}
+
+[group('Runtime')]
+watch *ARGS:
+    cd .. && PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.runtime --root . --watch --bun {{quote(BUN)}} -- {{ARGS}}
+
+[group('Runtime')]
+check:
+    cd .. && {{quote(BUN)}} run --cwd runtime check
+
+[group('Runtime')]
+test:
+    cd .. && {{quote(BUN)}} test tests/runtime/unit tests/runtime/native tests/runtime/integration
+
+[group('Runtime')]
+test-integration:
+    cd .. && {{quote(BUN)}} test tests/runtime/integration
+
+[group('Runtime')]
+build:
+    cd .. && {{quote(BUN)}} run --cwd runtime build
