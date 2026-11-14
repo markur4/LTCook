@@ -448,6 +448,7 @@ class _LogFollower:
     path: Path
     label: str
     offset: int | None = None
+    verbose: bool = False
     stream: BinaryIO | None = None
     identity: tuple[int, int] | None = None
     decoder: codecs.IncrementalDecoder = field(
@@ -459,9 +460,15 @@ class _LogFollower:
         self.fragment += text
         while "\n" in self.fragment:
             line, self.fragment = self.fragment.split("\n", 1)
-            print(_format_console_log(line, self.label), flush=True)
+            rendered = _format_console_log(line, self.label, verbose=self.verbose)
+            if rendered is not None:
+                print(rendered, flush=True)
         if final and self.fragment:
-            print(_format_console_log(self.fragment, self.label), flush=True)
+            rendered = _format_console_log(
+                self.fragment, self.label, verbose=self.verbose
+            )
+            if rendered is not None:
+                print(rendered, flush=True)
             self.fragment = ""
 
     def _drain(self) -> None:
@@ -514,8 +521,12 @@ def follow_runtime_logs(
     *,
     child: StartedRuntime | None = None,
     stop_owned_on_interrupt: bool = False,
+    verbose: bool = False,
 ) -> int:
-    """Attach private owner logs; Ctrl+C normally detaches only this viewer."""
+    """Attach private owner logs; Ctrl+C normally detaches only this viewer.
+
+    :param verbose: Whether to show complete diagnostic records and trace output.
+    """
     url = paseo_url(status.paseo_listen)
     if status.backend_log_path is None:
         raise RuntimeClientError(
@@ -526,9 +537,10 @@ def follow_runtime_logs(
             Path(status.backend_log_path),
             "runtime",
             child.backend_offset if child else None,
+            verbose,
         ),
-        _LogFollower(Path(status.telemetry_log_path), "events"),
-        _LogFollower(Path(status.paseo_log_path), "paseo"),
+        _LogFollower(Path(status.telemetry_log_path), "events", verbose=verbose),
+        _LogFollower(Path(status.paseo_log_path), "paseo", verbose=verbose),
     ]
     try:
         for follower in followers:

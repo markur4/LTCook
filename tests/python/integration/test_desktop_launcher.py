@@ -241,9 +241,20 @@ def test_concurrent_cli_attach_detach_incremental_logs_and_explicit_stop(tmp_pat
             path.parent.mkdir(parents=True, exist_ok=True)
         telemetry_record = (
             b'{"timestamp":"2026-11-14T10:20:30.000Z","level":"info",'
-            b'"event":"runtime.ready","sessionId":"fixture-session"}\n'
+            b'"event":"runtime.ready","workspace":"workspace-alpha",'
+            b'"sessionId":"fixture-session"}\n'
         )
         paseo_record = (
+            b'{"time":1794651630000,"level":30,'
+            b'"msg":"Client connected; awaiting hello",'
+            b'"connectionId":"synthetic-connection",'
+            b'"userAgent":"synthetic-browser"}\n'
+            b'{"time":1794651630000,"level":30,"msg":"ws_runtime_metrics",'
+            b'"memory":{"rss":100000},"latency":[{"count":20}]}\n'
+            b'{"time":1794651630000,"level":40,"msg":"ws_slow_request",'
+            b'"requestType":"usage.list_reports.request","durationMs":826,'
+            b'"connectionId":"synthetic-connection",'
+            b'"userAgent":"synthetic-browser"}\n'
             b'{"time":1794651630000,"level":50,"msg":"request failed",'
             b'"name":"fixture-daemon","err":{"type":"TypeError",'
             b'"message":"bad input","code":"EINVAL",'
@@ -271,13 +282,16 @@ def test_concurrent_cli_attach_detach_incremental_logs_and_explicit_stop(tmp_pat
             "INFO",
             "[events]",
             "runtime.ready",
-            "sessionId=fixture-session",
+            "workspace=workspace-alpha",
+            "details in log",
             "ERROR",
             "[paseo] [fixture-daemon]",
             "request failed",
             "TypeError: bad input",
             "code=EINVAL",
-            "at handler (server.js:4)",
+            "ws_slow_request",
+            "requestType=usage.list_reports.request",
+            "durationMs=826",
         }
         while time.monotonic() < deadline and not all(
             marker in seen for marker in expected
@@ -288,6 +302,12 @@ def test_concurrent_cli_attach_detach_incremental_logs_and_explicit_stop(tmp_pat
                     "utf-8", errors="replace"
                 )
         assert all(marker in seen for marker in expected)
+        assert "sessionId=fixture-session" not in seen
+        assert "at handler (server.js:4)" not in seen
+        assert "Client connected; awaiting hello" not in seen
+        assert "ws_runtime_metrics" not in seen
+        assert "synthetic-connection" not in seen
+        assert "synthetic-browser" not in seen
         assert {path: path.read_bytes() for path in raw_sources} == raw_sources
         for path, _label in sources:
             with path.open("ab") as output:
@@ -412,6 +432,74 @@ def test_concurrent_cli_attach_detach_incremental_logs_and_explicit_stop(tmp_pat
             )
         except subprocess.TimeoutExpired:
             pass
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="Signal-based owner lifecycle needs POSIX."
+)
+@pytest.mark.skipif(
+    shutil.which("bun") is None, reason="Bun runs the native owner fixture."
+)
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "arguments", [("--verbose",), ("launch", "runtime", "--verbose")]
+)
+def test_verbose_cli_shows_full_upstream_diagnostics(tmp_path, arguments):
+    environment = _environment(tmp_path)
+    process = _start_cli(
+        environment, *(arguments if arguments[0] == "--verbose" else ())
+    )
+    try:
+        status = _wait_ready(environment, process)
+        if arguments[0] == "launch":
+            _detach(process)
+            process = _start_cli(environment, *arguments)
+        assert process.stdout is not None
+        deadline = time.monotonic() + 5
+        seen = ""
+        while time.monotonic() < deadline and "Attached to LTCook" not in seen:
+            ready, _, _ = select.select([process.stdout], [], [], 0.2)
+            if ready:
+                seen += os.read(process.stdout.fileno(), 4096).decode(
+                    "utf-8", errors="replace"
+                )
+        assert "Attached to LTCook" in seen
+        paseo = Path(status.paseo_log_path)
+        paseo.parent.mkdir(parents=True, exist_ok=True)
+        paseo.write_text(
+            '{"level":30,"msg":"websocket client connected",'
+            '"connectionId":"synthetic-connection",'
+            '"browserFingerprint":"synthetic-browser",'
+            '"metrics":{"active":[1,2,3]}}\n',
+            encoding="utf-8",
+        )
+        assert process.stdout is not None
+        deadline = time.monotonic() + 5
+        seen = ""
+        while time.monotonic() < deadline and "synthetic-browser" not in seen:
+            ready, _, _ = select.select([process.stdout], [], [], 0.2)
+            if ready:
+                seen += os.read(process.stdout.fileno(), 4096).decode(
+                    "utf-8", errors="replace"
+                )
+        assert "websocket client connected" in seen
+        assert "synthetic-connection" in seen
+        assert "synthetic-browser" in seen and "metrics" in seen
+        _detach(process)
+        assert isinstance(probe_runtime(environment), RuntimeStatus)
+    finally:
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+            process.communicate(timeout=10)
+        subprocess.run(
+            _command("stop"),
+            cwd=REPOSITORY_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=35,
+            check=False,
+        )
 
 
 @pytest.mark.skipif(

@@ -124,12 +124,14 @@ a server started by that foreground command; reusing a server does not take over
 its ownership. Old or raw developer runtimes without output capture must be
 restarted through the installed CLI before desktop log attachment is available.
 
-The terminal formats recognized LTCook telemetry and Paseo/Pino JSON records as
-readable timestamp, severity, source and message columns, followed by context
-fields and error stacks. Colors are enabled only for an interactive terminal;
-set `NO_COLOR=1` to disable them. Plain text and unrecognized records remain
-visible. This changes presentation only: the original diagnostic files retain
-their raw contents.
+The normal terminal view shows LTCook information messages and upstream
+warnings/errors, with concise messages and bounded, actionable context.
+Routine Paseo connection messages and metrics do not appear in this view.
+Use `ltcook --verbose` for diagnostic messages, full structured context and
+error stacks. Colors are enabled only for an interactive terminal; set
+`NO_COLOR=1` to disable them. Unrecognized output remains visible.
+These are presentation choices: the original diagnostic files retain their
+raw contents in either mode.
 
 Logs include private captured stdout/stderr in `<deployment>/logs/backend.log`,
 the configured telemetry JSONL, and Paseo's rotating daemon log. Upstream output

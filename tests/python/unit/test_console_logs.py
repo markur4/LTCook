@@ -18,6 +18,7 @@ from ltcook._runtime_client import _LogFollower
                 "timestamp": "2026-11-14T10:20:30.000Z",
                 "level": "info",
                 "event": "runtime.ready",
+                "workspace": "workspace-alpha",
                 "sessionId": "session-1",
             },
             "events",
@@ -26,7 +27,8 @@ from ltcook._runtime_client import _LogFollower
                 "INFO",
                 "[events]",
                 "runtime.ready",
-                "sessionId=session-1",
+                "workspace=workspace-alpha",
+                "details in log",
             ),
         ),
         (
@@ -47,7 +49,7 @@ from ltcook._runtime_client import _LogFollower
                 "[paseo]",
                 "[http-server/api]",
                 "request failed",
-                "requestId=r-2",
+                "details in log",
             ),
         ),
     ],
@@ -60,7 +62,7 @@ def test_known_structured_records_render_columns_and_context(record, source, par
     assert "hostname=" not in rendered
 
 
-def test_pino_errors_render_type_context_and_indented_stack():
+def test_pino_errors_keep_actionable_summary_and_verbose_stack():
     record = {
         "time": "2026-11-14T10:20:30.000Z",
         "level": 50,
@@ -71,16 +73,77 @@ def test_pino_errors_render_type_context_and_indented_stack():
             "code": "EINVAL",
             "stack": "TypeError: bad input\n    at handler (server.js:4)",
         },
+        "clientId": "synthetic-client",
     }
 
     rendered = _console_logs._format_console_log(json.dumps(record), "paseo")
+    verbose = _console_logs._format_console_log(
+        json.dumps(record), "paseo", verbose=True
+    )
 
     assert "ERROR" in rendered and "request failed" in rendered
-    assert "err: TypeError: bad input code=EINVAL" in rendered
-    assert any(
-        line.startswith(" ") and line.lstrip() == "at handler (server.js:4)"
-        for line in rendered.splitlines()
+    assert "TypeError: bad input" in rendered and "code=EINVAL" in rendered
+    assert "at handler" not in rendered and "synthetic-client" not in rendered
+    assert "at handler (server.js:4)" in verbose
+    assert "synthetic-client" in verbose
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Client connected; awaiting hello",
+        "Client socket disconnected; session remains attached",
+        "ws_runtime_metrics",
+    ],
+)
+def test_routine_upstream_diagnostics_require_verbose_mode(message):
+    record = {
+        "time": 1794651630000,
+        "level": 30,
+        "msg": message,
+        "connectionId": "synthetic-connection",
+        "client": {"session": "synthetic-session", "metrics": [1] * 500},
+    }
+
+    assert _console_logs._format_console_log(json.dumps(record), "paseo") is None
+    verbose = _console_logs._format_console_log(
+        json.dumps(record), "paseo", verbose=True
     )
+    assert message in verbose
+    assert "synthetic-connection" in verbose
+    assert "metrics" in verbose
+
+
+def test_slow_request_warning_keeps_only_actionable_scalar_context():
+    record = {
+        "level": "warn",
+        "event": "slow request",
+        "requestType": "websocket",
+        "durationMs": 12000,
+        "clientId": "synthetic-client",
+        "browserFingerprint": "synthetic-browser",
+        "payload": {"items": [1, 2, 3]},
+    }
+    rendered = _console_logs._format_console_log(json.dumps(record), "paseo")
+
+    assert "WARN" in rendered and "requestType=websocket" in rendered
+    assert "durationMs=12000" in rendered
+    assert "synthetic-client" not in rendered
+    assert "synthetic-browser" not in rendered and "items" not in rendered
+    assert "details in log" in rendered
+
+
+def test_oversized_recognized_error_is_visible_and_bounded():
+    record = {
+        "level": 50,
+        "msg": "failed",
+        "err": {"type": "NetworkError", "message": "x" * 3000, "code": "ECONNRESET"},
+    }
+    rendered = _console_logs._format_console_log(json.dumps(record), "paseo")
+
+    assert rendered is not None and "ERROR" in rendered
+    assert "NetworkError" in rendered and "ECONNRESET" in rendered
+    assert "details in log" in rendered and len(rendered) < 1000
 
 
 def test_missing_optional_metadata_and_established_level_strings_render():
@@ -127,6 +190,23 @@ def test_follower_formats_complete_lines_and_final_fragment_without_rewriting_fi
         "final" in output.getvalue() and "2026-11-14T10:20:30.000Z" in output.getvalue()
     )
     assert path.read_bytes() == raw + fragment
+    follower.close()
+
+
+def test_follower_suppresses_routine_final_fragment_without_blank_output(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "paseo.jsonl"
+    path.write_text('{"level":30,"msg":"websocket connected"}', encoding="utf-8")
+    follower = _LogFollower(path, "paseo")
+    follower.offset = 0
+    output = io.StringIO()
+    monkeypatch.setattr("sys.stdout", output)
+
+    follower.read()
+    follower._emit("", final=True)
+
+    assert output.getvalue() == ""
     follower.close()
 
 

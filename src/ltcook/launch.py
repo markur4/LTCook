@@ -284,7 +284,9 @@ def _open_existing_runtime(
             ) from error
 
 
-def _run_foreground_runtime(launch: LaunchConfig, shell: Mapping[str, str]) -> int:
+def _run_foreground_runtime(
+    launch: LaunchConfig, shell: Mapping[str, str], *, verbose: bool = False
+) -> int:
     """Run explicit server-only startup while preserving terminal output and Ctrl+C."""
     child = start_runtime(
         launch.environment,
@@ -307,21 +309,30 @@ def _run_foreground_runtime(launch: LaunchConfig, shell: Mapping[str, str]) -> i
     if child.process.poll() == 75:
         if launch.workspace_root is None:
             typer.echo(f"Reusing LTCook runtime for team {status.team_selection}.")
-            return 0
-        if _open_existing_runtime(launch, shell):
+        elif _open_existing_runtime(launch, shell):
             typer.echo(f"Opened workspace session for {launch.workspace_root}")
-            return 0
-        raise RuntimeClientError(
-            "The runtime that won the listen race disappeared before workspace activation."
-        )
+        else:
+            raise RuntimeClientError(
+                "The runtime that won the listen race disappeared before workspace activation."
+            )
+        if verbose:
+            return follow_runtime_logs(launch.environment, status, verbose=True)
+        return 0
     return follow_runtime_logs(
-        launch.environment, status, child=child, stop_owned_on_interrupt=True
+        launch.environment,
+        status,
+        child=child,
+        stop_owned_on_interrupt=True,
+        verbose=verbose,
     )
 
 
 @launch_cli.command("runtime")
 def runtime_command(
     workspace: Annotated[Path | None, typer.Option("--workspace")] = None,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", help="Show complete runtime diagnostics.")
+    ] = False,
 ) -> None:
     """Start the global runtime or explicitly open a project session.
 
@@ -333,27 +344,27 @@ def runtime_command(
     launch = resolve_launch(workspace, original_environment=shell)
     try:
         status = probe_runtime(launch.environment)
-        if isinstance(status, RuntimeStatus):
-            if workspace is None:
-                typer.echo(f"Reusing LTCook runtime for team {status.team_selection}.")
-                return
-            if _open_existing_runtime(launch, shell):
-                typer.echo(f"Opened workspace session for {launch.workspace_root}")
-                return
-        elif status == "starting":
+        if status == "starting":
             status = wait_for_runtime(launch.environment, None)
-            if workspace is None:
-                typer.echo(f"Reusing LTCook runtime for team {status.team_selection}.")
+        if isinstance(status, RuntimeStatus):
+            if workspace is None or _open_existing_runtime(launch, shell):
+                if workspace is None:
+                    typer.echo(
+                        f"Reusing LTCook runtime for team {status.team_selection}."
+                    )
+                else:
+                    typer.echo(f"Opened workspace session for {launch.workspace_root}")
+                if verbose:
+                    raise typer.Exit(
+                        follow_runtime_logs(launch.environment, status, verbose=True)
+                    )
                 return
-            if _open_existing_runtime(launch, shell):
-                typer.echo(f"Opened workspace session for {launch.workspace_root}")
-                return
-        raise typer.Exit(_run_foreground_runtime(launch, shell))
+        raise typer.Exit(_run_foreground_runtime(launch, shell, verbose=verbose))
     except RuntimeClientError as error:
         raise typer.BadParameter(str(error)) from error
 
 
-def desktop_command() -> int:
+def desktop_command(*, verbose: bool = False) -> int:
     """Start or reuse the global owner, open Paseo, and attach its logs."""
     try:
         shell = _shell_environment(os.environ)
@@ -380,7 +391,9 @@ def desktop_command() -> int:
                 f"Could not open the default browser: {error}. Open {url}",
                 file=sys.stderr,
             )
-        return follow_runtime_logs(launch.environment, status, child=child)
+        return follow_runtime_logs(
+            launch.environment, status, child=child, verbose=verbose
+        )
     except KeyboardInterrupt:
         return 130
     except (OSError, ValueError, KeyError) as error:

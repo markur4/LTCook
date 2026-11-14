@@ -138,6 +138,38 @@ def test_main_without_arguments_still_starts_the_desktop_runtime(
     assert exit_info.value.code == 19
 
 
+def test_bare_verbose_dispatches_to_desktop_verbose_mode(monkeypatch):
+    cli_module = importlib.import_module("ltcook.cli.app")
+    calls = []
+
+    def desktop_command(**options):
+        calls.append(options)
+        return 0
+
+    monkeypatch.setattr(cli_module, "desktop_command", desktop_command)
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli_module.main(["--verbose"])
+
+    assert exit_info.value.code == 0
+    assert calls == [{"verbose": True}]
+
+
+def test_root_verbose_is_documented_and_rejects_command_combinations(monkeypatch):
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    help_result = RUNNER.invoke(app, ["--help"], color=False)
+
+    assert help_result.exit_code == 0
+    assert "--verbose" in help_result.output
+    runtime_help = RUNNER.invoke(app, ["launch", "runtime", "--help"], color=False)
+    assert runtime_help.exit_code == 0, runtime_help.output
+    assert "--verbose" in runtime_help.output
+
+    cli_module = importlib.import_module("ltcook.cli.app")
+    with pytest.raises(SystemExit, match="only without a command"):
+        cli_module.main(["--verbose", "diagnose"])
+
+
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     [

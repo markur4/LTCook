@@ -211,6 +211,13 @@ def app_callback(
             help="Show the package version and exit.",
         ),
     ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            help="Show complete diagnostics for bare desktop startup.",
+        ),
+    ] = False,
     env_files: rc.cli.EnvFilesOption = None,
     env_file_overrides_os_environ: rc.cli.EnvFileOverridesOption = False,
     skip_dotenv_layers: rc.cli.SkipDotenvLayersOption = False,
@@ -220,6 +227,11 @@ def app_callback(
     log_level: rc.cli.LogLevelOption = None,
 ) -> None:
     """Capture AppRC bootstrap inputs before optional runtime preparation."""
+    if verbose and ctx.invoked_subcommand is not None:
+        raise typer.BadParameter(
+            "--verbose is supported only for bare desktop startup; use "
+            "`ltcook launch runtime --verbose` for the foreground viewer."
+        )
     try:
         options = rc.cli.CliRuntimeOptions.from_typer(
             env_files=env_files,
@@ -270,6 +282,22 @@ def main(argv: list[str] | None = None) -> None:
             app()
             return
         raise SystemExit(desktop_command())
+    completion_requested = any(
+        key.startswith("_") and key.endswith("_COMPLETE") and value
+        for key, value in os.environ.items()
+    )
+    if arguments and arguments[0] == "--verbose":
+        if completion_requested or any(
+            argument in {"--help", "--version", "-V"} for argument in arguments
+        ):
+            app(args=arguments)
+            return
+        if len(arguments) == 1:
+            raise SystemExit(desktop_command(verbose=True))
+        raise SystemExit(
+            "`ltcook --verbose` is supported only without a command; "
+            "use `ltcook launch runtime --verbose` for foreground logs."
+        )
     app(args=arguments)
 
 
