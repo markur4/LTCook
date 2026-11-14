@@ -80,8 +80,9 @@ All notable changes to `ltcook` will be documented in this file.
   redacted local diagnostics and fast isolated behavior checks. Runtime launches
   omit an empty `CONTAINER_CONNECTION` so local Podman does not enter remote mode;
   configured connection names remain available.
-- Added readable Pass/Task/member status and ordered Step progress in the native
-  Paseo panel while excluding private task, report, handoff, and blocker text.
+- Added themed, responsive Team Overview, Task Board and Agent Focus views in
+  Paseo, with named Passes, ordered Step progress, native conversation links and
+  selected task/handoff/blocker details. Bulk status excludes private work text.
 - Added exact LTCook-owned Pi extension reconciliation with preserved independent
   extensions, one shared TypeBox command schema, and focused package validation
   used by the installer builder and release tooling.

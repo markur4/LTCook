@@ -4,14 +4,22 @@ import type { PluginAgentSnapshot } from '@getpaseo/plugin';
 const work = z.object({ id: z.string(), title: z.string(), status: z.string() });
 export const PanelSnapshotSourceSchema = z.object({
   session: z.object({ teamId: z.string() }),
+  definition: z.object({ name: z.string() }),
   members: z.array(
     z.object({
-      member: z.object({ key: z.string(), name: z.string() }),
+      member: z.object({
+        key: z.string(),
+        name: z.string(),
+        modelAlias: z.string(),
+        thinking: z.string(),
+        readOnly: z.boolean(),
+        lifetime: z.enum(['persistent', 'temporary']),
+      }),
       binding: z.object({ nativeAgentId: z.string().nullable() }).nullable(),
       nativeStatus: z.string().nullable(),
     }),
   ),
-  passes: z.array(work),
+  passes: z.array(work.extend({ createdAt: z.string() })),
   tasks: z.array(work.extend({ passId: z.string().optional() })),
   steps: z.array(work.extend({ taskId: z.string(), position: z.number() })),
   assignments: z.array(
@@ -47,10 +55,15 @@ const memberStatus = z.enum(memberStatuses);
 
 export const TeamStatusSnapshotSchema = z.object({
   teamId: z.string(),
+  teamName: z.string(),
   members: z.array(
     z.object({
       memberKey: z.string(),
       name: z.string(),
+      modelAlias: z.string(),
+      thinking: z.string(),
+      readOnly: z.boolean(),
+      lifetime: z.enum(['persistent', 'temporary']),
       nativeAgentId: z.string().nullable(),
       status: memberStatus,
     }),
@@ -60,6 +73,7 @@ export const TeamStatusSnapshotSchema = z.object({
       passId: z.string(),
       title: z.string(),
       status: z.string(),
+      createdAt: z.string(),
     }),
   ),
   tasks: z.array(
@@ -85,6 +99,7 @@ export const TeamStatusSnapshotSchema = z.object({
       taskId: z.string(),
       taskTitle: z.string(),
       memberName: z.string(),
+      memberKey: z.string(),
       status: z.string(),
     }),
   ),
@@ -128,9 +143,14 @@ export function panelSnapshot(snapshot: PanelSnapshotSource): TeamStatusSnapshot
   }
   return {
     teamId: snapshot.session.teamId,
+    teamName: snapshot.definition.name,
     members: snapshot.members.map(({ member, binding, nativeStatus }) => ({
       memberKey: member.key,
       name: member.name,
+      modelAlias: member.modelAlias,
+      thinking: member.thinking,
+      readOnly: member.readOnly,
+      lifetime: member.lifetime,
       nativeAgentId: binding?.nativeAgentId ?? null,
       status: isNativeStatus(nativeStatus) ? nativeStatus : binding ? 'unknown' : 'not connected',
     })),
@@ -138,6 +158,7 @@ export function panelSnapshot(snapshot: PanelSnapshotSource): TeamStatusSnapshot
       passId: pass.id,
       title: pass.title,
       status: pass.status,
+      createdAt: pass.createdAt,
     })),
     tasks: snapshot.tasks.map((task) => ({
       taskId: task.id,
@@ -159,6 +180,7 @@ export function panelSnapshot(snapshot: PanelSnapshotSource): TeamStatusSnapshot
       taskId: assignment.taskId,
       taskTitle: taskTitles.get(assignment.taskId) ?? 'Task title unavailable',
       memberName: memberNames.get(assignment.memberKey) ?? assignment.memberKey,
+      memberKey: assignment.memberKey,
       status: assignment.status,
     })),
     issues,

@@ -1,201 +1,164 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, ScrollView, Text, View } from 'react-native';
-import { defineRpc } from '@getpaseo/plugin';
+import { useLayoutEffect, useState } from 'react';
+import { ScrollView, Text, View } from 'react-native';
 import {
-  useAgent,
-  useRpc,
   useWorkspace,
   type PluginClientContext,
   type PluginWorkspacePanelProps,
 } from '@getpaseo/plugin/client';
-import {
-  SessionOpenRequestSchema,
-  SessionOpenResponseSchema,
-  TeamSnapshotRequestSchema,
-  TeamSnapshotResponseSchema,
-  type TeamStatusSnapshot,
-} from './shared/panel-snapshot';
-
-const teamSnapshot = defineRpc({
-  name: 'ltcook.team.snapshot',
-  input: TeamSnapshotRequestSchema,
-  output: TeamSnapshotResponseSchema,
-});
-const openSession = defineRpc({
-  name: 'ltcook.session.open',
-  input: SessionOpenRequestSchema,
-  output: SessionOpenResponseSchema,
-});
-
-function MemberStatus({
-  member,
-  navigation,
-}: {
-  member: TeamStatusSnapshot['members'][number];
-  navigation: PluginWorkspacePanelProps['navigation'];
-}) {
-  const liveStatus = useAgent(member.nativeAgentId ?? '', (agent) => agent.status);
-  return (
-    <Text
-      onPress={() => {
-        if (member.nativeAgentId) navigation?.openAgent({ agentId: member.nativeAgentId });
-      }}
-    >
-      {member.name}: {liveStatus ?? member.status}
-    </Text>
-  );
-}
+import type { TeamDetailTarget } from './shared/panel-details';
+import { useTeamPanel } from './client/use-team-panel';
+import { Action, Label } from './client/components/PanelChrome';
+import { TeamOverview } from './client/screens/TeamOverview';
+import { TaskBoard } from './client/screens/TaskBoard';
+import { AgentFocus } from './client/screens/AgentFocus';
 
 function TeamStatus(props: PluginWorkspacePanelProps) {
-  const workspace = useWorkspace(props.workspaceId, (value) => ({ directory: value.directory }));
-  const callSnapshot = useRpc(teamSnapshot);
-  const callOpenSession = useRpc(openSession);
-  const [state, setState] = useState<
-    | { root: string; status: 'loading' }
-    | { root: string; status: 'empty' }
-    | { root: string; status: 'ready'; snapshot: TeamStatusSnapshot }
-    | { root: string; status: 'error'; message: string }
-  >();
-  const [pendingRoots, setPendingRoots] = useState<ReadonlySet<string>>(() => new Set());
-  const requestVersion = useRef(0);
-  const pendingRootsRef = useRef(new Set<string>());
-  const mounted = useRef(true);
-  const refresh = useCallback(async () => {
-    const workspaceRoot = workspace?.directory;
-    if (!workspaceRoot) return;
-    const version = ++requestVersion.current;
-    setState({ root: workspaceRoot, status: 'loading' });
-    try {
-      const snapshot = await callSnapshot({ workspaceRoot });
-      if (version === requestVersion.current) {
-        setState(
-          snapshot
-            ? { root: workspaceRoot, status: 'ready', snapshot }
-            : { root: workspaceRoot, status: 'empty' },
-        );
-      }
-    } catch (error) {
-      if (version === requestVersion.current) {
-        setState({
-          root: workspaceRoot,
-          status: 'error',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-  }, [callSnapshot, workspace?.directory]);
-
-  const updatePending = (workspaceRoot: string, pending: boolean) => {
-    const next = new Set(pendingRootsRef.current);
-    if (pending) next.add(workspaceRoot);
-    else next.delete(workspaceRoot);
-    pendingRootsRef.current = next;
-    if (mounted.current) setPendingRoots(next);
-  };
-
-  useEffect(() => {
-    mounted.current = true;
-    void refresh();
-    return () => {
-      mounted.current = false;
-      requestVersion.current += 1;
-    };
-  }, [refresh]);
-  const startSession = async () => {
-    const workspaceRoot = workspace?.directory;
-    if (!workspaceRoot || pendingRootsRef.current.has(workspaceRoot)) return;
-    const version = ++requestVersion.current;
-    updatePending(workspaceRoot, true);
-    setState({ root: workspaceRoot, status: 'loading' });
-    try {
-      await callOpenSession({ workspaceRoot });
-      if (version === requestVersion.current) void refresh();
-    } catch (error) {
-      if (version === requestVersion.current) {
-        setState({
-          root: workspaceRoot,
-          status: 'error',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } finally {
-      updatePending(workspaceRoot, false);
-    }
-  };
-
-  if (!workspace?.directory) return <Text>Workspace location unavailable</Text>;
-  const currentState = state?.root === workspace.directory ? state : undefined;
-  const starting = pendingRoots.has(workspace.directory);
+  const root = useWorkspace(props.workspaceId, (value) => value.directory);
+  const [view, setView] = useState<'overview' | 'tasks' | 'agent'>('overview');
+  const [memberKey, setMember] = useState<string | null>(null);
+  const [taskId, setTask] = useState<string | null>(null);
+  const [issuesOpen, setIssues] = useState(false);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    setView('overview');
+    setMember(null);
+    setTask(null);
+    setIssues(false);
+  }, [root]);
+  const target: TeamDetailTarget | null =
+    view === 'agent' && memberKey
+      ? { kind: 'member', memberKey }
+      : view === 'tasks' && taskId
+        ? { kind: 'task', taskId }
+        : view === 'overview' && issuesOpen
+          ? { kind: 'issues' }
+          : null;
+  const panel = useTeamPanel(root ?? undefined, target);
+  const snapshot = panel.state?.status === 'ready' ? panel.state.value : null;
+  const detail = panel.detail?.status === 'ready' ? panel.detail.value : undefined;
+  const theme = props.theme;
+  const compact = props.layout.compact || width < 720;
   return (
-    <ScrollView>
-      <View>
-        <Text>Team status</Text>
-        {currentState?.status === 'ready' && (
-          <Button title="Refresh" onPress={() => void refresh()} />
-        )}
-        {currentState?.status === 'loading' && (
-          <Text accessibilityRole="progressbar">Loading team status…</Text>
-        )}
-        {currentState?.status === 'error' && (
-          <Text accessibilityRole="alert">Team status unavailable: {currentState.message}</Text>
-        )}
-        {currentState?.status === 'error' && (
-          <Button title="Retry" onPress={() => void refresh()} />
-        )}
-        {currentState?.status === 'empty' && (
-          <View>
-            <Text>No LTCook session is open for this directory.</Text>
-            <Button
-              title={starting ? 'Starting session…' : 'Start session'}
-              onPress={() => void startSession()}
-              disabled={starting}
-            />
-          </View>
-        )}
-        {currentState?.status === 'ready' && (
-          <View>
-            <Text>Team: {currentState.snapshot.teamId}</Text>
-            <Text>Members</Text>
-            {currentState.snapshot.members.map((member) => (
-              <MemberStatus key={member.memberKey} member={member} navigation={props.navigation} />
-            ))}
-            <Text>Passes</Text>
-            {currentState.snapshot.passes.map((pass) => (
-              <Text key={pass.passId}>
-                {pass.title}: {pass.status}
-              </Text>
-            ))}
-            <Text>Tasks</Text>
-            {currentState.snapshot.tasks.map((task) => (
-              <View key={task.taskId}>
-                <Text>
-                  {task.title}: {task.status}
-                  {task.passId ? ` · Pass: ${task.passTitle ?? 'title unavailable'}` : ' · No Pass'}
-                </Text>
-                {task.steps.map((step, index) => (
-                  <Text key={step.stepId}>
-                    {'  '}Step {index + 1}: {step.title}: {step.status}
-                  </Text>
-                ))}
-              </View>
-            ))}
-            <Text>Assignments</Text>
-            {currentState.snapshot.assignments.map((assignment) => (
-              <Text key={assignment.assignmentId}>
-                {assignment.taskTitle} → {assignment.memberName} ({assignment.status})
-              </Text>
-            ))}
-            <Text>Issues</Text>
-            {currentState.snapshot.issues.length ? (
-              currentState.snapshot.issues.map((issue, index) => (
-                <Text key={`${index}:${issue}`}>{issue}</Text>
-              ))
-            ) : (
-              <Text>None</Text>
-            )}
-          </View>
-        )}
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
+      contentContainerStyle={{ padding: 16, gap: 16 }}
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+    >
+      <Label theme={theme} heading>
+        {snapshot?.teamName ?? 'Team status'}
+      </Label>
+      <Label theme={theme} muted>
+        {root ?? 'Workspace location unavailable'}
+      </Label>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        <Action
+          theme={theme}
+          title="Team Overview"
+          selected={view === 'overview'}
+          onPress={() => setView('overview')}
+        />
+        <Action
+          theme={theme}
+          title="Task Board"
+          selected={view === 'tasks'}
+          onPress={() => setView('tasks')}
+        />
+        <Action
+          theme={theme}
+          title="Agent Focus"
+          selected={view === 'agent'}
+          onPress={() => setView('agent')}
+        />
+        <Action
+          theme={theme}
+          title="Refresh"
+          disabled={!root || panel.starting}
+          onPress={() => void panel.refresh()}
+        />
       </View>
+      {root && (!panel.state || panel.state.status === 'loading') && (
+        <Text accessibilityRole="progressbar" style={{ color: theme.colors.foreground }}>
+          Loading team status…
+        </Text>
+      )}
+      {panel.state?.status === 'error' && (
+        <View style={{ gap: 8 }}>
+          <Text accessibilityRole="alert" style={{ color: theme.colors.statusDanger }}>
+            {panel.state.message}
+          </Text>
+          <Action theme={theme} title="Retry" onPress={() => void panel.refresh()} />
+          <Action
+            theme={theme}
+            title="Start session"
+            disabled={panel.starting}
+            onPress={() => void panel.startSession()}
+          />
+        </View>
+      )}
+      {panel.state?.status === 'ready' && !snapshot && (
+        <View style={{ gap: 8 }}>
+          <Label theme={theme}>No LTCook session is open for this directory.</Label>
+          <Action
+            theme={theme}
+            title={panel.starting ? 'Starting session…' : 'Start session'}
+            disabled={panel.starting}
+            onPress={() => void panel.startSession()}
+          />
+        </View>
+      )}
+      {snapshot && (
+        <>
+          {panel.detail?.status === 'loading' && (
+            <Label theme={theme} muted>
+              Loading selected details…
+            </Label>
+          )}
+          {panel.detail?.status === 'error' && (
+            <Text accessibilityRole="alert" style={{ color: theme.colors.statusDanger }}>
+              {panel.detail.message}
+            </Text>
+          )}
+          {panel.detail?.status === 'ready' && !detail && (
+            <Label theme={theme} muted>
+              Selected item is no longer available
+            </Label>
+          )}
+          {view === 'overview' && (
+            <TeamOverview
+              theme={theme}
+              snapshot={snapshot}
+              compact={compact}
+              onMember={(key) => {
+                setMember(key);
+                setView('agent');
+              }}
+              issuesOpen={issuesOpen}
+              onIssues={() => setIssues((value) => !value)}
+              detail={detail}
+            />
+          )}
+          {view === 'tasks' && (
+            <TaskBoard
+              theme={theme}
+              snapshot={snapshot}
+              compact={compact}
+              selectedTask={taskId}
+              onTask={setTask}
+              detail={detail}
+            />
+          )}
+          {view === 'agent' && (
+            <AgentFocus
+              theme={theme}
+              snapshot={snapshot}
+              memberKey={memberKey}
+              onMember={setMember}
+              detail={detail}
+              navigation={props.navigation}
+            />
+          )}
+        </>
+      )}
     </ScrollView>
   );
 }

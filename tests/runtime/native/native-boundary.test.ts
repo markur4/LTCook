@@ -852,7 +852,12 @@ describe('native runtime boundary', () => {
       status: 'running',
     });
     expect(projected.passes).toEqual([
-      { passId: 'pass-1', title: 'Visible pass', status: 'running' },
+      {
+        passId: 'pass-1',
+        title: 'Visible pass',
+        status: 'running',
+        createdAt: '2026-01-01T00:00:00Z',
+      },
     ]);
     expect(projected.tasks).toEqual([
       {
@@ -881,6 +886,7 @@ describe('native runtime boundary', () => {
         taskId: 'task-1',
         taskTitle: 'Visible task',
         memberName: 'Worker',
+        memberKey: 'worker',
         status: 'uncertain',
       },
     ]);

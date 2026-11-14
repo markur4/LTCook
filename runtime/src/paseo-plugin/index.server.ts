@@ -1,6 +1,17 @@
 import { defineRpc } from '@getpaseo/plugin';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import {
+  PanelDetailSourceSchema,
+  TeamDetailRequestSchema,
+  TeamDetailResponseSchema,
+  panelDetail,
+} from './shared/panel-details';
+const teamDetail = defineRpc({
+  name: 'ltcook.team.detail',
+  input: TeamDetailRequestSchema,
+  output: TeamDetailResponseSchema,
+});
+import {
   panelSnapshot,
   PanelSnapshotSourceSchema,
   SessionOpenRequestSchema,
@@ -62,6 +73,25 @@ async function runtimeRequest(
 }
 
 export default function contribute(server: PluginServerContext) {
+  server.handle(teamDetail, async (input) => {
+    const { endpoint, headers } = runtimeConfig();
+    const { response, detail, payload } = await runtimeRequest(endpoint, headers, '/v1/snapshot', {
+      workspaceRoot: input.workspaceRoot,
+    });
+    if (
+      response.status === 404 &&
+      payload &&
+      typeof payload === 'object' &&
+      'code' in payload &&
+      payload.code === 'SESSION_NOT_FOUND' &&
+      'error' in payload &&
+      payload.error === 'No session found for workspace'
+    )
+      return null;
+    if (!response.ok)
+      throw new Error(`LTCook team detail unavailable (${response.status})${detail}`);
+    return panelDetail(PanelDetailSourceSchema.parse(await response.json()), input.target);
+  });
   server.handle(teamSnapshot, async (input) => {
     const { endpoint, headers } = runtimeConfig();
     const { response, detail, payload } = await runtimeRequest(
