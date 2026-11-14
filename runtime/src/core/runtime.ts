@@ -170,6 +170,15 @@ export class RuntimeController implements RuntimeControllerContract {
   async execute(sessionId: string, actor: RuntimeActor, command: RuntimeCommand): Promise<unknown> {
     this.assertOpen();
     const session = this.session(sessionId);
+    if (
+      (actor.kind === 'agent' ||
+        command.type === 'planning.start' ||
+        command.type === 'planning.approve') &&
+      !this.initializedSessions.has(sessionId)
+    )
+      throw new Error(
+        'Session must be explicitly opened and reconciled before native work or execution approval',
+      );
     const identity =
       actor.kind === 'agent'
         ? this.store
@@ -647,8 +656,10 @@ export class RuntimeController implements RuntimeControllerContract {
   ) {
     this.assertOpen();
     this.session(sessionId);
+    if (!this.initializedSessions.has(sessionId))
+      return { allowed: false, reason: 'Session native bindings have not been reconciled' };
     const member = this.snapshot(sessionId).members.find(
-      (item) => item.binding?.nativeAgentId === nativeAgentId,
+      (item) => item.binding?.nativeAgentId === nativeAgentId && item.binding.state === 'bound',
     )?.member;
     if (
       member?.readOnly &&
@@ -692,6 +703,8 @@ export class RuntimeController implements RuntimeControllerContract {
   bindDecisionPresentation(input: DecisionPresentation): void {
     this.assertOpen();
     this.session(input.sessionId);
+    if (!this.initializedSessions.has(input.sessionId))
+      throw new Error('Session native bindings have not been reconciled');
     this.planning.bind(input);
   }
   async resolveDecisionPresentation(input: {
@@ -702,12 +715,19 @@ export class RuntimeController implements RuntimeControllerContract {
     cancelled?: boolean;
   }): Promise<void> {
     this.assertOpen();
+    if (!this.initializedSessions.has(input.sessionId))
+      throw new Error('Session native bindings have not been reconciled');
     await this.planning.resolve(this.session(input.sessionId), input);
   }
   private session(sessionId: string): Session {
-    const session = this.sessions.get(sessionId);
-    if (session === undefined) throw new Error(`Session is not open in this runtime: ${sessionId}`);
-    return session;
+    const cached = this.sessions.get(sessionId);
+    if (cached !== undefined) return cached;
+    // > Metadata recovery is read-only; native work still requires explicit reconciliation.
+    const persisted = this.store.getSession(sessionId);
+    if (persisted.teamId !== this.team.definition.id)
+      throw new Error('Persisted Session belongs to a different selected Team');
+    this.sessions.set(sessionId, persisted);
+    return persisted;
   }
   private emit(event: RuntimeEvent): void {
     this.onEvent(event);

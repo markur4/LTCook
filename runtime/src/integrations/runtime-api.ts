@@ -399,7 +399,11 @@ export class RuntimeApi {
         if (!input.sessionId) throw new Error('Agent snapshot requires a bound session');
         const snapshot: SessionSnapshot = runtime.snapshot(input.sessionId);
         if (
-          !snapshot.members.some((member) => member.binding?.nativeAgentId === actor.nativeAgentId)
+          !snapshot.members.some(
+            (member) =>
+              member.binding?.nativeAgentId === actor.nativeAgentId &&
+              member.binding.state === 'bound',
+          )
         ) {
           throw new Error('Native agent is not bound to this session');
         }
@@ -427,10 +431,17 @@ export class RuntimeApi {
       }
       if (!input.sessionId || !isRuntimeCommand(input.command))
         throw new Error('sessionId and a valid runtime command are required');
+      const metadataRecovery =
+        actor.kind === 'user' &&
+        ['planning.show', 'planning.questions', 'decision.answer'].includes(input.command.type);
       const sessionSnapshot = runtime.snapshot(input.sessionId);
+      if (metadataRecovery && !this.sessions.has(input.sessionId))
+        this.setSession(sessionSnapshot.session.workspaceRoot, input.sessionId);
       if (actor.kind === 'agent') {
         const member = sessionSnapshot.members.find(
-          (candidate) => candidate.binding?.nativeAgentId === actor.nativeAgentId,
+          (candidate) =>
+            candidate.binding?.nativeAgentId === actor.nativeAgentId &&
+            candidate.binding.state === 'bound',
         );
         if (!member) {
           response.writeHead(403).end('{"error":"native agent is not bound to this session"}');

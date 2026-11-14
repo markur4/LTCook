@@ -1,3 +1,5 @@
+import { createServer } from 'node:net';
+import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -575,7 +577,15 @@ describe('RuntimeController coordination', () => {
 
     runtime = createRuntime({ databasePath: path, team, agents });
     await runtime.openSession({ id: first.session.id, workspaceRoot: first.session.workspaceRoot });
-    expect(() => runtime.snapshot(second.session.id)).toThrow(/not open/);
+    expect(runtime.snapshot(second.session.id).session.id).toBe(second.session.id);
+    expect(
+      runtime.authorizeTool(
+        second.session.id,
+        second.members[0]!.binding!.nativeAgentId!,
+        'write',
+        { path: 'project.ts' },
+      ).allowed,
+    ).toBe(false);
     const restoredSecond = await runtime.openSession({
       id: second.session.id,
       workspaceRoot: second.session.workspaceRoot,
@@ -1108,6 +1118,107 @@ describe('authoritative planning workflow', () => {
       expect(f.runtime.snapshot(f.snapshot.session.id).passes).toHaveLength(0);
     } finally {
       await f.runtime.close();
+    }
+  });
+  test('closed temporary reviewer identity cannot retain approved-Pass tool access', async () => {
+    const f = await fixture(defaultTeam);
+    try {
+      await finishStages(f);
+      await answerMandatory(f);
+      await f.runtime.execute(
+        f.snapshot.session.id,
+        { kind: 'user' },
+        { type: 'planning.approve', planId: f.plan.id },
+      );
+      await f.runtime.execute(
+        f.snapshot.session.id,
+        { kind: 'user' },
+        { type: 'team.spawn', memberKey: 'reviewer-tmp' },
+      );
+      const reviewer = f.runtime
+        .snapshot(f.snapshot.session.id)
+        .members.find((item) => item.member.key === 'reviewer-tmp')!.binding!.nativeAgentId!;
+      expect(
+        f.runtime.authorizeTool(f.snapshot.session.id, reviewer, 'edit', { path: 'project.ts' })
+          .allowed,
+      ).toBe(true);
+      await f.runtime.execute(
+        f.snapshot.session.id,
+        { kind: 'user' },
+        { type: 'team.close', memberKey: 'reviewer-tmp' },
+      );
+      expect(
+        f.runtime.authorizeTool(f.snapshot.session.id, reviewer, 'edit', { path: 'project.ts' })
+          .allowed,
+      ).toBe(false);
+    } finally {
+      await f.runtime.close();
+    }
+  });
+  test('authenticated CLI recovers pending decisions at idle restart without native replay', async () => {
+    const f = await fixture(team, true);
+    await f.runtime.close();
+    const creates = f.agents.creates;
+    const sends = f.agents.sends.length;
+    const reopened = createRuntime({
+      databasePath: f.databasePath,
+      stateDirectory: f.stateDirectory,
+      team,
+      agents: f.agents,
+    });
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing local test address');
+    const port = address.port;
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    const api = new RuntimeApi(reopened, 'cli-recovery-secret', `127.0.0.1:${port}`);
+    const endpoint = await api.listen();
+    const post = (command: unknown, token = 'cli-recovery-secret') =>
+      fetch(`${endpoint}/v1/command`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: f.snapshot.session.id, command }),
+      });
+    try {
+      expect((await post({ type: 'planning.show', planId: f.plan.id }, 'wrong')).status).toBe(401);
+      const show = await post({ type: 'planning.show', planId: f.plan.id });
+      expect(show.status).toBe(200);
+      expect(((await show.json()) as { value: { id: string } }).value.id).toBe(f.plan.id);
+      const questions = await post({ type: 'planning.questions', planId: f.plan.id });
+      expect(questions.status).toBe(200);
+      const decisions = ((await questions.json()) as { value: { id: string; answer?: string }[] })
+        .value;
+      expect(decisions).toHaveLength(3);
+      expect(decisions[0]!.answer).toBeUndefined();
+      expect(
+        (
+          await post({
+            type: 'decision.answer',
+            planId: f.plan.id,
+            decisionId: decisions[0]!.id,
+            answer: 'Recovered explicit user answer',
+          })
+        ).status,
+      ).toBe(200);
+      expect(reopened.snapshot(f.snapshot.session.id).decisions[0]!.answer).toBe(
+        'Recovered explicit user answer',
+      );
+      const approve = await post({ type: 'planning.approve', planId: f.plan.id });
+      expect(approve.status).toBe(400);
+      expect(await approve.text()).toContain('reconciled');
+      const native = f.snapshot.members[0]!.binding!.nativeAgentId!;
+      expect(
+        reopened.authorizeTool(f.snapshot.session.id, native, 'write', { path: 'project.ts' })
+          .allowed,
+      ).toBe(false);
+      expect(f.agents.creates).toBe(creates);
+      expect(f.agents.sends).toHaveLength(sends);
+    } finally {
+      await api.close();
+      await reopened.close();
     }
   });
   test('rejects invalid routing-hook selections before dispatch', async () => {
