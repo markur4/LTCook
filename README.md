@@ -314,7 +314,8 @@ keep separate native conversations and agent bindings. See
 
 The selected team stays fixed for a running session. Teams use the purpose-named
 [Team API v2](docs/References.md#team-api). Core routes Design and Plan work;
-Main schedules execution after explicit user approval. Rules provide standing
+Main registers execution Tasks after explicit user approval; the runtime then
+dispatches eligible work, checks recorded gates, and advances the Pass. Rules provide standing
 context, and native Pi skills load their bodies on demand across Core, Team,
 Project and User scopes. See [planning and guidance](docs/How-To-User-Guides.md#plan-work-and-answer-decisions).
 

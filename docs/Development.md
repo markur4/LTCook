@@ -13,6 +13,7 @@ layout, packaging boundary, verification limits, and current release workflow.
   - [Documentation authoring](#documentation-authoring)
 - [Verify and release](#verify-and-release)
   - [Verification](#verification)
+  - [Local guidance benchmark](#local-guidance-benchmark)
   - [Asset packaging](#asset-packaging)
   - [Integration and system procedures](#integration-and-system-procedures)
   - [Releases](#releases)
@@ -167,6 +168,40 @@ an explicitly prepared environment. System checks may require service, network,
 source archive, native OS, or installer prerequisites. Do not add an unbounded
 model prompt loop to quick checks.
 
+## Local guidance benchmark
+
+The opt-in [guidance benchmark](../tests/benchmarks/guidance.ts) compares minimal
+Team guidance with complete LTCook guidance using the same `default-minimal`
+Team, selected model, tool definitions, fixture, and Core rules/skills in both
+arms. It uses Pi's public SDK and existing `models.json` provider configuration.
+Start your own llama.cpp OpenAI-compatible server on loopback and register the
+model there through Pi's normal configuration. No model download, authentication
+client, external provider, or service provisioning is performed.
+
+Run from the checkout root after `just sync`:
+
+```shell
+bun tests/benchmarks/guidance.ts /absolute/path/to/models.json local Spark-X2.6-1.7B /absolute/path/to/results.json 3
+```
+
+The first two arguments select an existing Pi model file and provider ID. The
+remaining arguments select model ID, JSON output, and 1–20 repetitions. The
+initial model label is `Spark-X2.6-1.7B`; use the exact ID in your Pi configuration.
+Only a loopback endpoint is accepted. A run has a 120-second deadline, a 24-tool
+budget, and at most two direct delegations to another declared eligible member.
+It exposes only fixed fixture read/write/verification tools and a clearly named
+synthetic `benchmark_delegate` tool; it does not measure RuntimeController Pass
+scheduling. Each run uses a fresh temporary workspace, removed after disposal.
+
+The JSON report records per-run success, elapsed time, provider-reported input,
+output/cache tokens, tool calls, delegations, and rule-based unnecessary-action
+candidates. Repeated reads, verification calls, and answer writes are candidates
+for inspection; a necessary correction may trigger them. Aggregates compare the
+two arms, whose order alternates each repetition. Zero usage may mean the provider
+did not report tokens; it is not an estimate. Model scores never gate CI or Pass
+completion. A live local model run is explicitly initiated by this command;
+normal checks use no model service.
+
 ## Asset packaging
 
 `src/ltcook_dev/packaging/package_assets.py` builds the canonical
@@ -200,9 +235,12 @@ software or initialize those secrets.
 integration tests; `just runtime test-integration` runs the Bun runtime
 integration tests alone. The standard `just test` already includes those
 in-memory runtime contracts. `just test-system` runs the marked Python system
-tests. These selected suites are separate from quick Python tests, and may need
-their scenario-specific environment. The slow CI workflow is manual; it is not
-part of the ordinary quick-check loop.
+tests and the required Linux clockwork acceptance. That acceptance starts
+isolated real Pi and Paseo processes against a local scripted OpenAI-compatible
+endpoint with fake credentials. It covers approved delegation, a real local
+verification command, failure/correction, restart, independent review, and Pass
+completion without model downloads or external services. It is a PR CI gate;
+other slow installer/service scenarios retain their separate prerequisites.
 
 Native package smoke requires a built setup from an explicit immutable commit
 and normal download/toolchain prerequisites. Run only the selected maintained
