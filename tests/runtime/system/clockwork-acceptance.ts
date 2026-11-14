@@ -1,14 +1,21 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { fork, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { createServer as createSocketServer } from 'node:net';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createRuntime } from '../../../runtime/src/core/runtime.js';
-import { RuntimeApi, agentBearer } from '../../../runtime/src/integrations/runtime-api.js';
+import { agentBearer } from '../../../runtime/src/integrations/runtime-api.js';
 import { startPaseoHost } from '../../../runtime/src/integrations/paseo.js';
 import team from '../../../teams/default/src/index.js';
-import type { AgentBackend, PlanningRecord } from '../../../runtime/src/workflow-api/index.js';
+import type {
+  AgentBackend,
+  PlanningRecord,
+  RuntimeActor,
+  RuntimeCommand,
+  SessionSnapshot,
+} from '../../../runtime/src/workflow-api/index.js';
 
 const root = path.resolve(import.meta.dir, '../../..');
 const directory = process.argv[2];
@@ -23,13 +30,48 @@ const secret = 'offline-system-fixture-token';
 const requestCounts = new Map<string, number>();
 const toolCalls: string[] = [];
 const nativeIds = new Map<string, string>();
-let runtime: ReturnType<typeof createRuntime>;
+let owner: ChildProcess | undefined;
+let cachedSnapshot: SessionSnapshot;
+let sequence = 0;
+const pending = new Map<number, { resolve(value: unknown): void; reject(reason: unknown): void }>();
+const runtime = {
+  snapshot(_sessionId: string): SessionSnapshot {
+    return cachedSnapshot;
+  },
+  async execute(
+    _sessionId: string,
+    actor: RuntimeActor,
+    command: RuntimeCommand,
+  ): Promise<unknown> {
+    return ownerRequest('execute', { actor, command });
+  },
+  async close(): Promise<void> {
+    if (!owner || owner.exitCode !== null || owner.signalCode !== null) return;
+    const child = owner;
+    child.send({ kind: 'stop' });
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 10_000);
+    try {
+      await once(child, 'exit');
+    } finally {
+      clearTimeout(timeout);
+    }
+  },
+};
+function ownerRequest(kind: string, data: Record<string, unknown> = {}): Promise<unknown> {
+  const id = ++sequence;
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    owner!.send({ kind, id, ...data });
+  });
+}
 let providerError: unknown;
 let requests = 0;
 
 async function waitFor(label: string, predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 45_000;
-  while (!predicate()) {
+  while (true) {
+    await ownerRequest('snapshot');
+    if (predicate()) return;
     if (providerError) throw providerError;
     if (Date.now() >= deadline)
       throw new Error(
@@ -146,11 +188,18 @@ function script(
       arguments: {
         command:
           task.requestId === 'system-correction'
-            ? "printf 'repaired\\n' > repaired.txt && test -s repaired.txt"
+            ? "printf 'repaired\\n' > repaired.txt && test -s repaired.txt && cat repaired.txt"
             : 'test -f repaired.txt && cat repaired.txt',
       },
     };
-  if (index === 1)
+  if (index === 1) {
+    const toolResult = JSON.stringify(
+      [...messages].reverse().find((entry) => (entry as { role?: string }).role === 'tool'),
+    );
+    assert(
+      toolResult.includes(failed ? 'code 1' : 'repaired'),
+      `Unexpected native verification output: ${toolResult}`,
+    );
     return command({
       type: 'report.create',
       assignmentId: assignment.id,
@@ -165,6 +214,7 @@ function script(
         },
       ],
     });
+  }
 }
 
 await mkdir(workspace, { recursive: true });
@@ -187,6 +237,7 @@ const provider = createServer(async (request, response) => {
     for await (const chunk of request) body += chunk;
     const input = JSON.parse(body) as { model: string; messages: unknown[] };
     requests += 1;
+    await ownerRequest('snapshot');
     const action = script(input.model, input.messages);
     if (action) toolCalls.push(action.name);
     const id = `fixture-${requests}`;
@@ -250,8 +301,8 @@ async function freePort(): Promise<number> {
 process.env.LTCOOK_PI_AUTH_DIR = authHome;
 process.env.PI_CODING_AGENT_DIR = agentHome;
 process.env.PI_OFFLINE = '1';
-const api = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`);
-const endpoint = await api.listen();
+const apiListen = `127.0.0.1:${await freePort()}`;
+const endpoint = `http://${apiListen}`;
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 try {
   host = await startPaseoHost({
@@ -314,16 +365,52 @@ try {
       await native.agents.ref(id).archive();
     },
   };
-  const options = {
-    databasePath: path.join(directory, 'coordination.sqlite'),
-    stateDirectory: path.join(directory, 'state'),
-    team,
-    agents: backend,
-  };
-  runtime = createRuntime(options);
-  api.setRuntime(runtime);
-  await runtime.openSession({ id: sessionId, workspaceRoot: workspace });
-  api.setSession(workspace, sessionId);
+  async function startOwner(): Promise<void> {
+    const child = fork(
+      path.join(root, 'tests/runtime/system/clockwork-owner.ts'),
+      [directory, apiListen],
+      { execPath: process.execPath, cwd: root, stdio: ['ignore', 'inherit', 'inherit', 'ipc'] },
+    );
+    owner = child;
+    await new Promise<void>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code, signal) => {
+        for (const request of pending.values())
+          request.reject(new Error(`Runtime owner exited (${code}, ${signal})`));
+        pending.clear();
+        if (code !== 0) reject(new Error(`Runtime owner startup failed (${code}, ${signal})`));
+      });
+      child.on(
+        'message',
+        (message: {
+          kind: string;
+          id: number;
+          method?: keyof AgentBackend;
+          args?: unknown[];
+          value?: unknown;
+          error?: string;
+          snapshot?: SessionSnapshot;
+        }) => {
+          if (message.snapshot) cachedSnapshot = message.snapshot;
+          if (message.kind === 'ready') resolve();
+          else if (message.kind === 'owner-result') {
+            const request = pending.get(message.id);
+            pending.delete(message.id);
+            if (message.error) request?.reject(new Error(message.error));
+            else request?.resolve(message.value);
+          } else if (message.kind === 'backend') {
+            const method = backend[message.method!] as (...args: unknown[]) => Promise<unknown>;
+            void method(...message.args!).then(
+              (value) => child.send({ kind: 'backend-result', id: message.id, value }),
+              (error: unknown) =>
+                child.send({ kind: 'backend-result', id: message.id, error: String(error) }),
+            );
+          }
+        },
+      );
+    });
+  }
+  await startOwner();
   const designPath = path.join(
     runtime.snapshot(sessionId).documentsDirectory,
     'designs',
@@ -364,7 +451,7 @@ try {
                 topic,
                 disposition: 'Resolved' as const,
                 detail: 'Explicit fixture scope',
-              })),
+              })) as NonNullable<Extract<RuntimeCommand, { type: 'planning.submit' }>['coverage']>,
             }
           : {}),
       },
@@ -407,9 +494,9 @@ try {
   );
   const before = runtime.snapshot(sessionId);
   await runtime.close();
-  runtime = createRuntime(options);
-  api.setRuntime(runtime);
-  await runtime.openSession({ id: sessionId, workspaceRoot: workspace });
+  const previousOwnerPid = owner!.pid;
+  await startOwner();
+  assert.notEqual(owner!.pid, previousOwnerPid);
   assert.equal(runtime.snapshot(sessionId).session.id, before.session.id);
   assert.equal(runtime.snapshot(sessionId).assignments.length, before.assignments.length);
   await backend.send(nativeIds.get('main')!, 'FIXTURE_RETRY');
@@ -436,12 +523,11 @@ try {
       providerRequests: requests,
       toolCalls: toolCalls.length,
       nativeAgents: nativeIds.size,
-      restart: 'SQLite owner reopened with native agents retained',
+      restart: 'Runtime owner process restarted with native agents retained',
     }),
   );
 } finally {
   await runtime?.close();
-  await api.close();
   await host?.close();
   await new Promise<void>((resolve, reject) =>
     provider.close((error) => (error ? reject(error) : resolve())),
