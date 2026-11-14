@@ -66,6 +66,7 @@ function ownerRequest(kind: string, data: Record<string, unknown> = {}): Promise
 }
 let providerError: unknown;
 let requests = 0;
+let shuttingDown = false;
 
 async function waitFor(label: string, predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 45_000;
@@ -248,6 +249,10 @@ const provider = createServer(async (request, response) => {
     for await (const chunk of request) body += chunk;
     const input = JSON.parse(body) as { model: string; messages: unknown[] };
     requests += 1;
+    if (shuttingDown) {
+      response.writeHead(503).end('Fixture stopping');
+      return;
+    }
     await ownerRequest('snapshot');
     const action = script(input.model, input.messages);
     if (action) toolCalls.push(action.name);
@@ -318,14 +323,15 @@ let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 let shutdown: Promise<void> | undefined;
 function cleanup(): Promise<void> {
   shutdown ??= (async () => {
+    shuttingDown = true;
     const failures: unknown[] = [];
     for (const operation of [
-      () => runtime.close(),
       () => host?.close(),
       () =>
         new Promise<void>((resolve, reject) =>
           provider.close((error) => (error ? reject(error) : resolve())),
         ),
+      () => runtime.close(),
     ]) {
       try {
         await operation();
