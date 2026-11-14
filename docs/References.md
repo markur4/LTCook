@@ -39,7 +39,7 @@
 | [teams](../teams) | Bundled team packages and Markdown resources. |
 | [services](../services) | Pinned Compose services and their non-secret configuration. |
 | [src/ltcook_distr/payload/app_lifecycle](../src/ltcook_distr/payload/app_lifecycle) | Authored installation, preparation, and maintenance behavior. |
-| [src/ltcook_dev/packaging](../src/ltcook_dev/packaging) | Authoring, asset staging, and PyApp build helpers. |
+| [src/ltcook_dev/packaging](../src/ltcook_dev/packaging) | Asset archive, package and native-release staging helpers. |
 | [src/ltcook_dev/runtime.py](../src/ltcook_dev/runtime.py) | Resolves workspace AppRC settings before starting Bun against checkout source. |
 | [tests](../tests) | Python and TypeScript quick, integration, and system tests. |
 
@@ -57,8 +57,8 @@ commands provide launch operations and diagnostics:
 | `ltcook diagnose --json` | Report package, interpreter, and AppRC paths without writing files. |
 | `ltcook config setup --yes` | Initialize declared configuration files; it does not install Node or prepare services. |
 | `ltcook config show --json` | Show app settings, paths, and selected workspace. |
-| `ltcook config paths --json` | Show declared AppRC paths. |
-| `ltcook config doctor --json` | Diagnose configuration without writing. |
+| `ltcook app paths` | Show recorded AppRC resource paths. |
+| `ltcook app doctor --json` | Diagnose installation/configuration without writing. |
 | `ltcook config edit` | Open the AppRC terminal configuration editor. |
 | `ltcook workspace add NAME ROOT --yes` | Optionally register a project and initialize its AppRC settings marker. |
 | `ltcook launch runtime [--workspace ROOT]` | Browser-free foreground server, or explicit project activation; reuse does not take over the owner. |
@@ -70,7 +70,7 @@ commands provide launch operations and diagnostics:
 | `ltcook services stop [--workspace ROOT]` | Stop the SearXNG and Crawl4AI containers in local mode. |
 | `ltcook services status [--workspace ROOT]` | Show local Compose status or the configured remote-service mode. |
 | `ltcook services logs [--workspace ROOT]` | Show recent local service logs. |
-| `ltcook launcher` | Open the optional AppRC management launcher. |
+| `ltcook app doctor --json`, `ltcook app paths` | Inspect installation health and recorded resource placement. |
 | `python -m ltcook.launch runtime [--workspace ROOT]` | Internal module entry point for the same global or project launch. |
 | `python -m ltcook.launch environment --workspace ROOT` | Emit raw workspace-specific child environment JSON; may contain secrets. |
 | `python -m ltcook.launch write-native-config --workspace ROOT` | Internal entry point for the private Pi-only `web-search.json` writer. |
@@ -101,22 +101,18 @@ stop the runtime. These endpoints do not provide network-wide discovery.
 
 ## Installer reference
 
-The PyApp launcher executes a generated standalone AppRC installer; AppRC's
-`uv tool` backend owns the installed Python application. The current manual
-release workflow builds Linux installer assets, but no LTCook release is
-published. For checkout installation, follow the
-[installation guide](How-To-User-Guides.md#install-from-a-checkout). Do not treat
-an installer asset build as a completed installation or a release.
+The Linux `ltcook-setup-linux-x86_64` contains an SDK manager, committed project
+snapshot and exact lock. Install with `--yes --skip-setup`; updates use a newer
+setup. AppRC owns managed runtime slots, not a `uv tool` environment.
+No adjacent wheel, generated Python installer or shell wrapper is required.
+The manual workflow builds assets only; no release has been published.
 
-The portable PyApp bundle contains three adjacent assets: `ltcook-install`
-(`ltcook-install.exe` on native Windows), `main-installer.pyz`, and the canonical
-LTCook wheel matching the project version. Keep all three together and preserve
-the exact `.pyz` filename. The installer validates and selects the wheel for a
-noneditable AppRC install; it needs no checkout or source download.
-
-`--root` sets only the single-root resource destination. `--directory` names the
-saved installation directory for `--repair`; neither option selects source. The
-native shell bootstrap remains a separate checkout-based route.
+For editable registration, synchronize the checkout and run
+`uv run --locked ltcook app install -e --yes --skip-setup`. Its `.venv` remains
+developer-owned. `--command-directory` selects an existing directory already on
+PATH without modifying shell profiles or overwriting unrelated commands.
+`--skip-setup` does not skip initialization. See the
+[installation guide](How-To-User-Guides.md#install-from-a-checkout).
 
 ## Uninstaller reference
 
@@ -134,39 +130,37 @@ AppRC declares config, appdata, cache, and state as independent paths. The
 installation authority is a separate fixed native location. The deployment is
 normally under AppRC appdata; it contains the private Node executable, production
 application bundle, per-workspace Pi locations, service receipt, and SQLite
-coordination database. Use `ltcook config paths --json` and `ltcook installation
-show` to inspect the resolved locations. The installer may capture native paths
-or an explicit single-root layout; reinstallation should reuse recorded placement.
+coordination database. Use `ltcook app paths` and `ltcook app doctor --json` to
+inspect recorded locations. Explicit resource relocation uses `app migrate`,
+not a manual move or an edit to installation authority.
 
 ## Lifecycle and deployment assets
 
-The authored lifecycle composition lives under
+The initializer and maintenance actions live under
 [`src/ltcook_distr/payload/app_lifecycle`](../src/ltcook_distr/payload/app_lifecycle).
-The generated standalone AppRC support is under
-[`src/ltcook_distr/artifacts`](../src/ltcook_distr/artifacts); those files are not
-a second authored lifecycle implementation. The `BuildPy` hook in
-[`package_assets.py`](../src/ltcook_dev/packaging/package_assets.py) copies only
-a validated, explicitly staged production bundle into the built wheel.
+AppRC initializes resources before invoking `actions:initialize` with pending
+operation context. That hook provisions runtime/services without config edits.
+Missing service secrets are saved only at explicit post-Ready starts.
 
-The staged `src/ltcook_distr/bundle` contains the compiled runtime, shared-auth
-Pi SDK/RPC launcher, Pi extension, Paseo panel plugin, built team packages and
-Markdown resources, Compose assets,
-root production manifests/lock, and selected Node version. It excludes development
-`node_modules`, tests, and Python development tools. The bundle is required wheel
-content, not a disposable build output. `src/ltcook_distr/artifacts/_support` is
-generated installer support, not runtime app payload.
+[`package_assets.py`](../src/ltcook_dev/packaging/package_assets.py) creates and
+validates the single canonical `src/ltcook_distr/bundle.zip`. It contains compiled
+runtime/team code, Pi/Paseo plugin resources, services, manifests, production
+lock and Node selection, excluding development dependencies. `BuildPy` copies
+the validated archive; initialization safely extracts it while preparing Node.
+An archive is necessary because SDK snapshot cleanup strips generated `dist`
+directories, even inside staged package directories.
 
-`just build` stages the Python distribution artifacts from existing build output;
-it does not generate lifecycle artifacts. `just make-artifacts` explicitly
-generates those outputs. `just check-artifacts` validates generated lifecycle
-files without rewriting them. Installer preparation provisions a private Node
-runtime and application deployment; it does not install global npm dependencies
-or make PyApp a second Python environment owner.
+`just sync` and `just build` prepare the archive. `just build-native` exports a
+committed tree, builds assets inside that private tree and invokes AppRC's native
+builder with the locked application graph. Authoring needs uv 0.13.6, Rust and
+LLVM; editable registration does not.
 
-The current manual release workflow is Linux-only and builds a wheel, source
-archive, PyApp launcher, and generated installer asset. It does not publish a
-release, create a tag, or publish to PyPI. `RELEASE_PYPI := "false"` in the root
-`justfile`; no LTCook release is available.
+The Linux workflow emits wheel, sdist, `ltcook-setup-linux-x86_64` and
+`SHA256SUMS`. Release staging verifies the embedded binding's app/distribution,
+version, command and source commit plus exact native checksums before creating
+the schema-2 release manifest. Legacy schema-1 script/zipapp manifests are not
+accepted. The workflow creates no tag, GitHub Release or PyPI publication;
+`RELEASE_PYPI := "false"` remains the hard publication gate.
 
 <br>
 
@@ -339,8 +333,7 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just test-system` | Run marked Python system tests. |
 | `just build` | Build/stage runtime, team, and service production assets and the Python wheel/source distribution. |
 | `just sync`, `just install` | Prepare the checkout-local uv environment, install frozen locks, build, stage assets, and install the Python application. |
-| `just make-artifacts` | Generate AppRC lifecycle support files. |
-| `just check-artifacts` | Check generated lifecycle files without rewriting. |
+| `just build-native` | Build committed-source Linux setup and SDK checksums with uv 0.13.6 and Rust/LLVM. |
 | `just format`, `just format-check` | Format authored TypeScript/Python or check the existing formatting. |
 | `just run -- COMMAND ...` | Run a command with preserved arguments in the locked uv environment. |
 

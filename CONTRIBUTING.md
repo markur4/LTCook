@@ -82,9 +82,9 @@ and system commands are documented in the
 [verification guide](docs/Development.md#verification); use them only when their
 scenario prerequisites are available.
 
-Do not run installation smoke tests as a default loop. They require an explicit
-source commit/archive and external installer prerequisites. Windows and macOS
-behavior is not established by Linux execution. The detailed guides explain these
+Do not run installation smoke tests as a default loop. They require an explicitly
+built native setup and its immutable source commit, plus compiler/download prerequisites.
+Windows and macOS behavior is not established by Linux execution. The guides explain these
 limits; the [release guide](docs/Development.md#releases) describes the current
 Linux-only manual asset build, not publication.
 
@@ -106,8 +106,8 @@ Linux-only manual asset build, not publication.
   values. Redaction controls display; it does not encrypt the AppRC-managed file.
 - Keep Python launch/configuration concerns in `src/ltcook`, lifecycle and
   installer ownership in `src/ltcook_distr`, and developer packaging helpers in
-  `src/ltcook_dev`. The wheel's `BuildPy` step copies only a validated staged
-  `src/ltcook_distr/bundle`.
+  `src/ltcook_dev`. The wheel's `BuildPy` step copies only a validated canonical
+  `src/ltcook_distr/bundle.zip`.
 - Runtime and team packages are Bun workspaces. Teams implement the current
   public `apiVersion: 1` interface in `runtime/src/api/team.ts`; use public team
   operations rather than SQL or runtime internals. Shared commands are defined
@@ -150,11 +150,12 @@ as well.
 
 ## Generated files
 
-When an asset has a source builder, update the source and use its explicit
-regeneration command. `just make-artifacts` generates AppRC lifecycle support;
-`just check-artifacts` checks tracked outputs without rewriting them. `just build`
-stages the production runtime/team/service bundle into the wheel. Do not hand-edit
-generated support or stage incomplete assets into a distributable package. See
+When an asset has a source builder, update that source and regenerate explicitly.
+`just sync` and `just build` create the canonical runtime/team/service bundle ZIP.
+`just build-native` snapshots committed source and its lock, then builds the Linux
+native setup through AppRC. Native authoring needs uv 0.13.6 and Rust/LLVM;
+editable registration does not. Never hand-edit generated payloads or stage
+incomplete assets into a distributable package. See
 [asset packaging](docs/Development.md#asset-packaging).
 
 ---

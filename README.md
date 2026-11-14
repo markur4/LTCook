@@ -164,45 +164,20 @@ software or start services.
 > No LTCook release has been published yet. Use the checkout workflow below.
 > Release downloads in this section apply only after an actual release exists.
 
-The generated release-mode native entry can run by itself. It acquires and
-verifies the matching source and release manifest; adjacent manifest and
-`main-installer.py` files are not required. Downloading the complete release
-asset set is an optional workflow when you want to inspect or retain those
-assets locally.
+The Linux native setup embeds committed project source and its exact Python
+lock. It installs a private managed runtime through AppRC; no adjacent wheel,
+Python installer or shell wrapper is needed.
 
 ```shell
-gh release download vX.Y.Z --repo markur4/ltcook
-./app-install.sh
+gh release download vX.Y.Z --repo markur4/LTCook --pattern 'ltcook-setup-linux-x86_64'
+chmod +x ltcook-setup-linux-x86_64
+./ltcook-setup-linux-x86_64 --yes --skip-setup
 ```
 
-On Windows, run the downloaded `app-install.cmd` instead:
-
-```powershell
-gh release download vX.Y.Z --repo markur4/ltcook
-.\app-install.cmd
-```
-
-The default source selection installs the pinned source archive. `--version
-X.Y.Z` selects a specific published release, and `--main` resolves the
-repository's current `main` to one immutable commit for that invocation. These
-choices cannot be combined. `--github-client gh` selects authenticated GitHub
-CLI downloads; public downloads do not inherit GitHub CLI credentials. Private
-VCS dependencies separately require Git credentials. Installing missing native
-prerequisites on Windows can require administrator privileges.
-
-For a source checkout, first generate its local AppRC artifacts with
-`just make-artifacts`, then use `./app-install.sh` or `.\app-install.cmd`.
-`just check-artifacts` verifies tracked output without rewriting it. A missing
-checkout payload reports the generation command; it never fetches a replacement
-from a remote repository.
-These authoring recipes use uv's locked project environment; an activated virtual
-environment or direnv is not required.
-
-The installer offers native or single-root resource placement when the
-application declares resource capabilities. Use `--layout native` for native
-locations or `--layout single-root --root ABSOLUTE_PATH` for a single root.
-Reinstallation keeps the saved absolute placement unless an explicit layout
-override is supplied. LTCook declares config, appdata, cache and state paths.
+The manual asset workflow is Linux-only; it does not establish Windows/macOS
+installation support. Updates use a newer setup executable. There are no
+`--main`, `--version`, wheel-input or generated shell-installer selectors.
+Resource placement is recorded separately from the installed program.
 
 Configuration setup is optional and does not block installation management.
 
@@ -210,56 +185,48 @@ Configuration setup is optional and does not block installation management.
 
 ## Install from a checkout
 
-Clone the repository, synchronize its locked authoring environment, and
-generate local AppRC artifacts before running the checkout installer:
+Clone the repository and synchronize its locked environment, then register that
+checkout's `.venv` as the global command:
 
 ```shell
 git clone https://github.com/markur4/LTCook.git
 cd LTCook
 just sync
-just make-artifacts
-```
-
-On Linux and macOS, run:
-
-```shell
-./app-install.sh --layout native
+uv run --locked ltcook app install -e --yes --skip-setup
 ltcook
 ```
 
-On Windows, run:
+The SDK is pinned to an exact unreleased AppRC Git commit in `pyproject.toml`
+and `uv.lock`. Git and normal dependency-download access are required.
+`just sync` builds the canonical `src/ltcook_distr/bundle.zip`; registration
+prepares Node and service prerequisites without starting containers.
+`--skip-setup` skips only the optional configuration offer, not initialization.
+Editable registration neither copies nor owns the checkout or `.venv`.
+Use Git and `just sync` to update; repeat registration to refresh provisioning.
+Rust/PyApp compilation is not needed for an editable installation.
 
-```powershell
-.\app-install.cmd --layout native
-ltcook
-```
-
-The checkout install is editable and uses the actual project files, including
-uncommitted changes. It does not alter the repository's saved source revision.
-Use `just check-artifacts` to check generated outputs without rewriting them.
+> [!WARNING]
+> Schema-2 AppRC installations must first be retired using their matching old
+> tools while retaining all resources. Do not delete `installation.json` or use
+> a complete-removal default that selects user data. See the
+> [migration procedure](docs/How-To-User-Guides.md#install-from-a-checkout).
 
 <br>
 
 ## Uninstall
 
-Run `./app-uninstall.sh` on Linux or macOS, or `.\app-uninstall.cmd` on Windows.
-The default removes the managed program and retains declared resources and
-installation recovery support. Complete removal requires an explicit request:
+Preview and remove the registered program through its lifecycle CLI:
 
 ```shell
-./app-uninstall.sh --complete --category config --category appdata --yes
+ltcook app uninstall --dry-run
+ltcook app uninstall --yes
 ```
 
-Use the same options with `app-uninstall.cmd` on Windows. Only select resource
-categories that the application declared; unknown files and external data are
-not inferred as cleanup targets. The saved uninstall code invokes any
-repository-owned cleanup before removing the installed program. Inspection and
-recovery use `ltcook installation show`, `ltcook installation
-doctor`, and `ltcook installation repair`.
-
-The saved controller is stored under the fixed native `installation/` address,
-separate from application data. Repeated commands do not redirect it when the
-shell's `HOME`, XDG variables, or `LOCALAPPDATA` change.
+Program-only removal retains declared resources, external Pi authentication,
+and the editable checkout/environment. Inspect `ltcook app paths` and
+`ltcook app doctor --json` for placement and installation health. Complete
+resource removal is a separate destructive action requiring explicit categories
+and ownership-safe inventory; never infer permission to remove user data.
 
 <br>
 
@@ -276,7 +243,7 @@ setup. Run these commands from the installed application environment:
 ```shell
 ltcook version
 ltcook diagnose --json
-ltcook installation show
+ltcook app doctor --json
 ltcook config show --json
 ltcook
 ```

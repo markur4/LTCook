@@ -64,6 +64,18 @@ All notable changes to `ltcook` will be documented in this file.
 - Breaking: Bare `ltcook` now starts or attaches to the runtime instead of printing
   help. Scripts requiring help must use `ltcook --help`; headless foreground users
   should retain `ltcook launch runtime`.
+- Breaking: LTCook now requires the pinned unreleased AppRC cutover. Maintenance
+  commands move to `ltcook app ...`; use `config setup`, and replace the optional
+  terminal `ltcook launcher` with bare `ltcook` for Paseo or `app doctor|paths|repair`.
+  Retire schema-2 installations with matching old tools before registering the
+  checkout with `uv run --locked ltcook app install -e`; retain all user resources.
+- Breaking: Native distribution authors now build a committed-source Linux setup
+  with `just build-native`, rather than generated shell/Python installers or
+  adjacent-wheel PyApp bundles. Release staging requires schema-2 native manifests;
+  regenerate legacy manifests and assets from the intended immutable source commit.
+- Missing service secrets are generated only at explicit runtime/service starts
+  after installation is Ready, serialized across simultaneous starts; inspection
+  and authentication checks remain read-only.
 
 ### ➕ Added
 

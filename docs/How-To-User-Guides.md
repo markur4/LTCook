@@ -31,54 +31,58 @@ No LTCook release exists yet. Use [checkout installation](#install-from-a-checko
 The current manual [release workflow](Development.md#releases) builds Linux assets
 for inspection; it does not publish a GitHub Release or a PyPI package.
 
-The portable PyApp delivery consists of three adjacent assets: `ltcook-install`
-(`ltcook-install.exe` on native Windows), `main-installer.pyz`, and the canonical
-LTCook wheel matching the project version. The launcher validates the wheel's
-identity and SHA-256, then AppRC installs it as a noneditable local wheel. This
-bundle needs no project checkout and does not download source.
-
-PyApp runs the generated AppRC installer from the separate `ltcook-installer`
-bootstrap environment, which depends on `apprc-core` and its transitive
-requirements, not `ltcook`. AppRC's configured `uv tool` backend installs the
-actual LTCook application and owns its environment. The native shell installer
-in the next section is a separate checkout-based route.
-An artifact build does not prove a completed installation or support on every
-platform.
+The Linux setup `ltcook-setup-linux-x86_64` embeds committed project source and
+its exact lock. Run it with `--yes --skip-setup`; no adjacent wheel, shell
+bootstrap or Python installer is needed. AppRC owns managed runtime slots;
+updating uses a newer setup executable, not a main/release/wheel selector.
+Building an asset does not prove installation or native Windows/macOS support.
 
 ## Install from a checkout
 
-Start with Python 3.12+, Node matching `.node-version`, Bun, uv, and just. From
-the repository root, build and stage the production payload before generating
-the checkout installer:
+Start with Python 3.12+, Node matching `.node-version`, Bun, uv, Git and just.
+From the repository root:
 
 ```shell
 just sync
-just make-artifacts
+uv run --locked ltcook app install -e --yes --skip-setup
 ```
 
-Then run `./app-install.sh --layout native` on Linux/macOS or
-`.\app-install.cmd --layout native` in native Windows. The generated installer
-first installs Python editably and initializes AppRC's resource directories, then
-prepares a private Node installation and JavaScript application under AppRC
-appdata. It installs production dependencies from `package-lock.json`, prepares
-browser prerequisites, and checks or installs Podman
-and a Compose provider for local services. This is explicit setup: it can download
-software and require the host's normal elevation. It does not start the Compose stack.
+This registers the checkout's existing `.venv` and publishes its command without
+copying or owning the developer environment. The exact unreleased AppRC commit
+is pinned in `pyproject.toml` and `uv.lock`; an index version alone is insufficient.
+No Rust/native compilation is needed for this route.
 
-A compatible existing Podman installation is reused. macOS and native Windows
-may require a Podman machine. Configuration inspection and directory entry do not
-perform this preparation. Re-run the explicit installer to retry preparation;
-`ltcook config setup --yes` initializes configuration, not external prerequisites.
+Registration initializes declared AppRC directories, extracts the canonical
+`bundle.zip`, and prepares private Node, production dependencies, optional
+browser tools and the configured service prerequisites. Local mode validates
+Podman and its Compose provider. Missing native prerequisites can require normal
+host elevation; this preparation does not start containers. `--skip-setup`
+skips only optional configuration, not required initialization.
+
+> [!WARNING]
+> Existing schema-2 installations need their matching old retirement tools
+> before schema-3 registration. Program-only old uninstall leaves an incompatible
+> retained record. The old application CLI's `--complete` without categories
+> selects all resources: do not use it for a retention-preserving cutover.
+> Preview the matching old controller with an explicitly empty category set,
+> `complete=True, forget_retained=True`, retaining every resource root and marker.
+> Only recorded program/support outputs may be removed. Apply that reviewed
+> revision/inventory through its supported handoff, wait for finalization, then
+> register the original checkout. Never hand-edit/delete authority or reset Pi auth.
+
+Configuration inspection and directory entry do not provision prerequisites.
+Use `ltcook app doctor --json` for diagnostics; repeat the supported editable
+registration to retry initialization. `config setup` initializes saved settings,
+not external prerequisites.
 
 Runtime launches omit an unset or empty `CONTAINER_CONNECTION`, preserving Podman's
 default engine selection. Set it to a configured Podman connection name only when
 a remote engine is intended.
 
-The private JavaScript deployment is copied from the staged bundle; after
-changing runtime or team sources, rerun `just sync` and the checkout installer
-to refresh it.
-See [installation placement](References.md#installation-placement) for native and
-single-root resource layouts.
+The private deployment is populated from the packaged archive; after changing
+runtime/team sources, rerun `just sync` and editable registration to refresh it.
+See [installation placement](References.md#installation-placement) for recorded
+resource locations and explicit migration.
 
 > [!WARNING]
 > Windows/macOS installation and live web/model workflows are not established by
@@ -95,8 +99,8 @@ Inspect the application without starting agents:
 ltcook --help
 ltcook version
 ltcook diagnose --json
-ltcook installation show
-ltcook installation doctor
+ltcook app paths
+ltcook app doctor --json
 ltcook config show --json
 ```
 
@@ -165,16 +169,15 @@ can also connect through Paseo's existing client and select the LTCook
 team-status panel. If `LTCOOK_PASEO_PASSWORD` is set, it protects API and
 WebSocket access, not the static HTML page. Never put the password in the URL.
 The minimal team contains Main and Adjutant, not hidden specialists. Starting
-native agents is distinct from sending a prompt; a model-backed conversation
-additionally needs a working provider and explicit user input. The optional
-`ltcook launcher` opens AppRC management; it is not a separate chat interface or
-a substitute for the runtime command.
+agents is distinct from sending a model-backed prompt, which needs a working
+provider and explicit input. The former terminal `ltcook launcher` is removed:
+use bare `ltcook` for Paseo and `ltcook app ...` for maintenance.
 
 ## Remove an installation
 
-Run the generated `./app-uninstall.sh` or native Windows `app-uninstall.cmd`.
-Program-only removal retains declared resources and saved recovery support.
-Inspect `ltcook installation uninstall --dry-run` before removal.
+Preview with `ltcook app uninstall --dry-run`, then use
+`ltcook app uninstall --yes` for program-only removal. Declared resources,
+external shared Pi auth and editable checkout/environment remain intact.
 
 > [!CAUTION]
 > Explicit appdata removal deletes LTCook's deployment and coordination data.
@@ -211,6 +214,11 @@ server/UI. Provider account login belongs to Pi, as described
 provider's AppRC secret field or native environment variable such as
 `OPENAI_API_KEY`. `config show --json` reports application settings, not provider
 OAuth credentials. Store only revocable credentials agents may read.
+
+Explicit runtime and service starts create only missing runtime, Crawl4AI and
+SearXNG secrets after installation is Ready, preserving existing values. They do
+not generate provider credentials. Status, diagnosis and auth checks do not
+initialize these service secrets.
 
 The [configuration layers](Explanations.md#configuration-files) preserve saved
 user defaults, registered workspace overrides, and deliberate shell exports.
@@ -257,11 +265,10 @@ environment, or revoke credentials at the provider.
 
 ## Choose application paths
 
-The installer accepts `--layout native` or
-`--layout single-root --root ABSOLUTE_PATH`. Reinstallation reuses recorded
-absolute resource paths unless placement is explicitly overridden. Config,
-appdata, cache, and state are enabled independently in the AppRC declaration.
-The fixed native `installation/` authority remains separate from appdata.
+AppRC records absolute native or explicitly selected resource locations
+separately from program ownership. Config, appdata, cache and state are enabled
+independently. Use `ltcook app migrate --help` for supported explicit relocation;
+do not move/edit the fixed native `installation/` authority by hand.
 
 The default deployment is `<appdata>/deployment`, including private `node/`,
 production `app/`, service receipts, and coordination data. Paseo's mutable home
@@ -276,8 +283,8 @@ changing the workspace-specific `PI_CODING_AGENT_DIR`.
 `app/` tree. `PI_CODING_AGENT_DIR` must resolve inside the deployment. Invalid
 paths are rejected with the variable name.
 
-Use `ltcook config paths --json` and `ltcook installation show` to inspect actual
-locations. See [project paths](References.md#project-paths).
+Use `ltcook app paths` and `ltcook app doctor --json` to inspect actual locations.
+See [project paths](References.md#project-paths).
 
 ## Select a team and resume a session
 
@@ -415,21 +422,20 @@ team setting without replacing application modules.
 
 ## Troubleshoot configuration and installation
 
-Use `ltcook config paths --json`, `ltcook config doctor --json`, and
-`ltcook installation doctor` for passive inspection.
+Use `ltcook app paths` and `ltcook app doctor --json` for passive inspection.
 
 | Symptom | Action |
 | --- | --- |
 | Command unavailable | Use the installed environment's executable or `python -m ltcook`. |
 | Saved team is ignored | Compare `LTCOOK_TEAM` shell exports and registered workspace overrides. |
-| Runtime deployment is missing | Re-run the explicit generated installer after building/staging its inputs. |
+| Runtime deployment is missing | Run `just sync`, then repeat editable registration to initialize the staged payload. |
 | Model alias is empty | Configure the matching `runtime.*_model` or smart fallback and provider credentials. |
 | Provider authentication is not ready | Run `ltcook auth check --provider openai --json --no-refresh`, then use Pi login for the selected provider. |
 | Session reports a different team/workspace | Restore the original selection or choose a new session identifier. |
 | Database already has an owner | Stop that runtime; do not delete its lock or run another recovery owner. |
 | Browser unavailable | Inspect the installation receipt and browser prerequisites; do not confuse it with core chat/search availability. |
 | Web tools cannot connect | Check configured URLs, actual Compose ports, credentials, network access, and narrow SSRF allowances. |
-| Saved installation is incomplete | Use installation inspection/repair with matching saved support. |
+| Saved installation is incomplete | Inspect `ltcook app doctor --json` and use the matching `app repair` workflow; preserve pending authority. |
 
 The internal `python -m ltcook.launch environment --workspace ROOT` command emits
 raw child-process environment values, including secrets. It is not a redacted

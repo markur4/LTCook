@@ -139,6 +139,7 @@ def test_auth_check_and_logout_use_shared_native_auth_file(tmp_path):
         cwd=project,
     )
     assert missing.returncode == 1
+    assert not Path(environment["XDG_CONFIG_HOME"]).exists()
     assert not auth_file.exists()
 
     fixture_key = "ltcook-test-only-dummy-key"
@@ -155,6 +156,7 @@ def test_auth_check_and_logout_use_shared_native_auth_file(tmp_path):
         cwd=project,
     )
     assert ready.returncode == 0
+    assert not Path(environment["XDG_CONFIG_HOME"]).exists()
     assert fixture_key not in ready.stdout
     assert fixture_key not in ready.stderr
 

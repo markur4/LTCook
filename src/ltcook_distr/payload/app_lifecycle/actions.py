@@ -8,9 +8,12 @@ import os
 import re
 import secrets
 import shutil
+import tempfile
 from collections.abc import Callable, Mapping
+from importlib import resources
 from pathlib import Path
 
+from apprc.definition.installation import OperationContext
 from apprc.definition.maintenance import (
     AppDataOperations,
     CacheOperations,
@@ -21,27 +24,39 @@ from apprc.definition.maintenance import (
     StateOperations,
 )
 from apprc.definition.paths import ResourceKind
+from filelock import FileLock
 
-from ._common import SetupError, no_links, run
+from ._common import SetupError, extract_archive, no_links, run
 
 
-def prepare_project(
-    source: object, appdata: Path, environment: Mapping[str, str]
-) -> None:
-    """Prepare private Node and services after AppRC initializes resource ownership."""
+def initialize(context: OperationContext) -> None:
+    """Provision the bundled runtime inside the SDK's pending installation.
+
+    :param context: Pending operation with SDK-initialized resource placement.
+    :return: None.
+    """
     from .prepare_runtime import prepare_runtime
     from .prepare_services import prepare_services
 
+    appdata = context.placement.appdata_dir
     if appdata is None:
         raise SetupError("LTCook AppRC appdata path is required for setup.")
-    prepare_runtime(source, appdata, environment=dict(environment))
-    prepare_services(appdata, environment=dict(environment))
+    environment = dict(os.environ)
+    payload = resources.files("ltcook_distr").joinpath("bundle.zip")
+    with (
+        resources.as_file(payload) as archive,
+        tempfile.TemporaryDirectory(prefix="ltcook-bundle-") as temporary,
+    ):
+        bundle = Path(temporary)
+        extract_archive(archive, bundle)
+        prepare_runtime(bundle, appdata, environment=environment)
+    prepare_services(appdata, environment=environment)
 
 
 def ensure_service_secrets(environment: Mapping[str, str]) -> None:
     """Create missing service secrets through registered AppRC secret fields.
 
-    :param environment: Captured setup environment used by AppRC resolution.
+    :param environment: Original shell environment for a post-Ready start.
     :return: None.
     """
     try:
@@ -53,33 +68,27 @@ def ensure_service_secrets(environment: Mapping[str, str]) -> None:
         ) from exc
     manager = APP_RC.manage(environment=dict(environment))
     manager.setup()
-    configuration = manager.resolve().build(LtcookConfig)
-    secret_fields = (
-        (configuration.runtime.api_token, "LTCOOK_API_TOKEN"),
-        (configuration.crawl4ai.api_token, "CRAWL4AI_API_TOKEN"),
-        (configuration.searxng.secret, "SEARXNG_SECRET"),
-    )
-    for existing, reference in secret_fields:
-        if existing:
-            continue
-        plan = manager.plan_update(reference, secrets.token_urlsafe(48), scope="user")
-        manager.apply_edit(plan)
-
-
-def initialize_service_secrets(
-    interpreter: Path, environment: Mapping[str, str]
-) -> None:
-    """Run idempotent secret setup through the installed LTCook interpreter."""
-    if not interpreter.is_absolute() or not interpreter.is_file():
-        raise SetupError(
-            "Installed LTCook interpreter is unavailable for secret setup."
+    config_dir = manager.paths.require("config")
+    lock_path = config_dir.with_name(f".{config_dir.name}.ltcook-secrets.lock")
+    no_links(lock_path)
+    # > Hold the read-and-create sequence together across simultaneous starts.
+    # > AppRC still validates and locks each individual configuration edit.
+    with FileLock(lock_path, timeout=10):
+        configuration = manager.inspect(include_workspace=False).resolved.build(
+            LtcookConfig
         )
-    code = (
-        "import os\n"
-        "from ltcook_distr.payload.app_lifecycle.actions import ensure_service_secrets\n"
-        "ensure_service_secrets(os.environ)"
-    )
-    run([str(interpreter), "-I", "-c", code], environment=environment)
+        secret_fields = (
+            (configuration.runtime.api_token, "LTCOOK_API_TOKEN"),
+            (configuration.crawl4ai.api_token, "CRAWL4AI_API_TOKEN"),
+            (configuration.searxng.secret, "SEARXNG_SECRET"),
+        )
+        for existing, reference in secret_fields:
+            if existing:
+                continue
+            plan = manager.plan_update(
+                reference, secrets.token_urlsafe(48), scope="user"
+            )
+            manager.apply_edit(plan)
 
 
 def _stop_owned_services(deployment: Path) -> None:
