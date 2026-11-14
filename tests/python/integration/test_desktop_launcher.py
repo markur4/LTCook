@@ -348,7 +348,7 @@ def test_concurrent_cli_attach_detach_incremental_logs_and_explicit_stop(tmp_pat
         if paseo.exists():
             paseo.replace(rotated)
         rotated_record = (
-            b'{"time":1794651630000,"level":30,"msg":"rotated after replacement"}\n'
+            b'{"time":1794651630000,"level":40,"msg":"rotated after replacement"}\n'
         )
         paseo.write_bytes(rotated_record)
         deadline = time.monotonic() + 5
@@ -466,13 +466,13 @@ def test_verbose_cli_shows_full_upstream_diagnostics(tmp_path, arguments):
         assert "Attached to LTCook" in seen
         paseo = Path(status.paseo_log_path)
         paseo.parent.mkdir(parents=True, exist_ok=True)
-        paseo.write_text(
-            '{"level":30,"msg":"websocket client connected",'
-            '"connectionId":"synthetic-connection",'
-            '"browserFingerprint":"synthetic-browser",'
-            '"metrics":{"active":[1,2,3]}}\n',
-            encoding="utf-8",
-        )
+        with paseo.open("a", encoding="utf-8") as output:
+            output.write(
+                '{"level":30,"msg":"websocket client connected",'
+                '"connectionId":"synthetic-connection",'
+                '"browserFingerprint":"synthetic-browser",'
+                '"metrics":{"active":[1,2,3]}}\n'
+            )
         assert process.stdout is not None
         deadline = time.monotonic() + 5
         seen = ""

@@ -346,19 +346,18 @@ def runtime_command(
         status = probe_runtime(launch.environment)
         if status == "starting":
             status = wait_for_runtime(launch.environment, None)
-        if isinstance(status, RuntimeStatus):
-            if workspace is None or _open_existing_runtime(launch, shell):
-                if workspace is None:
-                    typer.echo(
-                        f"Reusing LTCook runtime for team {status.team_selection}."
-                    )
-                else:
-                    typer.echo(f"Opened workspace session for {launch.workspace_root}")
-                if verbose:
-                    raise typer.Exit(
-                        follow_runtime_logs(launch.environment, status, verbose=True)
-                    )
-                return
+        if isinstance(status, RuntimeStatus) and (
+            workspace is None or _open_existing_runtime(launch, shell)
+        ):
+            if workspace is None:
+                typer.echo(f"Reusing LTCook runtime for team {status.team_selection}.")
+            else:
+                typer.echo(f"Opened workspace session for {launch.workspace_root}")
+            if verbose:
+                raise typer.Exit(
+                    follow_runtime_logs(launch.environment, status, verbose=True)
+                )
+            return
         raise typer.Exit(_run_foreground_runtime(launch, shell, verbose=verbose))
     except RuntimeClientError as error:
         raise typer.BadParameter(str(error)) from error
