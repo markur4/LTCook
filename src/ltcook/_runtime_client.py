@@ -103,6 +103,44 @@ def _canonical(path: str) -> str:
     return str(Path(path).expanduser().resolve())
 
 
+def runtime_command(
+    environment: Mapping[str, str], session_id: str, command: Mapping[str, object]
+) -> object:
+    """Send a user-authenticated command to this installation's ready owner.
+
+    :param environment: Globally resolved AppRC launch environment.
+    :param session_id: Explicit Session identity; never inferred from cwd.
+    :param command: Command validated by the runtime's authoritative schema.
+    :return: Runtime result, without interpreting agent text as user consent.
+    """
+    if not session_id.strip():
+        raise RuntimeClientError("An explicit Session is required.")
+    status = probe_runtime(environment)
+    if status is None or status == "starting":
+        raise RuntimeClientError("Start the LTCook runtime before issuing commands.")
+    request = _request(
+        environment, "/v1/command", {"sessionId": session_id, "command": dict(command)}
+    )
+    try:
+        with _HTTP.open(request, timeout=30) as response:
+            return json.loads(response.read(1024 * 1024).decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = ""
+        try:
+            payload = json.loads(error.read(65536).decode("utf-8"))
+            if isinstance(payload, dict) and isinstance(payload.get("error"), str):
+                detail = f": {payload['error']}"
+        except (ValueError, UnicodeError):
+            pass
+        raise RuntimeClientError(
+            f"Runtime command rejected (HTTP {error.code}){detail}"
+        ) from error
+    except (OSError, urllib.error.URLError, UnicodeError, ValueError) as error:
+        raise RuntimeClientError(
+            "Could not confirm the runtime command result."
+        ) from error
+
+
 def _status(
     payload: object,
     environment: Mapping[str, str],

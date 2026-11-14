@@ -136,3 +136,69 @@ def test_main_without_arguments_still_starts_the_desktop_runtime(
         cli_module.main([])
 
     assert exit_info.value.code == 19
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (["planning", "show", "--plan", "Plan-2026_11_14-18_00-example"], "--session"),
+        (["planning", "approve", "--session", "session-one"], "--plan"),
+        (
+            ["planning", "answer", "--session", "session-one", "--plan", "plan"],
+            "--decision",
+        ),
+    ],
+)
+def test_planning_requires_explicit_context(monkeypatch, arguments, expected):
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    result = RUNNER.invoke(app, arguments, color=False)
+    assert result.exit_code != 0
+    assert expected in result.output
+
+
+def test_planning_answer_uses_authenticated_user_command(monkeypatch):
+    module = importlib.import_module("ltcook.cli.planning")
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        module,
+        "resolve_launch",
+        lambda _: SimpleNamespace(environment={"owner": "configured"}),
+    )
+    seen = []
+
+    def send(environment, session, command):
+        seen.append((environment, session, command))
+        return {"answered": True}
+
+    monkeypatch.setattr(module, "runtime_command", send)
+    result = RUNNER.invoke(
+        app,
+        [
+            "planning",
+            "answer",
+            "--session",
+            "session-one",
+            "--plan",
+            "Plan-2026_11_14-18_00-example",
+            "--decision",
+            "decision-one",
+            "--answer",
+            "Use clean breaking changes",
+        ],
+        color=False,
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == [
+        (
+            {"owner": "configured"},
+            "session-one",
+            {
+                "type": "decision.answer",
+                "planId": "Plan-2026_11_14-18_00-example",
+                "decisionId": "decision-one",
+                "answer": "Use clean breaking changes",
+            },
+        )
+    ]

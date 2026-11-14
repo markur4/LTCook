@@ -69,6 +69,16 @@ def _shell_environment(environment: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def _user_path(value: str, home: Path) -> Path:
+    """Expand a global path against the initiating user's home."""
+    path = (
+        home / value[2:].lstrip("/\\")
+        if value == "~" or value.startswith(("~/", "~\\"))
+        else Path(value).expanduser()
+    )
+    return path.resolve()
+
+
 def resolve_launch(
     workspace_root: str | Path | None = None,
     *,
@@ -85,13 +95,14 @@ def resolve_launch(
     )
     resolved = resolve_config(workspace_root, environment=shell)
     config = resolved.build(LtcookConfig)
-    # > Shared provider authentication is user state.
-    # > Resolve it globally, never from project overlays.
-    global_config = (
-        config
+    # > Shared credentials and runtime/guidance roots are user state. Resolve
+    # > them before native agents change HOME, without project overlays.
+    global_resolved = (
+        resolved
         if resolved.workspace is None
-        else resolve_global_config(environment=shell).build(LtcookConfig)
+        else resolve_global_config(environment=shell)
     )
+    global_config = global_resolved.build(LtcookConfig)
     environment = dict(shell)
     for section in config.__dict__.values():
         environment.update(
@@ -103,13 +114,31 @@ def resolve_launch(
     home = Path(
         shell.get("HOME") or shell.get("USERPROFILE") or str(Path.home())
     ).expanduser()
-    auth_dir = global_config.runtime.pi_auth_dir
-    auth_path = (
-        home / auth_dir[2:].lstrip("/\\")
-        if auth_dir == "~" or auth_dir.startswith(("~/", "~\\"))
-        else Path(auth_dir).expanduser()
+    environment["LTCOOK_PI_AUTH_DIR"] = str(
+        _user_path(global_config.runtime.pi_auth_dir, home)
     )
-    environment["LTCOOK_PI_AUTH_DIR"] = str(auth_path.resolve())
+    runtime_state = (
+        _user_path(global_config.runtime.state_dir, home)
+        if global_config.runtime.state_dir
+        else global_resolved.paths.require("state") / "runtime"
+    )
+    guidance = (
+        _user_path(global_config.runtime.guidance_dir, home)
+        if global_config.runtime.guidance_dir
+        else global_resolved.paths.require("config") / "guidance"
+    )
+    environment["LTCOOK_RUNTIME_STATE_DIR"] = str(runtime_state)
+    environment["LTCOOK_GUIDANCE_DIR"] = str(guidance)
+    environment["LTCOOK_PROJECT_CACHE_DIR"] = str(
+        global_resolved.paths.require("cache") / "projects"
+    )
+    environment["LTCOOK_DATABASE"] = (
+        str(_user_path(global_config.runtime.database, home))
+        if global_config.runtime.database
+        and global_config.runtime.database != ":memory:"
+        else global_config.runtime.database
+        or str(runtime_state / "coordination.sqlite")
+    )
     appdata_dir = resolved.paths.require("appdata")
     deployment = (
         Path(config.app.deployment).expanduser()
@@ -152,8 +181,6 @@ def resolve_launch(
     else:
         environment.pop("LTCOOK_WORKSPACE", None)
         environment.pop("LTCOOK_SESSION", None)
-    if not environment.get("LTCOOK_DATABASE"):
-        environment["LTCOOK_DATABASE"] = str(deployment / "coordination.sqlite")
     if not environment.get("LTCOOK_BROWSER_HOME"):
         environment["LTCOOK_BROWSER_HOME"] = str(deployment / "browser-home")
     if not environment.get("PASEO_HOME"):

@@ -12,6 +12,8 @@ class RuntimeSettings(rc.Config):
     """LTCook-owned runtime declarations."""
 
     database: str = rc.field("LTCOOK_DATABASE", default="")
+    state_dir: str = rc.field("LTCOOK_RUNTIME_STATE_DIR", default="")
+    guidance_dir: str = rc.field("LTCOOK_GUIDANCE_DIR", default="")
     paseo_listen: str = rc.field("LTCOOK_PASEO_LISTEN", default="127.0.0.1:6767")
     paseo_password: str = rc.field("LTCOOK_PASEO_PASSWORD", default="", secret=True)
     js_root: str = rc.field("LTCOOK_JS_ROOT", default="")

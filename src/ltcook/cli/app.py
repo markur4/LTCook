@@ -16,6 +16,7 @@ from apprc.definition.installation import InstallationHooks
 import ltcook
 from ltcook._runtime_client import RuntimeClientError, stop_runtime
 from ltcook.auth import auth_cli
+from ltcook.cli.planning import guidance_cli, planning_cli
 from ltcook.config.app import APP_RC
 from ltcook.config.bundle import LtcookConfig
 from ltcook.launch import desktop_command, launch_cli, resolve_launch, services_cli
@@ -34,6 +35,10 @@ app = typer.Typer(
 )
 app.add_typer(launch_cli, name="launch", help="Launch native runtime components.")
 app.add_typer(auth_cli, name="auth", help="Manage Pi provider authentication.")
+app.add_typer(
+    planning_cli, name="planning", help="Plan work and record user decisions."
+)
+app.add_typer(guidance_cli, name="guidance", help="Inspect rules and skills.")
 app.add_typer(
     services_cli,
     name="services",
@@ -158,6 +163,8 @@ runtime = rc.cli.CliRuntime(
     runtime_policy=rc.cli.CliRuntimePolicy(
         runtime_independent_commands={
             "stop": rc.cli.RuntimeIndependentCommand(skip_empty=True),
+            "planning": rc.cli.RuntimeIndependentCommand(skip_empty=True),
+            "guidance": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "auth": rc.cli.RuntimeIndependentCommand(
                 action_prefixes={("login",), ("logout",), ("check",)},
                 skip_empty=True,

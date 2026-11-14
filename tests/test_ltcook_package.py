@@ -31,6 +31,14 @@ def _asset_source(root: Path) -> Path:
     (root / "runtime/dist/integrations").mkdir(parents=True)
     (root / "runtime/dist/main.js").write_text("runtime", encoding="utf-8")
     (root / "runtime/dist/integrations/pi-rpc.js").write_text("rpc", encoding="utf-8")
+    for boundary in ("team-api", "guidance-api", "workflow-api"):
+        path = root / "runtime/dist" / boundary / "index.js"
+        path.parent.mkdir()
+        path.write_text("export {};", encoding="utf-8")
+    for resource in ("rules/planning.md", "skills/ltcook-planning/SKILL.md"):
+        path = root / "runtime/resources" / resource
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("required Core guidance", encoding="utf-8")
     plugin = root / "runtime/dist/paseo-plugin"
     for name in (
         "paseo-plugin.json",
@@ -77,6 +85,8 @@ def test_bundle_archive_is_deterministic_and_excludes_development_installs(
     names = validate_bundle(first)
     assert names == tuple(sorted(names))
     assert "runtime/dist/main.js" in names
+    assert "runtime/dist/workflow-api/index.js" in names
+    assert "runtime/resources/skills/ltcook-planning/SKILL.md" in names
     assert "teams/default-minimal/dist/index.js" in names
     assert all("node_modules" not in name for name in names)
     with zipfile.ZipFile(first) as archive:

@@ -50,9 +50,21 @@ def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
     assert global_launch.environment["LTCOOK_WORKSPACE"] == str(project.resolve())
     assert not marker_file.exists()
     assert not registry_file.exists()
+    assert global_launch.environment["LTCOOK_RUNTIME_STATE_DIR"] == str(
+        paths.require("state") / "runtime"
+    )
+    assert global_launch.environment["LTCOOK_GUIDANCE_DIR"] == str(
+        paths.require("config") / "guidance"
+    )
+    assert global_launch.environment["LTCOOK_DATABASE"] == str(
+        paths.require("state") / "runtime" / "coordination.sqlite"
+    )
 
     marker_file.write_text(
-        f"LTCOOK_TEAM=project-team\nLTCOOK_PI_AUTH_DIR={tmp_path / 'project-auth'}\n",
+        f"LTCOOK_TEAM=project-team\nLTCOOK_PI_AUTH_DIR={tmp_path / 'project-auth'}\n"
+        f"LTCOOK_RUNTIME_STATE_DIR={project / 'state'}\n"
+        f"LTCOOK_GUIDANCE_DIR={project / 'guidance'}\n"
+        f"LTCOOK_DATABASE={project / 'coordination.sqlite'}\n",
         encoding="utf-8",
     )
     project_launch = launch.resolve_launch(project, original_environment=environment)
@@ -62,6 +74,13 @@ def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
         global_auth.resolve()
     )
     assert not registry_file.exists()
+    for key in (
+        "LTCOOK_RUNTIME_STATE_DIR",
+        "LTCOOK_GUIDANCE_DIR",
+        "LTCOOK_PROJECT_CACHE_DIR",
+        "LTCOOK_DATABASE",
+    ):
+        assert project_launch.environment[key] == global_launch.environment[key]
 
 
 @pytest.mark.parametrize("connection", [None, "", "named-podman-connection"])
@@ -140,6 +159,9 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
         runtime=Section(
             {"LTCOOK_MODEL_SMOL": "workspace-model", "LTCOOK_TEAM": "workspace-team"},
             pi_auth_dir="~/.pi/agent",
+            state_dir="",
+            guidance_dir="",
+            database="",
         ),
         web=Section({"LTCOOK_CRAWL4AI_URL": ""}),
         pi=Section({}),
@@ -196,7 +218,9 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
 def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_path):
     config = SimpleNamespace(
         app=Section({}, deployment=""),
-        runtime=Section({}, pi_auth_dir="~/.pi/agent"),
+        runtime=Section(
+            {}, pi_auth_dir="~/.pi/agent", state_dir="", guidance_dir="", database=""
+        ),
         web=Section({}),
         pi=Section({}),
     )

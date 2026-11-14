@@ -223,10 +223,10 @@ def maintenance_handlers() -> MaintenanceHandlers:
         return (root / "deployment",)
 
     def cache_targets(root: Path) -> tuple[Path, ...]:
-        return (root / "ltcook",)
+        return (root / "ltcook", root / "projects")
 
     def state_targets(root: Path) -> tuple[Path, ...]:
-        return (root / "logs", root / "ltcook")
+        return (root / "logs", root / "ltcook", root / "runtime")
 
     def info(root: Path) -> Mapping[str, object]:
         return {"ltcook_deployment_exists": (root / "deployment").is_dir()}

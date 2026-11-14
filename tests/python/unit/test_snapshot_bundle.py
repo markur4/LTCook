@@ -139,6 +139,11 @@ def test_finished_snapshot_wheel_initializes_compiled_assets(tmp_path: Path) -> 
     commit = _committed_project(source)
     expected = {
         "runtime/dist/main.js": "export const runtime = 'snapshot-runtime';\n",
+        "runtime/dist/team-api/index.js": "export const teamApiVersion = 2;\n",
+        "runtime/dist/guidance-api/index.js": "export const guidance = true;\n",
+        "runtime/dist/workflow-api/index.js": "export const workflow = true;\n",
+        "runtime/resources/rules/planning.md": "Required planning rule\n",
+        "runtime/resources/skills/ltcook-planning/SKILL.md": "Planning skill\n",
         "runtime/dist/integrations/pi-rpc.js": "// snapshot Pi RPC\n",
         "runtime/dist/paseo-plugin/paseo-plugin.json": '{"id":"snapshot-plugin"}',
         "runtime/dist/paseo-plugin/index.server.ts": "// snapshot server plugin\n",

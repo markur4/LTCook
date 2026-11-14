@@ -13,7 +13,13 @@ from pathlib import Path, PurePosixPath
 from setuptools.command.build_py import build_py as BuildPyBase
 
 ROOT_DECLARATIONS = ("package.json", "package-lock.json", ".node-version")
-REQUIRED_RUNTIME_ENTRIES = ("dist/main.js", "dist/integrations/pi-rpc.js")
+REQUIRED_RUNTIME_ENTRIES = (
+    "dist/main.js",
+    "dist/integrations/pi-rpc.js",
+    "dist/team-api/index.js",
+    "dist/guidance-api/index.js",
+    "dist/workflow-api/index.js",
+)
 REQUIRED_PASEO_PLUGIN_ASSETS = (
     "paseo-plugin.json",
     "index.server.ts",
@@ -118,6 +124,9 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
             shutil.copyfile(root / declaration, staging / declaration)
         shutil.copyfile(runtime_manifest, staging / "runtime/package.json")
         _copy_tree(root / "runtime/dist", staging / "runtime/dist", required=True)
+        _copy_tree(
+            root / "runtime/resources", staging / "runtime/resources", required=True
+        )
         launcher = staging / "runtime/dist/integrations/pi-rpc.js"
         launcher.chmod(launcher.stat().st_mode | 0o111)
         for team in ("default", "default-minimal"):
@@ -193,6 +202,13 @@ def validate_bundle(archive: Path) -> tuple[str, ...]:
                 raise ValueError(
                     "Production bundle is missing a required production asset."
                 )
+            for kind in ("rules", "skills"):
+                if not any(
+                    name.startswith(f"runtime/resources/{kind}/") for name in names
+                ):
+                    raise ValueError(
+                        "Production bundle is missing required Core guidance."
+                    )
             for team in ("default", "default-minimal"):
                 for subtree in ("dist", "resources"):
                     if not any(
