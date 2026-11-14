@@ -44,6 +44,7 @@ describe('Paseo panel RPC', () => {
       if (requests.length === 6) {
         return Response.json({
           session: { teamId: 'server-team' },
+          definition: { name: 'Test team' },
           members: [],
           passes: [],
           tasks: [],
@@ -89,6 +90,7 @@ describe('Paseo panel RPC', () => {
       expect(JSON.parse(String(requests[2]?.init.body))).toEqual({ workspaceRoot: '/project' });
       expect(await snapshot!({ workspaceRoot: '/project' } as never)).toEqual({
         teamId: 'server-team',
+        teamName: 'Test team',
         members: [],
         passes: [],
         tasks: [],
@@ -105,4 +107,61 @@ describe('Paseo panel RPC', () => {
       else process.env.LTCOOK_TEAM = oldTeam;
     }
   });
+});
+
+test('selected detail RPC excludes unrelated private work and forwards only the workspace', async () => {
+  const oldEndpoint = process.env.LTCOOK_RUNTIME_API_URL;
+  const oldToken = process.env.LTCOOK_RUNTIME_USER_TOKEN;
+  const originalFetch = globalThis.fetch;
+  process.env.LTCOOK_RUNTIME_API_URL = 'http://runtime.invalid';
+  process.env.LTCOOK_RUNTIME_USER_TOKEN = 'private-token';
+  let received: unknown;
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+    received = JSON.parse(String(init?.body));
+    return Response.json({
+      tasks: [
+        {
+          id: 'selected',
+          title: 'Selected',
+          status: 'blocked',
+          description: 'visible detail',
+          acceptance: 'visible acceptance',
+          blocker: 'waiting',
+        },
+        {
+          id: 'other',
+          title: 'Other',
+          status: 'running',
+          description: 'PRIVATE_OTHER',
+          acceptance: 'PRIVATE_OTHER',
+        },
+      ],
+      members: [],
+      assignments: [],
+      reports: [],
+      blockers: [],
+    });
+  }) as typeof fetch;
+  try {
+    const handler = (await registerHandlers()).get('ltcook.team.detail')!;
+    const result = await handler({
+      workspaceRoot: '/project',
+      target: { kind: 'task', taskId: 'selected' },
+    } as never);
+    expect(received).toEqual({ workspaceRoot: '/project' });
+    expect(result).toMatchObject({
+      kind: 'task',
+      taskId: 'selected',
+      description: 'visible detail',
+      blocker: 'waiting',
+    });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_OTHER');
+    expect(JSON.stringify(result)).not.toContain('private-token');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (oldEndpoint === undefined) delete process.env.LTCOOK_RUNTIME_API_URL;
+    else process.env.LTCOOK_RUNTIME_API_URL = oldEndpoint;
+    if (oldToken === undefined) delete process.env.LTCOOK_RUNTIME_USER_TOKEN;
+    else process.env.LTCOOK_RUNTIME_USER_TOKEN = oldToken;
+  }
 });

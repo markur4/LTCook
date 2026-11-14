@@ -5,14 +5,29 @@ describe('Paseo panel snapshot', () => {
   test('projects readable work titles and ordered Steps without private work content', () => {
     const input = {
       session: { teamId: 'team' },
+      definition: { name: 'Test team' },
       members: [
         {
-          member: { key: 'main', name: 'Main' },
+          member: {
+            key: 'main',
+            name: 'Main',
+            modelAlias: 'smart',
+            thinking: 'high',
+            readOnly: false,
+            lifetime: 'persistent' as const,
+          },
           binding: { nativeAgentId: 'native-main' },
           nativeStatus: 'idle',
         },
       ],
-      passes: [{ id: 'pass-1', title: 'Release integration', status: 'running' as const }],
+      passes: [
+        {
+          id: 'pass-1',
+          title: 'Release integration',
+          status: 'running' as const,
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
       tasks: [
         {
           id: 'task-1',
@@ -70,11 +85,17 @@ describe('Paseo panel snapshot', () => {
         taskId: 'task-1',
         taskTitle: 'Integrate runtime',
         memberName: 'Main',
+        memberKey: 'main',
         status: 'sent',
       },
     ]);
     expect(snapshot.passes).toEqual([
-      { passId: 'pass-1', title: 'Release integration', status: 'running' },
+      {
+        passId: 'pass-1',
+        title: 'Release integration',
+        status: 'running',
+        createdAt: '2026-01-01T00:00:00Z',
+      },
     ]);
     expect(snapshot.tasks).toEqual([
       {

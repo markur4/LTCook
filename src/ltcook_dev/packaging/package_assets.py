@@ -17,6 +17,14 @@ REQUIRED_PASEO_PLUGIN_ASSETS = (
     "index.server.ts",
     "index.client.tsx",
     "shared/panel-snapshot.ts",
+    "shared/panel-details.ts",
+    "shared/view-model.ts",
+    "client/use-team-panel.ts",
+    "client/components/PanelChrome.tsx",
+    "client/components/StatusBadge.tsx",
+    "client/screens/TeamOverview.tsx",
+    "client/screens/TaskBoard.tsx",
+    "client/screens/AgentFocus.tsx",
 )
 
 
