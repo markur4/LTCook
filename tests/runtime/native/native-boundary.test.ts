@@ -597,6 +597,15 @@ describe('native runtime boundary', () => {
           },
           body,
         });
+      const post = (url: string, token: string, body: object) =>
+        fetch(`${endpoint}${url}`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${token}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
       expect((await stop(master, '{')).status).toBe(400);
       expect((await stop(agentBearer(master, 'native-agent'), '{}')).status).toBe(401);
       expect((await stop(master, JSON.stringify({ instanceId: 'stale-runtime' }))).status).toBe(
@@ -615,6 +624,24 @@ describe('native runtime boundary', () => {
           })
         ).status,
       ).toBe(503);
+      const sessionOpen = await post('/v1/session/open', master, {
+        workspaceRoot: '/workspace',
+        sessionId: 'session-during-stop',
+        teamSelection: 'default-minimal',
+      });
+      expect(sessionOpen.status).toBe(503);
+      const command = {
+        type: 'task.create',
+        title: 'Task',
+        description: 'Work',
+        acceptance: 'Done',
+      };
+      expect((await post('/v1/command', master, { sessionId: 'session-1', command })).status).toBe(
+        503,
+      );
+      expect(
+        (await post('/v1/command', 'wrong-token', { sessionId: 'session-1', command })).status,
+      ).toBe(401);
     } finally {
       await api.close();
     }
