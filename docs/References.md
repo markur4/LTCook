@@ -335,7 +335,10 @@ register `assigneeKey`, `dependencyIds`, `verificationRequirements`,
 `outcome` (`success` or `failure`) and `verification` entries with `requirement`,
 `result` (`passed` or `failed`), and nonempty `evidence`. Required successful
 entries and exact user approvals gate completion. Pass review responses identify
-the current review assignment and revision. Consult the authoritative schema
+the current review assignment and revision. `review.create` also accepts the
+same named `verification` entries when its review Task declares requirements;
+acceptance requires passing evidence and every exact approval scope on that Task.
+Consult the authoritative schema
 for required and optional fields; standalone and planning work retains manual
 assignment/status behavior.
 

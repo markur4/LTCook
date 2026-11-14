@@ -506,6 +506,8 @@ export class RuntimeController implements RuntimeControllerContract {
           const assignment = this.store.getAssignment(sessionId, command.assignmentId);
           if (assignment.taskId !== gate.id || assignment.nativeAgentId !== actor.nativeAgentId)
             throw new Error('Only the assigned Pass reviewer may submit this review');
+          if (command.outcome === 'accepted' && this.taskGates(sessionId, gate).length)
+            throw new Error('Pass review has unmet dependencies or approval gates');
           if (
             this.store
               .listTasks(sessionId)
@@ -682,6 +684,7 @@ export class RuntimeController implements RuntimeControllerContract {
         });
       }
       if (gate) {
+        if (this.taskGates(session.id, gate).length) continue;
         if (gate.status !== 'completed') {
           if (gate.status !== 'failed') await this.dispatchScheduled(session, gate);
           continue;
@@ -701,6 +704,12 @@ export class RuntimeController implements RuntimeControllerContract {
   }
 
   private async dispatchScheduled(session: Session, task: Task): Promise<void> {
+    if (
+      !task.passId ||
+      !this.planning.approvedPass(session.id, task.passId) ||
+      this.taskGates(session.id, task).length
+    )
+      return;
     const assignments = this.store.listAssignments(session.id);
     const previous = assignments
       .filter((item) => item.taskId === task.id && (item.attempt ?? 1) === (task.attempt ?? 1))
@@ -743,6 +752,12 @@ export class RuntimeController implements RuntimeControllerContract {
         );
       this.store.setTaskAssignee(session.id, task.id, selected);
     }
+    // > A routing hook may yield while a new blocking decision is recorded.
+    if (
+      !this.planning.approvedPass(session.id, task.passId) ||
+      this.taskGates(session.id, this.store.getTask(session.id, task.id)).length
+    )
+      return;
     if (!eligible.some((member) => member.key === selected))
       throw new Error(
         `Selected member is not eligible for ${review ? 'Pass review' : 'task.execute'}`,
@@ -926,7 +941,8 @@ export class RuntimeController implements RuntimeControllerContract {
         assignment.nativeAgentId,
         `Assignment ID: ${assignment.id}. Task ID: ${assignment.taskId}. Attempt: ${assignment.attempt ?? 1}.\n${assignment.handoff}`,
       );
-      this.store.updateAssignment(assignment.sessionId, assignment.id, 'sent');
+      if (this.store.getAssignment(assignment.sessionId, assignment.id).status === 'sending')
+        this.store.updateAssignment(assignment.sessionId, assignment.id, 'sent');
       this.emit({
         type: 'assignment.sent',
         sessionId: assignment.sessionId,
@@ -935,6 +951,9 @@ export class RuntimeController implements RuntimeControllerContract {
         memberKey: assignment.memberKey,
       });
     } catch (error) {
+      // > A native result proves delivery even when its transport acknowledgement arrives late.
+      if (this.store.getAssignment(assignment.sessionId, assignment.id).status === 'reported')
+        return;
       this.store.updateAssignment(assignment.sessionId, assignment.id, 'uncertain');
       this.store.updateTask(assignment.sessionId, {
         taskId: assignment.taskId,

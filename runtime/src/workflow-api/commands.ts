@@ -253,6 +253,7 @@ export const RuntimeCommandSchema = Type.Union([
       passId: Type.String(),
       assignmentId: Type.Optional(Type.String()),
       revision: Type.Optional(Type.Integer({ minimum: 1 })),
+      verification: Type.Optional(Type.Array(VerificationEntrySchema)),
       outcome: Type.Union([Type.Literal('accepted'), Type.Literal('changes-requested')]),
       summary: Type.String(),
     },
