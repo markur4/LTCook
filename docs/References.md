@@ -96,8 +96,8 @@ the registry's selected-workspace fallback.
 The launch command requires a prepared deployment and an AppRC runtime token.
 Without a project it starts or reuses the idle host without creating agents.
 An explicit project opens a Session through the current runtime when available,
-otherwise starts the runtime and opens that project. Startup automatically starts
-the Compose project in `local` mode.
+otherwise starts the runtime and opens that project. Opening a project starts the Compose project in `local` mode; idle startup
+does not start containers.
 The service commands also use the internal
 [`ServiceController`](../runtime/src/services/controller.ts). In `direct` and
 `paseo-tunnel` modes, operate remote services on their host; local commands do

@@ -124,6 +124,12 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
             shutil.copyfile(root / declaration, staging / declaration)
         shutil.copyfile(runtime_manifest, staging / "runtime/package.json")
         _copy_tree(root / "runtime/dist", staging / "runtime/dist", required=True)
+        for boundary in ("team-api", "guidance-api", "workflow-api"):
+            _copy_tree(
+                root / "runtime/src" / boundary,
+                staging / "runtime/src" / boundary,
+                required=True,
+            )
         _copy_tree(
             root / "runtime/resources", staging / "runtime/resources", required=True
         )
@@ -173,6 +179,11 @@ def validate_bundle(archive: Path) -> tuple[str, ...]:
         ".ltcook-bundle",
         *ROOT_DECLARATIONS,
         "runtime/package.json",
+        *(
+            f"runtime/src/{boundary}/index.ts"
+            for boundary in ("team-api", "guidance-api", "workflow-api")
+        ),
+        "runtime/src/workflow-api/commands.ts",
         *(f"runtime/{entry}" for entry in REQUIRED_RUNTIME_ENTRIES),
         *(f"runtime/dist/paseo-plugin/{name}" for name in REQUIRED_PASEO_PLUGIN_ASSETS),
         "services/compose.yaml",
@@ -226,11 +237,24 @@ def validate_bundle(archive: Path) -> tuple[str, ...]:
     return tuple(names)
 
 
+def _check_output_ownership(destination: Path) -> None:
+    """Allow rebuilding an owned output independently of its old asset inventory."""
+    _no_links(destination)
+    if not destination.exists():
+        return
+    try:
+        with zipfile.ZipFile(destination) as archive:
+            marker = archive.getinfo(".ltcook-bundle")
+            if marker.file_size == 7 and archive.read(marker) == b"ltcook\n":
+                return
+    except (OSError, KeyError, zipfile.BadZipFile):
+        pass
+    raise ValueError("Refusing to replace an unowned production bundle archive.")
+
+
 def _write_bundle(bundle: Path, destination: Path) -> Path:
     """Publish deterministically staged directory members to one ZIP file."""
-    _no_links(destination)
-    if destination.exists():
-        validate_bundle(destination)
+    _check_output_ownership(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     _no_links(destination)
     descriptor, name = tempfile.mkstemp(
@@ -278,8 +302,7 @@ def archive_assets(
     root = root.resolve(strict=True)
     destination = Path(os.path.abspath(destination))
     _no_links(destination)
-    if destination.exists():
-        validate_bundle(destination)
+    _check_output_ownership(destination)
     if staging_parent is not None:
         _no_links(staging_parent)
     parent = staging_parent.resolve(strict=True) if staging_parent else None

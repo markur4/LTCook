@@ -162,7 +162,8 @@ registry entries. `ltcook workspace add project-name ROOT --yes` remains an
 optional way to manage project-specific AppRC configuration.
 
 The runtime starts Paseo using its built-in Pi provider. In local service mode,
-runtime startup also starts the prepared LTCook Compose project; in direct or
+opening a project starts the prepared LTCook Compose project; idle startup does
+not start containers. In direct or
 tunnel mode, the configured services remain on their remote host. Check service
 status before relying on live research. Runtime startup prints `Paseo <listen>`;
 open `http://<listen>/` in a browser for Paseo's bundled web UI. The UI is
@@ -413,7 +414,7 @@ ltcook services stop
 
 `start` starts the services in local mode; `status` inspects their containers and
 `logs` shows recent output. `stop` stops SearXNG and Crawl4AI without removing the
-project. Starting the runtime in local mode also starts the Compose project.
+project. Opening a project in local mode also starts the Compose project.
 Check service status before live research: command success does not establish
 healthy containers or successful web requests.
 

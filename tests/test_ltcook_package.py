@@ -35,6 +35,12 @@ def _asset_source(root: Path) -> Path:
         path = root / "runtime/dist" / boundary / "index.js"
         path.parent.mkdir()
         path.write_text("export {};", encoding="utf-8")
+        source = root / "runtime/src" / boundary / "index.ts"
+        source.parent.mkdir(parents=True)
+        source.write_text("export {};", encoding="utf-8")
+    (root / "runtime/src/workflow-api/commands.ts").write_text(
+        "export {};", encoding="utf-8"
+    )
     for resource in ("rules/planning.md", "skills/ltcook-planning/SKILL.md"):
         path = root / "runtime/resources" / resource
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,6 +100,22 @@ def test_bundle_archive_is_deterministic_and_excludes_development_installs(
         assert all(
             info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist()
         )
+
+
+def test_rebuild_replaces_owned_generated_output_with_current_assets(
+    tmp_path: Path,
+) -> None:
+    """An old compiler output can be rebuilt while install inputs remain strict."""
+    from ltcook_dev.packaging.package_assets import archive_assets, validate_bundle
+
+    root = _asset_source(tmp_path / "source")
+    destination = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(destination, "w") as archive:
+        archive.writestr(".ltcook-bundle", b"ltcook\n")
+    with pytest.raises(ValueError):
+        validate_bundle(destination)
+    archive_assets(root, destination)
+    assert "runtime/dist/workflow-api/index.js" in validate_bundle(destination)
 
 
 @pytest.mark.skipif(

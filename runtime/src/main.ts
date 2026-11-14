@@ -3,6 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import type { SessionSnapshot } from './workflow-api/index.js';
 import { selectedTeam } from './integrations/team-loader.js';
+import { projectContextProvider } from './integrations/project-context.js';
 const EX_TEMPFAIL = 75;
 function isListenAddressInUse(error: unknown): boolean {
   return (
@@ -77,6 +78,8 @@ async function run(): Promise<void> {
   const traces = process.env.LTCOOK_TRACES;
   const teamSelection = process.env.LTCOOK_TEAM;
   const serviceConnection = process.env.LTCOOK_SERVICE_CONNECTION;
+  const stateDirectory = process.env.LTCOOK_RUNTIME_STATE_DIR;
+  const projectCacheDirectory = process.env.LTCOOK_PROJECT_CACHE_DIR;
   if (
     !deployment ||
     !jsRoot ||
@@ -84,7 +87,9 @@ async function run(): Promise<void> {
     !logs ||
     !traces ||
     !teamSelection ||
-    !serviceConnection
+    !serviceConnection ||
+    !stateDirectory ||
+    !projectCacheDirectory
   ) {
     throw new Error(
       'AppRC did not resolve required runtime configuration; launch through `ltcook launch runtime`.',
@@ -115,6 +120,7 @@ async function run(): Promise<void> {
   let canonicalDatabasePath = databasePath ?? '';
   if (databasePath && databasePath !== ':memory:') {
     const databaseCandidate = path.resolve(databasePath);
+    await fs.mkdir(path.dirname(databaseCandidate), { recursive: true, mode: 0o700 });
     try {
       canonicalDatabasePath = await fs.realpath(databaseCandidate);
     } catch (error) {
@@ -134,6 +140,17 @@ async function run(): Promise<void> {
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
   let shutdownPromise: Promise<void> | undefined;
+  let serviceStartup: Promise<unknown> | undefined;
+  const ensureProjectServices = async (): Promise<void> => {
+    if (serviceConnection !== 'local') return;
+    serviceStartup ??= import('./services/controller.js')
+      .then(({ createServiceController }) => createServiceController(process.env).start())
+      .catch((error) => {
+        serviceStartup = undefined;
+        throw error;
+      });
+    await serviceStartup;
+  };
   const cleanup = (signal: string, exitCode: number): Promise<void> => {
     stopping = true;
     startup.end();
@@ -204,12 +221,10 @@ async function run(): Promise<void> {
       }
     }
     if (stopping) return;
-    if (serviceConnection === 'local') {
-      const { createServiceController } = await import('./services/controller.js');
-      await createServiceController(process.env).start();
-    } else if (serviceConnection !== 'direct' && serviceConnection !== 'paseo-tunnel') {
+    if (!['local', 'direct', 'paseo-tunnel'].includes(serviceConnection)) {
       throw new Error('LTCOOK_SERVICE_CONNECTION must be local, direct, or paseo-tunnel.');
     }
+    if (workspaceRoot) await ensureProjectServices();
     if (stopping) return;
     host = await startPaseoHost({
       node,
@@ -253,6 +268,8 @@ async function run(): Promise<void> {
     if (stopping) return;
     const runtimeController = createRuntime({
       databasePath: canonicalDatabasePath,
+      stateDirectory,
+      projectContext: projectContextProvider(python, projectCacheDirectory),
       team,
       agents: backend,
       onEvent(event) {
@@ -275,6 +292,7 @@ async function run(): Promise<void> {
         delete shellEnvironment.LTCOOK_SHELL_PROVENANCE;
         workspaceShellEnvironments.set(request.sessionId, shellEnvironment);
         try {
+          await ensureProjectServices();
           return await runtimeController.openSession({
             id: request.sessionId,
             workspaceRoot: targetWorkspace,
