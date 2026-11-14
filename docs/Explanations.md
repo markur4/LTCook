@@ -316,11 +316,12 @@ execution while member read-only restrictions remain. Unavailable runtime
 authorization fails closed. These controls are native tool/API boundaries; they
 are not an operating-system sandbox.
 
-The project snapshot combines cached root manifest declarations, literal Just
-recipes and installed tool versions with separately refreshed Git state. It
-reports source fingerprints, freshness and incomplete coverage. It does not run
-project scripts, probe services or construct a semantic project index. See the
-[workflow contract](References.md#workflow-api) and
+RIED combines bounded `brief` repository discovery with Git state, host tool
+availability and Just recipe names. It stores one versioned cache under AppRC
+and refreshes Git status when read. Session activation starts cache warmup without
+waiting. RIED reports partial or stale results; it does not run recipes, project
+scripts or services, or build a semantic index. See the
+[runtime API](References.md#workflow-api) and
 [planning guide](How-To-User-Guides.md#plan-work-and-answer-decisions).
 
 ## Coordination and recovery

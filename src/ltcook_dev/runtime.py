@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -40,6 +41,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     original_environment = dict(os.environ)
     original_environment["LTCOOK_JS_ROOT"] = str(source_root)
     launch = resolve_launch(workspace, original_environment=original_environment)
+    development_brief = shutil.which("brief")
+    if development_brief:
+        launch.environment["LTCOOK_BRIEF_EXECUTABLE"] = development_brief
     launch.environment["LTCOOK_SHELL_PROVENANCE"] = json.dumps(original_environment)
     bun = options.bun or original_environment.get("BUN") or "bun"
     os.chdir(source_root)

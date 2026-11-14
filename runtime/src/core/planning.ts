@@ -8,7 +8,6 @@ import type {
   DocumentReference,
   PlanCoverage,
   PlanningRecord,
-  ProjectSnapshot,
   RuntimeActor,
   RuntimeCommand,
   Session,
@@ -38,7 +37,6 @@ const readTools = new Set([
 ]);
 export interface PlanningDependencies {
   stateDirectory: string;
-  projectContext?: (workspaceRoot: string) => Promise<ProjectSnapshot>;
   scheduleExecution(session: Session, record: PlanningRecord): Promise<void>;
   dispatch(
     session: Session,
@@ -127,7 +125,6 @@ export class PlanningWorkflow {
       this.user(actor);
       const design = this.reference(command.designPath, 'design');
       if (!fs.existsSync(design.path)) throw new Error('Design document does not exist');
-      const context = await this.dependencies.projectContext?.(session.workspaceRoot);
       const plan = this.reference(this.planPath(command.title), 'plan');
       const record = this.save({
         id: plan.id,
@@ -137,7 +134,6 @@ export class PlanningWorkflow {
         plan,
         stage: 'prefill',
         coverage: [],
-        ...(context ? { projectContext: context } : {}),
       });
       // > Persist registration before the first externally visible dispatch.
       for (const category of mandatory) {

@@ -204,6 +204,61 @@ def test_runtime_readiness_requires_matching_payload_and_files(
     assert not _ready(deployment, "declared-inputs")
 
 
+def test_brief_setup_uses_pinned_digest_and_repairs_only_missing_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ltcook_distr.payload.app_lifecycle.prepare_runtime import (
+        _BRIEF_DIGESTS,
+        _prepare_brief,
+    )
+
+    deployment = owned_directory(tmp_path / "deployment")
+    record: dict[str, object] = {"schema": 1}
+    downloads: list[str] = []
+
+    def download_asset(_url: str, archive: Path, digest: str) -> None:
+        assert digest == _BRIEF_DIGESTS[("Linux", "x86_64")]
+        downloads.append(digest)
+        archive.write_bytes(b"archive")
+
+    def extract(_archive: Path, stage: Path) -> None:
+        (stage / "brief").write_text("fixture executable")
+
+    monkeypatch.setattr(prepare_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(prepare_runtime.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(prepare_runtime, "download", download_asset)
+    monkeypatch.setattr(prepare_runtime, "extract_archive", extract)
+    _prepare_brief(deployment, record)
+    binary = deployment / "brief/brief"
+    assert binary.is_file()
+    assert record["brief_version"] == "0.16.0"
+    _prepare_brief(deployment, record)
+    assert len(downloads) == 1
+    binary.unlink()
+    _prepare_brief(deployment, record)
+    assert len(downloads) == 2
+    assert binary.is_file()
+
+
+def test_brief_checksum_failure_leaves_runtime_usable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ltcook_distr.payload.app_lifecycle.prepare_runtime import _prepare_brief
+
+    deployment = owned_directory(tmp_path / "deployment")
+    record: dict[str, object] = {"schema": 1}
+    monkeypatch.setattr(prepare_runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(prepare_runtime.platform, "machine", lambda: "x86_64")
+
+    def fail_download(*_args: object) -> None:
+        raise SetupError("Prerequisite download failed its SHA-256 check.")
+
+    monkeypatch.setattr(prepare_runtime, "download", fail_download)
+    _prepare_brief(deployment, record)
+    assert "brief_version" not in record
+    assert "SHA-256" in str(record["brief_unavailable_reason"])
+
+
 def test_browser_failure_is_retryable_without_invalidating_core(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -311,6 +366,7 @@ def test_browser_flag_controls_optional_setup_without_skipping_node(
         prepare_runtime, "download", lambda _url, archive: archive.write_text("archive")
     )
     monkeypatch.setattr(prepare_runtime, "extract_archive", extract)
+    monkeypatch.setattr(prepare_runtime, "_prepare_brief", lambda *_args: None)
     monkeypatch.setattr(prepare_runtime, "run", fake_run)
     monkeypatch.setattr(prepare_runtime, "_chrome_binary", lambda _home: chrome)
     environment = (

@@ -11,6 +11,8 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
 ## Repo routing and project rules
 - Follow [Working conventions](CONTRIBUTING.md#working-conventions) and the
   [repository layout](docs/Development.md#repository-routing).
+- Apply the prototype breaking-change rule in Contributing to every new format,
+  cache, API and installer path. Do not add migration code or compatibility layers.
 - Inspect the existing owner and shared helpers before adding an implementation;
   warn the user when documented paths appear stale.
 - Check [BACKLOG.md](BACKLOG.md) and assess related durable work for the pass.

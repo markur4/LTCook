@@ -192,7 +192,8 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_RUNTIME_STATE_DIR` | Global `runtime.state_dir`; defaults to `<AppRC state>/runtime`, containing documents and the default database. |
 | `LTCOOK_DATABASE` | Global `runtime.database`; defaults to `<LTCOOK_RUNTIME_STATE_DIR>/coordination.sqlite`. Incompatible schemas are rejected unchanged. |
 | `LTCOOK_GUIDANCE_DIR` | Global `runtime.guidance_dir`; defaults to `<AppRC config>/guidance` with `rules/` and `skills/`. |
-| `LTCOOK_PROJECT_CACHE_DIR` | Launch-derived `<AppRC cache>/projects`, resolved globally before native HOME changes. |
+| `LTCOOK_RIED_CACHE_DIR` | Launch-derived `<AppRC cache>/projects`, holding the single versioned RIED cache. |
+| `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
 | `LTCOOK_TEAM` | `AppSettings.team`; defaults to `default-minimal`. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |
 | `LTCOOK_TEAM_INSTANCE_ID` | Runtime-derived identifier for the persistent TeamInstance shared by Sessions on the same selected team and canonical workspace. |
@@ -320,10 +321,18 @@ provenance under `runtime/resources`.
 
 `@ltcook/runtime/workflow-api`, authored in
 [`runtime/src/workflow-api`](../runtime/src/workflow-api), contains planning,
-document references, project context, decisions, approvals and work results.
+document references, decisions, approvals and work results.
 [`commands.ts`](../runtime/src/workflow-api/commands.ts) is the single authoritative
 TypeBox schema; public command types and agent-facing input schemas derive from it.
 The `ltcook_team` native tool uses that schema and Core enforces actor permissions.
+
+RIED is a separate runtime service. `POST /v1/ried` accepts an authenticated
+Session and `operation` of `summary`, `section` or `refresh`; `section` requires
+`repository`, `git`, `host` or `recipes`. The `ltcook_ried` native tool exposes
+these operations to bound agents, including read-only members. The runtime
+derives the scan root from the Session. Its schema-version-1 result reports
+provenance, capture time, partial or stale status and diagnostics. Neither
+Team API v2 nor coordination snapshots carry the full inventory.
 
 The local authenticated command endpoint accepts
 `POST /v1/command` with `{"sessionId":"SESSION","command":{"type":"..."}}`

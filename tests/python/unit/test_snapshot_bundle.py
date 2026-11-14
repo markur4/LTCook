@@ -103,9 +103,16 @@ from ltcook_distr.payload.app_lifecycle import actions
 runtime = importlib.import_module('ltcook_distr.payload.app_lifecycle.prepare_runtime')
 assert actions.__file__.startswith(str(wheel)), actions.__file__
 
-def download_node(url, destination):
+def download_node(url, destination, digest=None):
     basename = destination.name.removesuffix('.tar.gz')
     with tarfile.open(destination, 'w:gz') as archive:
+        if digest is not None:
+            data = b'fixture brief executable\n'
+            member = tarfile.TarInfo('brief')
+            member.size = len(data)
+            member.mode = 0o755
+            archive.addfile(member, io.BytesIO(data))
+            return
         for name in ('node', 'npm'):
             data = b'fixture external executable\n'
             member = tarfile.TarInfo(f'{basename}/bin/{name}')
