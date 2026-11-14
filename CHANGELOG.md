@@ -164,6 +164,9 @@ All notable changes to `ltcook` will be documented in this file.
 ### 🔨 Fixed
 
 <br>
+- Fixed missing `ltcook_ried` in standalone LTCook Pi chats; native Pi workspace
+  changes now rebind inventory while reusing the existing scanner and AppRC cache.
+
 
 ### 🔒 Security
 

@@ -11,7 +11,11 @@ import {
 } from 'node:fs';
 import { arch, platform } from 'node:os';
 import { basename, delimiter, isAbsolute, join, sep } from 'node:path';
-import type { Session } from './workflow-api/index.js';
+
+export interface RiedContext {
+  id: string;
+  workspaceRoot: string;
+}
 
 export type RiedSection = 'repository' | 'git' | 'host' | 'recipes';
 export interface RiedSnapshot {
@@ -148,7 +152,7 @@ export class RiedService {
     private readonly shellEnvironment: (sessionId: string) => Record<string, string> | undefined,
   ) {}
 
-  private key(session: Session): { workspace: string; pathValue: string; file: string } {
+  private key(session: RiedContext): { workspace: string; pathValue: string; file: string } {
     const workspace = realpathSync(session.workspaceRoot);
     const pathValue = this.shellEnvironment(session.id)?.PATH ?? process.env.PATH ?? '';
     const digest = createHash('sha256')
@@ -205,11 +209,7 @@ export class RiedService {
     };
   }
 
-  private async scan(
-    session: Session,
-    workspace: string,
-    pathValue: string,
-  ): Promise<RiedSnapshot> {
+  private async scan(workspace: string, pathValue: string): Promise<RiedSnapshot> {
     const capturedAt = new Date().toISOString();
     const diagnostics: string[] = [];
     const repository: RiedSnapshot['repository'] = {
@@ -335,7 +335,7 @@ export class RiedService {
     };
   }
 
-  async get(session: Session, request: RiedRequest): Promise<unknown> {
+  async get(session: RiedContext, request: RiedRequest): Promise<unknown> {
     const { workspace, pathValue, file } = this.key(session);
     if (!statSync(workspace).isDirectory())
       throw new Error('RIED requires an existing workspace directory');
@@ -353,7 +353,7 @@ export class RiedService {
       const key = basename(file);
       let pending = this.pending.get(key);
       if (!pending) {
-        pending = this.scan(session, workspace, pathValue);
+        pending = this.scan(workspace, pathValue);
         this.pending.set(key, pending);
       }
       try {
