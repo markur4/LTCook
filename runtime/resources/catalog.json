@@ -1,0 +1,10 @@
+[
+  { "path": "rules/planning.md", "kind": "rule", "required": true },
+  { "path": "rules/clear-writing.md", "kind": "rule", "required": true },
+  { "path": "skills/ltcook-planning/SKILL.md", "kind": "skill", "required": true },
+  { "path": "skills/ltcook-lookup/SKILL.md", "kind": "skill", "required": true },
+  { "path": "skills/ltcook-explore/SKILL.md", "kind": "skill", "required": true },
+  { "path": "skills/ltcook-typescript/SKILL.md", "kind": "skill", "required": false },
+  { "path": "skills/ltcook-react-vite/SKILL.md", "kind": "skill", "required": false },
+  { "path": "skills/ltcook-reader-load/SKILL.md", "kind": "skill", "required": false }
+]
