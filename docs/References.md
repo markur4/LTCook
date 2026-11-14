@@ -72,7 +72,7 @@ commands provide launch operations and diagnostics:
 | `ltcook auth check [--provider PROVIDER] [--model MODEL] [--json] [--no-refresh]` | Report native Pi credential readiness without printing credentials; exit statuses are 0 ready, 1 not ready, and 2 invalid. |
 | `ltcook launch write-native-config --workspace ROOT` | Write the private Pi `web-search.json` under `PI_CODING_AGENT_DIR`; the Paseo config is not written by this command. |
 | `ltcook planning start --session SESSION --design PATH --title TITLE` | Request Plan prefill/finalization for a Design. |
-| `ltcook planning show --session SESSION --plan PLAN_ID` | Inspect registered document and workflow state. |
+| `ltcook planning show --session SESSION --plan PLAN_ID [--json]` | Read current Plan Markdown and workflow state, or raw state with `--json`. |
 | `ltcook planning questions --session SESSION --plan PLAN_ID` | Inspect registered user decisions. |
 | `ltcook planning answer --session SESSION --plan PLAN_ID --decision ID --answer TEXT` | Persist an explicit authenticated user answer. |
 | `ltcook planning approve --session SESSION --plan PLAN_ID` | Approve after coverage and decision gates pass. |

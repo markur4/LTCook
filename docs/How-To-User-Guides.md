@@ -340,6 +340,7 @@ ltcook planning questions --session SESSION --plan Plan-2026_11_14-18_05-example
 ```
 
 Use the registered Plan ID returned by `start`; example timestamps are illustrative.
+`show` reads its current Markdown and workflow state; add `--json` for raw state.
 Adjutant writes the proposed Plan, then Main investigates and finalizes the same
 file. Pending questions use native Paseo dialogs. If a dialog is interrupted,
 inspect `questions` and answer explicitly through the authenticated CLI:

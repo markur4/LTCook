@@ -202,3 +202,46 @@ def test_planning_answer_uses_authenticated_user_command(monkeypatch):
             },
         )
     ]
+
+
+def test_planning_show_reads_current_team_document_without_versioning(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    module = importlib.import_module("ltcook.cli.planning")
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    monkeypatch.setattr(
+        module, "resolve_launch", lambda _: SimpleNamespace(environment={})
+    )
+    plan = "Plan-2026_11_14-18_00-example"
+    document = tmp_path / f"{plan}.md"
+    document.write_text("# Proposed Plan\n\nReview this content.\n")
+    monkeypatch.setattr(
+        module,
+        "runtime_command",
+        lambda *_: {
+            "value": {
+                "id": plan,
+                "stage": "awaiting-approval",
+                "plan": {"path": str(document)},
+            }
+        },
+    )
+    arguments = ["planning", "show", "--session", "session-one", "--plan", plan]
+    result = RUNNER.invoke(app, arguments, color=False)
+    assert result.exit_code == 0, result.output
+    assert "# Proposed Plan\n\nReview this content." in result.output
+    document.write_text(
+        "# Proposed Plan\n\n# Implementation Report\nProgress appended.\n"
+    )
+    appended = RUNNER.invoke(app, arguments, color=False)
+    assert appended.exit_code == 0, appended.output
+    assert "Progress appended." in appended.output
+    document.unlink()
+    metadata = RUNNER.invoke(app, [*arguments, "--json"], color=False)
+    assert metadata.exit_code == 0, metadata.output
+    assert '"stage": "awaiting-approval"' in metadata.output
+    unreadable = RUNNER.invoke(app, arguments, color=False)
+    assert unreadable.exit_code != 0
+    assert "Cannot read the registered Plan" in unreadable.output

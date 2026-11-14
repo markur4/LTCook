@@ -23,11 +23,15 @@ Plan = Annotated[
 ]
 
 
-def _command(session: str, command: dict[str, object]) -> None:
+def _result(session: str, command: dict[str, object]) -> object:
     try:
-        result = runtime_command(resolve_launch(None).environment, session, command)
+        return runtime_command(resolve_launch(None).environment, session, command)
     except (RuntimeClientError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
+
+
+def _command(session: str, command: dict[str, object]) -> None:
+    result = _result(session, command)
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
@@ -53,9 +57,32 @@ def start(
 
 
 @planning_cli.command("show")
-def show(session: Session, plan: Plan) -> None:
-    """Show one registered Plan and its workflow state."""
-    _command(session, {"type": "planning.show", "planId": plan})
+def show(
+    session: Session,
+    plan: Plan,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Emit raw registered workflow state.")
+    ] = False,
+) -> None:
+    """Read the Team's current Plan Markdown and show its workflow state."""
+    result = _result(session, {"type": "planning.show", "planId": plan})
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    record = result.get("value") if isinstance(result, dict) else None
+    document = record.get("plan") if isinstance(record, dict) else None
+    location = document.get("path") if isinstance(document, dict) else None
+    if not isinstance(location, str):
+        raise typer.BadParameter("The runtime returned no registered Plan path.")
+    path = Path(location)
+    if not path.is_absolute() or path.name != f"{plan}.md" or path.is_symlink():
+        raise typer.BadParameter("The runtime returned an unsafe Plan path.")
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise typer.BadParameter(f"Cannot read the registered Plan: {error}") from error
+    assert isinstance(record, dict)
+    typer.echo(f"{plan} [{record['stage']}]\n{path}\n\n{content}")
 
 
 @planning_cli.command("questions")
