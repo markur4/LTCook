@@ -141,6 +141,27 @@ async function approveExecutionFixture(
     { kind: 'user' },
     { type: 'planning.approve', planId: plan.id },
   )) as import('../../../runtime/src/workflow-api/index.js').PlanningRecord;
+  const scheduling = runtime
+    .snapshot(sessionId)
+    .tasks.find((task) => task.requestId === `${plan.id}:execution-handoff`)!;
+  const handoff = runtime
+    .snapshot(sessionId)
+    .assignments.find((assignment) => assignment.taskId === scheduling.id)!;
+  await runtime.execute(
+    sessionId,
+    { kind: 'agent', nativeAgentId: handoff.nativeAgentId },
+    {
+      type: 'report.create',
+      assignmentId: handoff.id,
+      summary: 'Execution scheduling prepared',
+      evidence: 'Fixture execution follows',
+    },
+  );
+  await runtime.execute(
+    sessionId,
+    { kind: 'agent', nativeAgentId: handoff.nativeAgentId },
+    { type: 'task.update', taskId: scheduling.id, status: 'completed' },
+  );
   return { id: approved.passId! };
 }
 test('idle runtime starts and shuts down without creating sessions or agents', async () => {
@@ -1116,6 +1137,175 @@ describe('authoritative planning workflow', () => {
         { type: 'planning.reject', planId: f.plan.id },
       );
       expect(f.runtime.snapshot(f.snapshot.session.id).passes).toHaveLength(0);
+    } finally {
+      await f.runtime.close();
+    }
+  });
+  test.each([false, true])(
+    'CLI approval persists one Main handoff without replay (uncertain=%s)',
+    async (uncertain) => {
+      const f = await fixture();
+      await finishStages(f);
+      await answerMandatory(f);
+      const before = f.agents.sends.length;
+      f.agents.failSends = uncertain;
+      const server = createServer();
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing local test address');
+      const port = address.port;
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+      const api = new RuntimeApi(f.runtime, 'approval-cli-secret', `127.0.0.1:${port}`);
+      api.setSession(f.directory, f.snapshot.session.id);
+      const endpoint = await api.listen();
+      const approve = () =>
+        fetch(`${endpoint}/v1/command`, {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer approval-cli-secret',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            sessionId: f.snapshot.session.id,
+            command: { type: 'planning.approve', planId: f.plan.id },
+          }),
+        });
+      try {
+        const response = await approve();
+        expect(response.status).toBe(200);
+        const record = (
+          (await response.json()) as {
+            value: import('../../../runtime/src/workflow-api/index.js').PlanningRecord;
+          }
+        ).value;
+        expect(record.stage).toBe('approved');
+        expect(record.passId).toBeDefined();
+        const snapshot = f.runtime.snapshot(f.snapshot.session.id);
+        const scheduling = snapshot.tasks.find(
+          (task) => task.requestId === `${record.id}:execution-handoff`,
+        )!;
+        const assignment = snapshot.assignments.find((item) => item.taskId === scheduling.id)!;
+        const main = f.snapshot.members.find((member) => member.member.key === 'main')!.binding!
+          .nativeAgentId!;
+        expect(assignment.nativeAgentId).toBe(main);
+        expect(assignment.status).toBe(uncertain ? 'uncertain' : 'sent');
+        expect(scheduling.passId).toBe(record.passId);
+        expect(f.agents.sends).toHaveLength(before + 1);
+        expect(f.agents.sends.at(-1)!.message).toContain(record.plan.path);
+        expect(f.agents.sends.at(-1)!.message).toContain(record.passId!);
+        expect(f.agents.sends.at(-1)!.message).toContain('schedules execution Tasks');
+        if (uncertain)
+          expect(
+            snapshot.blockers.some(
+              (blocker) => blocker.includes('uncertain') || blocker.includes('unknown'),
+            ),
+          ).toBe(true);
+        expect((await approve()).status).toBe(200);
+        expect(f.agents.sends).toHaveLength(before + 1);
+        expect(
+          f.runtime
+            .snapshot(f.snapshot.session.id)
+            .approvals.filter((item) => item.scope.action === 'plan.execute'),
+        ).toHaveLength(1);
+      } finally {
+        await api.close();
+        await f.runtime.close();
+      }
+      const reopened = createRuntime({
+        databasePath: f.databasePath,
+        stateDirectory: f.stateDirectory,
+        team,
+        agents: f.agents,
+      });
+      try {
+        const snapshot = await reopened.openSession({
+          id: f.snapshot.session.id,
+          workspaceRoot: f.directory,
+        });
+        expect(snapshot.planning[0]!.stage).toBe('approved');
+        expect(
+          snapshot.tasks.filter((task) => task.requestId === `${f.plan.id}:execution-handoff`),
+        ).toHaveLength(1);
+        expect(f.agents.sends).toHaveLength(before + 1);
+        await reopened.execute(
+          f.snapshot.session.id,
+          { kind: 'user' },
+          { type: 'planning.approve', planId: f.plan.id },
+        );
+        expect(f.agents.sends).toHaveLength(before + 1);
+      } finally {
+        await reopened.close();
+      }
+    },
+  );
+  test('specific mandatory questions replace unasked placeholders while genuine blockers remain', async () => {
+    const f = await fixture();
+    try {
+      await finishStages(f);
+      const id = f.snapshot.session.id;
+      const initial = f.runtime.snapshot(id).decisions;
+      for (const category of ['intent', 'breaking-changes', 'verification'] as const) {
+        const question = (await f.runtime.execute(
+          id,
+          { kind: 'agent', nativeAgentId: f.snapshot.members[0]!.binding!.nativeAgentId! },
+          {
+            type: 'decision.create',
+            planId: f.plan.id,
+            category,
+            prompt: `Specific ${category} decision for this implementation?`,
+            blocking: true,
+          },
+        )) as import('../../../runtime/src/workflow-api/index.js').Decision;
+        expect(question.id).toBe(initial.find((item) => item.category === category)!.id);
+        expect(question.prompt).toContain('Specific');
+        await f.runtime.execute(
+          id,
+          { kind: 'user' },
+          {
+            type: 'decision.answer',
+            planId: f.plan.id,
+            decisionId: question.id,
+            answer: 'Explicit specific answer',
+          },
+        );
+      }
+      expect(f.runtime.snapshot(id).decisions).toHaveLength(3);
+      const extra = (await f.runtime.execute(
+        id,
+        { kind: 'user' },
+        {
+          type: 'decision.create',
+          planId: f.plan.id,
+          category: 'intent',
+          prompt: 'A second genuine scope decision?',
+          blocking: true,
+        },
+      )) as import('../../../runtime/src/workflow-api/index.js').Decision;
+      expect(f.runtime.snapshot(id).decisions).toHaveLength(4);
+      await expect(
+        f.runtime.execute(id, { kind: 'user' }, { type: 'planning.approve', planId: f.plan.id }),
+      ).rejects.toThrow(/Blocking decisions/);
+      await f.runtime.execute(
+        id,
+        { kind: 'user' },
+        {
+          type: 'decision.answer',
+          planId: f.plan.id,
+          decisionId: extra.id,
+          answer: 'Explicit second answer',
+        },
+      );
+      expect(
+        (
+          (await f.runtime.execute(
+            id,
+            { kind: 'user' },
+            { type: 'planning.approve', planId: f.plan.id },
+          )) as { stage: string }
+        ).stage,
+      ).toBe('approved');
     } finally {
       await f.runtime.close();
     }

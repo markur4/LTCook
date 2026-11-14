@@ -19,6 +19,11 @@ import { CoordinationStore } from '../storage/coordination.js';
 
 const topics = ['intent', 'design', 'scope', 'implementation', 'verification', 'delivery'] as const;
 const mandatory = ['intent', 'breaking-changes', 'verification'] as const;
+const mandatoryPrompts = {
+  intent: 'What user intent and outcome must this Plan preserve?',
+  'breaking-changes': 'What breaking changes, compatibility, and migration decisions apply?',
+  verification: 'What validation and potentially lengthy verification is authorized?',
+} as const;
 const readTools = new Set([
   'read',
   'grep',
@@ -34,6 +39,7 @@ const readTools = new Set([
 export interface PlanningDependencies {
   stateDirectory: string;
   projectContext?: (workspaceRoot: string) => Promise<ProjectSnapshot>;
+  scheduleExecution(session: Session, record: PlanningRecord): Promise<void>;
   dispatch(
     session: Session,
     record: PlanningRecord,
@@ -146,12 +152,7 @@ export class PlanningWorkflow {
           sessionId,
           planId: record.id,
           category,
-          prompt:
-            category === 'intent'
-              ? 'What user intent and outcome must this Plan preserve?'
-              : category === 'breaking-changes'
-                ? 'What breaking changes, compatibility, and migration decisions apply?'
-                : 'What validation and potentially lengthy verification is authorized?',
+          prompt: mandatoryPrompts[category],
           blocking: true,
           ...(prior?.answer !== undefined
             ? { answer: prior.answer, answeredAt: prior.answeredAt }
@@ -188,8 +189,19 @@ export class PlanningWorkflow {
             item.prompt === command.prompt,
         );
         if (duplicate) return duplicate;
+        const placeholder = this.decisions(sessionId).find(
+          (item) =>
+            item.planId === record.id &&
+            item.category === command.category &&
+            item.answer === undefined &&
+            item.category !== 'other' &&
+            item.prompt === mandatoryPrompts[item.category] &&
+            !this.store
+              .records<DecisionPresentation & { id: string }>(sessionId, 'presentation')
+              .some((presentation) => presentation.decisionId === item.id),
+        );
         const decision: Decision = {
-          id: randomUUID(),
+          id: placeholder?.id ?? randomUUID(),
           sessionId,
           planId: record.id,
           category: command.category,
@@ -252,7 +264,10 @@ export class PlanningWorkflow {
           this.save(record);
           return record;
         }
-        if (record.stage === 'approved') return record;
+        if (record.stage === 'approved') {
+          await this.dependencies.scheduleExecution(session, record);
+          return record;
+        }
         if (record.stage !== 'awaiting-approval')
           throw new Error('Plan finalization must finish before approval');
         if (
@@ -270,7 +285,9 @@ export class PlanningWorkflow {
           throw new Error('All mandatory question categories require recorded user answers');
         if (decisions.some((item) => item.blocking && item.answer === undefined))
           throw new Error('Blocking decisions remain unanswered');
-        return this.store.approvePlan(record);
+        const approved = this.store.approvePlan(record);
+        await this.dependencies.scheduleExecution(session, approved);
+        return approved;
       }
       default:
         throw new Error('Unsupported planning command');
@@ -313,6 +330,7 @@ export class PlanningWorkflow {
         }
       }
       await this.advance(session, record);
+      if (record.stage === 'approved') await this.dependencies.scheduleExecution(session, record);
     }
   }
   bind(input: DecisionPresentation): void {

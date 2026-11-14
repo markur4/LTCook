@@ -69,6 +69,7 @@ export class RuntimeController implements RuntimeControllerContract {
         path.join(path.dirname(options.databasePath), 'runtime'),
       ...(options.projectContext ? { projectContext: options.projectContext } : {}),
       dispatch: (session, record, stage) => this.dispatchPlanning(session, record, stage),
+      scheduleExecution: (session, record) => this.scheduleExecution(session, record),
     });
   }
 
@@ -145,6 +146,10 @@ export class RuntimeController implements RuntimeControllerContract {
           binding.state === 'creating',
       )
       .map((binding) => `${binding.memberKey}: ${binding.blocker ?? binding.state}`);
+    for (const task of this.store.listTasks(sessionId)) {
+      if (task.requestId?.endsWith(':execution-handoff') && task.status === 'blocked')
+        blockers.push(`Scheduling Task ${task.id}: ${task.blocker ?? 'blocked'}`);
+    }
     for (const assignment of assignments) {
       if (assignment.status === 'uncertain')
         blockers.push(`Assignment ${assignment.id} may have been delivered; it was not resent`);
@@ -594,6 +599,52 @@ export class RuntimeController implements RuntimeControllerContract {
         blocker: `Native handoff outcome is unknown: ${String(error)}`,
       });
     }
+  }
+
+  private async scheduleExecution(session: Session, record: PlanningRecord): Promise<void> {
+    if (
+      record.passId === undefined ||
+      this.store.getPass(session.id, record.passId).status !== 'running' ||
+      !this.planning.approvedPass(session.id, record.passId)
+    )
+      return;
+    const requestId = `${record.id}:execution-handoff`;
+    const task =
+      this.store.listTasks(session.id).find((item) => item.requestId === requestId) ??
+      this.store.createTask(session.id, {
+        passId: record.passId,
+        title: `Schedule approved Plan: ${record.title}`,
+        workType: 'task.execute',
+        requestId,
+        description: `The user approved Plan ${record.id} at ${record.plan.path} for Pass ${record.passId}. Main now schedules execution Tasks among the declared eligible members. Preserve the approved scope and recorded decisions. Append detailed execution reports, Emerging Issues and User decisions post approval to this same Plan; record lasting design decisions in ${record.design.path}. Submit a report for this scheduling assignment and mark this scheduling Task complete after assigning the execution work.`,
+        acceptance:
+          'Main receives the approved Plan/Pass, schedules execution Tasks, and reports the scheduling handoff.',
+      });
+    if (this.store.listAssignments(session.id).some((assignment) => assignment.taskId === task.id))
+      return;
+    const coordinator = this.store
+      .listBindings(session.id)
+      .find(
+        (binding) =>
+          binding.memberKey === this.team.definition.coordinatorKey &&
+          binding.state === 'bound' &&
+          binding.nativeAgentId !== null,
+      );
+    if (!coordinator?.nativeAgentId) {
+      this.store.updateTask(session.id, {
+        taskId: task.id,
+        status: 'blocked',
+        blocker: 'Plan consent is recorded; coordinator scheduling awaits a reconciled bound Main',
+      });
+      return;
+    }
+    const assignment = this.store.createAssignment(session.id, {
+      taskId: task.id,
+      memberKey: coordinator.memberKey,
+      nativeAgentId: coordinator.nativeAgentId,
+      message: `Approved Plan execution handoff. Scheduling Task ${task.id}. ${task.description}`,
+    });
+    await this.deliverAssignment(assignment);
   }
 
   private async dispatchPlanning(
