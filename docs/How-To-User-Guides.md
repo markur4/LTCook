@@ -12,6 +12,8 @@
   - [Authenticate with Pi](#authenticate-with-pi)
   - [Choose application paths](#choose-application-paths)
   - [Select a team and resume a session](#select-a-team-and-resume-a-session)
+  - [Plan work and answer decisions](#plan-work-and-answer-decisions)
+  - [Configure guidance](#configure-guidance)
   - [Configure research tools](#configure-research-tools)
 - [Extend and maintain configuration](#extend-and-maintain-configuration)
   - [Add a setting](#add-a-setting)
@@ -180,7 +182,8 @@ Preview with `ltcook app uninstall --dry-run`, then use
 external shared Pi auth and editable checkout/environment remain intact.
 
 > [!CAUTION]
-> Explicit appdata removal deletes LTCook's deployment and coordination data.
+> Explicit appdata removal deletes LTCook's deployment; state removal deletes
+> runtime documents and coordination data.
 > Select categories deliberately; program removal is not permission to erase data.
 
 The [uninstaller reference](References.md#uninstaller-reference) explains complete
@@ -271,7 +274,8 @@ independently. Use `ltcook app migrate --help` for supported explicit relocation
 do not move/edit the fixed native `installation/` authority by hand.
 
 The default deployment is `<appdata>/deployment`, including private `node/`,
-production `app/`, service receipts, and coordination data. Paseo's mutable home
+production `app/` and service receipts. Runtime documents and coordination use
+`<state>/runtime` by default; cached project facts use `<cache>/projects`. Paseo's mutable home
 defaults to `<LTCOOK_DEPLOYMENT_DIR>/paseo`, outside the replaceable
 `<LTCOOK_DEPLOYMENT_DIR>/app` bundle. Workspace Pi homes default to
 `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi`.
@@ -299,7 +303,7 @@ LTCOOK_TEAM=default-minimal LTCOOK_SESSION=my-project ltcook launch runtime --wo
 
 The aliases `default` and `default-minimal` resolve to the bundled team packages.
 Other values are dynamically imported JavaScript module specifiers; the module
-must already be resolvable in the deployment and export an `apiVersion: 1` team.
+must already be resolvable in the deployment and export an `apiVersion: 2` team.
 Changing the setting does not install a module.
 
 When `LTCOOK_SESSION` is unset, opening a project creates a fresh chat Session.
@@ -321,6 +325,64 @@ than resending them. Inspect the panel's blockers and native conversations befor
 choosing further action. Restarting is not renewed permission to repeat an
 external operation. [Coordination and recovery](Explanations.md#coordination-and-recovery)
 explains the ownership boundary.
+
+## Plan work and answer decisions
+
+Open an explicit project Session first. Have the Team write its Design under
+`<LTCOOK_RUNTIME_STATE_DIR>/documents/designs/`, using
+`Design-YYYY_MM_DD-HH_MM-<concise-title>.md`. Start planning with its absolute path:
+
+```shell
+ltcook planning start --session SESSION --design /absolute/path/Design-2026_11_14-18_00-example.md --title example
+ltcook planning show --session SESSION --plan Plan-2026_11_14-18_05-example
+ltcook planning questions --session SESSION --plan Plan-2026_11_14-18_05-example
+```
+
+Use the registered Plan ID returned by `start`; example timestamps are illustrative.
+Adjutant writes the proposed Plan, then Main investigates and finalizes the same
+file. Pending questions use native Paseo dialogs. If a dialog is interrupted,
+inspect `questions` and answer explicitly through the authenticated CLI:
+
+```shell
+ltcook planning answer --session SESSION --plan PLAN_ID --decision DECISION_ID --answer 'Use clean breaking changes'
+ltcook planning approve --session SESSION --plan PLAN_ID
+ltcook planning reject --session SESSION --plan PLAN_ID
+```
+
+`approve` succeeds only after finalization, complete topic coverage, answered
+mandatory categories and no outstanding blocking decisions. Rejection does not
+permit execution. Missing responses, defaults and cancellation remain pending.
+Session and Plan context are always explicit; these commands do not create a
+Session or infer one from the current directory.
+
+The Team appends detailed implementation reporting to the Plan, including
+`Implementation Report`, `Emerging Issues` and `User decisions post approval`.
+Lasting design decisions also belong in the Design. Appending reports does not
+reset approval; a material scope change requires an explicit new user decision.
+
+## Configure guidance
+
+User guidance defaults to `<AppRC config>/guidance/rules/` and `skills/`. Set its
+global root through AppRC when needed:
+
+```shell
+ltcook config set runtime.guidance_dir /absolute/path/guidance --scope user
+ltcook guidance inspect --session SESSION
+ltcook guidance inspect --session SESSION --agent NATIVE_AGENT_ID
+```
+
+Rules are Markdown standing instructions. Skills use native `SKILL.md` directories
+with names and descriptions. Their bodies and references load on demand; the
+bundled reader-load skill remains explicit-only. The inspector reports scope,
+kind, applicability, diagnostics and actual native loading. Distinct resources
+with conflicting names fail activation; repeated discovery of the same physical
+resource is deduplicated. Required Core resources must be present.
+
+Project `AGENTS.md`, `.pi/skills` and `.agents/skills` keep native trust behavior.
+Global roots resolve before native agents change `HOME`; project settings cannot
+redirect shared state, User guidance or the shared auth home. Core planning and
+Clear Writing rules apply to every Team. Optional integrations do not disable
+them or the execution guards.
 
 ## Configure research tools
 

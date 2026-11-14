@@ -70,9 +70,9 @@ containing only Main and Adjutant.
 
 This is a new application named `ltcook`, not an upgrade or compatibility layer
 for `lcook`. Its setup and cleanup must leave existing `lcook` installations,
-settings, and data alone. LTCook performs its own versioned coordination-database
-migrations while preserving LTCook Session identities and native bindings; it does
-not import or migrate data from an independent `lcook` installation.
+settings, and data alone. This prototype accepts only its current coordination
+schema; incompatible databases must be preserved and a fresh database selected.
+There are no compatibility adapters or database conversions.
 
 
 #### Main dependencies:
@@ -312,8 +312,11 @@ Multiple Sessions in one workspace share a logical persistent TeamInstance but
 keep separate native conversations and agent bindings. See
 [domain terminology](docs/Explanations.md#domain-terminology).
 
-The selected team stays fixed for a running session. Coordination uses the
-selected package's public API, not imports of the default team's internals.
+The selected team stays fixed for a running session. Teams use the purpose-named
+[Team API v2](docs/References.md#team-api). Core routes Design and Plan work;
+Main schedules execution after explicit user approval. Rules provide standing
+context, and native Pi skills load their bodies on demand across Core, Team,
+Project and User scopes. See [planning and guidance](docs/How-To-User-Guides.md#plan-work-and-answer-decisions).
 
 
 <br>

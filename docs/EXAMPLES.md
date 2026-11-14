@@ -5,6 +5,7 @@
 - [Choose a bundled team and workspace](#choose-a-bundled-team-and-workspace)
 - [Authenticate with Pi](#authenticate-with-pi)
 - [Resume a named session](#resume-a-named-session)
+- [Select an assignee through Team API](#select-an-assignee-through-team-api)
 - [Resolve settings in Python](#resolve-settings-in-python)
 - [Inspect launch environment carefully](#inspect-launch-environment-carefully)
 
@@ -35,7 +36,7 @@ full bundled team with `LTCOOK_TEAM=default`. The full team includes six persist
 members and four explicitly temporary variants; a temporary member must be
 spawned explicitly before assignment. Team aliases resolve to the bundled modules.
 An installed third-party module can also be selected by its resolvable module
-specifier, provided it exports the fresh public `apiVersion: 1` contract.
+specifier, provided it exports the fresh public `apiVersion: 2` contract.
 
 The shell override applies only to this command. Save a user selection through
 AppRC instead:
@@ -89,6 +90,36 @@ conversations and agent bindings.
 Only one TypeScript runtime owns a coordination database. A later launch command
 contacts the running runtime to open the workspace session instead of starting a
 second owner. If no owner is running, it starts a runtime for the selected team.
+
+<br>
+
+# Select an assignee through Team API
+
+A separately installed Team package can reuse the minimal definition and provide
+one selection hook. This illustrative module changes Team identity and chooses
+from the members Core declares eligible for the requested work:
+
+```typescript
+import base from '@ltcook/team-default-minimal';
+import type { TeamPackage } from '@ltcook/runtime/team-api';
+
+const team: TeamPackage = {
+  apiVersion: 2,
+  definition: { ...base.definition, id: 'my-team', name: 'My team' },
+  selectAssignee(context, eligible) {
+    const preferred = context.workType === 'plan.prefill' ? 'adjutant' : 'main';
+    const selected = eligible.find((member) => member.key === preferred);
+    if (!selected) throw new Error(`No eligible member for ${context.workType}`);
+    return selected.key;
+  },
+};
+export default team;
+```
+
+Core validates the returned member key and persists the assignment before dispatch.
+The hook has no runtime handle or approval authority. Omitting the hook uses the
+Team's declared `routing`. Main still schedules execution Tasks through workflow
+commands after Plan approval. See [Team API](References.md#team-api).
 
 <br>
 

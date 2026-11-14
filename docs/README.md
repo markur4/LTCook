@@ -55,7 +55,7 @@ Use these names consistently:
 | `ltcook` CLI | `ltcook.cli.app.app` | Exposes AppRC commands, runtime launch, and native Pi authentication. |
 | Runtime | `runtime/src/main.ts` | Starts the idle Paseo host and opens project Sessions on explicit user request. |
 | Pi authentication | `ltcook auth` and native Pi's SDK | Shares Pi-managed credentials while keeping project settings and histories separate. |
-| Team package | `TeamPackage` in `runtime/src/api/team.ts` | Provides versioned team definition and activation hooks. |
+| Team package | `TeamPackage` in `runtime/src/team-api/index.ts` | Provides versioned member, guidance and work-routing declarations. |
 | Deployment bundle | `src/ltcook_distr/bundle.zip` | Canonical archive of runtime, team, resource, service and lock assets for installation. |
 | Lifecycle payload | `src/ltcook_distr/payload/app_lifecycle` | Prepares and maintains LTCook-owned installation resources. |
 

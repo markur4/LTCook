@@ -104,7 +104,11 @@ requirement imposed on users of the application.
 
 The Python application resolves settings through AppRC. Keep native component
 translation in LTCook-owned paths and avoid a second hidden settings layer. The
-TypeScript runtime owns coordination; team packages use its public version-1 API.
+TypeScript runtime owns coordination; team packages use its public Team API v2.
+Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
+`workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
+notices retain their provenance. Design/Plan Markdown lives in global AppRC state,
+with coordination metadata and user decisions in SQLite.
 The `src/ltcook_distr/bundle` destination is generated production input for the
 wheel and installer, not general build debris. See
 [asset packaging](#asset-packaging).
@@ -151,6 +155,11 @@ Python formatting uses the existing Ruff configuration and generated-path
 exclusions. Normal checks enforce both formats; `just format` applies them.
 
 
+Planning/guidance checks use fake backends and native Pi RPC without model calls.
+They cover trusted decisions, restart/uncertain delivery, native loading and
+execution gates. Imported-text fidelity is checked separately from behavior;
+installed resource paths must be verified independently of source paths.
+
 For changed behavior, choose the narrow existing relevant test and report what
 it establishes. Unit/contract tests do not prove native installer behavior,
 service connectivity, or a live Pi model conversation. Integration tests require
@@ -162,7 +171,8 @@ model prompt loop to quick checks.
 
 `src/ltcook_dev/packaging/package_assets.py` builds the canonical
 `src/ltcook_distr/bundle.zip` from validated production outputs. It contains the
-compiled runtime, Pi/Paseo plugins, built teams/resources, services, production
+compiled runtime and all three public entry points, Core rules/skills/references,
+Pi/Paseo plugins, built teams/resources, services, production
 manifests/lock and Node selection, but no development dependencies.
 `BuildPy` validates and copies that archive; initialization extracts it into
 private staging while preparing the deployment.

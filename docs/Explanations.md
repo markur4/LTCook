@@ -19,6 +19,7 @@
   - [Pi authentication](#pi-authentication)
   - [Domain terminology](#domain-terminology)
   - [Interchangeable teams](#interchangeable-teams)
+  - [Guidance and planning](#guidance-and-planning)
   - [Coordination and recovery](#coordination-and-recovery)
   - [Web services and diagnostics](#web-services-and-diagnostics)
 
@@ -265,8 +266,8 @@ running system. These classifications do not grant approval or bypass review.
 
 ## Interchangeable teams
 
-Each team exports `apiVersion`, `definition`, `activateService` and
-`activateAgent` through the [public team API](../runtime/src/api/team.ts).
+Each team exports `apiVersion: 2`, `definition` and optionally `selectAssignee`
+through the [public Team API](../runtime/src/team-api/index.ts).
 The host loads the selected package and uses its definition, not fixed role
 names or a fixed member count.
 
@@ -275,6 +276,52 @@ explicitly temporary specialist variants. The
 [minimal team](../teams/default-minimal) declares exactly Main and Adjutant.
 Main performs absent specialists' work in the minimal team; self-inspection is
 not labelled an independent review. Team selection stays fixed for a runtime.
+
+## Guidance and planning
+
+Core supplies required common rules and methods. Teams add member responsibilities
+and methods; Projects retain native repository instructions and skills; Users add
+global personal guidance. Rules enter applicable standing context. Native Pi
+advertises skill descriptions and reads bodies/references when needed. Required
+Core guidance and execution guards cannot be disabled by optional resource flags.
+The [guidance inspector](References.md#guidance-api) reports sources, applicability,
+conflicts and actual loading rather than assuming that discovered means loaded.
+
+Core owns the planning sequence: Adjutant prefills, Main investigates and finalizes,
+then the user approves. Teams declare eligible members, default routes and an
+optional selection hook. The hook receives work context and eligible members; it
+cannot answer user questions, approve execution or operate a second scheduler.
+Main continues scheduling execution Tasks. Both bundled Teams preserve their
+existing member models, lifetimes, read-only settings and review policy.
+
+The Team writes Designs and Plans through native file tools in the global runtime
+state directory. Core records document references, stages, topic coverage and
+user decisions. It does not maintain document versions or interpret edits.
+Documents retain their timestamped filenames; implementation reports append to
+the same Plan. Approval attaches to the registered Plan and survives appended
+reports. A declared blocking decision pauses new execution until answered.
+
+Approval requires coverage of intent, design, scope, implementation, verification
+and delivery, with no Unresolved topic. The mandatory question categories are
+user intent; breaking changes, compatibility and migrations; and validation and
+potentially lengthy verification. Applicable recorded answers can be reused.
+Only authenticated CLI operations or correlated native user dialog responses can
+answer or approve. Agent reports, recommendations, cancellation and timeouts do
+not count as consent. Interrupted dialogs remain pending for CLI recovery.
+
+Before approval, native tools permit read-only investigation and writing the
+Design/Plan files in designated directories. Project edits, arbitrary shell
+execution and other mutations are blocked. After approval, an active Pass permits
+execution while member read-only restrictions remain. Unavailable runtime
+authorization fails closed. These controls are native tool/API boundaries; they
+are not an operating-system sandbox.
+
+The project snapshot combines cached root manifest declarations, literal Just
+recipes and installed tool versions with separately refreshed Git state. It
+reports source fingerprints, freshness and incomplete coverage. It does not run
+project scripts, probe services or construct a semantic project index. See the
+[workflow contract](References.md#workflow-api) and
+[planning guide](How-To-User-Guides.md#plan-work-and-answer-decisions).
 
 ## Coordination and recovery
 
@@ -299,12 +346,11 @@ Recovery reconciles saved bindings with native agents before dispatching work.
 An uncertain external outcome is a blocker, not permission to resend an action.
 A restart does not mint approvals or silently replace the selected team.
 
-On an existing unversioned coordination database, runtime startup applies a
-transactional SQLite migration tracked by `PRAGMA user_version`; it rejects
-databases from unsupported newer versions. Existing Session identifiers, native
-bindings, and records are preserved. Legacy Task reviews remain historical and
-are not whole-Pass approvals. This coordination migration is distinct from
-installation and does not import an independent `lcook` application's data.
+The runtime creates its schema only in a new empty store and rejects incompatible
+databases before modifying them. Preserve an old database and explicitly select a
+fresh `runtime.database` under AppRC state. No conversion, compatibility layer or
+chat-history import is performed. Native Pi/Paseo histories and authentication
+remain separate from coordination state.
 
 ## Web services and diagnostics
 

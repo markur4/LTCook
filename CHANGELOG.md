@@ -47,13 +47,22 @@ All notable changes to `ltcook` will be documented in this file.
 ### 💥 Breaking changes
 
 <br>
+- Breaking: Team packages require API v2 and the purpose-named `team-api`,
+  `guidance-api` and `workflow-api` imports. The generic `api` export and activation
+  hooks are removed. Custom Teams must implement the new declarations; no adapter
+  or automatic rewrite is supplied.
+- Breaking: Execution requires a registered, approved Plan and active Pass. Runtime
+  coordination uses a new schema and defaults to `<AppRC state>/runtime/coordination.sqlite`.
+  Existing prototype databases are rejected unchanged; select a new empty store
+  while preserving old files. No database conversion is provided.
+
 - Breaking: The `ltcook version` command is replaced with the eager root option
   `ltcook --version` (alias `ltcook -V`). Affected: users and scripts invoking
   the former subcommand. Migration: use `ltcook --version` or `ltcook -V`;
   version output exits before AppRC runtime preparation.
 - Breaking: Opening a project with unset `LTCOOK_SESSION` now starts a new chat
   instead of selecting a workspace-derived Session. To resume, set `LTCOOK_SESSION`
-  to an existing saved identifier; IDs and native bindings survive migration.
+  to an existing saved identifier; current-schema IDs and native bindings remain stable on restart.
 - Breaking: Team command consumers must create Passes explicitly, handle optional
   `Task.passId`, and submit `review.create` with `passId` instead of `reportId`.
   Review now gates the current whole-Pass revision. Teams must remove
@@ -84,6 +93,16 @@ All notable changes to `ltcook` will be documented in this file.
 ### ➕ Added
 
 <br>
+- Added Core/Team/Project/User guidance with required standing Core rules, native
+  progressive skills, source diagnostics and `ltcook guidance inspect`.
+- Added Team-routed Plan prefill/finalization, Team-authored timestamped Markdown,
+  persisted topic coverage and mandatory user decisions, authenticated native
+  dialogs and explicit `ltcook planning` CLI operations.
+- Added approval-before-execution tool gates, pending-decision recovery, cached
+  declarative project facts and separately refreshed Git state.
+- Added verbatim Modes and Clear Writing guidance plus shared research and optional
+  domain skills with source provenance and notices.
+
 - Initialized a separate `ltcook` application from Buildben, preserving the
   existing `lcook` application and its data.
 - Added a Bun development workspace and packaged Node runtime using Pi agents

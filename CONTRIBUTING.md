@@ -109,9 +109,11 @@ Linux-only manual asset build, not publication.
   `src/ltcook_dev`. The wheel's `BuildPy` step copies only a validated canonical
   `src/ltcook_distr/bundle.zip`.
 - Runtime and team packages are Bun workspaces. Teams implement the current
-  public `apiVersion: 1` interface in `runtime/src/api/team.ts`; use public team
-  operations rather than SQL or runtime internals. Shared commands are defined
-  once in `runtime/src/api/commands.ts` and inferred from its TypeBox schema; do
+  public `apiVersion: 2` interface in `runtime/src/team-api/index.ts`. Guidance
+  and workflow contracts have separate purpose-named public entry points. Teams
+  declare routing and optional assignee selection; Core owns consent and dispatch.
+  Shared commands are defined once in `runtime/src/workflow-api/commands.ts`
+  and inferred from its TypeBox schema; do
   not duplicate the command union or parameters. Do not add adapters for old
   prototype versions.
 - Keep TypeScript coordination in the single runtime owner for its SQLite

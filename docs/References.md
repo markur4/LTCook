@@ -13,6 +13,8 @@
   - [Environment variables](#environment-variables)
   - [Configuration files](#configuration-files)
   - [Team API](#team-api)
+  - [Guidance API](#guidance-api)
+  - [Workflow API](#workflow-api)
 - [Development reference](#development-reference)
   - [Dependency and lock files](#dependency-and-lock-files)
   - [Task commands](#task-commands)
@@ -34,7 +36,10 @@
 | [src/ltcook/config/sections](../src/ltcook/config/sections) | Registered settings declarations grouped by owning component and environment prefix. |
 | [src/ltcook/config/pi_config.py](../src/ltcook/config/pi_config.py) | Writes only the private Pi `web-search.json` native configuration. |
 | [src/ltcook/launch.py](../src/ltcook/launch.py) | Global server settings, optional project overrides, and native process launch commands. |
-| [runtime/src/api/team.ts](../runtime/src/api/team.ts) | Version 1 public team and runtime API. |
+| [runtime/src/team-api](../runtime/src/team-api) | Team API v2 definitions and routing. |
+| [runtime/src/guidance-api](../runtime/src/guidance-api) | Guidance discovery, selection and inspection contract. |
+| [runtime/src/workflow-api](../runtime/src/workflow-api) | Planning, decisions, approvals and coordination contract. |
+| [runtime/resources](../runtime/resources) | Required Core rules and shared native skills/references. |
 | [runtime/src/services/controller.ts](../runtime/src/services/controller.ts) | Internal local Compose controller used by the service commands. |
 | [teams](../teams) | Bundled team packages and Markdown resources. |
 | [services](../services) | Pinned Compose services and their non-secret configuration. |
@@ -66,6 +71,13 @@ commands provide launch operations and diagnostics:
 | `ltcook auth logout PROVIDER` | Remove that provider's credential through Pi; affects other Pi instances using the same home. |
 | `ltcook auth check [--provider PROVIDER] [--model MODEL] [--json] [--no-refresh]` | Report native Pi credential readiness without printing credentials; exit statuses are 0 ready, 1 not ready, and 2 invalid. |
 | `ltcook launch write-native-config --workspace ROOT` | Write the private Pi `web-search.json` under `PI_CODING_AGENT_DIR`; the Paseo config is not written by this command. |
+| `ltcook planning start --session SESSION --design PATH --title TITLE` | Request Plan prefill/finalization for a Design. |
+| `ltcook planning show --session SESSION --plan PLAN_ID` | Inspect registered document and workflow state. |
+| `ltcook planning questions --session SESSION --plan PLAN_ID` | Inspect registered user decisions. |
+| `ltcook planning answer --session SESSION --plan PLAN_ID --decision ID --answer TEXT` | Persist an explicit authenticated user answer. |
+| `ltcook planning approve --session SESSION --plan PLAN_ID` | Approve after coverage and decision gates pass. |
+| `ltcook planning reject --session SESSION --plan PLAN_ID` | Reject execution. |
+| `ltcook guidance inspect --session SESSION [--agent ID]` | Inspect actual native loading and guidance diagnostics. |
 | `ltcook services start [--workspace ROOT]` | Start the LTCook Compose project in local mode. |
 | `ltcook services stop [--workspace ROOT]` | Stop the SearXNG and Crawl4AI containers in local mode. |
 | `ltcook services status [--workspace ROOT]` | Show local Compose status or the configured remote-service mode. |
@@ -129,8 +141,9 @@ for recovery rather than broaden cleanup.
 AppRC declares config, appdata, cache, and state as independent paths. The
 installation authority is a separate fixed native location. The deployment is
 normally under AppRC appdata; it contains the private Node executable, production
-application bundle, per-workspace Pi locations, service receipt, and SQLite
-coordination database. Use `ltcook app paths` and `ltcook app doctor --json` to
+application bundle, per-workspace Pi locations and service receipt. Runtime
+documents and SQLite coordination default to `<state>/runtime`; project facts
+are cached under `<cache>/projects`. Use `ltcook app paths` and `ltcook app doctor --json` to
 inspect recorded locations. Explicit resource relocation uses `app migrate`,
 not a manual move or an edit to installation authority.
 
@@ -176,6 +189,10 @@ and `playwright` sections; their declarations are in
 
 | Name | Meaning |
 | --- | --- |
+| `LTCOOK_RUNTIME_STATE_DIR` | Global `runtime.state_dir`; defaults to `<AppRC state>/runtime`, containing documents and the default database. |
+| `LTCOOK_DATABASE` | Global `runtime.database`; defaults to `<LTCOOK_RUNTIME_STATE_DIR>/coordination.sqlite`. Incompatible schemas are rejected unchanged. |
+| `LTCOOK_GUIDANCE_DIR` | Global `runtime.guidance_dir`; defaults to `<AppRC config>/guidance` with `rules/` and `skills/`. |
+| `LTCOOK_PROJECT_CACHE_DIR` | Launch-derived `<AppRC cache>/projects`, resolved globally before native HOME changes. |
 | `LTCOOK_TEAM` | `AppSettings.team`; defaults to `default-minimal`. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |
 | `LTCOOK_TEAM_INSTANCE_ID` | Runtime-derived identifier for the persistent TeamInstance shared by Sessions on the same selected team and canonical workspace. |
@@ -228,7 +245,11 @@ not encryption of the AppRC-managed files.
 | AppRC user env and secret files | Saved user settings and credentials beneath declared AppRC paths. |
 | Initialized AppRC workspace settings and secrets | Optional project overrides; named registration is not required for a project path. |
 | Arbitrary workspace `.env` files | Not owned or loaded by LTCook automatically. |
-| `<appdata>/deployment` | Private Node, production application, service receipts, and coordination database. |
+| `<appdata>/deployment` | Private Node, production application and service receipts. |
+| `<state>/runtime/documents/designs/Design-YYYY_MM_DD-HH_MM-title.md` | Team-authored Design, using creation-machine local time and timezone metadata. |
+| `<state>/runtime/documents/plans/Plan-YYYY_MM_DD-HH_MM-title.md` | Team-authored Plan; stable filename and append-only reporting convention. |
+| `<state>/runtime/coordination.sqlite` | Runtime coordination, document references, decisions and approval metadata. |
+| `<cache>/projects` | Lazily refreshed declarative facts; Git state is refreshed separately. |
 | `<LTCOOK_DEPLOYMENT_DIR>/paseo/config.json` | Paseo configuration written by the Node host; the home also holds mutable Paseo data. |
 | `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` | Workspace-specific Pi home; `write-native-config` writes its private `web-search.json`. |
 | `<PI_CODING_AGENT_DIR>/settings.json.ltcook-extensions.json` | Versioned exact ownership of LTCook-managed extension paths; independent extensions remain in `settings.json`. |
@@ -245,52 +266,92 @@ merged environment is not used as the next project's shell input. See the
 
 ## Team API
 
-A team module exposes this `TeamPackage` shape from
-[`runtime/src/api/team.ts`](../runtime/src/api/team.ts):
+The public import is `@ltcook/runtime/team-api`, authored in
+[`runtime/src/team-api/index.ts`](../runtime/src/team-api/index.ts).
 
 | Member | Type | Purpose |
 | --- | --- | --- |
-| `apiVersion` | `1` | Fresh public API version; no old-version adapters are provided. |
-| `definition` | `TeamDefinition` | Team identity, members, resources, and review policy. |
-| `activateService(runtime)` | function | Activates the selected team through scoped coordination and agent operations; policy comes from `definition`. |
-| `activateAgent(runtime)` | function | Registers instructions for the selected member. |
+| `apiVersion` | `2` | Current clean prototype contract; old APIs are rejected. |
+| `definition` | `TeamDefinition` | Identity, members, separate rule/skill refs, routing and review policy. |
+| `selectAssignee(context, eligible)` | optional function | Returns an eligible member key; Core validates and persists before dispatch. |
 
-The runtime recognizes built-in module aliases `default` and `default-minimal`;
-other selections are dynamically imported module specifiers that must be installed
-and resolvable. Team packages access coordination through the scoped public API,
-not SQL or runtime internals. The full team uses independent review; minimal uses
-a self-review policy and must not be described as independent specialist review.
-The runtime uses one TypeBox command schema in
-[`runtime/src/api/commands.ts`](../runtime/src/api/commands.ts) for both HTTP
-validation and Pi tool parameters; command types are inferred from that schema.
-API version remains `1`, with a clean cutover rather than compatibility adapters.
-Teams can create explicit Passes with an optional Plan reference, create Tasks
-with or without a Pass, and record ordered Steps within Tasks. Pass completion
-requires completed Tasks and, when policy requires it, an accepted whole-Pass
-review for the current revision. Task reviews are not the review gate.
+Members declare keys, names, roles, eligible `workTypes`, model alias, thinking,
+lifetime, read-only policy, `rules` and `skills`. Resources have path, URL and
+rule/skill kind. Teams have one default route per work type:
 
-The API command union uses a `type` discriminator. Each item below is a separate
-`RuntimeCommand`; HTTP sends that command inside `{"command": ...}`:
+| Work type | `default-minimal` | `default` |
+| --- | --- | --- |
+| `design` | Main | Main |
+| `plan.prefill` | Adjutant | Adjutant |
+| `plan.finalize` | Main | Main |
+| `task.execute` | Main | Senior |
 
-- Create an explicit Pass with a Plan reference:
-  `{"type":"pass.create","title":"Runtime integration","planRef":"docs/plan.md"}`
-- Create a standalone Task by omitting `passId`:
-  `{"type":"task.create","title":"Update docs","description":"Clarify runtime behavior","acceptance":"Examples match the current API"}`
-- Add an ordered Step to an existing Task:
-  `{"type":"step.create","taskId":"task-1","title":"Update the guide","position":1}`
-- Review the whole Pass, not a Task:
-  `{"type":"review.create","passId":"pass-1","outcome":"accepted","summary":"Current Pass revision reviewed"}`
+Main can schedule among eligible execution members. The optional hook receives
+read-only work context and eligible members, without a privileged runtime handle
+or user approval authority. There are no `activateService`/`activateAgent` hooks.
+The built-in aliases are `default` and `default-minimal`; other Team modules must
+already be installed and resolvable. See the
+[selection-hook example](EXAMPLES.md#select-an-assignee-through-team-api).
 
-HTTP validates commands with `RuntimeCommandSchema` through `isRuntimeCommand`;
-Pi tool parameters use the `RuntimeCommandInputSchema` wrapper. Both derive from
-the same schema rather than separate hand-maintained command representations.
-A Task may also set `passId`, `phase`, and the native-message reference
-`requestId`.
+Independent-review eligibility, dispatch and current Pass-revision checks remain
+the full Team's policy. Minimal permits self-review. Task, Step and report changes
+advance the Pass revision and require a current accepted review when required;
+Plan execution approval is a separate gate. A completed Pass remains final.
 
-Whole-Pass review approval is tied to the current Pass revision. Task, Step, and
-report changes increment that revision, so an older accepted review does not
-authorize the changed work. A completed Pass is final; start a new Pass for later
-work rather than reopening or mutating the completed Pass.
+## Guidance API
+
+`@ltcook/runtime/guidance-api`, authored in
+[`runtime/src/guidance-api`](../runtime/src/guidance-api), describes Rule/Skill
+resources and inspection. Sources use Core, Team, Project and User scopes. Rules
+enter applicable standing context; skills use Pi's native parser and discovery.
+Descriptions are advertised; bodies and references remain on demand. Bundled
+skill names use the `ltcook-` prefix; reader-load is explicit-only.
+
+`ltcook guidance inspect` reports each resource's name, path, scope, kind,
+applicability, native loaded state and explicit-only setting, plus source-specific
+diagnostics. Repeated discovery of one physical file is deduplicated; distinct
+resources with conflicting names fail. Missing required guidance blocks activation.
+Native project trust remains authoritative. Global User guidance is resolved from
+AppRC before native HOME changes. Required Core rules and guards cannot be
+removed by optional resource settings. Imported text and notices retain recorded
+provenance under `runtime/resources`.
+
+## Workflow API
+
+`@ltcook/runtime/workflow-api`, authored in
+[`runtime/src/workflow-api`](../runtime/src/workflow-api), contains planning,
+document references, project context, decisions, approvals and work results.
+[`commands.ts`](../runtime/src/workflow-api/commands.ts) is the single authoritative
+TypeBox schema; public command types and agent-facing input schemas derive from it.
+The `ltcook_team` native tool uses that schema and Core enforces actor permissions.
+
+The local authenticated command endpoint accepts
+`POST /v1/command` with `{"sessionId":"SESSION","command":{"type":"..."}}`
+and returns `{"value":...}`. Planning CLI operations use the user bearer; native
+agents receive only their bound Session/agent credential. Agent-reported answers
+cannot authorize execution.
+
+Planning operations are `planning.start`, `planning.show`, `planning.questions`,
+`planning.submit`, `decision.create`, `decision.answer`, `planning.approve` and
+`planning.reject`. Answers and approvals require explicit Session and Plan
+identity. Native user dialogs are correlated through the trusted host bridge;
+cancellation, missing events and timeouts remain pending. Duplicate matching
+responses are idempotent. The CLI provides recovery after interrupted delivery.
+
+Plans register six coverage topics: intent, design, scope, implementation,
+verification and delivery. Dispositions are `Resolved`, `Defaulted`, `Unresolved`
+and `Not applicable`. Unresolved coverage, unanswered mandatory question categories
+or outstanding blocking decisions prevent approval. Approval permits the Plan's
+Pass to execute. Core does not interpret Markdown to infer material changes;
+Teams register new blocking decisions when scope changes. Appended reports do
+not reset approval.
+
+Document names use local timestamps and concise titles, without random suffixes.
+Timezone is retained in metadata; collisions fail. Core supplies directories and
+records references. Native file tools write the documents; there are no content
+update, revision or snapshot endpoints. See
+[planning and guidance](Explanations.md#guidance-and-planning) and the
+[CLI guide](How-To-User-Guides.md#plan-work-and-answer-decisions).
 
 ## Dependency and lock files
 
