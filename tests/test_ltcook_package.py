@@ -615,6 +615,19 @@ def test_production_bundle_staging_includes_runtime_teams_and_services(
     (plugin / "index.server.ts").write_text("source")
     (plugin / "index.client.tsx").write_text("source")
     (plugin / "shared/panel-snapshot.ts").write_text("source")
+    for relative in (
+        "shared/panel-details.ts",
+        "shared/view-model.ts",
+        "client/use-team-panel.ts",
+        "client/components/PanelChrome.tsx",
+        "client/components/StatusBadge.tsx",
+        "client/screens/TeamOverview.tsx",
+        "client/screens/TaskBoard.tsx",
+        "client/screens/AgentFocus.tsx",
+    ):
+        asset = plugin / relative
+        asset.parent.mkdir(parents=True, exist_ok=True)
+        asset.write_text("source")
     (root / "runtime/package.json").write_text("{}")
     (root / "runtime/node_modules").mkdir()
     (root / "runtime/node_modules/private").write_text("not shipped")
@@ -651,6 +664,9 @@ def test_production_bundle_staging_includes_runtime_teams_and_services(
     bundle_link.symlink_to(bundle, target_is_directory=True)
     with pytest.raises(ValueError, match="Unsafe production bundle destination"):
         stage_assets(root, bundle_link)
+    (plugin / "client/screens/TaskBoard.tsx").unlink()
+    with pytest.raises(FileNotFoundError, match="TaskBoard"):
+        stage_assets(root, bundle)
 
 
 def test_package_cli_preserves_destination_leaf_symlink(

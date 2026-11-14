@@ -111,6 +111,20 @@ directory and use **Start session** in the LTCook panel when ready. Before
 starting agents, [choose their models](#initialize-saved-preferences) and
 [authenticate with Pi](#authenticate-with-pi).
 
+The **Team status** panel contains three views:
+
+- **Team Overview** shows active Passes, progress, members and issues. Select a
+  member to open Agent Focus; expand issue details to read recorded blockers.
+- **Task Board** groups Tasks by their recorded state. Select a Task to inspect
+  its description, acceptance criteria, ordered Steps, blocker and report.
+- **Agent Focus** shows role settings, current assignments, recorded handoff and
+  report, plus native model/activity when available. **Open conversation** uses
+  Paseo's existing chat and is unavailable for disconnected members.
+
+Use **Refresh** to reload coordination state. Task dependencies are not recorded
+by the current runtime; the board does not infer a dependency graph. Private work
+text is fetched only for the selected detail, not included in bulk status data.
+
 To open an existing project directory directly from the terminal:
 
 ```shell
