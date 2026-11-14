@@ -161,6 +161,9 @@ test('failed managed activation publishes a source diagnostic after binding retr
         cwd: root,
         env: {
           ...process.env,
+          LTCOOK_PI_AUTH_DIR: path.join(root, 'auth'),
+          PI_CODING_AGENT_DIR: path.join(root, 'agent'),
+          PI_CODING_AGENT_SESSION_DIR: path.join(root, 'sessions'),
           LTCOOK_JS_ROOT: root,
           LTCOOK_GUIDANCE_DIR: path.join(root, 'user'),
           LTCOOK_NATIVE_AGENT_ID: 'native-failure',
