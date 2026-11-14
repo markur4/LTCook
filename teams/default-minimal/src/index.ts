@@ -11,7 +11,7 @@ const members: readonly TeamMember[] = [
     roles: ['coordinator'],
     workTypes: ['design', 'plan.finalize', 'task.execute'],
     rules: ['rules/main.md'],
-    skills: ['skills/lookup.md', 'skills/explore.md'],
+    skills: [],
   },
   {
     key: 'adjutant',
@@ -26,12 +26,7 @@ const members: readonly TeamMember[] = [
     skills: [],
   },
 ];
-const resources = [
-  'rules/main.md',
-  'rules/adjutant.md',
-  'skills/lookup.md',
-  'skills/explore.md',
-] as const;
+const resources = ['rules/main.md', 'rules/adjutant.md'] as const;
 export const definition: TeamDefinition = {
   id: '@ltcook/team-default-minimal',
   name: 'Default Minimal',
@@ -45,8 +40,9 @@ export const definition: TeamDefinition = {
   members,
   resources: resources.map((path) => ({
     path,
-    kind: path.startsWith('rules/') ? ('rule' as const) : ('skill' as const),
+    kind: 'rule' as const,
     scope: 'team' as const,
+    required: true,
     url: new URL(`../resources/${path}`, import.meta.url).href,
   })),
   reviewPolicy: { mode: 'self', reviewerKeys: [], required: false },

@@ -10,8 +10,8 @@ const members: readonly TeamMember[] = [
     readOnly: false,
     roles: ['coordinator'],
     workTypes: ['design', 'plan.finalize', 'task.execute'],
-    rules: ['rules/delegation.md', 'rules/clear-writing.md'],
-    skills: ['skills/lookup.md', 'skills/explore.md'],
+    rules: ['rules/delegation.md', 'rules/research-handoffs.md'],
+    skills: [],
   },
   {
     key: 'adjutant',
@@ -22,7 +22,7 @@ const members: readonly TeamMember[] = [
     readOnly: false,
     roles: ['adjutant'],
     workTypes: ['plan.prefill', 'task.execute'],
-    rules: ['rules/delegation.md', 'rules/clear-writing.md'],
+    rules: ['rules/delegation.md'],
     skills: [],
   },
   {
@@ -70,8 +70,8 @@ const members: readonly TeamMember[] = [
     readOnly: true,
     roles: ['explorer'],
     workTypes: ['task.execute'],
-    rules: [],
-    skills: ['skills/lookup.md', 'skills/explore.md'],
+    rules: ['rules/research-handoffs.md'],
+    skills: [],
   },
   {
     key: 'senior-tmp',
@@ -118,17 +118,15 @@ const members: readonly TeamMember[] = [
     readOnly: true,
     roles: ['explorer'],
     workTypes: ['task.execute'],
-    rules: [],
-    skills: ['skills/lookup.md', 'skills/explore.md'],
+    rules: ['rules/research-handoffs.md'],
+    skills: [],
   },
 ];
 const resources = [
   'rules/delegation.md',
-  'rules/clear-writing.md',
   'rules/engineering.md',
   'rules/review.md',
-  'skills/lookup.md',
-  'skills/explore.md',
+  'rules/research-handoffs.md',
 ] as const;
 export const definition: TeamDefinition = {
   id: '@ltcook/team-default',
@@ -143,8 +141,9 @@ export const definition: TeamDefinition = {
   members,
   resources: resources.map((path) => ({
     path,
-    kind: path.startsWith('rules/') ? ('rule' as const) : ('skill' as const),
+    kind: 'rule' as const,
     scope: 'team' as const,
+    required: true,
     url: new URL(`../resources/${path}`, import.meta.url).href,
   })),
   reviewPolicy: { mode: 'independent', reviewerKeys: ['reviewer', 'reviewer-tmp'], required: true },
