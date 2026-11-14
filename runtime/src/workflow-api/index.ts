@@ -16,6 +16,7 @@ export type {
   UpdatePassInput,
   CreateTaskInput,
   UpdateTaskInput,
+  RetryTaskInput,
   CreateStepInput,
   UpdateStepInput,
   CreateAssignmentInput,
@@ -31,6 +32,7 @@ import type {
   UpdatePassInput,
   CreateTaskInput,
   UpdateTaskInput,
+  RetryTaskInput,
   CreateStepInput,
   UpdateStepInput,
   CreateAssignmentInput,
@@ -74,6 +76,13 @@ export interface Task {
   requestId?: string;
   blocker?: string;
   report?: string;
+  scheduled?: boolean;
+  attempt?: number;
+  assigneeKey?: string;
+  dependencyIds?: string[];
+  verificationRequirements?: string[];
+  approvalScopes?: ApprovalScope[];
+  correctionOfTaskId?: string;
 }
 export interface Step {
   id: string;
@@ -91,6 +100,8 @@ export interface Assignment {
   nativeAgentId: string;
   status: 'pending' | 'sending' | 'sent' | 'uncertain' | 'reported';
   handoff: string;
+  attempt?: number;
+  requestId?: string;
 }
 export interface Report {
   id: string;
@@ -100,7 +111,14 @@ export interface Report {
   nativeAgentId: string;
   summary: string;
   evidence: string;
+  outcome?: 'success' | 'failure';
+  verification?: VerificationEntry[];
   revision: number;
+}
+export interface VerificationEntry {
+  requirement: string;
+  result: 'passed' | 'failed';
+  evidence: string;
 }
 export interface Review {
   id: string;
@@ -108,6 +126,7 @@ export interface Review {
   passId: string;
   nativeAgentId: string;
   kind: 'independent' | 'self';
+  assignmentId?: string;
   outcome: 'accepted' | 'changes-requested';
   summary: string;
   revision: number;
@@ -215,6 +234,8 @@ export interface CoordinationApi {
   getTask(sessionId: string, taskId: string): Task;
   listTasks(sessionId: string): Task[];
   updateTask(sessionId: string, input: UpdateTaskInput): Task;
+  retryTask(sessionId: string, input: RetryTaskInput): Task;
+  setTaskAssignee(sessionId: string, taskId: string, memberKey: string): Task;
   createStep(sessionId: string, input: CreateStepInput): Step;
   getStep(sessionId: string, stepId: string): Step;
   listSteps(sessionId: string): Step[];
