@@ -7,6 +7,7 @@ import errno
 import json
 import os
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from ltcook._browser import paseo_url
@@ -183,12 +185,30 @@ def _status(
     )
 
 
+def _timeout_probe(environment: Mapping[str, str]) -> Literal["starting"] | None:
+    """Distinguish an owned port from a free port that silently drops connects."""
+    address = urlsplit(runtime_api_url(environment["LTCOOK_API_LISTEN"]))
+    assert address.hostname is not None and address.port is not None
+    family = socket.AF_INET6 if ":" in address.hostname else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as candidate:
+        if os.name == "nt":
+            candidate.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            # > Ignore closed connections in TIME_WAIT, never an active listener.
+            candidate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            candidate.bind((address.hostname, address.port))
+        except OSError:
+            return "starting"
+    return None
+
+
 def probe_runtime(
     environment: Mapping[str, str],
     *,
     previous_instance_id: str | None = None,
 ) -> RuntimeStatus | Literal["starting"] | None:
-    """Probe authenticated readiness; only connection refusal means no owner."""
+    """Probe readiness; absence requires refusal or exclusive-bind confirmation."""
     request = _request(environment, "/v1/status")
     try:
         with _HTTP.open(request, timeout=1) as response:
@@ -208,13 +228,13 @@ def probe_runtime(
             f"Runtime status failed (HTTP {error.code})."
         ) from error
     except TimeoutError:
-        return "starting"
+        return _timeout_probe(environment)
     except urllib.error.URLError as error:
         reason = error.reason
         if isinstance(reason, TimeoutError) or (
             isinstance(reason, OSError) and reason.errno == errno.ETIMEDOUT
         ):
-            return "starting"
+            return _timeout_probe(environment)
         if isinstance(reason, OSError) and reason.errno == errno.ECONNREFUSED:
             return None
         raise RuntimeClientError(
@@ -228,7 +248,7 @@ def probe_runtime(
         if error.errno == errno.ECONNREFUSED:
             return None
         if error.errno == errno.ETIMEDOUT:
-            return "starting"
+            return _timeout_probe(environment)
         raise RuntimeClientError(
             "Could not read the local LTCook runtime API response."
         ) from error
