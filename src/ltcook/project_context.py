@@ -30,7 +30,7 @@ def _tool(name: str, workspace: Path) -> str | None:
     if candidate is None or not Path(candidate).is_absolute():
         return None
     resolved = Path(candidate).resolve()
-    if resolved.is_relative_to(workspace):
+    if name != "python" and resolved.is_relative_to(workspace):
         return None
     return str(resolved)
 
@@ -48,7 +48,11 @@ def _run(arguments: list[str], workspace: Path) -> str:
     )
     if result.returncode:
         raise ValueError(f"{Path(arguments[0]).name} exited with {result.returncode}")
-    return result.stdout.strip()[:65536]
+    if len(result.stdout) > 65536:
+        raise ValueError(
+            f"{Path(arguments[0]).name} output exceeded the snapshot limit"
+        )
+    return result.stdout.rstrip("\r\n")
 
 
 def _manifest(name: str, text: str) -> dict[str, object]:
@@ -196,7 +200,11 @@ def project_snapshot(workspace_root: Path, cache_dir: Path) -> dict[str, object]
                 incomplete.append(f"Installed tool unavailable outside project: {name}")
                 continue
             try:
-                version = _run([executable, "--version"], workspace).splitlines()[0]
+                version = (
+                    sys.version.split()[0]
+                    if name == "python"
+                    else _run([executable, "--version"], workspace).splitlines()[0]
+                )
                 tools.append({"name": name, "version": version, "source": executable})
             except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
                 incomplete.append(f"Installed version unavailable: {name}")
