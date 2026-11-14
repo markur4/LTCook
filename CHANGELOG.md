@@ -108,7 +108,9 @@ All notable changes to `ltcook` will be documented in this file.
   explicit retry, restart delivery handling, and one current-revision Pass review.
 - Added required Linux real Pi/Paseo system acceptance using a scripted local
   endpoint, plus an opt-in local Pi/llama.cpp guidance benchmark with per-run
-  outcomes, provider usage, tool/delegation counts and action candidates.
+  outcomes, provider usage, tool/delegation counts and action candidates. The
+  benchmark defaults to Spark-X2.6-4B Q8 with thinking off and retries failed
+  tasks once at low thinking, reporting total task completion time.
 - Added Core/Team/Project/User guidance with required standing Core rules, native
   progressive skills, source diagnostics and `ltcook guidance inspect`.
 - Added Team-routed Plan prefill/finalization, Team-authored timestamped Markdown,

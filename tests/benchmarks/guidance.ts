@@ -16,9 +16,11 @@ import { selectedTeam } from '../../runtime/src/integrations/team-loader.js';
 import type { TeamPackage } from '../../runtime/src/team-api/index.js';
 
 export type Arm = 'minimal' | 'complete';
+export type BenchmarkThinking = 'off' | 'low' | 'high';
 export interface RunResult {
   arm: Arm;
   repetition: number;
+  thinking: BenchmarkThinking;
   success: boolean;
   elapsedMs: number;
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
@@ -32,21 +34,36 @@ export interface RunResult {
   failure?: string;
 }
 
+export interface TaskResult {
+  arm: Arm;
+  repetition: number;
+  attempts: RunResult[];
+  initialSuccess: boolean;
+  success: boolean;
+  elapsedMs: number;
+  tokens: RunResult['tokens'];
+  toolCalls: number;
+  delegations: number;
+  unnecessaryActionCandidates: RunResult['unnecessaryActionCandidates'];
+}
+
 /** Compare outcomes without interpreting heuristic action counts as agent errors. */
-export function aggregate(runs: RunResult[]) {
+export function aggregate(tasks: TaskResult[]) {
   return (['minimal', 'complete'] as const).map((arm) => {
-    const selected = runs.filter((run) => run.arm === arm);
+    const selected = tasks.filter((task) => task.arm === arm);
     return {
       arm,
-      runs: selected.length,
-      successes: selected.filter((run) => run.success).length,
-      meanElapsedMs: selected.reduce((sum, run) => sum + run.elapsedMs, 0) / selected.length,
-      providerReportedTokens: selected.reduce((sum, run) => sum + run.tokens.total, 0),
-      toolCalls: selected.reduce((sum, run) => sum + run.toolCalls, 0),
-      delegations: selected.reduce((sum, run) => sum + run.delegations, 0),
+      tasks: selected.length,
+      initialSuccesses: selected.filter((task) => task.initialSuccess).length,
+      successesAfterRetry: selected.filter((task) => task.success).length,
+      lowThinkingRetries: selected.filter((task) => task.attempts.length > 1).length,
+      meanTotalElapsedMs: selected.reduce((sum, task) => sum + task.elapsedMs, 0) / selected.length,
+      providerReportedTokens: selected.reduce((sum, task) => sum + task.tokens.total, 0),
+      toolCalls: selected.reduce((sum, task) => sum + task.toolCalls, 0),
+      delegations: selected.reduce((sum, task) => sum + task.delegations, 0),
       unnecessaryActionCandidates: selected.reduce(
-        (sum, run) =>
-          sum + Object.values(run.unnecessaryActionCandidates).reduce((a, b) => a + b, 0),
+        (sum, task) =>
+          sum + Object.values(task.unnecessaryActionCandidates).reduce((a, b) => a + b, 0),
         0,
       ),
     };
@@ -69,6 +86,7 @@ export async function runFixture(input: {
   provider: string;
   model: string;
   timeoutMs: number;
+  thinking: BenchmarkThinking;
 }): Promise<RunResult> {
   const model = input.modelRuntime.getModel(input.provider, input.model);
   if (!model) throw new Error('Selected model is missing from Pi models.json.');
@@ -78,6 +96,7 @@ export async function runFixture(input: {
   const result: RunResult = {
     arm: input.arm,
     repetition: input.repetition,
+    thinking: input.thinking,
     success: false,
     elapsedMs: 0,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -220,7 +239,7 @@ export async function runFixture(input: {
       agentDir,
       modelRuntime: input.modelRuntime,
       model,
-      thinkingLevel: 'off',
+      thinkingLevel: input.thinking,
       resourceLoader: loader,
       settingsManager,
       sessionManager: SessionManager.inMemory(directory),
@@ -277,21 +296,69 @@ export async function runFixture(input: {
   return result;
 }
 
+/** Retry an unsuccessful off-thinking task once with low thinking on a fresh fixture. */
+export async function runTask(
+  input: Omit<Parameters<typeof runFixture>[0], 'thinking'> & {
+    initialThinking?: BenchmarkThinking;
+  },
+): Promise<TaskResult> {
+  const started = performance.now();
+  const first = await runFixture({ ...input, thinking: input.initialThinking ?? 'off' });
+  const attempts = [first];
+  if (first.thinking === 'off' && !first.success)
+    attempts.push(await runFixture({ ...input, thinking: 'low' }));
+  const tokens: RunResult['tokens'] = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+  };
+  const unnecessaryActionCandidates: RunResult['unnecessaryActionCandidates'] = {
+    repeatedReads: 0,
+    repeatedVerification: 0,
+    redundantWrites: 0,
+  };
+  for (const attempt of attempts) {
+    for (const key of Object.keys(tokens) as Array<keyof RunResult['tokens']>)
+      tokens[key] += attempt.tokens[key];
+    for (const key of Object.keys(unnecessaryActionCandidates) as Array<
+      keyof RunResult['unnecessaryActionCandidates']
+    >)
+      unnecessaryActionCandidates[key] += attempt.unnecessaryActionCandidates[key];
+  }
+  return {
+    arm: input.arm,
+    repetition: input.repetition,
+    attempts,
+    initialSuccess: first.success,
+    success: attempts.at(-1)!.success,
+    elapsedMs: performance.now() - started,
+    tokens,
+    toolCalls: attempts.reduce((sum, attempt) => sum + attempt.toolCalls, 0),
+    delegations: attempts.reduce((sum, attempt) => sum + attempt.delegations, 0),
+    unnecessaryActionCandidates,
+  };
+}
+
 if (import.meta.main) {
   const [
     modelsPath,
     provider,
-    model = 'Spark-X2.6-1.7B',
+    model = 'Spark-X2.6-4B-Q8',
     reportPath = 'guidance-benchmark.json',
     repetitionsText = '3',
+    initialThinking = 'off',
   ] = process.argv.slice(2);
   if (!modelsPath || !provider)
     throw new Error(
-      'Usage: bun tests/benchmarks/guidance.ts MODELS_JSON PROVIDER [MODEL] [REPORT_JSON] [REPETITIONS]',
+      'Usage: bun tests/benchmarks/guidance.ts MODELS_JSON PROVIDER [MODEL] [REPORT_JSON] [REPETITIONS] [THINKING: off|low|high]',
     );
   const repetitions = Number(repetitionsText);
   if (!Number.isInteger(repetitions) || repetitions < 1 || repetitions > 20)
     throw new Error('REPETITIONS must be 1..20');
+  if (!['off', 'low', 'high'].includes(initialThinking))
+    throw new Error('THINKING must be off, low, or high');
   const authDirectory = mkdtempSync(join(tmpdir(), 'ltcook-benchmark-auth-'));
   try {
     const modelRuntime = await ModelRuntime.create({
@@ -307,13 +374,15 @@ if (import.meta.main) {
       throw new Error(
         'Benchmark model must use an existing Pi config with a loopback llama.cpp endpoint.',
       );
+    if (!configured.reasoning)
+      throw new Error('Benchmark model must declare reasoning support for low/high thinking.');
     const team = await selectedTeam('default-minimal');
-    const runs: RunResult[] = [];
+    const tasks: TaskResult[] = [];
     for (let repetition = 0; repetition < repetitions; repetition++) {
       const order: Arm[] = repetition % 2 ? ['complete', 'minimal'] : ['minimal', 'complete'];
       for (const arm of order)
-        runs.push(
-          await runFixture({
+        tasks.push(
+          await runTask({
             arm,
             repetition,
             team,
@@ -321,6 +390,7 @@ if (import.meta.main) {
             provider,
             model,
             timeoutMs: 120_000,
+            initialThinking: initialThinking as BenchmarkThinking,
           }),
         );
     }
@@ -331,20 +401,22 @@ if (import.meta.main) {
           team: team.definition.id,
           provider,
           model,
+          initialThinking,
+          retryPolicy: 'Retry failed off-thinking tasks once with low thinking on a fresh fixture',
           tokenSource:
             'Pi session statistics from provider usage; zero may mean unreported; no estimates',
           delegationSource: 'synthetic benchmark_delegate tool',
           candidateRules:
             'Repeated fixture reads, verification calls, and answer writes are candidates for human inspection; necessary corrections may trigger them.',
-          runs,
-          aggregates: aggregate(runs),
+          tasks,
+          aggregates: aggregate(tasks),
         },
         null,
         2,
       ),
     );
     console.log(
-      `Wrote ${runs.length} benchmark runs to the selected report. Scores do not gate CI or a Pass.`,
+      `Wrote ${tasks.length} benchmark tasks to the selected report. Scores do not gate CI or a Pass.`,
     );
   } finally {
     rmSync(authDirectory, { recursive: true, force: true });

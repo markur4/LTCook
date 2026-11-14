@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { aggregate, runFixture } from './guidance.js';
+import { aggregate, runTask } from './guidance.js';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import { selectedTeam } from '../../runtime/src/integrations/team-loader.js';
 
 test('scripted local Pi usage produces comparable reports in both guidance arms', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'ltcook-benchmark-test-'));
+  let primaryRuns = 0;
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
@@ -20,6 +21,7 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
         (message) =>
           message.role === 'user' && JSON.stringify(message.content).includes('Inspect fixture.'),
       );
+      if (!child && calls === 0) primaryRuns++;
       const name = child
         ? 'fixture_read'
         : calls === 0
@@ -31,7 +33,7 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
         name === 'benchmark_delegate'
           ? { memberKey: 'adjutant', message: 'Inspect fixture.' }
           : name === 'fixture_write'
-            ? { total: 20 }
+            ? { total: primaryRuns === 1 ? 19 : 20 }
             : {};
       const done = child ? calls >= 1 : calls >= 3;
       const delta = done
@@ -78,7 +80,7 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
               {
                 id: 'fixture',
                 name: 'Fixture',
-                reasoning: false,
+                reasoning: true,
                 contextWindow: 32768,
                 maxTokens: 1000,
               },
@@ -93,9 +95,9 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
       allowModelNetwork: false,
     });
     const team = await selectedTeam('default-minimal');
-    const runs = [];
+    const tasks = [];
     for (const arm of ['minimal', 'complete'] as const) {
-      const run = await runFixture({
+      const task = await runTask({
         arm,
         repetition: 0,
         team,
@@ -104,23 +106,46 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
         model: 'fixture',
         timeoutMs: 10000,
       });
-      expect(run.failure).toBeUndefined();
-      expect(run.success).toBe(true);
-      expect(run.delegations).toBe(1);
-      expect(run.toolCalls).toBe(4);
-      expect(run.tokens.total).toBeGreaterThan(0);
-      runs.push(run);
+      expect(task.success).toBe(true);
+      expect(task.delegations).toBe(task.attempts.length);
+      expect(task.toolCalls).toBe(task.attempts.length * 4);
+      expect(task.tokens.total).toBeGreaterThan(0);
+      expect(task.elapsedMs).toBeGreaterThan(0);
+      tasks.push(task);
     }
+    expect(tasks[0]?.attempts.map((attempt) => [attempt.thinking, attempt.success])).toEqual([
+      ['off', false],
+      ['low', true],
+    ]);
+    expect(tasks[1]?.attempts.map((attempt) => [attempt.thinking, attempt.success])).toEqual([
+      ['off', true],
+    ]);
     expect(
-      aggregate(runs).map((entry) => ({
+      aggregate(tasks).map((entry) => ({
         arm: entry.arm,
-        runs: entry.runs,
-        successes: entry.successes,
+        tasks: entry.tasks,
+        initialSuccesses: entry.initialSuccesses,
+        successesAfterRetry: entry.successesAfterRetry,
+        lowThinkingRetries: entry.lowThinkingRetries,
         toolCalls: entry.toolCalls,
       })),
     ).toEqual([
-      { arm: 'minimal', runs: 1, successes: 1, toolCalls: 4 },
-      { arm: 'complete', runs: 1, successes: 1, toolCalls: 4 },
+      {
+        arm: 'minimal',
+        tasks: 1,
+        initialSuccesses: 0,
+        successesAfterRetry: 1,
+        lowThinkingRetries: 1,
+        toolCalls: 8,
+      },
+      {
+        arm: 'complete',
+        tasks: 1,
+        initialSuccesses: 1,
+        successesAfterRetry: 1,
+        lowThinkingRetries: 0,
+        toolCalls: 4,
+      },
     ]);
   } finally {
     server.stop(true);

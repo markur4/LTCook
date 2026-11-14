@@ -181,21 +181,28 @@ client, external provider, or service provisioning is performed.
 Run from the checkout root after `just sync`:
 
 ```shell
-bun tests/benchmarks/guidance.ts /absolute/path/to/models.json local Spark-X2.6-1.7B /absolute/path/to/results.json 3
+bun tests/benchmarks/guidance.ts /absolute/path/to/models.json local Spark-X2.6-4B-Q8 /absolute/path/to/results.json 3
 ```
 
 The first two arguments select an existing Pi model file and provider ID. The
-remaining arguments select model ID, JSON output, and 1–20 repetitions. The
-initial model label is `Spark-X2.6-1.7B`; use the exact ID in your Pi configuration.
+remaining arguments select model ID, JSON output, 1–20 repetitions, and optional
+starting thinking level (`off`, `low`, or `high`). The default model label is
+`Spark-X2.6-4B-Q8`; use the exact ID in your Pi configuration and configure it
+with reasoning support. The default is thinking off. Each failed off-thinking
+task automatically repeats once with low thinking on a fresh copy of the same
+fixture. Low and high starts are diagnostic runs and do not auto-retry.
 Only a loopback endpoint is accepted. A run has a 120-second deadline, a 24-tool
 budget, and at most two direct delegations to another declared eligible member.
 It exposes only fixed fixture read/write/verification tools and a clearly named
 synthetic `benchmark_delegate` tool; it does not measure RuntimeController Pass
 scheduling. Each run uses a fresh temporary workspace, removed after disposal.
 
-The JSON report records per-run success, elapsed time, provider-reported input,
-output/cache tokens, tool calls, delegations, and rule-based unnecessary-action
-candidates. Repeated reads, verification calls, and answer writes are candidates
+The JSON report records each task's initial and final success, total wall-clock
+completion time across attempts, and each attempt's thinking level, success,
+elapsed time, provider-reported input, output/cache tokens, tool calls,
+delegations, and rule-based unnecessary-action candidates. Aggregates include
+initial and post-retry success and mean total task time. Repeated reads,
+verification calls, and answer writes are candidates
 for inspection; a necessary correction may trigger them. Aggregates compare the
 two arms, whose order alternates each repetition. Zero usage may mean the provider
 did not report tokens; it is not an estimate. Model scores never gate CI or Pass
