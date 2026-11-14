@@ -1,5 +1,6 @@
 import path from 'node:path';
 import process from 'node:process';
+import type { SessionSnapshot } from './api/team.js';
 import { selectedTeam } from './integrations/team-loader.js';
 const EX_TEMPFAIL = 75;
 function isListenAddressInUse(error: unknown): boolean {
@@ -45,7 +46,7 @@ async function run(): Promise<void> {
 
   const [
     { createRuntime },
-    { RuntimeApi, agentBearer },
+    { RuntimeApi, agentBearer, captureShellEnvironment },
     { createPaseoAgentBackend, startPaseoHost },
     { Telemetry },
     fs,
@@ -70,8 +71,6 @@ async function run(): Promise<void> {
   if (
     !deployment ||
     !jsRoot ||
-    !workspace ||
-    !sessionId ||
     !python ||
     !logs ||
     !traces ||
@@ -82,9 +81,12 @@ async function run(): Promise<void> {
       'AppRC did not resolve required runtime configuration; launch through `ltcook launch runtime`.',
     );
   }
+  if (Boolean(workspace) !== Boolean(sessionId)) {
+    throw new Error('LTCOOK_WORKSPACE and LTCOOK_SESSION must be supplied together.');
+  }
   const deploymentRoot = path.resolve(deployment);
   const appRoot = path.resolve(jsRoot);
-  const workspaceRoot = path.resolve(workspace);
+  const workspaceRoot = workspace ? path.resolve(workspace) : undefined;
   const paseoHome = process.env.PASEO_HOME;
   const piHome = process.env.PI_CODING_AGENT_DIR;
   const node = process.env.LTCOOK_NODE_EXECUTABLE;
@@ -112,18 +114,20 @@ async function run(): Promise<void> {
         'AppRC did not resolve required native runtime paths; launch through `ltcook launch runtime`.',
       );
     }
-    const configResult = childProcess.spawnSync(
-      python,
-      ['-m', 'ltcook.launch', 'write-native-config', '--workspace', workspaceRoot],
-      { encoding: 'utf8', env: process.env, windowsHide: true },
-    );
-    if (configResult.status !== 0) {
-      const pathError = /PI_CODING_AGENT_DIR must resolve inside the LTCook deployment\./.exec(
-        configResult.stderr ?? '',
-      )?.[0];
-      throw new Error(
-        pathError ?? 'AppRC native configuration adapter failed to write its registered files.',
+    if (workspaceRoot) {
+      const configResult = childProcess.spawnSync(
+        python,
+        ['-m', 'ltcook.launch', 'write-native-config', '--workspace', workspaceRoot],
+        { encoding: 'utf8', env: process.env, windowsHide: true },
       );
+      if (configResult.status !== 0) {
+        const pathError = /PI_CODING_AGENT_DIR must resolve inside the LTCook deployment\./.exec(
+          configResult.stderr ?? '',
+        )?.[0];
+        throw new Error(
+          pathError ?? 'AppRC native configuration adapter failed to write its registered files.',
+        );
+      }
     }
     if (serviceConnection === 'local') {
       const { createServiceController } = await import('./services/controller.js');
@@ -174,20 +178,12 @@ async function run(): Promise<void> {
     });
     runtime = runtimeController;
     api.setRuntime(runtimeController);
-    const snapshot = await runtimeController.openSession({ id: sessionId, workspaceRoot });
-    api.setSession(workspaceRoot, snapshot.session.id);
-    const persistentMembers = snapshot.members.filter(
-      ({ member }) => member.lifetime === 'persistent',
-    );
-    const connectedAgents = persistentMembers.filter(
-      ({ binding }) => binding?.state === 'bound',
-    ).length;
-    const blockerCount = snapshot.blockers.length;
-    process.stdout.write(
-      `LTCook runtime ready: ${teamSelection}, ${snapshot.members.length} declared members, ` +
-        `${connectedAgents}/${persistentMembers.length} persistent native agents connected, ` +
-        `${blockerCount} blockers; Paseo ${host.listen}\n`,
-    );
+    let initialSnapshot: SessionSnapshot | undefined;
+    if (workspaceRoot && sessionId) {
+      workspaceShellEnvironments.set(sessionId, captureShellEnvironment(process.env));
+      initialSnapshot = await runtimeController.openSession({ id: sessionId, workspaceRoot });
+      api.setSession(workspaceRoot, initialSnapshot.session.id);
+    }
     api.setOpenWorkspaceHandler(
       teamSelection,
       async (request) => {
@@ -207,18 +203,33 @@ async function run(): Promise<void> {
       },
       team.definition.id,
     );
+    const summary = initialSnapshot
+      ? `${teamSelection}, ${initialSnapshot.members.length} declared members, ` +
+        `${
+          initialSnapshot.members.filter(
+            ({ member, binding }) => member.lifetime === 'persistent' && binding?.state === 'bound',
+          ).length
+        } persistent native agents connected, ${initialSnapshot.blockers.length} blockers; `
+      : `${teamSelection}, no project session; `;
+    process.stdout.write(`LTCook runtime ready: ${summary}Paseo ${host.listen}\n`);
     startup.end();
     await telemetry.log('info', 'runtime.ready', {
-      sessionId: snapshot.session.id,
+      sessionId: initialSnapshot?.session.id,
       teamId: team.definition.id,
-      memberCount: snapshot.members.length,
-      connectedPersistentAgentCount: connectedAgents,
-      blockerCount,
+      memberCount: initialSnapshot?.members.length ?? 0,
+      connectedPersistentAgentCount:
+        initialSnapshot?.members.filter(
+          ({ member, binding }) => member.lifetime === 'persistent' && binding?.state === 'bound',
+        ).length ?? 0,
+      blockerCount: initialSnapshot?.blockers.length ?? 0,
     });
     const shutdown = async (signal: string, exitCode: number) => {
       if (stopped) return;
       stopped = true;
-      await telemetry.log('info', 'runtime.shutdown', { signal, sessionId: snapshot.session.id });
+      await telemetry.log('info', 'runtime.shutdown', {
+        signal,
+        sessionId: initialSnapshot?.session.id,
+      });
       await runtime?.close();
       await api?.close();
       await host?.close();

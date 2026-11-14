@@ -16,6 +16,7 @@
   - [Package layout and dependencies](#package-layout-and-dependencies)
 - [Agent runtime](#agent-runtime)
   - [Pi and Paseo](#pi-and-paseo)
+  - [Pi authentication](#pi-authentication)
   - [Domain terminology](#domain-terminology)
   - [Interchangeable teams](#interchangeable-teams)
   - [Coordination and recovery](#coordination-and-recovery)
@@ -83,6 +84,12 @@ relabelled as shell exports. Deliberate shell exports still take precedence.
 The [application-code guide](How-To-User-Guides.md#use-settings-in-application-code)
 shows how to construct settings explicitly outside the CLI.
 
+Server startup and native authentication explicitly use global inspection through
+`ConfigManager.inspect(include_workspace=False)`, so a selected registry entry
+cannot silently choose a project. Opening an existing project path uses normal
+workspace resolution when its AppRC marker exists, otherwise global settings.
+The project root remains the agents' working directory in either case.
+
 <br>
 
 # Files and paths
@@ -90,10 +97,12 @@ shows how to construct settings explicitly outside the CLI.
 ## Configuration files
 
 Configuration layers include Python and packaged defaults, AppRC's saved user
-and secret env files, registered workspace settings and secrets, explicit
-dotenv files, and the captured process environment. Repository settings can
-override user defaults; shell exports retain AppRC's normal final precedence.
-LTCook does not take ownership of arbitrary `.env` files.
+and secret env files, optional initialized workspace settings and secrets,
+explicit dotenv files, and the captured process environment. Project settings
+can override user defaults; shell exports retain normal final precedence.
+LTCook does not take ownership of arbitrary `.env` files or require a marker
+merely to launch. Native application resource paths do not depend on project
+registration.
 
 `PASEO_HOME` must resolve inside the current deployment and outside its
 immutable `<deployment>/app` tree; `PI_CODING_AGENT_DIR` must resolve inside
@@ -108,6 +117,12 @@ replaceable `<LTCOOK_DEPLOYMENT_DIR>/app` bundle. Pi homes default to
 `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi`. Secret fields are
 redacted in diagnostics; raw component environment mappings are launch inputs,
 not material to print in logs or the status panel.
+
+Provider credentials are separate from those project homes. `runtime.pi_auth_dir`
+(`LTCOOK_PI_AUTH_DIR`) is resolved from global user settings and defaults to
+native Pi's `~/.pi/agent`. Every project runtime uses that directory's
+`auth.json` through Pi's supported SDK; models and other Pi configuration remain
+project-local. No credential file is copied or linked into a project home.
 
 ## Filesystem capabilities
 
@@ -182,13 +197,40 @@ are separate workspaces, with versions resolved in the root dependency locks.
 ## Pi and Paseo
 
 Paseo provides chat, connectivity and native agent identities. Its built-in Pi
-provider runs the agents; LTCook does not implement another provider or chat
-interface. Conversations remain in native Pi/Paseo storage.
+provider uses LTCook's managed Pi SDK/RPC entry to select a shared authentication
+store while retaining project-local services. Pi's public session/runtime APIs
+own agent execution and the RPC lifecycle; LTCook does not implement another
+OAuth provider or chat interface. Conversations remain in native Pi/Paseo storage.
 
 The Python launch helper builds the component's environment from AppRC.
 The TypeScript host connects native agent operations to the
 [`RuntimeController`](../runtime/src/core/runtime.ts), keeping settings
 resolution separate from scheduling and coordination.
+
+Starting the server without a project opens only Paseo and the local runtime
+API. A user explicitly opens a project from the terminal or **Start session** in
+the Paseo panel. Selecting a directory or viewing the panel alone does not
+initialize a Session or create agents.
+
+## Pi authentication
+
+`ltcook auth login`, `logout`, and `check` run the installed Pi authentication CLI
+with its agent directory set to the shared user auth home. The commands retain
+Pi's interactive terminal, credential storage, and exit behavior. ChatGPT account
+sign-in uses Pi's OAuth flow; an OpenAI API key is a different method and can also
+be supplied through the declared `OPENAI_API_KEY` secret.
+
+Paseo's agent command instead constructs Pi's public `ModelRuntime` with an
+explicit shared `authPath` and a project-local `modelsPath`. Pi owns credential
+refresh and cross-process storage locking. Its project services still use the
+workspace `PI_CODING_AGENT_DIR`, so web configuration and extension settings do
+not overwrite another project's configuration. The shared auth home is not an
+AppRC-managed application resource and is not purged with LTCook's appdata.
+
+The [authentication guide](How-To-User-Guides.md#authenticate-with-pi) covers
+headless login, API keys, and existing user-level Pi credentials. Provider login
+is distinct from LTCook model-role selection and from the optional Paseo API/
+WebSocket password.
 
 ## Domain terminology
 

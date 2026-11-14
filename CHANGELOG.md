@@ -47,15 +47,20 @@ All notable changes to `ltcook` will be documented in this file.
 ### 💥 Breaking changes
 
 <br>
-- Breaking: Unset `LTCOOK_SESSION` now starts a new chat instead of selecting a
-  workspace-derived Session. To resume, set `LTCOOK_SESSION` to an existing saved
-  identifier; existing IDs and native bindings are preserved by migration.
+- Breaking: Opening a project with unset `LTCOOK_SESSION` now starts a new chat
+  instead of selecting a workspace-derived Session. To resume, set `LTCOOK_SESSION`
+  to an existing saved identifier; IDs and native bindings survive migration.
 - Breaking: Team command consumers must create Passes explicitly, handle optional
   `Task.passId`, and submit `review.create` with `passId` instead of `reportId`.
   Review now gates the current whole-Pass revision. Teams must remove
   `workflows.register` calls and use `TeamDefinition` as the policy authority.
 - Breaking: Python callers must import `ltcook.config.pi_config` instead of
   `ltcook.config.native`. The unused `ltcook.utils` scaffold exports are removed.
+- Breaking: Pi agents now use a shared user-level authentication home instead of
+  credentials stored in each workspace Pi home. Users with workspace-only logins
+  must run `ltcook auth login PROVIDER` once, or set user-level `runtime.pi_auth_dir` to
+  an existing Pi auth home. Project settings and conversation histories stay
+  separate; credentials are not copied automatically.
 
 ### ➕ Added
 
@@ -69,9 +74,12 @@ All notable changes to `ltcook` will be documented in this file.
   Tasks, ordered Steps, whole-Pass review, scoped commands, and lazy restart
   recovery without LCook compatibility code.
 - Added AppRC-managed settings, private dependency preparation and scoped
-  installation, service and cleanup helpers.
+  installation, service and cleanup helpers, including editable checkout
+  installation from staged runtime assets.
 - Added pinned SearXNG/Crawl4AI Compose configuration, optional research tools,
-  redacted local diagnostics and fast isolated behavior checks.
+  redacted local diagnostics and fast isolated behavior checks. Runtime launches
+  omit an empty `CONTAINER_CONNECTION` so local Podman does not enter remote mode;
+  configured connection names remain available.
 - Added readable Pass/Task/member status and ordered Step progress in the native
   Paseo panel while excluding private task, report, handoff, and blocker text.
 - Added exact LTCook-owned Pi extension reconciliation with preserved independent
@@ -82,6 +90,11 @@ All notable changes to `ltcook` will be documented in this file.
   behavior and disabled PyPI publication.
 - Added pinned Prettier development formatting and Ruff format checks for authored
   source, with generated AppRC assets excluded and marked generated.
+- Added idle server/UI startup without a selected project, optional AppRC project
+  configuration, and explicit project Session activation from the Paseo panel.
+- Added native Pi login/logout/readiness commands and a supported SDK/RPC launcher
+  sharing Pi-managed authentication without merging project configuration or
+  conversations.
 
 ### 💔 Changed
 

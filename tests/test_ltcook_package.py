@@ -607,6 +607,8 @@ def test_production_bundle_staging_includes_runtime_teams_and_services(
         (root / declaration).write_text("declared")
     (root / "runtime/dist").mkdir(parents=True)
     (root / "runtime/dist/main.js").write_text("runtime")
+    (root / "runtime/dist/integrations").mkdir()
+    (root / "runtime/dist/integrations/pi-rpc.js").write_text("#!/usr/bin/env node\n")
     plugin = root / "runtime/dist/paseo-plugin"
     (plugin / "shared").mkdir(parents=True)
     (plugin / "paseo-plugin.json").write_text("{}")
@@ -634,6 +636,9 @@ def test_production_bundle_staging_includes_runtime_teams_and_services(
     assert Path(".node-version") in staged
     assert Path("package-lock.json") in staged
     assert Path("runtime/dist/main.js") in staged
+    assert Path("runtime/dist/integrations/pi-rpc.js") in staged
+    if os.name == "posix":
+        assert (bundle / "runtime/dist/integrations/pi-rpc.js").stat().st_mode & 0o111
     assert Path("runtime/dist/paseo-plugin/paseo-plugin.json") in staged
     assert Path("runtime/dist/paseo-plugin/index.server.ts") in staged
     assert Path("runtime/dist/paseo-plugin/index.client.tsx") in staged

@@ -107,7 +107,7 @@ export async function startPaseoHost(input: {
     await import('@getpaseo/server/daemon-control');
   const { hashDaemonPassword } = await import('@getpaseo/server');
   const appBin = path.join(appRoot, 'node_modules', '.bin');
-  const piCommand = path.join(appBin, process.platform === 'win32' ? 'pi.cmd' : 'pi');
+  const piCommand = path.join(appBin, process.platform === 'win32' ? 'ltcook-pi.cmd' : 'ltcook-pi');
   const pathEntries = [
     ...new Set([path.dirname(input.node), appBin, process.env.PATH].filter(Boolean)),
   ];

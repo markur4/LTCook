@@ -9,6 +9,7 @@
   - [Remove an installation](#remove-an-installation)
 - [Configure settings and paths](#configure-settings-and-paths)
   - [Initialize saved preferences](#initialize-saved-preferences)
+  - [Authenticate with Pi](#authenticate-with-pi)
   - [Choose application paths](#choose-application-paths)
   - [Select a team and resume a session](#select-a-team-and-resume-a-session)
   - [Configure research tools](#configure-research-tools)
@@ -57,9 +58,10 @@ just make-artifacts
 
 Then run `./app-install.sh --layout native` on Linux/macOS or
 `.\app-install.cmd --layout native` in native Windows. The generated installer
-uses the selected checkout and prepares a private Node installation and JavaScript
-application under AppRC appdata. It installs production dependencies from
-`package-lock.json`, prepares browser prerequisites, and checks or installs Podman
+first installs Python editably and initializes AppRC's resource directories, then
+prepares a private Node installation and JavaScript application under AppRC
+appdata. It installs production dependencies from `package-lock.json`, prepares
+browser prerequisites, and checks or installs Podman
 and a Compose provider for local services. This is explicit setup: it can download
 software and require the host's normal elevation. It does not start the Compose stack.
 
@@ -67,6 +69,14 @@ A compatible existing Podman installation is reused. macOS and native Windows
 may require a Podman machine. Configuration inspection and directory entry do not
 perform this preparation. Re-run the explicit installer to retry preparation;
 `ltcook config setup --yes` initializes configuration, not external prerequisites.
+
+Runtime launches omit an unset or empty `CONTAINER_CONNECTION`, preserving Podman's
+default engine selection. Set it to a configured Podman connection name only when
+a remote engine is intended.
+
+The private JavaScript deployment is copied from the staged bundle; after
+changing runtime or team sources, rerun `just sync` and the checkout installer
+to refresh it.
 See [installation placement](References.md#installation-placement) for native and
 single-root resource layouts.
 
@@ -90,21 +100,28 @@ ltcook installation doctor
 ltcook config show --json
 ```
 
-After installation, [save model selections and credentials](#initialize-saved-preferences).
-Before the first workspace-specific launch for a repository, register its AppRC
-workspace once:
+Start the server and bundled UI without choosing a project:
 
 ```shell
-ltcook workspace add project-name ROOT --yes
+ltcook launch runtime
 ```
 
-Then start the selected workspace:
+This does not create a Session or start native agents. In Paseo, select a project
+directory and use **Start session** in the LTCook panel when ready. Before
+starting agents, [choose their models](#initialize-saved-preferences) and
+[authenticate with Pi](#authenticate-with-pi).
+
+To open an existing project directory directly from the terminal:
 
 ```shell
 ltcook launch runtime --workspace ROOT
 ```
 
-Launching does not create the required workspace marker.
+Neither registration nor an AppRC marker is required. An existing
+`apprc.workspace.env` enables the normal project settings and secret layers;
+without it, launch uses user settings. Launching does not create markers or
+registry entries. `ltcook workspace add project-name ROOT --yes` remains an
+optional way to manage project-specific AppRC configuration.
 
 The runtime starts Paseo using its built-in Pi provider. In local service mode,
 runtime startup also starts the prepared LTCook Compose project; in direct or
@@ -156,16 +173,55 @@ ltcook config show --json
 `runtime.smart_model`, `runtime.smol_model`, and, for the full team,
 `runtime.plan_model` in the editor using model identifiers supported by the
 installed Pi provider. An empty non-smart alias falls back to the smart selection.
-Configure the required provider credential there as well; secret fields use
-AppRC's secret env files. Store only revocable credentials agents may read.
-`config show --json` reports application settings, not a dump of every component
-credential.
+These selections are required when creating agents, not when opening the idle
+server/UI. Provider account login belongs to Pi, as described
+[below](#authenticate-with-pi). An API key may instead be supplied through the
+provider's AppRC secret field or native environment variable such as
+`OPENAI_API_KEY`. `config show --json` reports application settings, not provider
+OAuth credentials. Store only revocable credentials agents may read.
 
 The [configuration layers](Explanations.md#configuration-files) preserve saved
 user defaults, registered workspace overrides, and deliberate shell exports.
 AppRC does not take ownership of arbitrary repository `.env` files. Use
 `ltcook config --help` for the installed version's workspace and secret-file
 management commands rather than inventing another configuration editor.
+
+## Authenticate with Pi
+
+LTCook exposes the installed Pi authentication CLI without implementing another
+login flow:
+
+```shell
+ltcook auth login openai
+ltcook auth check --provider openai --json --no-refresh
+ltcook auth logout openai
+```
+
+`login` requires an interactive terminal. For a headless machine, use
+`ltcook auth login openai --no-browser` and follow Pi's instructions. To store an
+OpenAI API key rather than sign in with an account, use
+`ltcook auth login openai --api-key`. Account OAuth and API billing credentials
+are different methods; configuring `OPENAI_API_KEY` is not a ChatGPT login.
+The wrapper preserves Pi's exit status; `auth check` reports ready/not-ready/invalid
+without printing the credential. `--no-refresh` avoids refreshing an expired
+OAuth token during inspection.
+
+All LTCook projects use `<LTCOOK_PI_AUTH_DIR>/auth.json`, defaulting to
+`~/.pi/agent/auth.json`. Existing Pi credentials there are reused. Set the
+user-scoped `runtime.pi_auth_dir` (`LTCOOK_PI_AUTH_DIR`) to use another native Pi home.
+Workspace-local Pi settings, models, extensions, web configuration, and session
+histories remain separate; credentials are not copied or linked into those homes.
+Earlier logins stored only in a workspace Pi home are not imported: run the
+shared login once, or select an existing user-level auth home.
+
+Logout removes stored credentials; it does not unset API keys in AppRC or the
+environment, or revoke credentials at the provider.
+
+> [!CAUTION]
+> Login and logout affect other Pi instances using the same credential home.
+> Keep `auth.json` private. LTCook does not remove an external shared Pi auth home
+> when uninstalling its own application resources.
+
 
 ## Choose application paths
 
@@ -180,6 +236,9 @@ production `app/`, service receipts, and coordination data. Paseo's mutable home
 defaults to `<LTCOOK_DEPLOYMENT_DIR>/paseo`, outside the replaceable
 `<LTCOOK_DEPLOYMENT_DIR>/app` bundle. Workspace Pi homes default to
 `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi`.
+Shared provider authentication is separate: `runtime.pi_auth_dir` defaults to Pi's
+user-level `~/.pi/agent`, and the SDK reads that home's `auth.json` without
+changing the workspace-specific `PI_CODING_AGENT_DIR`.
 
 `PASEO_HOME` must resolve inside the current deployment but outside its immutable
 `app/` tree. `PI_CODING_AGENT_DIR` must resolve inside the deployment. Invalid
@@ -190,8 +249,8 @@ locations. See [project paths](References.md#project-paths).
 
 ## Select a team and resume a session
 
-Register this repository once with AppRC before using `--workspace`; follow the
-[first-launch step](#run-the-first-command) to add its workspace marker.
+Use an existing project directory; registration and workspace initialization are
+optional, as described in the [first-launch step](#run-the-first-command).
 
 For a single POSIX invocation:
 
@@ -204,15 +263,17 @@ Other values are dynamically imported JavaScript module specifiers; the module
 must already be resolvable in the deployment and export an `apiVersion: 1` team.
 Changing the setting does not install a module.
 
-When `LTCOOK_SESSION` is unset, each launch creates a fresh chat Session. Set
-`LTCOOK_SESSION` explicitly to resume that Session with the same workspace and
+When `LTCOOK_SESSION` is unset, opening a project creates a fresh chat Session.
+Starting the server without a project creates none. Set `LTCOOK_SESSION`
+explicitly to resume that Session with the same workspace and
 selected team; a Session cannot silently switch either. Multiple Sessions in one
 workspace share a persistent TeamInstance, while their native conversations and
 agent bindings remain separate.
 
-Only one runtime owns a coordination database. A later `ltcook launch runtime`
-command contacts that runtime to open the requested workspace session rather
-than starting another database owner. Stop that owner before starting another
+Only one runtime owns a coordination database. A later `ltcook launch runtime
+--workspace ROOT` command contacts that runtime to open the requested project
+session. A launch without `--workspace` only starts or connects to the idle host;
+it does not select a project. Stop the owner before starting another
 runtime against the same database. A different selected team requires a runtime
 configured for that team and must not be added to the existing owner's sessions.
 
@@ -237,8 +298,8 @@ protection globally.
 The commands use the current directory by default; pass `--workspace ROOT` to
 resolve service configuration for a specific workspace.
 
-Register that repository first with `ltcook workspace add NAME ROOT --yes`.
-Service commands do not create its AppRC marker.
+Project-specific service overrides are optional. Existing initialized AppRC
+workspace settings are used when present; service commands do not create markers.
 
 Use the service commands for local Compose operations:
 
@@ -331,6 +392,7 @@ Use `ltcook config paths --json`, `ltcook config doctor --json`, and
 | Saved team is ignored | Compare `LTCOOK_TEAM` shell exports and registered workspace overrides. |
 | Runtime deployment is missing | Re-run the explicit generated installer after building/staging its inputs. |
 | Model alias is empty | Configure the matching `runtime.*_model` or smart fallback and provider credentials. |
+| Provider authentication is not ready | Run `ltcook auth check --provider openai --json --no-refresh`, then use Pi login for the selected provider. |
 | Session reports a different team/workspace | Restore the original selection or choose a new session identifier. |
 | Database already has an owner | Stop that runtime; do not delete its lock or run another recovery owner. |
 | Browser unavailable | Inspect the installation receipt and browser prerequisites; do not confuse it with core chat/search availability. |

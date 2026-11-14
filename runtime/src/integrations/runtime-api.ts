@@ -15,6 +15,35 @@ export interface WorkspaceSessionRequest {
   shellEnvironment: Record<string, string>;
 }
 
+/** Captures the shell before AppRC overlays, without retaining nested provenance. */
+export function captureShellEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
+  const encoded = source.LTCOOK_SHELL_PROVENANCE;
+  let original: Record<string, unknown> = source;
+  if (encoded !== undefined) {
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(encoded);
+    } catch {
+      throw new Error('LTCOOK_SHELL_PROVENANCE is not an environment mapping');
+    }
+    if (
+      !decoded ||
+      typeof decoded !== 'object' ||
+      Array.isArray(decoded) ||
+      !Object.values(decoded).every((value) => typeof value === 'string')
+    ) {
+      throw new Error('LTCOOK_SHELL_PROVENANCE is not an environment mapping');
+    }
+    original = decoded as Record<string, string>;
+  }
+  return Object.fromEntries(
+    Object.entries(original).filter(
+      (entry): entry is [string, string] =>
+        entry[0] !== 'LTCOOK_SHELL_PROVENANCE' && typeof entry[1] === 'string',
+    ),
+  );
+}
+
 function equalToken(left: string, right: string): boolean {
   const a = Buffer.from(left);
   const b = Buffer.from(right);
@@ -35,14 +64,17 @@ export class RuntimeApi {
     { workspaceRoot: string; pending: Promise<SessionSnapshot> }
   >();
   private selectedTeam: string | undefined;
+  private readonly startupShellEnvironment: Record<string, string>;
   private openWorkspace:
     ((request: WorkspaceSessionRequest) => Promise<SessionSnapshot>) | undefined;
   constructor(
     runtime: RuntimeController | undefined,
     private readonly secret: string,
     private readonly listenAddress: string,
+    startupEnvironment: NodeJS.ProcessEnv = process.env,
   ) {
     this.runtime = runtime;
+    this.startupShellEnvironment = captureShellEnvironment(startupEnvironment);
   }
   setRuntime(runtime: RuntimeController): void {
     this.runtime = runtime;
@@ -99,16 +131,29 @@ export class RuntimeApi {
     response: import('node:http').ServerResponse,
   ): Promise<void> {
     response.setHeader('content-type', 'application/json');
-    if (
-      request.method !== 'POST' ||
-      !['/v1/command', '/v1/snapshot', '/v1/session/open'].includes(request.url ?? '')
-    ) {
+    if (!(
+      (request.method === 'POST' &&
+        ['/v1/command', '/v1/snapshot', '/v1/session/open'].includes(request.url ?? '')) ||
+      (request.method === 'GET' && request.url === '/v1/status')
+    )) {
       response.writeHead(404).end('{}');
       return;
     }
     const bearer = request.headers.authorization?.startsWith('Bearer ')
       ? request.headers.authorization.slice(7)
       : '';
+    if (request.method === 'GET' && request.url === '/v1/status') {
+      if (!equalToken(bearer, this.secret)) {
+        response.writeHead(401).end('{"error":"unauthorized"}');
+        return;
+      }
+      if (!this.openWorkspace || !this.selectedTeam) {
+        response.writeHead(503).end('{"error":"Runtime session activation is not ready"}');
+        return;
+      }
+      response.writeHead(200).end(JSON.stringify({ teamSelection: this.selectedTeam }));
+      return;
+    }
     try {
       const maxBodyLength = request.url === '/v1/session/open' ? 1_048_576 : 64_000;
       let body = '';
@@ -116,13 +161,17 @@ export class RuntimeApi {
         body += chunk;
         if (body.length > maxBodyLength) throw new Error('request too large');
       }
-      const input = JSON.parse(body) as {
+      const parsed: unknown = JSON.parse(body);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('request must be a JSON object');
+      }
+      const input = parsed as {
         sessionId?: string;
         command?: RuntimeCommand;
         workspaceRoot?: string;
         nativeAgentId?: string;
         teamSelection?: string;
-        shellEnvironment?: Record<string, string>;
+        shellEnvironment?: unknown;
       };
       const isUser = equalToken(bearer, this.secret);
       const actor: RuntimeActor | undefined = isUser
@@ -147,18 +196,22 @@ export class RuntimeApi {
         }
         const shell = input.shellEnvironment;
         if (
+          typeof input.workspaceRoot !== 'string' ||
           !input.workspaceRoot ||
+          typeof input.sessionId !== 'string' ||
           !input.sessionId ||
+          typeof input.teamSelection !== 'string' ||
           !input.teamSelection ||
-          !shell ||
-          typeof shell !== 'object' ||
-          Array.isArray(shell) ||
-          !Object.values(shell).every((value) => typeof value === 'string')
+          (shell !== undefined &&
+            (!shell ||
+              typeof shell !== 'object' ||
+              Array.isArray(shell) ||
+              !Object.values(shell).every((value) => typeof value === 'string')))
         ) {
           response
             .writeHead(400)
             .end(
-              '{"error":"workspaceRoot, sessionId, teamSelection and shellEnvironment are required"}',
+              '{"error":"workspaceRoot, sessionId and teamSelection are required; shellEnvironment must be a string mapping when supplied"}',
             );
           return;
         }
@@ -194,7 +247,11 @@ export class RuntimeApi {
               workspaceRoot,
               sessionId: input.sessionId,
               teamSelection: input.teamSelection,
-              shellEnvironment: shell,
+              shellEnvironment: captureShellEnvironment(
+                shell === undefined
+                  ? this.startupShellEnvironment
+                  : (shell as Record<string, string>),
+              ),
             });
             entry = { workspaceRoot, pending };
             this.pendingSessions.set(input.sessionId, entry);
@@ -244,7 +301,12 @@ export class RuntimeApi {
           const sessionId =
             input.sessionId ??
             (requestedWorkspace ? this.defaultSessions.get(requestedWorkspace) : undefined);
-          if (!sessionId) throw new Error('Workspace has no active LTCook session');
+          if (!sessionId) {
+            response
+              .writeHead(404)
+              .end('{"error":"No session found for workspace","code":"SESSION_NOT_FOUND"}');
+            return;
+          }
           const snapshot = runtime.snapshot(sessionId);
           if (
             requestedWorkspace &&

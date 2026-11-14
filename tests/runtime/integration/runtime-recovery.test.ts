@@ -81,6 +81,34 @@ class FakeAgents implements AgentBackend {
   }
 }
 
+test('idle runtime starts and shuts down without creating sessions or agents', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ltcook-idle-runtime-'));
+  temporaryDirectories.push(directory);
+  const databasePath = join(directory, 'coordination.sqlite');
+  const agents = new FakeAgents();
+  let runtime = createRuntime({ databasePath, team, agents });
+  expect(agents.creates).toBe(0);
+  await runtime.close();
+
+  runtime = createRuntime({ databasePath, team, agents });
+  const activated = await runtime.openSession({
+    id: 'activated-after-idle',
+    workspaceRoot: '/workspace-after-idle',
+  });
+  expect(activated.session.id).toBe('activated-after-idle');
+  expect(activated.session.workspaceRoot).toBe('/workspace-after-idle');
+  expect(agents.creates).toBe(2);
+  await runtime.close();
+  const agentsAfterActivation = agents.creates;
+  runtime = createRuntime({ databasePath, team, agents });
+  const restored = await runtime.openSession({
+    id: activated.session.id,
+    workspaceRoot: activated.session.workspaceRoot,
+  });
+  expect(restored.session.id).toBe(activated.session.id);
+  expect(agents.creates).toBe(agentsAfterActivation);
+  await runtime.close();
+});
 test('retries requested-session initialization after transient failure', async () => {
   const agents = new FakeAgents();
   agents.failLists = 1;

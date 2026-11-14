@@ -1,4 +1,4 @@
-"""Per-workspace AppRC resolution for child process launches."""
+"""Global and per-workspace AppRC resolution for native launches."""
 
 from __future__ import annotations
 
@@ -19,10 +19,16 @@ from uuid import uuid4
 import typer
 
 from ltcook.config.bundle import LtcookConfig
-from ltcook.config.pi_config import resolve_config, write_pi_config
+from ltcook.config.pi_config import (
+    resolve_config,
+    resolve_global_config,
+    write_pi_config,
+)
 
 services_cli = typer.Typer(no_args_is_help=True)
 launch_cli = typer.Typer(no_args_is_help=True)
+
+RUNTIME_STATUS_PROBE_TIMEOUT_SECONDS = 1
 
 
 @dataclass(frozen=True)
@@ -31,7 +37,7 @@ class LaunchConfig:
 
     environment: dict[str, str]
     configuration: LtcookConfig
-    workspace_root: Path
+    workspace_root: Path | None
 
 
 def _shell_environment(environment: Mapping[str, str]) -> dict[str, str]:
@@ -55,34 +61,53 @@ def _shell_environment(environment: Mapping[str, str]) -> dict[str, str]:
 
 
 def resolve_launch(
-    workspace_root: str | Path, *, original_environment: Mapping[str, str] | None = None
+    workspace_root: str | Path | None = None,
+    *,
+    original_environment: Mapping[str, str] | None = None,
 ) -> LaunchConfig:
-    """Resolve settings from the target workspace and original shell inputs.
+    """Resolve global runtime settings and optional project overlays.
 
-    :param workspace_root: Workspace being launched.
+    :param workspace_root: Explicit project directory, or None for global startup.
     :param original_environment: Captured shell variables before AppRC overlays.
-    :return: Workspace-specific settings and environment for the child process.
+    :return: Settings and child environment for this invocation.
     """
     shell = _shell_environment(
         dict(os.environ if original_environment is None else original_environment)
     )
     resolved = resolve_config(workspace_root, environment=shell)
     config = resolved.build(LtcookConfig)
+    # > Shared provider authentication is user state.
+    # > Resolve it globally, never from project overlays.
+    global_config = (
+        config
+        if resolved.workspace is None
+        else resolve_global_config(environment=shell).build(LtcookConfig)
+    )
     environment = dict(shell)
     for section in config.__dict__.values():
         environment.update(
             section.current_env_mapping(prefixed=True, include_empty=True)
         )
+    # > Even an empty CONTAINER_CONNECTION switches Podman into remote mode.
+    if not environment.get("CONTAINER_CONNECTION"):
+        environment.pop("CONTAINER_CONNECTION", None)
+    home = Path(
+        shell.get("HOME") or shell.get("USERPROFILE") or str(Path.home())
+    ).expanduser()
+    auth_dir = global_config.runtime.pi_auth_dir
+    auth_path = (
+        home / auth_dir[2:].lstrip("/\\")
+        if auth_dir == "~" or auth_dir.startswith(("~/", "~\\"))
+        else Path(auth_dir).expanduser()
+    )
+    environment["LTCOOK_PI_AUTH_DIR"] = str(auth_path.resolve())
     appdata_dir = resolved.paths.require("appdata")
     deployment = (
         Path(config.app.deployment).expanduser()
         if config.app.deployment
         else appdata_dir / "deployment"
     )
-    workspace_id = hashlib.sha256(
-        str(Path(workspace_root).resolve()).encode()
-    ).hexdigest()[:24]
-    if not environment.get("LTCOOK_SESSION"):
+    if workspace_root is not None and not environment.get("LTCOOK_SESSION"):
         environment["LTCOOK_SESSION"] = f"session-{uuid4()}"
     if not environment.get("LTCOOK_DEPLOYMENT_DIR"):
         environment["LTCOOK_DEPLOYMENT_DIR"] = str(deployment)
@@ -95,9 +120,14 @@ def resolve_launch(
             deployment / "node" / ("node.exe" if os.name == "nt" else "bin/node")
         )
     if not environment.get("PI_CODING_AGENT_DIR"):
-        environment["PI_CODING_AGENT_DIR"] = str(
-            deployment / "workspaces" / workspace_id / "pi"
-        )
+        if workspace_root is None:
+            pi_home = deployment / "pi"
+        else:
+            workspace_id = hashlib.sha256(
+                str(Path(workspace_root).expanduser().resolve()).encode()
+            ).hexdigest()[:24]
+            pi_home = deployment / "workspaces" / workspace_id / "pi"
+        environment["PI_CODING_AGENT_DIR"] = str(pi_home)
     if not environment.get("LTCOOK_COMPOSE_FILE"):
         environment["LTCOOK_COMPOSE_FILE"] = str(
             deployment / "app" / "services" / "compose.yaml"
@@ -106,7 +136,13 @@ def resolve_launch(
         environment["LTCOOK_SERVICE_CONFIG_DIR"] = str(deployment / "service-config")
     if not environment.get("PLAYWRIGHT_BROWSERS_PATH"):
         environment["PLAYWRIGHT_BROWSERS_PATH"] = str(deployment / "browser-home")
-    environment["LTCOOK_WORKSPACE"] = str(Path(workspace_root).resolve())
+    if workspace_root is not None:
+        environment["LTCOOK_WORKSPACE"] = str(
+            Path(workspace_root).expanduser().resolve()
+        )
+    else:
+        environment.pop("LTCOOK_WORKSPACE", None)
+        environment.pop("LTCOOK_SESSION", None)
     if not environment.get("LTCOOK_DATABASE"):
         environment["LTCOOK_DATABASE"] = str(deployment / "coordination.sqlite")
     if not environment.get("LTCOOK_BROWSER_HOME"):
@@ -126,7 +162,12 @@ def resolve_launch(
         value for value in environment.get("PATH", "").split(os.pathsep) if value
     )
     environment["PATH"] = os.pathsep.join(dict.fromkeys(path_components))
-    return LaunchConfig(environment, config, Path(workspace_root).resolve())
+    root = (
+        Path(workspace_root).expanduser().resolve()
+        if workspace_root is not None
+        else None
+    )
+    return LaunchConfig(environment, config, root)
 
 
 @launch_cli.command("environment")
@@ -135,6 +176,7 @@ def environment_command(
 ) -> None:
     """Emit a workspace-specific native component environment as JSON."""
     launch = resolve_launch(workspace, original_environment=os.environ)
+    assert launch.workspace_root is not None
     typer.echo(
         json.dumps(
             {
@@ -179,6 +221,9 @@ def _open_existing_runtime(
     :param shell_environment: Original shell values for target-workspace resolution.
     :return: Whether an existing runtime accepted the workspace session.
     """
+    workspace_root = launch.workspace_root
+    if workspace_root is None:
+        raise ValueError("Opening a session requires an explicit workspace.")
     environment = launch.environment
     token = environment.get("LTCOOK_API_TOKEN", "")
     if not token:
@@ -186,10 +231,14 @@ def _open_existing_runtime(
             "LTCOOK_API_TOKEN is missing; run the LTCook installer to initialize "
             "service credentials, or set LTCOOK_API_TOKEN through AppRC."
         )
+    # > Bound owner discovery, but leave session initialization
+    # > on its normal deadline.
+    if _existing_runtime_team(launch) is None:
+        return False
     endpoint = _runtime_api_url(environment["LTCOOK_API_LISTEN"])
     request_body = json.dumps(
         {
-            "workspaceRoot": str(launch.workspace_root),
+            "workspaceRoot": str(workspace_root),
             "sessionId": environment["LTCOOK_SESSION"],
             "teamSelection": environment["LTCOOK_TEAM"],
             "shellEnvironment": dict(shell_environment),
@@ -235,16 +284,83 @@ def _open_existing_runtime(
             ) from error
 
 
-@launch_cli.command("runtime")
-def runtime_command(workspace: Annotated[Path, typer.Option("--workspace")]) -> None:
-    """Open a new chat, or resume the explicitly selected Session, in one runtime.
+def _existing_runtime_team(launch: LaunchConfig) -> str | None:
+    """Read a running server's configured team without opening a session.
 
-    :param workspace: Workspace root selected by the CLI caller.
+    :param launch: Global configuration and managed server environment.
+    :return: Active team selection, or None if no ready server is listening.
+    """
+    environment = launch.environment
+    token = environment.get("LTCOOK_API_TOKEN", "")
+    if not token:
+        return None
+    request = urllib.request.Request(
+        f"{_runtime_api_url(environment['LTCOOK_API_LISTEN'])}/v1/status",
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(
+            request, timeout=RUNTIME_STATUS_PROBE_TIMEOUT_SECONDS
+        ) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        if error.code == 503:
+            return None
+        if error.code == 401:
+            raise typer.BadParameter(
+                "The configured runtime token was rejected by the running runtime."
+            ) from error
+        raise typer.BadParameter(
+            f"Running LTCook runtime returned HTTP {error.code} for status."
+        ) from error
+    except TimeoutError:
+        return None
+    except urllib.error.URLError as error:
+        reason = error.reason
+        if isinstance(reason, TimeoutError) or (
+            isinstance(reason, OSError)
+            and reason.errno in {errno.ECONNREFUSED, errno.ETIMEDOUT}
+        ):
+            return None
+        raise typer.BadParameter(
+            "Could not contact the local LTCook runtime API."
+        ) from error
+    team = payload.get("teamSelection") if isinstance(payload, dict) else None
+    if not isinstance(team, str):
+        raise typer.BadParameter("Running LTCook runtime returned invalid status data.")
+    return team
+
+
+def _reuse_matching_runtime(launch: LaunchConfig) -> bool:
+    """Reuse a ready global runtime only when its team matches this invocation."""
+    active_team = _existing_runtime_team(launch)
+    if active_team is None:
+        return False
+    if active_team != launch.environment["LTCOOK_TEAM"]:
+        raise typer.BadParameter(
+            "A runtime is already active with a different team selection."
+        )
+    typer.echo(f"Reusing LTCook runtime for team {active_team}.")
+    return True
+
+
+@launch_cli.command("runtime")
+def runtime_command(
+    workspace: Annotated[Path | None, typer.Option("--workspace")] = None,
+) -> None:
+    """Start the global runtime or explicitly open a project session.
+
+    :param workspace: Optional project directory to open when starting.
     :return: None.
     """
     shell = _shell_environment(os.environ)
     launch = resolve_launch(workspace, original_environment=shell)
-    if _open_existing_runtime(launch, shell):
+    if workspace is None:
+        if _reuse_matching_runtime(launch):
+            return
+    elif _open_existing_runtime(launch, shell):
+        assert launch.workspace_root is not None
         typer.echo(f"Opened workspace session for {launch.workspace_root}")
         return
     native = Path(launch.environment["LTCOOK_JS_ROOT"]) / "runtime" / "dist" / "main.js"
@@ -263,9 +379,13 @@ def runtime_command(workspace: Annotated[Path, typer.Option("--workspace")]) -> 
         env=env,
         check=False,
     )
-    if completed.returncode == 75 and _open_existing_runtime(launch, shell):
-        typer.echo(f"Opened workspace session for {launch.workspace_root}")
-        return
+    if completed.returncode == 75:
+        if workspace is not None and _open_existing_runtime(launch, shell):
+            assert launch.workspace_root is not None
+            typer.echo(f"Opened workspace session for {launch.workspace_root}")
+            return
+        if workspace is None and _reuse_matching_runtime(launch):
+            return
     raise typer.Exit(completed.returncode)
 
 
@@ -278,6 +398,7 @@ def service_action(action: str, workspace: Path) -> None:
     """
     shell = _shell_environment(os.environ)
     launch = resolve_launch(workspace, original_environment=shell)
+    assert launch.workspace_root is not None
     native = Path(launch.environment["LTCOOK_JS_ROOT"]) / "runtime" / "dist" / "main.js"
     node = launch.environment["LTCOOK_NODE_EXECUTABLE"]
     if not Path(node).is_file() or not native.is_file():

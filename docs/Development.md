@@ -63,9 +63,9 @@ The restored scaffold recipes remain available alongside LTCook's runtime module
 > Lock and upgrade recipes intentionally change dependency resolutions. These
 > commands are not part of an ordinary verification loop.
 
-Before using the default checkout workspace, register this repository once from
-its root: `uv run ltcook workspace add ltcook . --yes`. AppRC's workspace marker
-is required; the development helper does not create it automatically.
+Project registration is optional. `uv run ltcook workspace add ltcook . --yes`
+initializes AppRC project settings when wanted; an existing unregistered directory
+can also be launched without creating a marker.
 
 For source-runtime development, use `just runtime dev` or `just runtime watch`.
 Both recipes call `ltcook_dev.runtime`, which resolves AppRC for the selected
@@ -162,9 +162,10 @@ model prompt loop to quick checks.
 
 `src/ltcook_dev/packaging/package_assets.py` stages validated production outputs
 from the repository root into `src/ltcook_distr/bundle`. The staged bundle
-contains compiled runtime entry, Pi extension, Paseo panel plugin, both built
-team packages and their Markdown resources, Compose assets, package declarations,
-locks, and selected Node version. It excludes development `node_modules` and
+contains compiled runtime entry, shared-auth Pi SDK/RPC launcher, Pi extension,
+Paseo panel plugin, both built team packages and their Markdown resources,
+Compose assets, package declarations, locks, and selected Node version.
+It excludes development `node_modules` and
 test/development-only dependencies. `BuildPy` refuses to build a wheel unless
 the bundle is staged and validated; it copies that bundle into the wheel.
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from setuptools.command.build_py import build_py as BuildPyBase
 
 ROOT_DECLARATIONS = ("package.json", "package-lock.json", ".node-version")
+REQUIRED_RUNTIME_ENTRIES = ("dist/main.js", "dist/integrations/pi-rpc.js")
 REQUIRED_PASEO_PLUGIN_ASSETS = (
     "paseo-plugin.json",
     "index.server.ts",
@@ -60,10 +61,12 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
         raise FileNotFoundError(
             "runtime/package.json is required for the production workspace lock."
         )
-    if not (root / "runtime/dist/main.js").is_file():
-        raise FileNotFoundError(
-            "Compiled runtime/dist/main.js is required before staging."
-        )
+    for entry in REQUIRED_RUNTIME_ENTRIES:
+        path = root / "runtime" / entry
+        if path.is_symlink() or not path.is_file():
+            raise FileNotFoundError(
+                f"Compiled runtime entry is required before staging: {entry}"
+            )
     plugin_directory = root / "runtime/dist/paseo-plugin"
     if plugin_directory.is_symlink() or not plugin_directory.is_dir():
         raise FileNotFoundError(
@@ -97,6 +100,8 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
             shutil.copyfile(root / declaration, staging / declaration)
         shutil.copyfile(runtime_manifest, staging / "runtime/package.json")
         _copy_tree(root / "runtime/dist", staging / "runtime/dist", required=True)
+        launcher = staging / "runtime/dist/integrations/pi-rpc.js"
+        launcher.chmod(launcher.stat().st_mode | 0o111)
         for team in ("default", "default-minimal"):
             source = root / "teams" / team
             target = staging / "teams" / team
@@ -146,7 +151,11 @@ class BuildPy(BuildPyBase):
             )
         required = [source / name for name in ROOT_DECLARATIONS]
         required.extend(
-            (source / "runtime/dist/main.js", source / "services/compose.yaml")
+            (
+                source / "runtime/dist/main.js",
+                source / "runtime/dist/integrations/pi-rpc.js",
+                source / "services/compose.yaml",
+            )
         )
         for team in ("default", "default-minimal"):
             required.extend(

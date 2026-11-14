@@ -33,7 +33,7 @@
 | [src/ltcook/config/app.py](../src/ltcook/config/app.py) | The single AppRC application declaration. |
 | [src/ltcook/config/sections](../src/ltcook/config/sections) | Registered settings declarations grouped by owning component and environment prefix. |
 | [src/ltcook/config/pi_config.py](../src/ltcook/config/pi_config.py) | Writes only the private Pi `web-search.json` native configuration. |
-| [src/ltcook/launch.py](../src/ltcook/launch.py) | Workspace-bound settings resolution and native process launch commands. |
+| [src/ltcook/launch.py](../src/ltcook/launch.py) | Global server settings, optional project overrides, and native process launch commands. |
 | [runtime/src/api/team.ts](../runtime/src/api/team.ts) | Version 1 public team and runtime API. |
 | [runtime/src/services/controller.ts](../runtime/src/services/controller.ts) | Internal local Compose controller used by the service commands. |
 | [teams](../teams) | Bundled team packages and Markdown resources. |
@@ -58,25 +58,32 @@ commands provide launch operations and diagnostics:
 | `ltcook config paths --json` | Show declared AppRC paths. |
 | `ltcook config doctor --json` | Diagnose configuration without writing. |
 | `ltcook config edit` | Open the AppRC terminal configuration editor. |
-| `ltcook workspace add NAME ROOT --yes` | Register a repository with AppRC and create its workspace marker before workspace-targeted commands. |
-| `ltcook launch runtime --workspace ROOT` | Resolve settings for `ROOT`, then open its session in the local runtime or start the runtime when none is available. |
+| `ltcook workspace add NAME ROOT --yes` | Optionally register a project and initialize its AppRC settings marker. |
+| `ltcook launch runtime [--workspace ROOT]` | Start the idle server/UI, or explicitly open a project Session when `ROOT` is supplied. |
+| `ltcook auth login PROVIDER [--api-key \| --no-browser]` | Delegate interactive authentication to the installed Pi CLI and shared user credential home. |
+| `ltcook auth logout PROVIDER` | Remove that provider's credential through Pi; affects other Pi instances using the same home. |
+| `ltcook auth check [--provider PROVIDER] [--model MODEL] [--json] [--no-refresh]` | Report native Pi credential readiness without printing credentials; exit statuses are 0 ready, 1 not ready, and 2 invalid. |
 | `ltcook launch write-native-config --workspace ROOT` | Write the private Pi `web-search.json` under `PI_CODING_AGENT_DIR`; the Paseo config is not written by this command. |
 | `ltcook services start [--workspace ROOT]` | Start the LTCook Compose project in local mode. |
 | `ltcook services stop [--workspace ROOT]` | Stop the SearXNG and Crawl4AI containers in local mode. |
 | `ltcook services status [--workspace ROOT]` | Show local Compose status or the configured remote-service mode. |
 | `ltcook services logs [--workspace ROOT]` | Show recent local service logs. |
 | `ltcook launcher` | Open the optional AppRC management launcher. |
-| `python -m ltcook.launch runtime --workspace ROOT` | Internal module entry point for the same runtime launch. |
+| `python -m ltcook.launch runtime [--workspace ROOT]` | Internal module entry point for the same global or project launch. |
 | `python -m ltcook.launch environment --workspace ROOT` | Emit raw workspace-specific child environment JSON; may contain secrets. |
 | `python -m ltcook.launch write-native-config --workspace ROOT` | Internal entry point for the private Pi-only `web-search.json` writer. |
 
-Every target passed with `--workspace` must already be registered with AppRC.
-Commands do not create workspace markers automatically. Register each repository
-once with `ltcook workspace add NAME ROOT --yes` before its first use.
+`--workspace` accepts an existing project directory without registration or an
+AppRC marker. An existing marker enables normal project settings and secret
+layers. Otherwise, launch uses global user settings and does not create project
+configuration files or registry entries. Global startup and auth commands ignore
+the registry's selected-workspace fallback.
 
 The launch command requires a prepared deployment and an AppRC runtime token.
-It opens a workspace in the current runtime when available, otherwise starts
-the runtime; startup automatically starts the Compose project in `local` mode.
+Without a project it starts or reuses the idle host without creating agents.
+An explicit project opens a Session through the current runtime when available,
+otherwise starts the runtime and opens that project. Startup automatically starts
+the Compose project in `local` mode.
 The service commands also use the internal
 [`ServiceController`](../runtime/src/services/controller.ts). In `direct` and
 `paseo-tunnel` modes, operate remote services on their host; local commands do
@@ -132,8 +139,9 @@ a second authored lifecycle implementation. The `BuildPy` hook in
 [`package_assets.py`](../src/ltcook_dev/packaging/package_assets.py) copies only
 a validated, explicitly staged production bundle into the built wheel.
 
-The staged `src/ltcook_distr/bundle` contains the compiled runtime, Pi extension,
-Paseo panel plugin, built team packages and Markdown resources, Compose assets,
+The staged `src/ltcook_distr/bundle` contains the compiled runtime, shared-auth
+Pi SDK/RPC launcher, Pi extension, Paseo panel plugin, built team packages and
+Markdown resources, Compose assets,
 root production manifests/lock, and selected Node version. It excludes development
 `node_modules`, tests, and Python development tools. The bundle is required wheel
 content, not a disposable build output. `src/ltcook_distr/artifacts/_support` is
@@ -166,10 +174,10 @@ and `playwright` sections; their declarations are in
 | Name | Meaning |
 | --- | --- |
 | `LTCOOK_TEAM` | `AppSettings.team`; defaults to `default-minimal`. |
-| `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a chat; unset launches create a fresh Session. |
+| `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |
 | `LTCOOK_TEAM_INSTANCE_ID` | Runtime-derived identifier for the persistent TeamInstance shared by Sessions on the same selected team and canonical workspace. |
 | `LTCOOK_JS_ROOT` | JavaScript runtime root; source development uses the checkout root, and installed launches use `<deployment>/app`. |
-| `LTCOOK_WORKSPACE` | Workspace selection supplied by the launch environment. |
+| `LTCOOK_WORKSPACE` | Project path supplied for an explicit project launch; absent for idle server startup. |
 | `LTCOOK_DEPLOYMENT_DIR` | LTCook-owned deployment location, normally beneath AppRC appdata. |
 | `LTCOOK_MODEL_SMART` | Provider model selected by the `smart` team alias. |
 | `LTCOOK_MODEL_SMOL` | Provider model selected by the `smol` alias; falls back to smart when empty. |
@@ -180,6 +188,7 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_PASEO_LISTEN` | Paseo listener address; defaults to `127.0.0.1:6767`. The runtime prints the actual listener at startup. |
 | `PASEO_HOME` | Mutable Paseo data home; defaults to `<LTCOOK_DEPLOYMENT_DIR>/paseo` and must stay inside deployment but outside `<LTCOOK_DEPLOYMENT_DIR>/app`. |
 | `PI_CODING_AGENT_DIR` | Workspace-specific Pi home; defaults to `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` and must remain within the deployment. |
+| `LTCOOK_PI_AUTH_DIR` | Global `runtime.pi_auth_dir`; defaults to native Pi's `~/.pi/agent`. All project SDK runtimes share its `auth.json`; project overrides do not change this auth location. |
 | `LTCOOK_SEARXNG_URL` | SearXNG endpoint; its declared default is `http://127.0.0.1:8888`. |
 | `LTCOOK_CRAWL4AI_URL` | Crawl4AI endpoint; defaults to `http://127.0.0.1:11235`. |
 | `CRAWL4AI_API_TOKEN`, `SEARXNG_SECRET` | Credentials passed to the Compose services and marked secret. |
@@ -191,8 +200,10 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_CONTEXT7_ENABLED` | Enable optional hosted Context7 MCP integration; defaults to false. |
 
 The runtime's ready line prints `Paseo <listen>`. Open `http://<listen>/` in a
-browser to use Paseo's bundled web UI; it is enabled by the runtime and needs no
-separate server, assets, or dependency.
+browser to use Paseo's bundled web UI; no separate server, assets, or dependency
+are needed. Select a directory and use **Start session** in the LTCook panel to
+activate its team. Merely starting the UI or selecting a directory does not
+create agents.
 
 AppRC setting paths for these secrets are `runtime.api_token`,
 `web.crawl4ai.api_token`, and `web.searxng.secret`; the typed bundle fields are
@@ -212,17 +223,21 @@ not encryption of the AppRC-managed files.
 | --- | --- |
 | [`src/ltcook/config/apprc.defaults.env`](../src/ltcook/config/apprc.defaults.env) | Packaged AppRC defaults. |
 | AppRC user env and secret files | Saved user settings and credentials beneath declared AppRC paths. |
-| Registered workspace settings and secrets | Per-workspace overrides resolved for the launched repository. |
+| Initialized AppRC workspace settings and secrets | Optional project overrides; named registration is not required for a project path. |
 | Arbitrary workspace `.env` files | Not owned or loaded by LTCook automatically. |
 | `<appdata>/deployment` | Private Node, production application, service receipts, and coordination database. |
 | `<LTCOOK_DEPLOYMENT_DIR>/paseo/config.json` | Paseo configuration written by the Node host; the home also holds mutable Paseo data. |
 | `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` | Workspace-specific Pi home; `write-native-config` writes its private `web-search.json`. |
 | `<PI_CODING_AGENT_DIR>/settings.json.ltcook-extensions.json` | Versioned exact ownership of LTCook-managed extension paths; independent extensions remain in `settings.json`. |
+| `<LTCOOK_PI_AUTH_DIR>/auth.json` | Shared Pi-managed API keys/OAuth credentials; native login/logout and all LTCook project SDK runtimes use this file without copying it. |
 
-`resolve_launch()` uses AppRC `current_env_mapping()` for each section, scoped
-to its target workspace and original shell provenance. Shell exports retain their
-normal precedence; one workspace's merged environment is not used as the next
-workspace's shell input. See the [configuration explanation](Explanations.md#configuration-files).
+`resolve_launch()` uses AppRC `current_env_mapping()` for each section and
+preserves original shell provenance. Global startup explicitly excludes workspace
+selection; project settings are optional. The auth directory is always resolved
+from global settings. Shell exports retain normal precedence; one project's
+merged environment is not used as the next project's shell input. See the
+[configuration explanation](Explanations.md#configuration-files) and
+[Pi authentication guide](How-To-User-Guides.md#authenticate-with-pi).
 
 ## Team API
 
@@ -307,7 +322,7 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just runtime check` | Type-check the runtime workspace. |
 | `just runtime test` | Run runtime unit/native/integration and team contract tests. |
 | `just runtime test-integration` | Run runtime integration tests. |
-| `just runtime build` | Compile the runtime, Pi extension, and Paseo plugin. |
+| `just runtime build` | Compile the runtime, Pi SDK/RPC launcher, Pi extension, and Paseo plugin. |
 | `just check` | Enforce Prettier/Ruff formatting, TypeScript types, Python lint, and Pyright. |
 | `just test` | Run Bun unit/native/integration and team contract tests, plus Python tests excluding `integration` and `system`. |
 | `just test-integration` | Run marked Python and TypeScript integration tests. |

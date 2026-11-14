@@ -3,11 +3,12 @@
 [Documentation](README.md) · [Explanations](Explanations.md) · [How-to user guides](How-To-User-Guides.md) · [References](References.md) · [Development](Development.md)
 
 - [Choose a bundled team and workspace](#choose-a-bundled-team-and-workspace)
+- [Authenticate with Pi](#authenticate-with-pi)
 - [Resume a named session](#resume-a-named-session)
 - [Resolve settings in Python](#resolve-settings-in-python)
 - [Inspect launch environment carefully](#inspect-launch-environment-carefully)
 
-Examples describe declared interfaces; they have not been run as part of this documentation pass. Runtime startup additionally requires an installed deployment and configured provider.
+Examples describe declared interfaces; they have not been run as part of this documentation pass. Idle server startup needs an installed deployment; starting project agents additionally needs model selections and provider authentication.
 
 <br>
 
@@ -16,11 +17,14 @@ Examples describe declared interfaces; they have not been run as part of this do
 From an installed environment, select a team for this process and launch it in
 a workspace directory:
 
-Before the first workspace-targeted command, register the repository with AppRC:
+To open the UI before choosing a project:
 
 ```shell
-ltcook workspace add project-name /path/to/project --yes
+ltcook launch runtime
 ```
+
+Select a project directory in Paseo and use **Start session** in the LTCook panel,
+or open the existing directory explicitly from the terminal:
 
 ```shell
 LTCOOK_TEAM=default-minimal ltcook launch runtime --workspace /path/to/project
@@ -46,19 +50,38 @@ for session identity and workspace constraints.
 
 <br>
 
+# Authenticate with Pi
+
+Use the installed native Pi login without configuring OAuth in AppRC:
+
+```shell
+ltcook auth login openai
+ltcook auth check --provider openai --json --no-refresh
+```
+
+For an API key rather than account sign-in, use
+`ltcook auth login openai --api-key`. For headless account sign-in, use
+`--no-browser`. Credentials are shared through `runtime.pi_auth_dir`, normally
+`~/.pi/agent`; project Pi settings and histories remain isolated.
+See [Pi authentication](How-To-User-Guides.md#authenticate-with-pi).
+
+<br>
+
+
 # Resume a named session
 
 A session is bound to its selected team and workspace. Set `LTCOOK_SESSION` to
 choose an explicit identifier:
 
-The workspace must already have the AppRC registration shown in the preceding example.
+The existing project directory does not need AppRC registration or a marker.
 
 ```shell
 LTCOOK_SESSION=project-work ltcook launch runtime --workspace /path/to/project
 ```
 
-When `LTCOOK_SESSION` is unset, each launch creates a fresh chat Session. To
-resume, explicitly reuse the same `LTCOOK_SESSION`, workspace, and selected
+When `LTCOOK_SESSION` is unset, opening a project creates a fresh chat Session;
+idle server startup creates none. To resume, explicitly reuse the same
+`LTCOOK_SESSION`, workspace, and selected
 team. A Session cannot silently switch its workspace or team. Multiple Sessions
 in one workspace share its logical TeamInstance, but retain separate native
 conversations and agent bindings.
@@ -84,10 +107,11 @@ print(config.app.team)
 ```
 
 The value defaults to `default-minimal`; `LTCOOK_TEAM` can override the saved
-user setting for this invocation. For actual runtime startup, prefer
-`ltcook launch runtime --workspace ROOT`: it resolves the target workspace and
-preserves original shell-variable provenance before passing the environment to
-native processes. See [workspace configuration](Explanations.md#configuration-files).
+user setting for this invocation. For server startup, use
+`ltcook launch runtime`; supply `--workspace ROOT` to explicitly open a project.
+The launch helper preserves original shell-variable provenance and reads
+initialized project settings only when present. See
+[workspace configuration](Explanations.md#configuration-files).
 
 <br>
 

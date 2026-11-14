@@ -13,6 +13,7 @@ import apprc as rc
 import typer
 
 import ltcook
+from ltcook.auth import auth_cli
 from ltcook.config.app import APP_RC
 from ltcook.config.bundle import LtcookConfig
 from ltcook.launch import launch_cli, services_cli
@@ -29,6 +30,7 @@ app = typer.Typer(
     pretty_exceptions_show_locals=False,
 )
 app.add_typer(launch_cli, name="launch", help="Launch native runtime components.")
+app.add_typer(auth_cli, name="auth", help="Manage Pi provider authentication.")
 app.add_typer(
     services_cli,
     name="services",
@@ -141,6 +143,22 @@ rc.cli.mount_app_cli(
     runtime_policy=rc.cli.CliRuntimePolicy(
         runtime_independent_commands={
             "launcher": rc.cli.RuntimeIndependentCommand(skip_empty=True),
+            "auth": rc.cli.RuntimeIndependentCommand(
+                action_prefixes={("login",), ("logout",), ("check",)},
+                skip_empty=True,
+            ),
+            "launch": rc.cli.RuntimeIndependentCommand(
+                action_prefixes={
+                    ("runtime",),
+                    ("environment",),
+                    ("write-native-config",),
+                },
+                skip_empty=True,
+            ),
+            "services": rc.cli.RuntimeIndependentCommand(
+                action_prefixes={("start",), ("stop",), ("status",), ("logs",)},
+                skip_empty=True,
+            ),
             "version": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "diagnose": rc.cli.RuntimeIndependentCommand(skip_empty=True),
         },

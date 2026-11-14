@@ -1,27 +1,39 @@
 import { z } from 'zod';
 import type { PluginAgentSnapshot } from '@getpaseo/plugin';
-import type { SessionSnapshot } from '../../api/team.js';
 
-export interface PanelSnapshotSource {
-  session: Pick<SessionSnapshot['session'], 'teamId'>;
-  members: Array<{
-    member: Pick<SessionSnapshot['members'][number]['member'], 'key' | 'name'>;
-    binding: Pick<
-      NonNullable<SessionSnapshot['members'][number]['binding']>,
-      'nativeAgentId'
-    > | null;
-    nativeStatus: string | null;
-  }>;
-  passes: Array<Pick<SessionSnapshot['passes'][number], 'id' | 'title' | 'status'>>;
-  tasks: Array<Pick<SessionSnapshot['tasks'][number], 'id' | 'passId' | 'title' | 'status'>>;
-  steps: Array<
-    Pick<SessionSnapshot['steps'][number], 'id' | 'taskId' | 'title' | 'position' | 'status'>
-  >;
-  assignments: Array<
-    Pick<SessionSnapshot['assignments'][number], 'id' | 'taskId' | 'memberKey' | 'status'>
-  >;
-  blockers: SessionSnapshot['blockers'];
-}
+const work = z.object({ id: z.string(), title: z.string(), status: z.string() });
+export const PanelSnapshotSourceSchema = z.object({
+  session: z.object({ teamId: z.string() }),
+  members: z.array(
+    z.object({
+      member: z.object({ key: z.string(), name: z.string() }),
+      binding: z.object({ nativeAgentId: z.string().nullable() }).nullable(),
+      nativeStatus: z.string().nullable(),
+    }),
+  ),
+  passes: z.array(work),
+  tasks: z.array(work.extend({ passId: z.string().optional() })),
+  steps: z.array(work.extend({ taskId: z.string(), position: z.number() })),
+  assignments: z.array(
+    z.object({
+      id: z.string(),
+      taskId: z.string(),
+      memberKey: z.string(),
+      status: z.string(),
+    }),
+  ),
+  blockers: z.array(z.string()),
+});
+export type PanelSnapshotSource = z.infer<typeof PanelSnapshotSourceSchema>;
+
+export const TeamSnapshotRequestSchema = z.object({ workspaceRoot: z.string().min(1) });
+export const SessionOpenRequestSchema = z.object({ workspaceRoot: z.string().min(1) });
+export const SessionOpenResponseSchema = z.object({
+  sessionId: z.string().min(1),
+  workspaceRoot: z.string().min(1),
+});
+
+export type SessionOpenRequest = z.infer<typeof SessionOpenRequestSchema>;
 
 const nativeStatuses = [
   'initializing',
@@ -79,6 +91,7 @@ export const TeamStatusSnapshotSchema = z.object({
   issues: z.array(z.string()),
 });
 export type TeamStatusSnapshot = z.infer<typeof TeamStatusSnapshotSchema>;
+export const TeamSnapshotResponseSchema = TeamStatusSnapshotSchema.nullable();
 
 function isNativeStatus(status: string | null): status is PluginAgentSnapshot['status'] {
   return status !== null && nativeStatuses.some((candidate) => candidate === status);

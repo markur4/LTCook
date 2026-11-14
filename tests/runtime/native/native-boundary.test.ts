@@ -18,7 +18,11 @@ import {
 } from '../../../runtime/src/integrations/native-policy.js';
 import { panelSnapshot } from '../../../runtime/src/paseo-plugin/shared/panel-snapshot.js';
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
-import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import {
+  agentBearer,
+  captureShellEnvironment,
+  RuntimeApi,
+} from '../../../runtime/src/integrations/runtime-api.js';
 import { startPaseoHost } from '../../../runtime/src/integrations/paseo.js';
 import { configurePiExtensions } from '../../../runtime/src/integrations/pi-settings.js';
 
@@ -497,7 +501,59 @@ describe('native runtime boundary', () => {
     }
   });
 
-  test('opens multiple same-team Sessions per workspace with single-flight and authority boundaries', async () => {
+  test('rejects malformed original-shell provenance without exposing its contents', () => {
+    expect(() => captureShellEnvironment({ LTCOOK_SHELL_PROVENANCE: '{' })).toThrow(
+      'LTCOOK_SHELL_PROVENANCE is not an environment mapping',
+    );
+    expect(
+      captureShellEnvironment({
+        LTCOOK_SHELL_PROVENANCE: JSON.stringify({
+          A: 'original',
+          LTCOOK_SHELL_PROVENANCE: 'nested',
+        }),
+        A: 'merged',
+      }),
+    ).toEqual({ A: 'original' });
+  });
+  test('requires user authentication and readiness for runtime status', async () => {
+    const master = 'test-master-secret';
+    const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`);
+    const endpoint = await api.listen();
+    try {
+      expect(
+        (
+          await fetch(`${endpoint}/v1/status`, {
+            headers: { authorization: `Bearer ${master}` },
+          })
+        ).status,
+      ).toBe(503);
+      expect(
+        (
+          await fetch(`${endpoint}/v1/status`, {
+            headers: { authorization: 'Bearer wrong-token' },
+          })
+        ).status,
+      ).toBe(401);
+      expect(
+        (
+          await fetch(`${endpoint}/v1/status`, {
+            headers: { authorization: `Bearer ${agentBearer(master, 'native-agent')}` },
+          })
+        ).status,
+      ).toBe(401);
+      api.setOpenWorkspaceHandler('default-minimal', async () => {
+        throw new Error('status does not open a session');
+      });
+      const ready = await fetch(`${endpoint}/v1/status`, {
+        headers: { authorization: `Bearer ${master}` },
+      });
+      expect(ready.status).toBe(200);
+      expect(await ready.json()).toEqual({ teamSelection: 'default-minimal' });
+    } finally {
+      await api.close();
+    }
+  });
+  test('opens same-team Sessions across projects with single-flight and authority boundaries', async () => {
     const master = 'test-master-secret';
     const shellEnvironment = {
       LTCOOK_API_TOKEN: 'original-shell-token',
@@ -518,7 +574,14 @@ describe('native runtime boundary', () => {
       },
       execute: async () => undefined,
     } as unknown as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
+    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`, {
+      LTCOOK_SHELL_PROVENANCE: JSON.stringify({
+        LTCOOK_API_TOKEN: 'original-shell-token',
+        LTCOOK_TEAM: 'default-minimal',
+        ORIGINAL_ONLY: 'startup',
+      }),
+      LTCOOK_TEAM: 'merged-project-team',
+    });
     api.setOpenWorkspaceHandler(
       'default-minimal',
       async (request) => {
@@ -545,16 +608,29 @@ describe('native runtime boundary', () => {
       workspaceRoot: '/new-workspace',
       sessionId: 'workspace-session',
       teamSelection: 'default-minimal',
-      shellEnvironment,
     };
-    const second = { ...first, sessionId: 'workspace-session-2' };
+    const second = {
+      ...first,
+      workspaceRoot: '/second-workspace',
+      sessionId: 'workspace-session-2',
+      shellEnvironment: { ...shellEnvironment, ORIGINAL_ONLY: 'cli-session' },
+    };
     try {
       const firstResponses = await Promise.all([post(master, first), post(master, first)]);
       expect(firstResponses.map((response) => response.status)).toEqual([200, 200]);
+      expect(await Promise.all(firstResponses.map((response) => response.json()))).toEqual([
+        { sessionId: first.sessionId, workspaceRoot: first.workspaceRoot },
+        { sessionId: first.sessionId, workspaceRoot: first.workspaceRoot },
+      ]);
       expect(opened).toHaveLength(1);
-      expect(opened[0]?.shellEnvironment).toEqual(shellEnvironment);
+      expect(opened[0]?.shellEnvironment).toEqual({
+        LTCOOK_API_TOKEN: 'original-shell-token',
+        LTCOOK_TEAM: 'default-minimal',
+        ORIGINAL_ONLY: 'startup',
+      });
       expect((await post(master, second)).status).toBe(200);
       expect(opened).toHaveLength(2);
+      expect(opened[1]?.shellEnvironment).toEqual(second.shellEnvironment);
       expect(snapshots.get(first.sessionId)?.session.teamInstanceId).toBe(
         snapshots.get(second.sessionId)?.session.teamInstanceId,
       );
@@ -564,10 +640,23 @@ describe('native runtime boundary', () => {
       expect((await post(master, { ...first, workspaceRoot: '/other-workspace' })).status).toBe(
         409,
       );
+      const noSessionResponse = await fetch(`${endpoint}/v1/snapshot`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${master}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceRoot: '/not-open' }),
+      });
+      expect(noSessionResponse.status).toBe(404);
+      expect(await noSessionResponse.json()).toEqual({
+        error: 'No session found for workspace',
+        code: 'SESSION_NOT_FOUND',
+      });
       const snapshotResponse = await fetch(`${endpoint}/v1/snapshot`, {
         method: 'POST',
         headers: { authorization: `Bearer ${master}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceRoot: first.workspaceRoot, sessionId: second.sessionId }),
+        body: JSON.stringify({
+          workspaceRoot: second.workspaceRoot,
+          sessionId: second.sessionId,
+        }),
       });
       expect(snapshotResponse.status).toBe(200);
       expect(((await snapshotResponse.json()) as SessionSnapshot).session.id).toBe(

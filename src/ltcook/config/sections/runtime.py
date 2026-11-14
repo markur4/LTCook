@@ -15,6 +15,7 @@ class RuntimeSettings(rc.Config):
     paseo_listen: str = rc.field("LTCOOK_PASEO_LISTEN", default="127.0.0.1:6767")
     paseo_password: str = rc.field("LTCOOK_PASEO_PASSWORD", default="", secret=True)
     js_root: str = rc.field("LTCOOK_JS_ROOT", default="")
+    pi_auth_dir: str = rc.field("LTCOOK_PI_AUTH_DIR", default="~/.pi/agent")
     smart_model: str = rc.field("LTCOOK_MODEL_SMART", default="")
     smol_model: str = rc.field("LTCOOK_MODEL_SMOL", default="")
     plan_model: str = rc.field("LTCOOK_MODEL_PLAN", default="")

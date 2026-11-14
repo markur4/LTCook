@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": { "ltcook-pi": "dist/integrations/pi-rpc.js" },
   "exports": {
     "./api": { "types": "./src/api/team.ts", "bun": "./src/api/team.ts", "default": "./dist/api/team.js" }
   },
@@ -13,7 +14,7 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "\"$npm_execpath\" test ../tests/runtime/unit ../tests/runtime/native ../tests/runtime/integration",
     "test:integration": "\"$npm_execpath\" test ../tests/runtime/integration",
-    "build": "\"$npm_execpath\" build src/api/team.ts --target=node --format=esm --outfile=dist/api/team.js && \"$npm_execpath\" build src/main.ts --target=node --format=esm --packages=external --outfile=dist/main.js && \"$npm_execpath\" build src/integrations/pi-extension.ts --target=node --format=esm --packages=external --outfile=dist/integrations/pi-extension.js && rm -rf dist/paseo-plugin && mkdir -p dist/paseo-plugin && cp -R src/paseo-plugin/. dist/paseo-plugin/"
+    "build": "\"$npm_execpath\" build src/api/team.ts --target=node --format=esm --outfile=dist/api/team.js && \"$npm_execpath\" build src/main.ts --target=node --format=esm --packages=external --outfile=dist/main.js && \"$npm_execpath\" build src/integrations/pi-extension.ts --target=node --format=esm --packages=external --outfile=dist/integrations/pi-extension.js && \"$npm_execpath\" build src/integrations/pi-rpc.ts --target=node --format=esm --packages=external --outfile=dist/integrations/pi-rpc.js && chmod +x dist/integrations/pi-rpc.js && rm -rf dist/paseo-plugin && mkdir -p dist/paseo-plugin && cp -R src/paseo-plugin/. dist/paseo-plugin/"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.5.2",

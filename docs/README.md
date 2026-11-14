@@ -13,12 +13,14 @@
 
 ## Start here
 
-LTCook launches Pi agents through Paseo and selects a team package per session.
-Install from a checkout using the [installation guide](How-To-User-Guides.md#install-from-a-checkout),
-then configure a model and provider credential through the existing AppRC CLI.
+LTCook connects Pi agents and interchangeable teams to Paseo. Install from a
+checkout using the [installation guide](How-To-User-Guides.md#install-from-a-checkout),
+then run `ltcook launch runtime` to open the idle server/UI. Before starting
+agents, choose models in AppRC and [authenticate through Pi](How-To-User-Guides.md#authenticate-with-pi).
 The application defaults to the two-member `default-minimal` team. The
 [team-selection guide](How-To-User-Guides.md#select-a-team-and-resume-a-session)
-shows how to choose a bundled or installed team module and a workspace.
+shows how to choose a team and open an existing project directory; registration
+and workspace markers are optional.
 
 The [Explanations](Explanations.md) page describes how AppRC, native Pi/Paseo,
 the runtime, and interchangeable teams connect. Use
@@ -49,9 +51,10 @@ Use these names consistently:
 | AppRC | `ltcook.config.app.APP_RC` | One settings, workspace, secret-file, and path declaration. |
 | `AppSettings` | `ltcook.config.sections.app.AppSettings` | Selects team, session, workspace, and deployment. |
 | `LtcookConfig` | `ltcook.config.bundle.LtcookConfig` | Groups LTCook's registered AppRC settings sections. |
-| Workspace launcher | `ltcook.launch.resolve_launch()` | Resolves AppRC settings from original shell inputs for one workspace. |
-| `ltcook` CLI | `ltcook.cli.app.app` | Exposes AppRC commands and `launch` operations. |
-| Runtime | `runtime/src/main.ts` | Starts Paseo/Pi, selects a team, and owns coordination. |
+| Launch helper | `ltcook.launch.resolve_launch()` | Resolves global settings or optional project overrides from original shell inputs. |
+| `ltcook` CLI | `ltcook.cli.app.app` | Exposes AppRC commands, runtime launch, and native Pi authentication. |
+| Runtime | `runtime/src/main.ts` | Starts the idle Paseo host and opens project Sessions on explicit user request. |
+| Pi authentication | `ltcook auth` and native Pi's SDK | Shares Pi-managed credentials while keeping project settings and histories separate. |
 | Team package | `TeamPackage` in `runtime/src/api/team.ts` | Provides versioned team definition and activation hooks. |
 | Deployment bundle | `src/ltcook_distr/bundle` | Staged runtime, team, resource, service, and lock assets for installation. |
 | Lifecycle payload | `src/ltcook_distr/payload/app_lifecycle` | Prepares and maintains LTCook-owned installation resources. |

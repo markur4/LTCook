@@ -16,6 +16,9 @@
     "runtime": {
       "name": "@ltcook/runtime",
       "version": "0.1.0",
+      "bin": {
+        "ltcook-pi": "dist/integrations/pi-rpc.js",
+      },
       "dependencies": {
         "@earendil-works/pi-coding-agent": "1.5.2",
         "@getpaseo/client": "0.15.4",

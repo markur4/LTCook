@@ -134,8 +134,9 @@ Third-party packages retain their own licences.
    2. [Install from a checkout](#install-from-a-checkout)
    3. [Uninstall](#uninstall)
 3. [Usage](#usage)
-   1. [Choose a team](#choose-a-team)
-   2. [Develop with Bun](#develop-with-bun)
+   1. [Authenticate with Pi](#authenticate-with-pi)
+   2. [Choose a team](#choose-a-team)
+   3. [Develop with Bun](#develop-with-bun)
 4. [Documentation](#documentation)
 
 
@@ -223,16 +224,14 @@ On Linux and macOS, run:
 
 ```shell
 ./app-install.sh --layout native
-ltcook workspace add project-name . --yes
-ltcook launch runtime --workspace .
+ltcook launch runtime
 ```
 
 On Windows, run:
 
 ```powershell
 .\app-install.cmd --layout native
-ltcook workspace add project-name . --yes
-ltcook launch runtime --workspace .
+ltcook launch runtime
 ```
 
 The checkout install is editable and uses the actual project files, including
@@ -279,11 +278,15 @@ ltcook version
 ltcook diagnose --json
 ltcook installation show
 ltcook config show --json
-ltcook launch runtime --workspace .
+ltcook launch runtime
 ```
 
-Register each repository once with `ltcook workspace add NAME ROOT --yes` before
-launching it. AppRC does not create the workspace marker automatically.
+This starts Paseo's UI without opening a project or creating agents. Select a
+project directory in Paseo and use **Start session** in the LTCook panel, or run
+`ltcook launch runtime --workspace ROOT` to open it from the terminal.
+Registration and AppRC workspace markers are optional; existing project settings
+are used when present. Model selections are needed when starting agents, not
+merely opening the UI.
 
 Application resources use the paths declared by `APP_RC`. Config, appdata,
 cache, and state are independent capabilities; disabled paths stay absent and
@@ -296,6 +299,29 @@ separate from application data. See the
 
 <br>
 
+## Authenticate with Pi
+
+Use Pi's native provider login through LTCook:
+
+```shell
+ltcook auth login openai
+ltcook auth check --provider openai --json --no-refresh
+```
+
+For OpenAI, account sign-in and an API key are different authentication methods.
+Use `ltcook auth login openai --api-key` for an API key instead. Pi stores
+credentials in the shared user home, normally `~/.pi/agent/auth.json`; project
+settings and conversations remain separate. Existing credentials in that home
+are reused without copying them into projects. See the
+[authentication guide](docs/How-To-User-Guides.md#authenticate-with-pi) for
+logout, headless login, and a custom `runtime.pi_auth_dir`.
+
+LTCook still selects team models through `runtime.smart_model`,
+`runtime.smol_model`, and `runtime.plan_model` in `ltcook config edit`.
+
+<br>
+
+
 ## Choose a team
 
 Set `LTCOOK_TEAM` through AppRC's configuration editor or a deliberate shell
@@ -307,10 +333,11 @@ of absent specialists and does not claim an independent review.
 LTCOOK_TEAM=default-minimal ltcook launch runtime --workspace .
 ```
 
-Each launch without `LTCOOK_SESSION` starts a fresh chat Session. To resume a
-chat, explicitly set `LTCOOK_SESSION` to its existing identifier with the same
-workspace and team. Multiple Sessions in one workspace share a logical persistent
-TeamInstance but keep separate native conversations and agent bindings. See
+Opening a project without `LTCOOK_SESSION` starts a fresh chat Session. Starting
+the server without a project creates no Session. To resume a chat, explicitly set
+`LTCOOK_SESSION` to its existing identifier with the same workspace and team.
+Multiple Sessions in one workspace share a logical persistent TeamInstance but
+keep separate native conversations and agent bindings. See
 [domain terminology](docs/Explanations.md#domain-terminology).
 
 The selected team stays fixed for a running session. Coordination uses the

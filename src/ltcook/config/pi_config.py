@@ -13,21 +13,41 @@ from ltcook.config.app import APP_RC
 from ltcook.config.bundle import LtcookConfig
 
 
+def resolve_global_config(*, environment: Mapping[str, str] | None = None):
+    """Read user settings without consulting workspace selectors or registry.
+
+    :param environment: Original shell environment for global settings.
+    :return: AppRC's immutable snapshot of user-level configuration.
+    """
+    return (
+        APP_RC.manage(
+            environment=dict(os.environ if environment is None else environment)
+        )
+        .inspect(include_workspace=False)
+        .resolved
+    )
+
+
 def resolve_config(
     workspace_root: str | Path | None = None,
     *,
     environment: Mapping[str, str] | None = None,
 ):
-    """Resolve the target workspace without mutating process environment.
+    """Resolve an existing directory, retaining initialized AppRC project layers.
 
-    :param workspace_root: Workspace directory selected for this invocation.
+    :param workspace_root: Explicit project directory, or None for global settings.
     :param environment: Original shell environment, never AppRC's prior output.
-    :return: An immutable AppRC snapshot.
+    :return: An immutable AppRC snapshot, without creating project files.
     """
-    return APP_RC.resolve(
-        ResolveOptions(workspace=str(workspace_root) if workspace_root else None),
-        environment=dict(os.environ if environment is None else environment),
-    )
+    shell = dict(os.environ if environment is None else environment)
+    if workspace_root is None:
+        return resolve_global_config(environment=shell)
+    root = Path(workspace_root).expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError(f"Workspace directory does not exist: {root}")
+    if not (root / APP_RC.schema.workspace_dotenv_filename).is_file():
+        return resolve_global_config(environment=shell)
+    return APP_RC.resolve(ResolveOptions(workspace=str(root)), environment=shell)
 
 
 def pi_documents(
