@@ -1871,6 +1871,129 @@ describe('approved Pass scheduling', () => {
     }
   });
 
+  test('self-inspection preserves exact approval gates before dispatch and acceptance', async () => {
+    const f = await fixture(team);
+    try {
+      const scope = { action: 'inspect', resourceId: 'complete-pass', revision: 'current' };
+      const task = await f.create('work');
+      const review = await f.create('inspection', {
+        phase: 'review',
+        approvalScopes: [scope],
+        verificationRequirements: ['inspect-check'],
+      });
+      await f.release();
+      await f.report(task.id);
+      expect(f.runtime.snapshot(f.id).assignments.some((item) => item.taskId === review.id)).toBe(
+        false,
+      );
+      await f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        { type: 'approval.create', scope, decision: 'approved' },
+      );
+      const assignment = f.runtime
+        .snapshot(f.id)
+        .assignments.find((item) => item.taskId === review.id)!;
+      expect(assignment).toBeDefined();
+      await f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        { type: 'approval.create', scope, decision: 'rejected' },
+      );
+      const command = {
+        type: 'review.create' as const,
+        passId: f.pass.id,
+        assignmentId: assignment.id,
+        revision: f.runtime.snapshot(f.id).passes.find((item) => item.id === f.pass.id)!.revision,
+        outcome: 'accepted' as const,
+        summary: 'Inspected',
+      };
+      await expect(
+        f.runtime.execute(
+          f.id,
+          { kind: 'agent', nativeAgentId: assignment.nativeAgentId },
+          command,
+        ),
+      ).rejects.toThrow('unmet');
+      expect(f.runtime.snapshot(f.id).passes.find((item) => item.id === f.pass.id)?.status).toBe(
+        'running',
+      );
+      await f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        { type: 'approval.create', scope, decision: 'approved' },
+      );
+      const actor = { kind: 'agent' as const, nativeAgentId: assignment.nativeAgentId };
+      await expect(f.runtime.execute(f.id, actor, command)).rejects.toThrow('Missing verification');
+      await expect(
+        f.runtime.execute(f.id, actor, {
+          ...command,
+          verification: [
+            { requirement: 'inspect-check', result: 'failed', evidence: 'Observed failure' },
+          ],
+        }),
+      ).rejects.toThrow('did not pass');
+      const accepted = {
+        ...command,
+        verification: [
+          {
+            requirement: 'inspect-check',
+            result: 'passed' as const,
+            evidence: 'Observed passing check',
+          },
+        ],
+      };
+      await f.runtime.execute(f.id, actor, accepted);
+      expect(f.runtime.snapshot(f.id).passes.find((item) => item.id === f.pass.id)?.status).toBe(
+        'completed',
+      );
+      await f.runtime.execute(f.id, actor, accepted);
+      await expect(
+        f.runtime.execute(f.id, actor, { ...accepted, revision: command.revision + 99 }),
+      ).rejects.toThrow('Conflicting duplicate review');
+      await expect(
+        f.runtime.execute(f.id, actor, { ...accepted, verification: [] }),
+      ).rejects.toThrow('Conflicting duplicate review');
+    } finally {
+      await f.runtime.close();
+    }
+  });
+
+  test('a result arriving before its send acknowledgement keeps the member available', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.create('fast-result', { assigneeKey: 'junior' });
+      const second = await f.create('next-result', { assigneeKey: 'junior' });
+      const sending = new Gate();
+      const acknowledged = new Gate();
+      const originalSend = f.agents.send.bind(f.agents);
+      spyOn(f.agents, 'send').mockImplementation(async (id, message) => {
+        if (message.includes(`Scheduled Task ${first.id}`)) {
+          sending.resolve();
+          await acknowledged.wait();
+        }
+        await originalSend(id, message);
+      });
+      const releasing = f.release();
+      await sending.wait();
+      const reporting = f.report(first.id);
+      await Promise.resolve();
+      expect(
+        f.runtime.snapshot(f.id).assignments.find((item) => item.taskId === first.id)?.status,
+      ).toBe('reported');
+      acknowledged.resolve();
+      await Promise.all([releasing, reporting]);
+      expect(
+        f.runtime.snapshot(f.id).assignments.find((item) => item.taskId === first.id)?.status,
+      ).toBe('reported');
+      expect(f.runtime.snapshot(f.id).assignments.some((item) => item.taskId === second.id)).toBe(
+        true,
+      );
+    } finally {
+      await f.runtime.close();
+    }
+  });
+
   test('requested changes retry the same Pass-wide review gate after linked correction', async () => {
     const f = await fixture();
     try {

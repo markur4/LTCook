@@ -24,6 +24,7 @@ import type {
   UpdateStepInput,
   UpdateTaskInput,
   RetryTaskInput,
+  VerificationEntry,
 } from '../workflow-api/index.js';
 import { canonicalWorkspace } from '../core/workspace.js';
 
@@ -331,9 +332,7 @@ export class CoordinationStore implements CoordinationApi {
           : { requestId: input.requestId }),
         scheduled:
           input.scheduled ??
-          (input.passId !== undefined &&
-            (input.workType ?? 'task.execute') === 'task.execute' &&
-            !input.requestId?.endsWith(':execution-handoff')),
+          (input.passId !== undefined && (input.workType ?? 'task.execute') === 'task.execute'),
         ...(input.assigneeKey === undefined ? {} : { assigneeKey: input.assigneeKey }),
         attempt: 1,
         dependencyIds: input.dependencyIds ?? [],
@@ -647,14 +646,7 @@ export class CoordinationStore implements CoordinationApi {
       if (task.scheduled && input.outcome === undefined)
         throw new Error('Scheduled Task results require an outcome');
       const verification = input.verification ?? [];
-      if (new Set(verification.map((entry) => entry.requirement)).size !== verification.length)
-        throw new Error('Duplicate verification entries');
-      for (const requirement of task.verificationRequirements ?? []) {
-        if (
-          !verification.some((entry) => entry.requirement === requirement && entry.evidence.trim())
-        )
-          throw new Error(`Missing verification evidence: ${requirement}`);
-      }
+      this.validateVerification(task, verification);
       const report: Report = {
         id: randomUUID(),
         sessionId,
@@ -722,11 +714,18 @@ export class CoordinationStore implements CoordinationApi {
               (review) => review.assignmentId === input.assignmentId,
             );
       if (previous) {
+        const request = this.records<{
+          id: string;
+          revision?: number;
+          verification?: VerificationEntry[];
+        }>(sessionId, 'review-request').find((item) => item.id === previous.id);
         if (
           previous.outcome !== input.outcome ||
           previous.summary !== input.summary ||
           previous.nativeAgentId !== input.nativeAgentId ||
-          previous.passId !== input.passId
+          previous.passId !== input.passId ||
+          request?.revision !== input.revision ||
+          JSON.stringify(request?.verification ?? []) !== JSON.stringify(input.verification ?? [])
         )
           throw new Error('Conflicting duplicate review');
         return previous;
@@ -744,6 +743,7 @@ export class CoordinationStore implements CoordinationApi {
           assignment.nativeAgentId !== input.nativeAgentId
         )
           throw new Error('Review must match the assigned Pass review gate');
+        this.validateVerification(task, input.verification ?? [], input.outcome === 'accepted');
         this.bumpPassForTask(sessionId, task.passId);
         this.database
           .prepare('UPDATE tasks SET status=?, revision=revision+1, blocker=NULL WHERE id=?')
@@ -761,7 +761,13 @@ export class CoordinationStore implements CoordinationApi {
         summary: input.summary,
         revision: pass.revision,
         ...(input.assignmentId === undefined ? {} : { assignmentId: input.assignmentId }),
+        ...(input.verification === undefined ? {} : { verification: input.verification }),
       };
+      this.putRecord(sessionId, 'review-request', {
+        id: review.id,
+        revision: input.revision,
+        verification: input.verification,
+      });
       this.database
         .prepare('INSERT INTO reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(
@@ -779,10 +785,36 @@ export class CoordinationStore implements CoordinationApi {
     });
   }
   listReviews(sessionId: string): Review[] {
+    const requests = this.records<{ id: string; verification?: VerificationEntry[] }>(
+      sessionId,
+      'review-request',
+    );
     return this.rows<Review>(
       'SELECT id, session_id AS sessionId, pass_id AS passId, native_agent_id AS nativeAgentId, kind, outcome, summary, revision, assignment_id AS assignmentId FROM reviews WHERE session_id = ? ORDER BY rowid',
       sessionId,
-    );
+    ).map((review) => {
+      const request = requests.find((item) => item.id === review.id);
+      return {
+        ...review,
+        ...(request?.verification === undefined ? {} : { verification: request.verification }),
+      };
+    });
+  }
+  private validateVerification(
+    task: Task,
+    entries: VerificationEntry[],
+    requirePassed = false,
+  ): void {
+    if (new Set(entries.map((entry) => entry.requirement)).size !== entries.length)
+      throw new Error('Duplicate verification entries');
+    for (const requirement of task.verificationRequirements ?? []) {
+      const entry = entries.find((item) => item.requirement === requirement);
+      if (!entry?.evidence.trim()) throw new Error(`Missing verification evidence: ${requirement}`);
+      if (requirePassed && entry.result !== 'passed')
+        throw new Error(`Verification did not pass: ${requirement}`);
+    }
+    if (requirePassed && entries.some((entry) => entry.result !== 'passed'))
+      throw new Error('Review verification did not pass');
   }
   createApproval(sessionId: string, input: CreateApprovalInput): Approval {
     const approval: Approval = {

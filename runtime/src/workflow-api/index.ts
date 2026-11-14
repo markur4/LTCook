@@ -127,6 +127,7 @@ export interface Review {
   nativeAgentId: string;
   kind: 'independent' | 'self';
   assignmentId?: string;
+  verification?: VerificationEntry[];
   outcome: 'accepted' | 'changes-requested';
   summary: string;
   revision: number;

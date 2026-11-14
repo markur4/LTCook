@@ -195,13 +195,14 @@ describe('scheduled Task persistence', () => {
     const pass = store.createPass(session.id, { title: 'Pass' });
     const input = {
       passId: pass.id,
-      requestId: 'request',
+      requestId: 'user-task:execution-handoff',
       title: 'Task',
       description: '',
       acceptance: '',
       approvalScopes: [{ action: 'deploy', resourceId: 'artifact', revision: 'one' }],
     };
     const task = store.createTask(session.id, input);
+    expect(task.scheduled).toBe(true);
     const revision = store.getPass(session.id, pass.id).revision;
     expect(store.createTask(session.id, input)).toEqual(task);
     expect(store.getPass(session.id, pass.id).revision).toBe(revision);

@@ -102,13 +102,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - name: Install Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
       - name: Install Python and uv
         uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           enable-cache: auto
       - name: Install locked dependencies without the staged Python app
-        run: uv sync --locked --all-groups --no-install-project
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+          uv sync --locked --all-groups --no-install-project
       - name: Run explicit integration checks
         run: PYTHONPATH=src uv run --locked --no-sync pytest -m integration
       - name: Run explicit system checks
