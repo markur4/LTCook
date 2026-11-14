@@ -11,8 +11,8 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
-    "apprc-core @ git+https://github.com/HisQu/apprc.git@4f26a397a040a50d76f27b035881641404661188",
-    "apprc @ git+https://github.com/HisQu/apprc.git@4f26a397a040a50d76f27b035881641404661188#subdirectory=src/apprc_dev/packaging/terminal",
+    "apprc-core @ git+https://github.com/HisQu/apprc.git@ae99f240568bb1ef6890dfa5db677a686834d609",
+    "apprc @ git+https://github.com/HisQu/apprc.git@ae99f240568bb1ef6890dfa5db677a686834d609#subdirectory=src/apprc_dev/packaging/terminal",
     "filelock>=3.18",
     "typer",
 ]
@@ -22,7 +22,7 @@ Repository = "https://github.com/markur4/LTCook.git"
 
 [dependency-groups]
 dev = [
-    "apprc-core[distribution] @ git+https://github.com/HisQu/apprc.git@4f26a397a040a50d76f27b035881641404661188",
+    "apprc-core[distribution] @ git+https://github.com/HisQu/apprc.git@ae99f240568bb1ef6890dfa5db677a686834d609",
     "setuptools>=68",
     "pytest>=8.2",
     "ruff>=0.4",

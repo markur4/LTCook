@@ -122,6 +122,8 @@ All notable changes to `ltcook` will be documented in this file.
 ### 💔 Changed
 
 <br>
+- Updated the locked AppRC Git revision to include the central host-first,
+  colored help renderer, preserving the CLI presentation after dependency sync.
 
 ### ⚠️ Deprecated
 
