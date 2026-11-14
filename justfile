@@ -757,6 +757,7 @@ test-integration:
 
 [group('Checks')]
 test-system:
+    {{quote(BUN)}} run build
     uv run --locked --no-sync pytest -m system
 
 [group('Build')]
