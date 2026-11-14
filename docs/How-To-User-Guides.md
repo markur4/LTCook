@@ -100,15 +100,33 @@ ltcook installation doctor
 ltcook config show --json
 ```
 
-Start the server and bundled UI without choosing a project:
+Open the server and bundled UI without choosing a project:
 
 ```shell
-ltcook launch runtime
+ltcook
 ```
 
-This does not create a Session or start native agents. In Paseo, select a project
-directory and use **Start session** in the LTCook panel when ready. Before
-starting agents, [choose their models](#initialize-saved-preferences) and
+This starts or reuses this installation's runtime, requests Paseo in the default
+browser, and follows backend logs. From WSL it opens the Windows browser through
+`explorer.exe`, never a WSL browser. Exact reuse or focus of an existing tab depends
+on the browser. Ctrl+C detaches the log viewer and leaves the runtime running.
+Stop that runtime explicitly with `ltcook stop`; Compose containers remain managed
+separately by `ltcook services stop`.
+
+For a browser-free foreground server, use `ltcook launch runtime`. Ctrl+C stops
+a server started by that foreground command; reusing a server does not take over
+its ownership. Old or raw developer runtimes without output capture must be
+restarted through the installed CLI before desktop log attachment is available.
+
+Logs include private captured stdout/stderr in `<deployment>/logs/backend.log`,
+the configured telemetry JSONL, and Paseo's rotating daemon log. Upstream output
+can contain sensitive details; do not share these files without reviewing them.
+If browser opening fails, the terminal prints the URL and continues following
+logs. WSL host navigation requires working interop and localhost forwarding.
+
+Opening the UI does not create a Session or start agents. In Paseo, select a
+project directory and use **Start session** when ready. Before starting agents,
+[choose their models](#initialize-saved-preferences) and
 [authenticate with Pi](#authenticate-with-pi).
 
 The **Team status** panel contains three views:

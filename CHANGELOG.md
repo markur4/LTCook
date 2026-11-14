@@ -61,6 +61,9 @@ All notable changes to `ltcook` will be documented in this file.
   must run `ltcook auth login PROVIDER` once, or set user-level `runtime.pi_auth_dir` to
   an existing Pi auth home. Project settings and conversation histories stay
   separate; credentials are not copied automatically.
+- Breaking: Bare `ltcook` now starts or attaches to the runtime instead of printing
+  help. Scripts requiring help must use `ltcook --help`; headless foreground users
+  should retain `ltcook launch runtime`.
 
 ### ➕ Added
 
@@ -96,6 +99,9 @@ All notable changes to `ltcook` will be documented in this file.
 - Added native Pi login/logout/readiness commands and a supported SDK/RPC launcher
   sharing Pi-managed authentication without merging project configuration or
   conversations.
+- Added one-command desktop startup with Windows-host browser opening from WSL,
+  detached runtime ownership, cross-terminal backend logs, and authenticated
+  `ltcook stop`. Ctrl+C detaches desktop logs without stopping the shared server.
 
 ### 💔 Changed
 

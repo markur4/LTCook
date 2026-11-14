@@ -50,6 +50,8 @@ commands provide launch operations and diagnostics:
 
 | Command | Result |
 | --- | --- |
+| `ltcook` | Start/reuse the local runtime, open Paseo in the host default browser, and follow backend logs; Ctrl+C detaches. |
+| `ltcook stop` | Gracefully stop the matching local runtime; does not stop Compose containers or close browser tabs. |
 | `ltcook --help` | Show application and mounted AppRC command help. |
 | `ltcook version` | Print the installed package version. |
 | `ltcook diagnose --json` | Report package, interpreter, and AppRC paths without writing files. |
@@ -59,7 +61,7 @@ commands provide launch operations and diagnostics:
 | `ltcook config doctor --json` | Diagnose configuration without writing. |
 | `ltcook config edit` | Open the AppRC terminal configuration editor. |
 | `ltcook workspace add NAME ROOT --yes` | Optionally register a project and initialize its AppRC settings marker. |
-| `ltcook launch runtime [--workspace ROOT]` | Start the idle server/UI, or explicitly open a project Session when `ROOT` is supplied. |
+| `ltcook launch runtime [--workspace ROOT]` | Browser-free foreground server, or explicit project activation; reuse does not take over the owner. |
 | `ltcook auth login PROVIDER [--api-key \| --no-browser]` | Delegate interactive authentication to the installed Pi CLI and shared user credential home. |
 | `ltcook auth logout PROVIDER` | Remove that provider's credential through Pi; affects other Pi instances using the same home. |
 | `ltcook auth check [--provider PROVIDER] [--model MODEL] [--json] [--no-refresh]` | Report native Pi credential readiness without printing credentials; exit statuses are 0 ready, 1 not ready, and 2 invalid. |
@@ -89,6 +91,13 @@ The service commands also use the internal
 `paseo-tunnel` modes, operate remote services on their host; local commands do
 not control them or verify their health. Successful startup is not a health
 check for the services or proof that live research works.
+
+The local runtime control boundary uses master-bearer authentication.
+`GET /v1/status` reports readiness and the running instance's UUID, team,
+deployment/database paths, actual Paseo listener, and log paths.
+`POST /v1/runtime/stop` accepts `{"instanceId":"<observed UUID>"}`; a stale UUID
+is rejected rather than stopping a replacement. Agent-scoped credentials cannot
+stop the runtime. These endpoints do not provide network-wide discovery.
 
 ## Installer reference
 
@@ -230,6 +239,7 @@ not encryption of the AppRC-managed files.
 | `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` | Workspace-specific Pi home; `write-native-config` writes its private `web-search.json`. |
 | `<PI_CODING_AGENT_DIR>/settings.json.ltcook-extensions.json` | Versioned exact ownership of LTCook-managed extension paths; independent extensions remain in `settings.json`. |
 | `<LTCOOK_PI_AUTH_DIR>/auth.json` | Shared Pi-managed API keys/OAuth credentials; native login/logout and all LTCook project SDK runtimes use this file without copying it. |
+| `<LTCOOK_DEPLOYMENT_DIR>/logs/backend.log` | Private append-only captured runtime stdout/stderr, followed alongside telemetry and Paseo daemon output by bare `ltcook`. |
 
 `resolve_launch()` uses AppRC `current_env_mapping()` for each section and
 preserves original shell provenance. Global startup explicitly excludes workspace

@@ -541,6 +541,36 @@ describe('native runtime boundary', () => {
           })
         ).status,
       ).toBe(401);
+      let stopCalls = 0;
+      const stopFinished = Promise.withResolvers<void>();
+      api.setLifecycle(
+        {
+          instanceId: 'runtime-1',
+          deploymentRoot: '/deployment',
+          databasePath: '/deployment/runtime.db',
+          paseoListen: '127.0.0.1:4312',
+          backendLogPath: null,
+          paseoLogPath: '/deployment/paseo.log',
+          telemetryLogPath: '/deployment/events.jsonl',
+        },
+        async () => {
+          stopCalls += 1;
+          stopFinished.resolve();
+        },
+      );
+      const readyBeforeHandler = await fetch(`${endpoint}/v1/status`, {
+        headers: { authorization: `Bearer ${master}` },
+      });
+      const stopBeforeHandler = await fetch(`${endpoint}/v1/runtime/stop`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${master}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ instanceId: 'runtime-1' }),
+      });
+      expect(stopBeforeHandler.status).toBe(503);
+      expect(readyBeforeHandler.status).toBe(503);
       api.setOpenWorkspaceHandler('default-minimal', async () => {
         throw new Error('status does not open a session');
       });
@@ -548,7 +578,70 @@ describe('native runtime boundary', () => {
         headers: { authorization: `Bearer ${master}` },
       });
       expect(ready.status).toBe(200);
-      expect(await ready.json()).toEqual({ teamSelection: 'default-minimal' });
+      expect(await ready.json()).toEqual({
+        teamSelection: 'default-minimal',
+        instanceId: 'runtime-1',
+        deploymentRoot: '/deployment',
+        databasePath: '/deployment/runtime.db',
+        paseoListen: '127.0.0.1:4312',
+        backendLogPath: null,
+        paseoLogPath: '/deployment/paseo.log',
+        telemetryLogPath: '/deployment/events.jsonl',
+      });
+      const stop = (token: string, body: string) =>
+        fetch(`${endpoint}/v1/runtime/stop`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${token}`,
+            'content-type': 'application/json',
+          },
+          body,
+        });
+      const post = (url: string, token: string, body: object) =>
+        fetch(`${endpoint}${url}`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${token}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+      expect((await stop(master, '{')).status).toBe(400);
+      expect((await stop(agentBearer(master, 'native-agent'), '{}')).status).toBe(401);
+      expect((await stop(master, JSON.stringify({ instanceId: 'stale-runtime' }))).status).toBe(
+        409,
+      );
+      expect((await stop(master, JSON.stringify({ instanceId: '' }))).status).toBe(400);
+      const accepted = await stop(master, JSON.stringify({ instanceId: 'runtime-1' }));
+      expect(accepted.status).toBe(202);
+      expect(await accepted.json()).toEqual({ stopping: true });
+      await stopFinished.promise;
+      expect(stopCalls).toBe(1);
+      expect(
+        (
+          await fetch(`${endpoint}/v1/status`, {
+            headers: { authorization: `Bearer ${master}` },
+          })
+        ).status,
+      ).toBe(503);
+      const sessionOpen = await post('/v1/session/open', master, {
+        workspaceRoot: '/workspace',
+        sessionId: 'session-during-stop',
+        teamSelection: 'default-minimal',
+      });
+      expect(sessionOpen.status).toBe(503);
+      const command = {
+        type: 'task.create',
+        title: 'Task',
+        description: 'Work',
+        acceptance: 'Done',
+      };
+      expect((await post('/v1/command', master, { sessionId: 'session-1', command })).status).toBe(
+        503,
+      );
+      expect(
+        (await post('/v1/command', 'wrong-token', { sessionId: 'session-1', command })).status,
+      ).toBe(401);
     } finally {
       await api.close();
     }
