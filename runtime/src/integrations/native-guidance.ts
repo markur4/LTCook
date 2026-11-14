@@ -5,6 +5,9 @@ import type { Skill, ResourceDiagnostic } from '@earendil-works/pi-coding-agent'
 import type { GuidanceInspection, GuidanceResource, GuidanceScope } from '../guidance-api/index.js';
 import type { TeamPackage } from '../team-api/index.js';
 
+/** Safe resource diagnostics contain only resource identity and failure reason. */
+export class NativeGuidanceError extends Error {}
+
 /** Resolve mandatory and selected guidance before the native loader builds standing context. */
 export class NativeGuidance {
   readonly inspection: GuidanceInspection = { resources: [], diagnostics: [] };
@@ -15,14 +18,16 @@ export class NativeGuidance {
 
   constructor(team: TeamPackage, memberKey: string, userDirectory: string, coreDirectory: string) {
     if (!path.isAbsolute(userDirectory))
-      throw new Error('User guidance directory must be an absolute AppRC path');
+      throw new NativeGuidanceError('User guidance directory must be an absolute AppRC path');
     this.userDirectory = userDirectory;
     const member = team.definition.members.find((item) => item.key === memberKey);
-    if (!member) throw new Error('Native guidance member is not declared by the selected Team');
+    if (!member)
+      throw new NativeGuidanceError('Native guidance member is not declared by the selected Team');
     const catalog: unknown = JSON.parse(
       readFileSync(path.join(coreDirectory, 'catalog.json'), 'utf8'),
     );
-    if (!Array.isArray(catalog)) throw new Error('Core guidance catalog must be an array');
+    if (!Array.isArray(catalog))
+      throw new NativeGuidanceError('Core guidance catalog must be an array');
     const resources: GuidanceResource[] = catalog.map(
       (entry: { path: string; kind: 'rule' | 'skill'; required: boolean }) => ({
         ...entry,
@@ -63,7 +68,8 @@ export class NativeGuidance {
       if (!applicable) continue;
       if (!existsSync(file)) {
         this.inspection.diagnostics.push({ source: file, reason: 'Guidance resource is missing' });
-        if (resource.required) throw new Error(`Required guidance is missing: ${file}`);
+        if (resource.required)
+          throw new NativeGuidanceError(`Required guidance is missing: ${file}`);
         continue;
       }
       const physical = realpathSync(file);
@@ -73,7 +79,7 @@ export class NativeGuidance {
         const name = path.basename(file, '.md');
         const previous = names.get(name);
         if (previous && previous !== physical)
-          throw new Error(`Conflicting rule name ${name}: ${previous}, ${physical}`);
+          throw new NativeGuidanceError(`Conflicting rule name ${name}: ${previous}, ${physical}`);
         names.set(name, physical);
         this.rules.push({ path: physical, content: readFileSync(physical, 'utf8') });
         row.loaded = true;
@@ -88,7 +94,7 @@ export class NativeGuidance {
     for (const diagnostic of base.diagnostics) {
       const collision = diagnostic.collision;
       if (collision && realpathSync(collision.winnerPath) !== realpathSync(collision.loserPath))
-        throw new Error(
+        throw new NativeGuidanceError(
           `Conflicting skill name ${collision.name}: ${collision.winnerPath}, ${collision.loserPath}`,
         );
       this.inspection.diagnostics.push({
@@ -103,7 +109,7 @@ export class NativeGuidance {
       const file = realpathSync(skill.filePath);
       const previous = names.get(skill.name);
       if (previous && previous !== file)
-        throw new Error(`Conflicting skill name ${skill.name}: ${previous}, ${file}`);
+        throw new NativeGuidanceError(`Conflicting skill name ${skill.name}: ${previous}, ${file}`);
       names.set(skill.name, file);
       if (physical.has(file)) return false;
       physical.add(file);
@@ -135,7 +141,7 @@ export class NativeGuidance {
     });
     for (const [file, resource] of this.sources)
       if (resource.kind === 'skill' && resource.required && !physical.has(file))
-        throw new Error(`Required skill was not loaded by Pi: ${file}`);
+        throw new NativeGuidanceError(`Required skill was not loaded by Pi: ${file}`);
     return { skills, diagnostics: base.diagnostics.filter((item) => item.type !== 'collision') };
   };
 

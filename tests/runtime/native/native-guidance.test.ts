@@ -64,7 +64,7 @@ function fixture() {
     await loader.reload();
     return loader;
   }
-  return { root, core, user, project, file, guidance, load };
+  return { root, core, user, project, agentDir, file, guidance, load };
 }
 
 test('native loader keeps rules standing and skill bodies progressive across a different agent HOME', async () => {
@@ -126,4 +126,70 @@ test('missing required guidance stops activation', () => {
   const f = fixture();
   rmSync(path.join(f.core, 'rules/baseline.md'));
   expect(f.guidance).toThrow('Required guidance is missing');
+});
+
+test('managed roots preserve native trusted and untrusted project discovery', async () => {
+  const f = fixture();
+  f.file('project/AGENTS.md', 'Native project context.');
+  f.file(
+    'project/.pi/skills/project-pi/SKILL.md',
+    '---\nname: project-pi\ndescription: Project Pi method\n---\nProject method.',
+  );
+  f.file(
+    'project/.agents/skills/project-agents/SKILL.md',
+    '---\nname: project-agents\ndescription: Project agents method\n---\nProject method.',
+  );
+  f.file('user/rules/preferences.md', 'Global user preference.');
+  f.file(
+    'user/skills/global-user/SKILL.md',
+    '---\nname: global-user\ndescription: Global user method\n---\nGlobal method.',
+  );
+  for (const projectTrusted of [false, true]) {
+    const baseline = new DefaultResourceLoader({
+      cwd: f.project,
+      agentDir: f.agentDir,
+      settingsManager: SettingsManager.create(f.project, f.agentDir, { projectTrusted }),
+      noExtensions: true,
+      noThemes: true,
+      noPromptTemplates: true,
+    });
+    await baseline.reload();
+    const managed = await f.load(f.guidance(), projectTrusted);
+    const nativeProjectSkills = baseline
+      .getSkills()
+      .skills.filter((skill) => skill.filePath.startsWith(f.project + path.sep))
+      .map((skill) => skill.name)
+      .sort();
+    const managedProjectSkills = managed
+      .getSkills()
+      .skills.filter((skill) => skill.filePath.startsWith(f.project + path.sep))
+      .map((skill) => skill.name)
+      .sort();
+    expect(managedProjectSkills).toEqual(nativeProjectSkills);
+    expect(nativeProjectSkills).toEqual(projectTrusted ? ['project-agents', 'project-pi'] : []);
+    // > Native Pi deliberately loads textual AGENTS.md even for untrusted projects.
+    expect(
+      baseline
+        .getAgentsFiles()
+        .agentsFiles.some((file) => file.path === path.join(f.project, 'AGENTS.md')),
+    ).toBe(true);
+    expect(
+      managed
+        .getAgentsFiles()
+        .agentsFiles.some((file) => file.path === path.join(f.project, 'AGENTS.md')),
+    ).toBe(true);
+    expect(
+      managed
+        .getAgentsFiles()
+        .agentsFiles.some((file) => file.content === 'Standing Core requirement.'),
+    ).toBe(true);
+    expect(
+      managed
+        .getAgentsFiles()
+        .agentsFiles.some((file) => file.content === 'Global user preference.'),
+    ).toBe(true);
+    expect(managed.getSkills().skills.map((skill) => skill.name)).toEqual(
+      expect.arrayContaining(['ltcook-method', 'global-user']),
+    );
+  }
 });

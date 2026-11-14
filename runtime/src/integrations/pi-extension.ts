@@ -3,7 +3,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { setTimeout } from 'node:timers';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { RuntimeCommandInputSchema } from '../workflow-api/commands.js';
+import { AgentRuntimeCommandInputSchema, type RuntimeCommand } from '../workflow-api/commands.js';
 import { selectedTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
@@ -122,9 +122,11 @@ export default async function activate(
     name: 'ltcook_team',
     label: 'Team coordination',
     description: 'Submit a coordination command.',
-    parameters: RuntimeCommandInputSchema,
+    parameters: AgentRuntimeCommandInputSchema,
     async execute(_id, input, _signal, _onUpdate, ctx) {
-      const response = await rpc('/v1/command', { command: input.command });
+      // > Native Pi validates the narrower agent schema before this shared command boundary.
+      const command = input.command as RuntimeCommand;
+      const response = await rpc('/v1/command', { command });
       if (!response.ok) throw new Error(`Coordination request failed (${response.status})`);
       const result: unknown = await response.json();
       const value = (
@@ -132,20 +134,20 @@ export default async function activate(
           value?: { id?: string; stage?: string; answer?: string; plan?: { path?: string } };
         }
       ).value;
-      if (input.command.type === 'decision.create' && value?.id && value.answer === undefined) {
+      if (command.type === 'decision.create' && value?.id && value.answer === undefined) {
         await ctx.ui.input(
           decisionTitle(
-            { sessionId, planId: input.command.planId, decisionId: value.id, kind: 'question' },
-            input.command.prompt,
+            { sessionId, planId: command.planId, decisionId: value.id, kind: 'question' },
+            command.prompt,
           ),
         );
-      } else if (input.command.type === 'planning.submit' && value?.stage === 'awaiting-approval') {
+      } else if (command.type === 'planning.submit' && value?.stage === 'awaiting-approval') {
         if (!value.plan?.path)
           throw new Error('Registered Plan path is unavailable; approval remains pending.');
         await ctx.ui.confirm(
           decisionTitle(
-            { sessionId, planId: input.command.planId, decisionId: '', kind: 'approval' },
-            `Approve Plan ${input.command.planId}?`,
+            { sessionId, planId: command.planId, decisionId: '', kind: 'approval' },
+            `Approve Plan ${command.planId}?`,
           ),
           readPlanForApproval(value.plan.path),
         );

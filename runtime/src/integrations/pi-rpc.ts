@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { NativeGuidance, coreGuidanceDirectory } from './native-guidance.js';
+import { NativeGuidance, NativeGuidanceError, coreGuidanceDirectory } from './native-guidance.js';
 import { selectedTeam } from './team-loader.js';
 import { Console } from 'node:console';
 import { spawn } from 'node:child_process';
@@ -379,8 +379,54 @@ export async function runPiLauncher(argv: string[]): Promise<void> {
   }
 }
 
+/** Publish activation failure through the same bound-agent inspection command, without authorizing a turn. */
+export async function publishPiActivationFailure(error: unknown): Promise<boolean> {
+  const endpoint = process.env.LTCOOK_RUNTIME_API_URL;
+  const token = process.env.LTCOOK_AGENT_API_TOKEN;
+  const nativeAgentId = process.env.LTCOOK_NATIVE_AGENT_ID;
+  const sessionId = process.env.LTCOOK_SESSION_ID;
+  if (!endpoint || !token || !nativeAgentId || !sessionId) return false;
+  const inspection = {
+    resources: [],
+    diagnostics: [
+      {
+        source: 'Pi native activation',
+        reason:
+          error instanceof NativeGuidanceError
+            ? error.message
+            : 'Pi activation failed; inspect the native agent diagnostics.',
+      },
+    ],
+  };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(`${endpoint}/v1/command`, {
+        method: 'POST',
+        signal: globalThis.AbortSignal.timeout(1000) as NonNullable<
+          Parameters<typeof fetch>[1]
+        >['signal'],
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          nativeAgentId,
+          command: { type: 'guidance.loaded', inspection },
+        }),
+      });
+      if (response.ok) return true;
+    } catch {
+      // > Creation may not have established a bound identity yet.
+    }
+    if (attempt < 2) await new Promise<void>((resolve) => setTimeout(resolve, 200));
+  }
+  return false;
+}
+
 if (import.meta.main) {
-  runPiLauncher(process.argv.slice(2)).catch((error: unknown) => {
+  runPiLauncher(process.argv.slice(2)).catch(async (error: unknown) => {
+    if (process.env.LTCOOK_NATIVE_AGENT_ID && !(await publishPiActivationFailure(error)))
+      console.error(
+        'Native loading failure could not be registered; guidance inspection remains unavailable.',
+      );
     console.error(error instanceof Error ? error.message : 'Pi launcher failed.');
     process.exitCode = 1;
   });
