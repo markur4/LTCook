@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import type { SessionSnapshot } from './workflow-api/index.js';
 import { selectedTeam } from './integrations/team-loader.js';
-import { projectContextProvider } from './integrations/project-context.js';
+import { RiedService } from './ried.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
 const EX_TEMPFAIL = 75;
 function isListenAddressInUse(error: unknown): boolean {
@@ -80,7 +80,7 @@ async function run(): Promise<void> {
   const teamSelection = process.env.LTCOOK_TEAM;
   const serviceConnection = process.env.LTCOOK_SERVICE_CONNECTION;
   const stateDirectory = process.env.LTCOOK_RUNTIME_STATE_DIR;
-  const projectCacheDirectory = process.env.LTCOOK_PROJECT_CACHE_DIR;
+  const riedCacheDirectory = process.env.LTCOOK_RIED_CACHE_DIR;
   if (
     !deployment ||
     !jsRoot ||
@@ -90,7 +90,7 @@ async function run(): Promise<void> {
     !teamSelection ||
     !serviceConnection ||
     !stateDirectory ||
-    !projectCacheDirectory
+    !riedCacheDirectory
   ) {
     throw new Error(
       'AppRC did not resolve required runtime configuration; launch through `ltcook launch runtime`.',
@@ -272,7 +272,9 @@ async function run(): Promise<void> {
     const runtimeController = createRuntime({
       databasePath: canonicalDatabasePath,
       stateDirectory,
-      projectContext: projectContextProvider(python, projectCacheDirectory),
+      ried: new RiedService(riedCacheDirectory, process.env.LTCOOK_BRIEF_EXECUTABLE, (id) =>
+        workspaceShellEnvironments.get(id),
+      ),
       team,
       agents: backend,
       onEvent(event) {

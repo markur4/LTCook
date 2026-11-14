@@ -129,7 +129,7 @@ def resolve_launch(
     )
     environment["LTCOOK_RUNTIME_STATE_DIR"] = str(runtime_state)
     environment["LTCOOK_GUIDANCE_DIR"] = str(guidance)
-    environment["LTCOOK_PROJECT_CACHE_DIR"] = str(
+    environment["LTCOOK_RIED_CACHE_DIR"] = str(
         global_resolved.paths.require("cache") / "projects"
     )
     environment["LTCOOK_DATABASE"] = (
@@ -144,6 +144,9 @@ def resolve_launch(
         Path(config.app.deployment).expanduser()
         if config.app.deployment
         else appdata_dir / "deployment"
+    )
+    environment["LTCOOK_BRIEF_EXECUTABLE"] = str(
+        deployment / "brief" / ("brief.exe" if os.name == "nt" else "brief")
     )
     if workspace_root is not None and not environment.get("LTCOOK_SESSION"):
         environment["LTCOOK_SESSION"] = f"session-{uuid4()}"

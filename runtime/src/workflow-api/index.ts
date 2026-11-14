@@ -184,6 +184,7 @@ export interface RuntimeEvent {
 export interface RuntimeController {
   openSession(options: { id?: string; workspaceRoot: string }): Promise<SessionSnapshot>;
   snapshot(sessionId: string): SessionSnapshot;
+  ried(sessionId: string, request: import('../ried.js').RiedRequest): Promise<unknown>;
   execute(sessionId: string, actor: RuntimeActor, command: RuntimeCommand): Promise<unknown>;
   authorizeTool(
     sessionId: string,
@@ -242,25 +243,6 @@ export interface CoordinationApi {
   listBindings(sessionId: string): NativeBinding[];
 }
 
-export interface ProjectSnapshot {
-  workspaceRoot: string;
-  capturedAt: string;
-  facts: {
-    manifests: {
-      path: string;
-      kind: string;
-      languages: string[];
-      packages: { name: string; version: string }[];
-      commands: Record<string, string>;
-    }[];
-    justRecipes: { name: string; definition: string }[];
-    tools: { name: string; version: string; source: string }[];
-  };
-  cache: { path: string; refreshedAt: string; reused: boolean };
-  git: { capturedAt: string; root?: string; branch?: string; status?: string; error?: string };
-  sources: { path: string; fingerprint: string }[];
-  incomplete: string[];
-}
 export type PlanCoverage = NonNullable<
   Extract<RuntimeCommand, { type: 'planning.submit' }>['coverage']
 >[number];
@@ -283,7 +265,6 @@ export interface PlanningRecord {
   assignmentId?: string;
   passId?: string;
   coverage: PlanCoverage[];
-  projectContext?: ProjectSnapshot;
 }
 export interface Decision {
   id: string;

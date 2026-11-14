@@ -47,6 +47,11 @@ All notable changes to `ltcook` will be documented in this file.
 ### 💥 Breaking changes
 
 <br>
+- Breaking: RIED replaces the Python project-context scanner and its JSON
+  format. Affected: callers of `ltcook.project_context`, `LTCOOK_PROJECT_CACHE_DIR`
+  and Team API v2 `WorkContext.projectContext`. Migration: use the authenticated
+  `ltcook_ried` tool or `/v1/ried` API and discard old cache files; no reader or
+  conversion is provided.
 - Breaking: Team packages require API v2 and the purpose-named `team-api`,
   `guidance-api` and `workflow-api` imports. The generic `api` export and activation
   hooks are removed. Custom Teams must implement the new declarations; no adapter
@@ -98,8 +103,8 @@ All notable changes to `ltcook` will be documented in this file.
 - Added Team-routed Plan prefill/finalization, Team-authored timestamped Markdown,
   persisted topic coverage and mandatory user decisions, authenticated native
   dialogs and explicit `ltcook planning` CLI operations.
-- Added approval-before-execution tool gates, pending-decision recovery, cached
-  declarative project facts and separately refreshed Git state.
+- Added approval-before-execution tool gates, pending-decision recovery and
+  runtime-owned RIED discovery with one AppRC cache and separately refreshed Git state.
 - Added verbatim Modes and Clear Writing guidance plus shared research and optional
   domain skills with source provenance and notices.
 

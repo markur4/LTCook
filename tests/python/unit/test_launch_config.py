@@ -77,7 +77,7 @@ def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
     for key in (
         "LTCOOK_RUNTIME_STATE_DIR",
         "LTCOOK_GUIDANCE_DIR",
-        "LTCOOK_PROJECT_CACHE_DIR",
+        "LTCOOK_RIED_CACHE_DIR",
         "LTCOOK_DATABASE",
     ):
         assert project_launch.environment[key] == global_launch.environment[key]

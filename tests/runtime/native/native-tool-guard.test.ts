@@ -41,17 +41,19 @@ test('every native call requires runtime authorization and runtime failures bloc
       },
       ctx?: { cwd: string },
     ) => Promise<{ block: boolean; reason: string } | undefined>;
-    let registered: Parameters<ExtensionAPI['registerTool']>[0] | undefined;
+    const registeredTools = new Map<string, Parameters<ExtensionAPI['registerTool']>[0]>();
     const pi = {
       on(name: string, handler: unknown) {
         if (name === 'tool_call') guard = handler as typeof guard;
       },
       registerTool(tool: Parameters<ExtensionAPI['registerTool']>[0]) {
-        registered = tool;
+        registeredTools.set(tool.name, tool);
       },
     } as unknown as ExtensionAPI;
     await activate(pi);
+    const registered = registeredTools.get('ltcook_team');
     if (!registered) throw new Error('Coordination tool was not registered');
+    expect(registeredTools.has('ltcook_ried')).toBe(true);
     expect(
       Value.Check(registered.parameters, {
         command: {

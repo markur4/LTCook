@@ -1,5 +1,4 @@
 import type { GuidanceResource } from '../guidance-api/index.js';
-import type { ProjectSnapshot } from '../workflow-api/index.js';
 export type WorkType = 'design' | 'plan.prefill' | 'plan.finalize' | 'task.execute';
 export type ModelAlias = 'smart' | 'smol' | 'plan';
 export interface TeamMember {
@@ -32,7 +31,6 @@ export interface WorkContext {
   workType: WorkType;
   sessionId: string;
   workspaceRoot: string;
-  projectContext?: ProjectSnapshot;
 }
 export interface TeamPackage {
   apiVersion: 2;

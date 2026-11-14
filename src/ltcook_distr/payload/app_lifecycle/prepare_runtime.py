@@ -26,6 +26,82 @@ from ._common import (
     write_json,
 )
 
+_BRIEF_VERSION = "0.16.0"
+_BRIEF_DIGESTS = {
+    (
+        "Linux",
+        "x86_64",
+    ): "b524dcb54ce4d4057ba7ebef6159fc82c2e0444f7eabaf8a11ef9825dc402336",
+    (
+        "Linux",
+        "aarch64",
+    ): "62dfe018ced4040b17799bb6c8e4850db46ff383f67ad58f763c8ab91ee62958",
+    (
+        "Darwin",
+        "x86_64",
+    ): "5a22d6e5f188c8b30d1f773de7ada5e422b012106c5399ad031522ed7601f079",
+    (
+        "Darwin",
+        "arm64",
+    ): "e000fad1adaec36574eea450babb39af5eab72743f14fbf2ae9a60f51e80de5a",
+    (
+        "Windows",
+        "AMD64",
+    ): "a5f47f1c05723c3bb52e9ca47b4dfd1250c4add72e362360fb1b4dbf7b27ff4a",
+}
+
+
+def _prepare_brief(deployment: Path, record: dict[str, Any]) -> None:
+    """Repair the optional pinned discovery executable without rebuilding Node.
+
+    :param deployment: LTCook-owned deployment directory.
+    :param record: Runtime receipt updated with discovery availability.
+    :return: None.
+    """
+    system, machine = platform.system(), platform.machine()
+    digest = _BRIEF_DIGESTS.get((system, machine))
+    binary = deployment / "brief" / ("brief.exe" if system == "Windows" else "brief")
+    try:
+        if digest is None:
+            raise SetupError(f"No pinned brief asset for {system}/{machine}.")
+        if record.get("brief_version") == _BRIEF_VERSION and binary.is_file():
+            no_links(binary)
+            return
+        os_name = {"Linux": "linux", "Darwin": "darwin", "Windows": "windows"}[system]
+        machine_name = {
+            "x86_64": "amd64",
+            "aarch64": "arm64",
+            "arm64": "arm64",
+            "AMD64": "amd64",
+        }[machine]
+        name = f"brief_{_BRIEF_VERSION}_{os_name}_{machine_name}.tar.gz"
+        archive = deployment / name
+        download(
+            f"https://github.com/git-pkgs/brief/releases/download/v{_BRIEF_VERSION}/{name}",
+            archive,
+            digest,
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="brief-stage-", dir=deployment
+        ) as temporary:
+            stage = Path(temporary)
+            extract_archive(archive, stage)
+            source = stage / binary.name
+            if not source.is_file() or source.is_symlink():
+                raise SetupError("Pinned brief archive lacks its executable.")
+            target = owned_directory(binary.parent) / binary.name
+            no_links(target)
+            shutil.copyfile(source, target)
+            target.chmod(0o700)
+        record["brief_version"] = _BRIEF_VERSION
+        record["brief_executable"] = str(binary)
+        record.pop("brief_unavailable_reason", None)
+    except (OSError, SetupError, tarfile.TarError, zipfile.BadZipFile) as exc:
+        record.pop("brief_version", None)
+        record.pop("brief_executable", None)
+        record["brief_unavailable_reason"] = str(exc)
+    write_json(deployment / "runtime.json", record)
+
 
 def _node_asset(version: str, system: str, machine: str) -> tuple[str, str, str]:
     """Resolve official Node archive names from the current platform."""
@@ -215,6 +291,10 @@ def prepare_runtime(
             )
             if browser_enabled and record.get("browser_available") is False:
                 _retry_browser(deployment, record, env)
+                record = json.loads(
+                    (deployment / "runtime.json").read_text(encoding="utf-8")
+                )
+            _prepare_brief(deployment, record)
             return deployment
         archive_url, archive_name, suffix = _node_asset(
             version, platform.system(), platform.machine()
@@ -363,6 +443,7 @@ def prepare_runtime(
         elif browser_error:
             record["browser_unavailable_reason"] = browser_error
         write_json(deployment / "runtime.json", record)
+        _prepare_brief(deployment, record)
     return deployment
 
 
