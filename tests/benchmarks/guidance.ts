@@ -122,6 +122,11 @@ export async function runFixture(input: {
   const create = async (memberKey: string, depth: number): Promise<AgentSession> => {
     const member = input.team.definition.members.find((entry) => entry.key === memberKey);
     if (!member) throw new Error('Undeclared benchmark member');
+    const eligibleMemberKeys = input.team.definition.members
+      .filter((entry) => entry.key !== memberKey && entry.workTypes.includes('task.execute'))
+      .map((entry) => entry.key);
+    if (depth === 0 && eligibleMemberKeys.length === 0)
+      throw new Error('Benchmark requires another declared Task member');
     const agentDir = join(directory, member.key);
     mkdirSync(agentDir, { recursive: true });
     const team =
@@ -205,10 +210,9 @@ export async function runFixture(input: {
       {
         name: 'benchmark_delegate',
         label: 'Synthetic benchmark delegation',
-        description:
-          'Ask a declared eligible Team member to inspect this same fixed fixture. This is benchmark delegation, not a RuntimeController assignment.',
+        description: `Ask one eligible Team member (${eligibleMemberKeys.join(', ')}) to inspect this same fixed fixture. This is benchmark delegation, not a RuntimeController assignment.`,
         parameters: Type.Object({
-          memberKey: Type.String(),
+          memberKey: Type.String({ enum: eligibleMemberKeys }),
           message: Type.String({ maxLength: 2000 }),
         }),
         async execute(_id, raw) {
@@ -220,7 +224,11 @@ export async function runFixture(input: {
               entry.key !== memberKey &&
               entry.workTypes.includes('task.execute'),
           );
-          if (!target || depth > 0 || result.delegations >= 2 || expired)
+          if (!target)
+            throw new Error(
+              `Unknown benchmark member. Eligible keys: ${eligibleMemberKeys.join(', ')}`,
+            );
+          if (depth > 0 || result.delegations >= 2 || expired)
             throw new Error(
               'Delegation is limited to two direct calls to another eligible declared member.',
             );
@@ -234,6 +242,8 @@ export async function runFixture(input: {
         },
       },
     ];
+    const activeTools =
+      depth === 0 ? tools : tools.filter((tool) => tool.name !== 'benchmark_delegate');
     const { session } = await createAgentSession({
       cwd: directory,
       agentDir,
@@ -243,8 +253,8 @@ export async function runFixture(input: {
       resourceLoader: loader,
       settingsManager,
       sessionManager: SessionManager.inMemory(directory),
-      tools: tools.map((tool) => tool.name),
-      customTools: tools,
+      tools: activeTools.map((tool) => tool.name),
+      customTools: activeTools,
     });
     if (expired) {
       session.dispose();
@@ -270,6 +280,16 @@ export async function runFixture(input: {
           verifications > 0 &&
           verifiedWrites === writes &&
           JSON.parse(readFileSync(output, 'utf8')).total === answer;
+        if (!result.success)
+          result.failure =
+            [
+              result.delegations === 0 ? 'No successful delegation' : null,
+              writes === 0 ? 'No answer write' : null,
+              verifications === 0 ? 'No verification call' : null,
+              verifiedWrites !== writes ? 'Latest answer not verified' : null,
+            ]
+              .filter(Boolean)
+              .join('; ') || 'Incorrect verified answer';
       })(),
       new Promise<never>((_resolve, reject) => {
         deadline = setTimeout(() => {

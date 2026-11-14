@@ -9,13 +9,22 @@ import { selectedTeam } from '../../runtime/src/integrations/team-loader.js';
 test('scripted local Pi usage produces comparable reports in both guidance arms', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'ltcook-benchmark-test-'));
   let primaryRuns = 0;
+  const requestedThinking = new Set<string>();
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
     async fetch(request) {
       const body = (await request.json()) as {
         messages: Array<{ role: string; content: string; tool_calls?: unknown[] }>;
+        tools?: Array<{
+          function: {
+            name: string;
+            parameters?: { properties?: { memberKey?: { enum?: string[] } } };
+          };
+        }>;
+        reasoning_effort?: string;
       };
+      if (body.reasoning_effort) requestedThinking.add(body.reasoning_effort);
       const calls = body.messages.filter((message) => message.role === 'assistant').length;
       const child = body.messages.some(
         (message) =>
@@ -31,7 +40,12 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
             : 'fixture_verify';
       const args =
         name === 'benchmark_delegate'
-          ? { memberKey: 'adjutant', message: 'Inspect fixture.' }
+          ? {
+              memberKey:
+                body.tools?.find((tool) => tool.function.name === name)?.function.parameters
+                  ?.properties?.memberKey?.enum?.[0] ?? 'undisclosed-member',
+              message: 'Inspect fixture.',
+            }
           : name === 'fixture_write'
             ? { total: primaryRuns === 1 ? 19 : 20 }
             : {};
@@ -81,6 +95,7 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
                 id: 'fixture',
                 name: 'Fixture',
                 reasoning: true,
+                thinkingLevelMap: { off: 'none' },
                 contextWindow: 32768,
                 maxTokens: 1000,
               },
@@ -120,6 +135,8 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
     expect(tasks[1]?.attempts.map((attempt) => [attempt.thinking, attempt.success])).toEqual([
       ['off', true],
     ]);
+    expect(tasks[0]?.attempts[0]?.failure).toContain('Latest answer not verified');
+    expect(requestedThinking).toEqual(new Set(['none', 'low']));
     expect(
       aggregate(tasks).map((entry) => ({
         arm: entry.arm,

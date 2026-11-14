@@ -191,8 +191,18 @@ starting thinking level (`off`, `low`, or `high`). The default model label is
 with reasoning support. The default is thinking off. Each failed off-thinking
 task automatically repeats once with low thinking on a fresh copy of the same
 fixture. Low and high starts are diagnostic runs and do not auto-retry.
+For Spark served by LM Studio, set the Pi model's `thinkingLevelMap.off` to
+`"none"` so the provider receives an explicit reasoning-off request. This backend
+accepts a low request but runs its on setting; low and high are not distinct
+reasoning levels there. Confirm the provider's effective setting before comparing
+thinking modes. With an 8,192-token server context, a conservative Pi context
+estimate may leave only one output token. Set the Pi model's
+`samplingParams.max_completion_tokens` to a tested value such as `2048` only when
+the server has enough room for both the actual prompt and response.
 Only a loopback endpoint is accepted. A run has a 120-second deadline, a 24-tool
 budget, and at most two direct delegations to another declared eligible member.
+The delegate tool declares the eligible member keys in its schema; a child cannot
+delegate again. A failed run records which required fixture steps were missed.
 It exposes only fixed fixture read/write/verification tools and a clearly named
 synthetic `benchmark_delegate` tool; it does not measure RuntimeController Pass
 scheduling. Each run uses a fresh temporary workspace, removed after disposal.
