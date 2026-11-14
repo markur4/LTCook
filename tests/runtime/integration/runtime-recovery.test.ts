@@ -478,105 +478,74 @@ describe('RuntimeController coordination', () => {
     ).toBe('missing');
     await runtime.close();
   });
-  test('requires current whole-Pass review before completing a Pass', async () => {
-    const agents = new FakeAgents();
+  test('runtime dispatches one whole-Pass review and completes only current acceptance', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-pass-review-'));
     temporaryDirectories.push(directory);
     const runtime = createRuntime({
       databasePath: ':memory:',
       stateDirectory: directory,
       team: reviewRequiredTeam,
-      agents,
+      agents: new FakeAgents(),
     });
-    const snapshot = await runtime.openSession({ workspaceRoot: '/workspace' });
-    const pass = await approveExecutionFixture(runtime, snapshot.session.id);
+    const opened = await runtime.openSession({ workspaceRoot: '/workspace' });
+    const id = opened.session.id;
+    const pass = await approveExecutionFixture(runtime, id);
     const task = (await runtime.execute(
-      snapshot.session.id,
+      id,
       { kind: 'user' },
       {
         type: 'task.create',
         passId: pass.id,
+        requestId: 'implementation',
         title: 'Implement',
         description: 'Change code',
         acceptance: 'Pass checks',
+        assigneeKey: 'junior',
       },
     )) as { id: string };
-    const assignment = (await runtime.execute(
-      snapshot.session.id,
-      { kind: 'user' },
-      {
-        type: 'assignment.create',
-        taskId: task.id,
-        memberKey: 'junior',
-        message: 'Implement the task',
-      },
-    )) as { id: string; nativeAgentId: string };
+    const assignment = runtime.snapshot(id).assignments.find((item) => item.taskId === task.id)!;
     await runtime.execute(
-      snapshot.session.id,
+      id,
       { kind: 'agent', nativeAgentId: assignment.nativeAgentId },
       {
         type: 'report.create',
         assignmentId: assignment.id,
         summary: 'Implemented',
-        evidence: 'Changes recorded',
+        evidence: 'Recorded changes',
+        outcome: 'success',
+        verification: [],
       },
     );
-    const reviewerId = snapshot.members.find((member) => member.member.key === 'reviewer')?.binding
-      ?.nativeAgentId;
-    if (reviewerId === undefined || reviewerId === null)
-      throw new Error('Expected a bound Reviewer');
-    const reviewer = { kind: 'agent', nativeAgentId: reviewerId } as const;
-    await runtime.execute(snapshot.session.id, reviewer, {
-      type: 'review.create',
-      passId: pass.id,
-      outcome: 'accepted',
-      summary: 'Review accepted',
-    });
-    await runtime.execute(
-      snapshot.session.id,
-      { kind: 'user' },
-      { type: 'task.update', taskId: task.id, status: 'completed' },
-    );
+    const snapshot = runtime.snapshot(id);
+    const gate = snapshot.tasks.find((item) => item.requestId === `${pass.id}:review`)!;
+    const reviewAssignment = snapshot.assignments.find((item) => item.taskId === gate.id)!;
+    expect(reviewAssignment.memberKey).toBe('reviewer');
+    const actor = { kind: 'agent' as const, nativeAgentId: reviewAssignment.nativeAgentId };
     await expect(
-      runtime.execute(
-        snapshot.session.id,
-        { kind: 'user' },
-        { type: 'pass.update', passId: pass.id, status: 'completed' },
-      ),
-    ).rejects.toThrow(/current revision/);
-    expect(
-      runtime.snapshot(snapshot.session.id).passes.find((item) => item.id === pass.id)?.status,
-    ).toBe('running');
-    const current = runtime
-      .snapshot(snapshot.session.id)
-      .passes.find((item) => item.id === pass.id);
-    if (current === undefined) throw new Error('Expected the Pass');
-    await runtime.execute(snapshot.session.id, reviewer, {
-      type: 'review.create',
+      runtime.execute(id, actor, {
+        type: 'review.create',
+        passId: pass.id,
+        assignmentId: reviewAssignment.id,
+        revision: 1,
+        outcome: 'accepted',
+        summary: 'Stale',
+      }),
+    ).rejects.toThrow(/revision/);
+    const command = {
+      type: 'review.create' as const,
       passId: pass.id,
-      outcome: 'accepted',
-      summary: 'Current whole-Pass review accepted',
-    });
-    const completed = await runtime.execute(
-      snapshot.session.id,
-      { kind: 'user' },
-      { type: 'pass.update', passId: pass.id, status: 'completed' },
+      assignmentId: reviewAssignment.id,
+      revision: snapshot.passes.find((item) => item.id === pass.id)!.revision,
+      outcome: 'accepted' as const,
+      summary: 'Complete Pass accepted',
+    };
+    await runtime.execute(id, actor, command);
+    await runtime.execute(id, actor, command);
+    expect(runtime.snapshot(id).passes.find((item) => item.id === pass.id)?.status).toBe(
+      'completed',
     );
-    expect(completed).toMatchObject({ status: 'completed', revision: current.revision });
-    -(await expect(
-      runtime.execute(
-        snapshot.session.id,
-        { kind: 'user' },
-        { type: 'pass.update', passId: pass.id, status: 'active' },
-      ),
-    ).rejects.toThrow(/cannot be reopened/));
-    +(await expect(
-      runtime.execute(
-        snapshot.session.id,
-        { kind: 'user' },
-        { type: 'pass.update', passId: pass.id, status: 'pending' },
-      ),
-    ).rejects.toThrow(/cannot be reopened/));
+    expect(runtime.snapshot(id).reviews).toHaveLength(1);
+    expect(runtime.snapshot(id).tasks.filter((item) => item.phase === 'review')).toHaveLength(1);
     await runtime.close();
   });
   test('restart rehydrates persisted sessions across workspaces', async () => {

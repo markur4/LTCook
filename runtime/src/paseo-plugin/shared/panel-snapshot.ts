@@ -183,6 +183,6 @@ export function panelSnapshot(snapshot: PanelSnapshotSource): TeamStatusSnapshot
       memberKey: assignment.memberKey,
       status: assignment.status,
     })),
-    issues,
+    issues: [...issues, ...snapshot.blockers],
   };
 }
