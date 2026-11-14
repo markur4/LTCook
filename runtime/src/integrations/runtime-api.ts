@@ -160,6 +160,7 @@ export class RuntimeApi {
           '/v1/session/open',
           '/v1/runtime/stop',
           '/v1/tool/authorize',
+          '/v1/ried',
         ].includes(request.url ?? '')) ||
       (request.method === 'GET' && request.url === '/v1/status')
     )) {
@@ -247,6 +248,8 @@ export class RuntimeApi {
         shellEnvironment?: unknown;
         toolName?: unknown;
         input?: unknown;
+        operation?: unknown;
+        section?: unknown;
       };
       const isUser = equalToken(bearer, this.secret);
       const actor: RuntimeActor | undefined = isUser
@@ -364,6 +367,44 @@ export class RuntimeApi {
       }
       if (!runtime) {
         response.writeHead(503).end('{"error":"LTCook runtime is not ready"}');
+        return;
+      }
+      if (request.url === '/v1/ried') {
+        if (!input.sessionId) throw new Error('RIED requires a Session');
+        if ('path' in parsed || 'workspaceRoot' in parsed)
+          throw new Error('RIED scan paths are derived from the Session');
+        if (!['summary', 'section', 'refresh'].includes(String(input.operation)))
+          throw new Error('Invalid RIED operation');
+        if (
+          input.operation === 'section' &&
+          !['repository', 'git', 'host', 'recipes'].includes(String(input.section))
+        )
+          throw new Error('Invalid RIED section');
+        const session = runtime.snapshot(input.sessionId);
+        if (actor.kind === 'agent') {
+          if (
+            !session.members.some(
+              (member) =>
+                member.binding?.nativeAgentId === actor.nativeAgentId &&
+                member.binding.state === 'bound',
+            )
+          ) {
+            response.writeHead(403).end('{"error":"native agent is not bound to this session"}');
+            return;
+          }
+        } else if (
+          this.sessions.get(input.sessionId) !== canonicalWorkspace(session.session.workspaceRoot)
+        ) {
+          response.writeHead(403).end('{"error":"session is not active in this runtime"}');
+          return;
+        }
+        const value = await runtime.ried(input.sessionId, {
+          operation: input.operation as 'summary' | 'section' | 'refresh',
+          ...(input.operation === 'section'
+            ? { section: input.section as 'repository' | 'git' | 'host' | 'recipes' }
+            : {}),
+        });
+        response.writeHead(200).end(JSON.stringify({ value }));
         return;
       }
       if (request.url === '/v1/snapshot') {

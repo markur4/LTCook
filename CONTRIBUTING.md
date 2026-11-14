@@ -94,6 +94,11 @@ Linux-only manual asset build, not publication.
 
 # Working conventions
 
+LTCook is a prototype. Prefer clean breaking replacements: remove superseded code,
+formats and caches. Do not add migration code, compatibility readers, aliases or
+dual implementations. Reject unsupported saved state unchanged and give explicit
+reset or reinstall guidance.
+
 - Keep changes focused and follow the [repository layout](docs/Development.md#repository-routing).
   Ask before creating a top-level directory if an existing owner fits.
 - AppRC is declared once in `ltcook.config.app.APP_RC`; settings belong in their

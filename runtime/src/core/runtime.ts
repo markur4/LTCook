@@ -16,17 +16,17 @@ import type {
   TeamPackage,
   PlanningRecord,
   DecisionPresentation,
-  ProjectSnapshot,
 } from '../workflow-api/index.js';
 import { CoordinationStore } from '../storage/coordination.js';
 import { canonicalWorkspace } from './workspace.js';
+import { RiedService, type RiedRequest } from '../ried.js';
 
 type RuntimeOptions = {
   databasePath: string;
   team: TeamPackage;
   agents: AgentBackend;
   stateDirectory?: string;
-  projectContext?: (workspaceRoot: string) => Promise<ProjectSnapshot>;
+  ried?: RiedService;
   onEvent?: (event: RuntimeEvent) => void;
 };
 
@@ -44,6 +44,7 @@ export class RuntimeController implements RuntimeControllerContract {
   private readonly nativeById = new Map<string, NativeAgent>();
   private closed = false;
   private readonly planning: PlanningWorkflow;
+  private readonly riedService: RiedService | undefined;
   private readonly initializedSessions = new Set<string>();
   private readonly initializingSessions = new Map<string, Promise<void>>();
   constructor(options: RuntimeOptions) {
@@ -62,12 +63,12 @@ export class RuntimeController implements RuntimeControllerContract {
         throw new Error(`Invalid routing for ${type}`);
     }
     this.store = new CoordinationStore(options.databasePath);
+    this.riedService = options.ried;
     this.planning = new PlanningWorkflow(this.store, {
       stateDirectory:
         options.stateDirectory ??
         process.env.LTCOOK_RUNTIME_STATE_DIR ??
         path.join(path.dirname(options.databasePath), 'runtime'),
-      ...(options.projectContext ? { projectContext: options.projectContext } : {}),
       dispatch: (session, record, stage) => this.dispatchPlanning(session, record, stage),
       scheduleExecution: (session, record) => this.scheduleExecution(session, record),
     });
@@ -85,7 +86,14 @@ export class RuntimeController implements RuntimeControllerContract {
     this.assertSessionSelection(session, input.workspaceRoot);
     if (this.initializedSessions.has(session.id)) return this.snapshot(session.id);
     await this.initializeSession(session);
+    void this.riedService?.get(session, { operation: 'summary' }).catch(() => undefined);
     return this.snapshot(session.id);
+  }
+
+  async ried(sessionId: string, request: RiedRequest): Promise<unknown> {
+    this.assertOpen();
+    if (!this.riedService) throw new Error('RIED is unavailable');
+    return this.riedService.get(this.session(sessionId), request);
   }
 
   private assertSessionSelection(session: Session, workspaceRoot: string): void {
@@ -671,7 +679,6 @@ export class RuntimeController implements RuntimeControllerContract {
       workType,
       sessionId: session.id,
       workspaceRoot: session.workspaceRoot,
-      ...(record.projectContext ? { projectContext: record.projectContext } : {}),
     };
     const selected =
       (await this.team.selectAssignee?.(
@@ -684,11 +691,15 @@ export class RuntimeController implements RuntimeControllerContract {
     if (binding.state !== 'bound' || binding.nativeAgentId === null)
       throw new Error(`Planning member ${selected} is unavailable`);
     const requestId = `${record.id}:${stage}`;
+    const riedSummary = await this.ried(session.id, { operation: 'summary' }).catch(() => ({
+      status: 'partial',
+      diagnostics: ['RIED unavailable'],
+    }));
     const task =
       this.store.listTasks(session.id).find((task) => task.requestId === requestId) ??
       this.store.createTask(session.id, {
         title: `${workType}: ${record.title}`,
-        description: `Read Design ${record.design.path}; ${stage === 'prefill' ? 'write the proposed Plan' : 'investigate gaps and finalize the same Plan'} at ${record.plan.path}. Consult the required planning skill and preserve Modes requirements. Include document metadata createdAt ${record.plan.createdAt} and timezone ${record.plan.timezone}. Register user questions through decision.create. Submit planning.submit for this assignment. Project context: ${JSON.stringify(record.projectContext ?? { incomplete: ['Project context provider unavailable'] })}`,
+        description: `Read Design ${record.design.path}; ${stage === 'prefill' ? 'write the proposed Plan' : 'investigate gaps and finalize the same Plan'} at ${record.plan.path}. Consult the required planning skill and preserve Modes requirements. Include document metadata createdAt ${record.plan.createdAt} and timezone ${record.plan.timezone}. Register user questions through decision.create. Submit planning.submit for this assignment. RIED summary: ${JSON.stringify(riedSummary)}. Use ltcook_ried for sections or refresh`,
         acceptance:
           'Team-authored Plan with all six coverage topics; required user decisions are persisted',
         workType: 'design',

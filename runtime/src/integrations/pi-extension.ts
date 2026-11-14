@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
+import { Type } from 'typebox';
 import { selectedTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
@@ -59,7 +60,7 @@ export default async function activate(
     throw new Error('Selected native team does not match the active session');
   const rpc = async (pathname: string, payload: Record<string, unknown>): Promise<Response> =>
     fetch(`${endpoint}${pathname}`, {
-      signal: globalThis.AbortSignal.timeout(3000) as NonNullable<
+      signal: globalThis.AbortSignal.timeout(pathname === '/v1/ried' ? 30000 : 3000) as NonNullable<
         Parameters<typeof fetch>[1]
       >['signal'],
       method: 'POST',
@@ -164,6 +165,35 @@ export default async function activate(
       const serialized = JSON.stringify(result);
       if (serialized === undefined) throw new Error('Coordination response could not be encoded.');
       return { content: [{ type: 'text', text: serialized }], details: result };
+    },
+  });
+  pi.registerTool({
+    name: 'ltcook_ried',
+    label: 'Repository and environment inventory',
+    description: 'Read a bounded inventory of this Session workspace or refresh it.',
+    parameters: Type.Object({
+      operation: Type.Union([
+        Type.Literal('summary'),
+        Type.Literal('section'),
+        Type.Literal('refresh'),
+      ]),
+      section: Type.Optional(
+        Type.Union([
+          Type.Literal('repository'),
+          Type.Literal('git'),
+          Type.Literal('host'),
+          Type.Literal('recipes'),
+        ]),
+      ),
+    }),
+    async execute(_id, input) {
+      const response = await rpc('/v1/ried', {
+        operation: input.operation,
+        ...(input.section ? { section: input.section } : {}),
+      });
+      if (!response.ok) throw new Error(`RIED request failed (${response.status})`);
+      const result: unknown = await response.json();
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
     },
   });
   await activateOptionalBrowser(pi);
