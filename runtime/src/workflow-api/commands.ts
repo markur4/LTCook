@@ -40,6 +40,22 @@ const CoverageSchema = Type.Array(
     { additionalProperties: false },
   ),
 );
+const ApprovalScopeSchema = Type.Object(
+  {
+    action: Type.String({ minLength: 1 }),
+    resourceId: Type.String({ minLength: 1 }),
+    revision: Type.String({ minLength: 1 }),
+  },
+  { additionalProperties: false },
+);
+const VerificationEntrySchema = Type.Object(
+  {
+    requirement: Type.String({ minLength: 1 }),
+    result: Type.Union([Type.Literal('passed'), Type.Literal('failed')]),
+    evidence: Type.String({ minLength: 1 }),
+  },
+  { additionalProperties: false },
+);
 const planContext = { planId: Type.String({ minLength: 1 }) };
 /** The single command definition used by HTTP, native tools, and public types. */
 export const RuntimeCommandSchema = Type.Union([
@@ -169,7 +185,13 @@ export const RuntimeCommandSchema = Type.Union([
       description: Type.String(),
       acceptance: Type.String(),
       phase: Type.Optional(TaskPhaseSchema),
-      requestId: Type.Optional(Type.String()),
+      requestId: Type.Optional(Type.String({ minLength: 1 })),
+      scheduled: Type.Optional(Type.Boolean()),
+      assigneeKey: Type.Optional(Type.String({ minLength: 1 })),
+      dependencyIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      verificationRequirements: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      approvalScopes: Type.Optional(Type.Array(ApprovalScopeSchema)),
+      correctionOfTaskId: Type.Optional(Type.String({ minLength: 1 })),
     },
     { additionalProperties: false },
   ),
@@ -177,8 +199,18 @@ export const RuntimeCommandSchema = Type.Union([
     {
       type: Type.Literal('task.update'),
       taskId: Type.String(),
-      status: WorkStatusSchema,
+      status: Type.Optional(WorkStatusSchema),
+      dependencyIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
       blocker: Type.Optional(Type.String()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal('task.retry'),
+      taskId: Type.String(),
+      requestId: Type.String({ minLength: 1 }),
+      correctionTaskId: Type.Optional(Type.String()),
     },
     { additionalProperties: false },
   ),
@@ -210,6 +242,8 @@ export const RuntimeCommandSchema = Type.Union([
       assignmentId: Type.String(),
       summary: Type.String(),
       evidence: Type.String(),
+      outcome: Type.Optional(Type.Union([Type.Literal('success'), Type.Literal('failure')])),
+      verification: Type.Optional(Type.Array(VerificationEntrySchema)),
     },
     { additionalProperties: false },
   ),
@@ -217,6 +251,9 @@ export const RuntimeCommandSchema = Type.Union([
     {
       type: Type.Literal('review.create'),
       passId: Type.String(),
+      assignmentId: Type.Optional(Type.String()),
+      revision: Type.Optional(Type.Integer({ minimum: 1 })),
+      verification: Type.Optional(Type.Array(VerificationEntrySchema)),
       outcome: Type.Union([Type.Literal('accepted'), Type.Literal('changes-requested')]),
       summary: Type.String(),
     },
@@ -254,6 +291,7 @@ type CommandInput<T extends RuntimeCommand['type']> = Omit<
 export type CreatePassInput = CommandInput<'pass.create'>;
 export type UpdatePassInput = CommandInput<'pass.update'>;
 export type CreateTaskInput = CommandInput<'task.create'>;
+export type RetryTaskInput = CommandInput<'task.retry'>;
 export type UpdateTaskInput = CommandInput<'task.update'>;
 export type CreateStepInput = CommandInput<'step.create'>;
 export type UpdateStepInput = CommandInput<'step.update'>;

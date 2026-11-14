@@ -326,6 +326,28 @@ document references, decisions, approvals and work results.
 TypeBox schema; public command types and agent-facing input schemas derive from it.
 The `ltcook_team` native tool uses that schema and Core enforces actor permissions.
 
+Scheduled Pass `task.create` requests use stable `requestId` values and may
+register `assigneeKey`, `dependencyIds`, `verificationRequirements`,
+`approvalScopes` (`{action, resourceId, revision}`), and `correctionOfTaskId`.
+`task.update` may change dependencies only while pending and unassigned.
+`task.retry` supplies `taskId`, stable `requestId`, and a completed linked
+`correctionTaskId` when required. A scheduled `report.create` declares
+`outcome` (`success` or `failure`) and `verification` entries with `requirement`,
+`result` (`passed` or `failed`), and nonempty `evidence`. Required successful
+entries and exact user approvals gate completion. Pass review responses identify
+the current review assignment and revision. `review.create` also accepts the
+same named `verification` entries when its review Task declares requirements;
+acceptance requires passing evidence and every exact approval scope on that Task.
+Consult the authoritative schema
+for required and optional fields; standalone and planning work retains manual
+assignment/status behavior.
+
+`/v1/snapshot` exposes saved Tasks, assignment attempts, gates, and blockers.
+Dependency waits, unmet verification/approvals, unavailable members, and uncertain
+sends remain visible through the existing Paseo views. Duplicate events are
+idempotent only when identical. An interrupted send becomes uncertain and is
+never replayed automatically.
+
 RIED is a separate runtime service. `POST /v1/ried` accepts an authenticated
 Session and `operation` of `summary`, `section` or `refresh`; `section` requires
 `repository`, `git`, `host` or `recipes`. The `ltcook_ried` native tool exposes
@@ -404,7 +426,7 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just check` | Enforce Prettier/Ruff formatting, TypeScript types, Python lint, and Pyright. |
 | `just test` | Run Bun unit/native/integration and team contract tests, plus Python tests excluding `integration` and `system`. |
 | `just test-integration` | Run marked Python and TypeScript integration tests. |
-| `just test-system` | Run marked Python system tests. |
+| `just test-system` | Run system checks, including required Linux real Pi/Paseo scripted acceptance. |
 | `just build` | Build/stage runtime, team, and service production assets and the Python wheel/source distribution. |
 | `just sync`, `just install` | Prepare the checkout-local uv environment, install frozen locks, build, stage assets, and install the Python application. |
 | `just build-native` | Build committed-source Linux setup and SDK checksums with uv 0.13.6 and Rust/LLVM. |

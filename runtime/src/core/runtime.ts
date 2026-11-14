@@ -16,6 +16,7 @@ import type {
   TeamPackage,
   PlanningRecord,
   DecisionPresentation,
+  Task,
 } from '../workflow-api/index.js';
 import { CoordinationStore } from '../storage/coordination.js';
 import { canonicalWorkspace } from './workspace.js';
@@ -47,6 +48,7 @@ export class RuntimeController implements RuntimeControllerContract {
   private readonly riedService: RiedService | undefined;
   private readonly initializedSessions = new Set<string>();
   private readonly initializingSessions = new Map<string, Promise<void>>();
+  private readonly scheduling = new Map<string, Promise<void>>();
   constructor(options: RuntimeOptions) {
     if (options.team.apiVersion !== 2)
       throw new Error(`Unsupported team API version ${String(options.team.apiVersion)}`);
@@ -114,6 +116,7 @@ export class RuntimeController implements RuntimeControllerContract {
       await this.reconcile(session);
       await this.planning.recover(session);
       this.initializedSessions.add(session.id);
+      await this.schedule(session);
     })();
     this.initializingSessions.set(session.id, initialization);
     try {
@@ -155,6 +158,36 @@ export class RuntimeController implements RuntimeControllerContract {
       )
       .map((binding) => `${binding.memberKey}: ${binding.blocker ?? binding.state}`);
     for (const task of this.store.listTasks(sessionId)) {
+      if (task.scheduled && !['completed', 'failed', 'cancelled'].includes(task.status)) {
+        const barrier = this.store
+          .listTasks(sessionId)
+          .find(
+            (item) => item.passId === task.passId && item.requestId?.endsWith(':execution-handoff'),
+          );
+        if (barrier?.status !== 'completed')
+          blockers.push(`Task ${task.id}: Waiting for Main to complete initial Task registration`);
+        if (task.phase === 'review' && task.assigneeKey === undefined)
+          blockers.push(`Task ${task.id}: Waiting for an available declared Pass reviewer`);
+        blockers.push(
+          ...this.taskGates(sessionId, task).map((reason) => `Task ${task.id}: ${reason}`),
+        );
+        if (task.assigneeKey) {
+          const binding = bindings.find((item) => item.memberKey === task.assigneeKey);
+          if (binding?.state !== 'bound')
+            blockers.push(
+              `Task ${task.id}: Member ${task.assigneeKey} is unavailable (${binding?.state ?? 'not spawned'})`,
+            );
+          else if (
+            assignments.some(
+              (item) =>
+                item.memberKey === task.assigneeKey &&
+                item.taskId !== task.id &&
+                item.status !== 'reported',
+            )
+          )
+            blockers.push(`Task ${task.id}: Member ${task.assigneeKey} has an active assignment`);
+        }
+      }
       if (task.requestId?.endsWith(':execution-handoff') && task.status === 'blocked')
         blockers.push(`Scheduling Task ${task.id}: ${task.blocker ?? 'blocked'}`);
     }
@@ -181,6 +214,16 @@ export class RuntimeController implements RuntimeControllerContract {
   }
 
   async execute(sessionId: string, actor: RuntimeActor, command: RuntimeCommand): Promise<unknown> {
+    const result = await this.executeCommand(sessionId, actor, command);
+    if (this.initializedSessions.has(sessionId)) await this.schedule(this.session(sessionId));
+    return result;
+  }
+
+  private async executeCommand(
+    sessionId: string,
+    actor: RuntimeActor,
+    command: RuntimeCommand,
+  ): Promise<unknown> {
     this.assertOpen();
     const session = this.session(sessionId);
     if (
@@ -239,6 +282,7 @@ export class RuntimeController implements RuntimeControllerContract {
           if (command.workType === undefined || command.workType === 'task.execute')
             executionPass(command.passId);
           break;
+        case 'task.retry':
         case 'task.update':
         case 'step.create':
         case 'assignment.create':
@@ -260,6 +304,13 @@ export class RuntimeController implements RuntimeControllerContract {
         this.requireCoordinator(actor, coordinator);
         if (command.status === 'running' && !this.planning.approvedPass(sessionId, command.passId))
           throw new Error('Pass execution requires its registered Plan approval');
+        if (
+          command.status === 'completed' &&
+          this.store
+            .listTasks(sessionId)
+            .some((task) => task.passId === command.passId && task.scheduled)
+        )
+          throw new Error('Scheduled Pass completion is owned by the runtime');
         if (command.status === 'completed' && this.team.definition.reviewPolicy.required) {
           const pass = this.store.getPass(sessionId, command.passId);
           const latest = this.store
@@ -272,11 +323,52 @@ export class RuntimeController implements RuntimeControllerContract {
         }
         return this.store.updatePass(sessionId, command);
       }
-      case 'task.create':
+      case 'task.create': {
         this.requireCoordinator(actor, coordinator);
+        if (
+          command.passId &&
+          (command.workType === undefined || command.workType === 'task.execute')
+        ) {
+          if (command.scheduled === false)
+            throw new Error('Pass execution Tasks are scheduled by the runtime');
+          if (command.phase === 'review') {
+            const policy = this.team.definition.reviewPolicy;
+            if (policy.mode !== 'self')
+              throw new Error('Core registers the independent Pass-wide review gate');
+            const tasks = this.store
+              .listTasks(sessionId)
+              .filter((task) => task.passId === command.passId);
+            if (
+              tasks.some((task) => task.scheduled) &&
+              tasks.filter((task) => task.scheduled).every((task) => task.status === 'completed')
+            )
+              throw new Error('Self-inspection must be registered before the final Task finishes');
+            return this.store.createTask(sessionId, {
+              ...command,
+              requestId: `${command.passId}:review`,
+              assigneeKey: this.team.definition.coordinatorKey,
+            });
+          }
+        }
+        if (
+          command.assigneeKey &&
+          !this.member(command.assigneeKey).workTypes.includes(
+            command.workType === 'design' ? 'design' : 'task.execute',
+          )
+        )
+          throw new Error('Selected member is not eligible for this Task');
         return this.store.createTask(sessionId, command);
+      }
+      case 'task.retry':
+        this.requireCoordinator(actor, coordinator);
+        return this.store.retryTask(sessionId, command);
       case 'task.update': {
         const task = this.store.getTask(sessionId, command.taskId);
+        if (task.scheduled && command.status !== undefined && command.status !== task.status)
+          throw new Error(
+            'Scheduled Task status is owned by the runtime; report a result or retry it',
+          );
+        if (command.dependencyIds !== undefined) this.requireCoordinator(actor, coordinator);
         if (actor.kind === 'agent' && !coordinator) {
           const ownsTask = this.store
             .listAssignments(sessionId)
@@ -284,7 +376,11 @@ export class RuntimeController implements RuntimeControllerContract {
               (assignment) =>
                 assignment.taskId === task.id && assignment.nativeAgentId === actor.nativeAgentId,
             );
-          if (!ownsTask || !['running', 'blocked', 'failed'].includes(command.status))
+          if (
+            !ownsTask ||
+            command.status === undefined ||
+            !['running', 'blocked', 'failed'].includes(command.status)
+          )
             throw new Error(
               'Agents may update only the status of tasks assigned to their bound native identity',
             );
@@ -297,6 +393,7 @@ export class RuntimeController implements RuntimeControllerContract {
       case 'assignment.create': {
         this.requireCoordinator(actor, coordinator);
         const task = this.store.getTask(sessionId, command.taskId);
+        if (task.scheduled) throw new Error('Scheduled Tasks are assigned by the runtime');
         const workType = task.workType === 'design' ? 'design' : 'task.execute';
         const eligible = this.team.definition.members.filter((member) =>
           member.workTypes.includes(workType),
@@ -343,7 +440,10 @@ export class RuntimeController implements RuntimeControllerContract {
         const assignment = this.store.getAssignment(sessionId, command.assignmentId);
         if (actor.kind !== 'agent' || assignment.nativeAgentId !== actor.nativeAgentId)
           throw new Error('Only the assigned native agent may report this task');
-        const requestId = this.store.getTask(sessionId, assignment.taskId).requestId;
+        const reportedTask = this.store.getTask(sessionId, assignment.taskId);
+        if (reportedTask.scheduled && reportedTask.phase === 'review')
+          throw new Error('Pass review requires review.create');
+        const requestId = reportedTask.requestId;
         if (
           this.planning
             .list(sessionId)
@@ -388,11 +488,48 @@ export class RuntimeController implements RuntimeControllerContract {
             identity.memberKey === this.team.definition.coordinatorKey)
         )
           throw new Error('This member is not an independent reviewer');
+        const gate = this.store
+          .listTasks(sessionId)
+          .find(
+            (task) => task.passId === command.passId && task.scheduled && task.phase === 'review',
+          );
+        if (
+          !gate &&
+          this.store
+            .listTasks(sessionId)
+            .some((task) => task.passId === command.passId && task.scheduled)
+        )
+          throw new Error('Scheduled Pass review awaits its runtime review gate');
+        if (gate) {
+          if (!command.assignmentId || command.revision === undefined)
+            throw new Error('Scheduled review requires its assignmentId and current Pass revision');
+          const assignment = this.store.getAssignment(sessionId, command.assignmentId);
+          if (assignment.taskId !== gate.id || assignment.nativeAgentId !== actor.nativeAgentId)
+            throw new Error('Only the assigned Pass reviewer may submit this review');
+          if (command.outcome === 'accepted' && this.taskGates(sessionId, gate).length)
+            throw new Error('Pass review has unmet dependencies or approval gates');
+          if (
+            this.store
+              .listTasks(sessionId)
+              .some(
+                (task) =>
+                  task.passId === command.passId &&
+                  task.id !== gate.id &&
+                  task.status !== 'completed',
+              )
+          )
+            throw new Error('Pass review requires all non-review Tasks to be completed');
+        }
         if (reviewPolicy.mode === 'independent') {
           const assignments = this.store.listAssignments(sessionId);
           const assignedToPass = this.store
             .listTasks(sessionId)
-            .filter((task) => task.passId === command.passId)
+            .filter(
+              (task) =>
+                task.passId === command.passId &&
+                task.phase !== 'review' &&
+                task.correctionOfTaskId !== gate?.id,
+            )
             .some((task) =>
               assignments.some(
                 (assignment) =>
@@ -452,6 +589,201 @@ export class RuntimeController implements RuntimeControllerContract {
     }
   }
 
+  /** Serializes dispatch decisions while native members perform their work concurrently. */
+  private schedule(session: Session): Promise<void> {
+    const previous = this.scheduling.get(session.id) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(() => this.advanceSession(session));
+    this.scheduling.set(session.id, next);
+    return next.finally(() => {
+      if (this.scheduling.get(session.id) === next) this.scheduling.delete(session.id);
+    });
+  }
+
+  private taskGates(sessionId: string, task: Task): string[] {
+    const reasons: string[] = [];
+    for (const dependencyId of task.dependencyIds ?? []) {
+      const dependency = this.store.getTask(sessionId, dependencyId);
+      if (dependency.status !== 'completed')
+        reasons.push(`Dependency ${dependency.id} is ${dependency.status}`);
+    }
+    for (const scope of task.approvalScopes ?? []) {
+      const approval = this.store
+        .listApprovals(sessionId)
+        .filter(
+          (item) =>
+            item.scope.action === scope.action &&
+            item.scope.resourceId === scope.resourceId &&
+            item.scope.revision === scope.revision,
+        )
+        .at(-1);
+      if (approval?.decision !== 'approved')
+        reasons.push(`Approval required: ${scope.action} ${scope.resourceId} ${scope.revision}`);
+    }
+    return reasons;
+  }
+
+  private async advanceSession(session: Session): Promise<void> {
+    if (this.closed) return;
+    for (const pass of this.store.listPasses(session.id)) {
+      if (pass.status !== 'running' || !this.planning.approvedPass(session.id, pass.id)) continue;
+      const tasks = this.store.listTasks(session.id).filter((task) => task.passId === pass.id);
+      const barrier = tasks.find((task) => task.requestId?.endsWith(':execution-handoff'));
+      if (!barrier || barrier.status !== 'completed') continue;
+      for (const task of tasks.filter((item) => item.scheduled && item.phase !== 'review')) {
+        if (['completed', 'failed', 'cancelled'].includes(task.status)) continue;
+        const gates = this.taskGates(session.id, task);
+        const assignment = this.store
+          .listAssignments(session.id)
+          .filter((item) => item.taskId === task.id && (item.attempt ?? 1) === (task.attempt ?? 1))
+          .at(-1);
+        const report =
+          assignment &&
+          this.store.listReports(session.id).find((item) => item.assignmentId === assignment.id);
+        if (report?.outcome === 'success' && gates.length === 0) {
+          this.store.updateTask(session.id, { taskId: task.id, status: 'completed' });
+          continue;
+        }
+        const failedDependency = (task.dependencyIds ?? []).some((id) =>
+          ['failed', 'cancelled'].includes(this.store.getTask(session.id, id).status),
+        );
+        if (!assignment && failedDependency) {
+          if (task.status !== 'blocked')
+            this.store.updateTask(session.id, {
+              taskId: task.id,
+              status: 'blocked',
+              blocker: gates.join('; '),
+            });
+          continue;
+        }
+        if (!assignment && task.status === 'blocked' && gates.length === 0)
+          this.store.updateTask(session.id, { taskId: task.id, status: 'pending' });
+        if (gates.length === 0 && !report)
+          await this.dispatchScheduled(session, this.store.getTask(session.id, task.id));
+      }
+      const current = this.store.listTasks(session.id).filter((task) => task.passId === pass.id);
+      const work = current.filter((task) => task.phase !== 'review');
+      if (
+        !current.some((task) => task.scheduled) ||
+        !work.every(
+          (task) => task.status === 'completed' && this.taskGates(session.id, task).length === 0,
+        )
+      )
+        continue;
+      let gate = current.find((task) => task.scheduled && task.phase === 'review');
+      const policy = this.team.definition.reviewPolicy;
+      if (!gate && policy.required) {
+        gate = this.store.createTask(session.id, {
+          passId: pass.id,
+          workType: 'task.execute',
+          phase: 'review',
+          requestId: `${pass.id}:review`,
+          title: `Review Pass: ${pass.title}`,
+          description:
+            'Review the complete Pass. Fix in-scope findings before acceptance, or request changes. Record review.create with this assignmentId and the current Pass revision.',
+          acceptance: 'Current-revision Pass-wide acceptance by the declared reviewer',
+        });
+      }
+      if (gate) {
+        if (this.taskGates(session.id, gate).length) continue;
+        if (gate.status !== 'completed') {
+          if (gate.status !== 'failed') await this.dispatchScheduled(session, gate);
+          continue;
+        }
+        const latest = this.store
+          .listReviews(session.id)
+          .filter((review) => review.passId === pass.id)
+          .at(-1);
+        if (
+          latest?.outcome !== 'accepted' ||
+          latest.revision !== this.store.getPass(session.id, pass.id).revision
+        )
+          continue;
+      }
+      this.store.updatePass(session.id, { passId: pass.id, status: 'completed' });
+    }
+  }
+
+  private async dispatchScheduled(session: Session, task: Task): Promise<void> {
+    if (
+      !task.passId ||
+      !this.planning.approvedPass(session.id, task.passId) ||
+      this.taskGates(session.id, task).length
+    )
+      return;
+    const assignments = this.store.listAssignments(session.id);
+    const previous = assignments
+      .filter((item) => item.taskId === task.id && (item.attempt ?? 1) === (task.attempt ?? 1))
+      .at(-1);
+    if (previous && previous.status !== 'pending') return;
+    const policy = this.team.definition.reviewPolicy;
+    const review = task.phase === 'review';
+    const eligible = this.team.definition.members.filter((member) => {
+      if (!member.workTypes.includes('task.execute')) return false;
+      if (!review) return true;
+      if (policy.mode === 'self') return member.key === this.team.definition.coordinatorKey;
+      return (
+        policy.reviewerKeys.includes(member.key) &&
+        member.key !== this.team.definition.coordinatorKey &&
+        !assignments.some(
+          (assignment) =>
+            assignment.memberKey === member.key &&
+            this.store.getTask(session.id, assignment.taskId).passId === task.passId &&
+            this.store.getTask(session.id, assignment.taskId).phase !== 'review' &&
+            this.store.getTask(session.id, assignment.taskId).correctionOfTaskId !== task.id,
+        )
+      );
+    });
+    let selected = task.assigneeKey;
+    if (!selected) {
+      selected = review
+        ? (eligible.find((member) => member.lifetime === 'persistent')?.key ?? eligible[0]?.key)
+        : ((await this.team.selectAssignee?.(
+            Object.freeze({
+              workType: 'task.execute',
+              sessionId: session.id,
+              workspaceRoot: session.workspaceRoot,
+            }),
+            Object.freeze(eligible.map((member) => Object.freeze({ ...member }))),
+          )) ?? this.team.definition.routing['task.execute']);
+      if (!selected) return;
+      if (!eligible.some((member) => member.key === selected))
+        throw new Error(
+          `Selected member is not eligible for ${review ? 'Pass review' : 'task.execute'}`,
+        );
+      this.store.setTaskAssignee(session.id, task.id, selected);
+    }
+    // > A routing hook may yield while a new blocking decision is recorded.
+    if (
+      !this.planning.approvedPass(session.id, task.passId) ||
+      this.taskGates(session.id, this.store.getTask(session.id, task.id)).length
+    )
+      return;
+    if (!eligible.some((member) => member.key === selected))
+      throw new Error(
+        `Selected member is not eligible for ${review ? 'Pass review' : 'task.execute'}`,
+      );
+    if (
+      assignments.some(
+        (item) =>
+          item.memberKey === selected && item.id !== previous?.id && item.status !== 'reported',
+      )
+    )
+      return;
+    const binding = this.store.listBindings(session.id).find((item) => item.memberKey === selected);
+    if (binding?.state !== 'bound' || !binding.nativeAgentId) return;
+    const assignment =
+      previous ??
+      this.store.createAssignment(session.id, {
+        taskId: task.id,
+        memberKey: selected,
+        nativeAgentId: binding.nativeAgentId,
+        message: `${review ? 'Pass-wide review' : 'Scheduled Task'} ${task.id} in Pass ${task.passId}. ${task.description} Acceptance: ${task.acceptance}. Verification requirements: ${JSON.stringify(task.verificationRequirements)}. ${review ? 'Submit review.create with assignmentId and the current Pass revision.' : 'Submit report.create with outcome success or failure and named verification entries with evidence.'}`,
+      });
+    if (task.status !== 'running')
+      this.store.updateTask(session.id, { taskId: task.id, status: 'running' });
+    await this.deliverAssignment(assignment);
+  }
+
   private requireCoordinator(actor: RuntimeActor, coordinator: boolean): void {
     if (actor.kind === 'agent' && !coordinator)
       throw new Error('Only the bound coordinator may schedule team work');
@@ -506,9 +838,13 @@ export class RuntimeController implements RuntimeControllerContract {
       bindingsByMember.set(member.key, binding);
     }
     for (const assignment of this.store.listAssignments(session.id)) {
-      if (assignment.status === 'pending') await this.deliverAssignment(assignment);
-      else if (assignment.status === 'sending')
+      if (assignment.status === 'sending')
         this.store.updateAssignment(session.id, assignment.id, 'uncertain');
+      else if (
+        assignment.status === 'pending' &&
+        !this.store.getTask(session.id, assignment.taskId).scheduled
+      )
+        await this.deliverAssignment(assignment);
     }
   }
 
@@ -601,8 +937,12 @@ export class RuntimeController implements RuntimeControllerContract {
   private async deliverAssignment(assignment: Assignment): Promise<void> {
     this.store.updateAssignment(assignment.sessionId, assignment.id, 'sending');
     try {
-      await this.agents.send(assignment.nativeAgentId, assignment.handoff);
-      this.store.updateAssignment(assignment.sessionId, assignment.id, 'sent');
+      await this.agents.send(
+        assignment.nativeAgentId,
+        `Assignment ID: ${assignment.id}. Task ID: ${assignment.taskId}. Attempt: ${assignment.attempt ?? 1}.\n${assignment.handoff}`,
+      );
+      if (this.store.getAssignment(assignment.sessionId, assignment.id).status === 'sending')
+        this.store.updateAssignment(assignment.sessionId, assignment.id, 'sent');
       this.emit({
         type: 'assignment.sent',
         sessionId: assignment.sessionId,
@@ -611,6 +951,9 @@ export class RuntimeController implements RuntimeControllerContract {
         memberKey: assignment.memberKey,
       });
     } catch (error) {
+      // > A native result proves delivery even when its transport acknowledgement arrives late.
+      if (this.store.getAssignment(assignment.sessionId, assignment.id).status === 'reported')
+        return;
       this.store.updateAssignment(assignment.sessionId, assignment.id, 'uncertain');
       this.store.updateTask(assignment.sessionId, {
         taskId: assignment.taskId,
@@ -634,8 +977,9 @@ export class RuntimeController implements RuntimeControllerContract {
         passId: record.passId,
         title: `Schedule approved Plan: ${record.title}`,
         workType: 'task.execute',
+        scheduled: false,
         requestId,
-        description: `The user approved Plan ${record.id} at ${record.plan.path} for Pass ${record.passId}. Main now schedules execution Tasks among the declared eligible members. Preserve the approved scope and recorded decisions. Append detailed execution reports, Emerging Issues and User decisions post approval to this same Plan; record lasting design decisions in ${record.design.path}. Submit a report for this scheduling assignment and mark this scheduling Task complete after assigning the execution work.`,
+        description: `The user approved Plan ${record.id} at ${record.plan.path} for Pass ${record.passId}. Main now schedules execution Tasks among the declared eligible members. Preserve the approved scope and recorded decisions. Append detailed execution reports, Emerging Issues and User decisions post approval to this same Plan; record lasting design decisions in ${record.design.path}. Submit a report for this scheduling assignment and mark this scheduling Task complete after registering the execution Tasks, dependencies, assignees and gates. The runtime dispatches them after this handoff is complete.`,
         acceptance:
           'Main receives the approved Plan/Pass, schedules execution Tasks, and reports the scheduling handoff.',
       });
@@ -810,6 +1154,7 @@ export class RuntimeController implements RuntimeControllerContract {
     if (!this.initializedSessions.has(input.sessionId))
       throw new Error('Session native bindings have not been reconciled');
     await this.planning.resolve(this.session(input.sessionId), input);
+    await this.schedule(this.session(input.sessionId));
   }
   private session(sessionId: string): Session {
     const cached = this.sessions.get(sessionId);

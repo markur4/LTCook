@@ -123,30 +123,157 @@ describe('CoordinationStore', () => {
     expect(() => store.getStep('another-session', first.id)).toThrow();
     store.close();
   });
-  test.each([0, 1, 3])('rejects incompatible schema %s without modifying any bytes', (version) => {
-    const path = databasePath();
-    const legacy = new Database(path);
-    legacy.exec(
-      `CREATE TABLE preserved (value TEXT); INSERT INTO preserved VALUES ('keep'); PRAGMA user_version=${version}`,
-    );
-    legacy.close();
-    const original = readFileSync(path);
-    expect(() => new CoordinationStore(path)).toThrow(/Incompatible coordination database schema/);
-    expect(readFileSync(path)).toEqual(original);
-    const probe = new Database(path);
-    expect(probe.prepare('SELECT value FROM preserved').get()).toMatchObject({ value: 'keep' });
-    expect(
-      probe.prepare("SELECT name FROM sqlite_master WHERE name='owner'").get(),
-    ).toBeUndefined();
-    probe.close();
-  });
+  test.each([0, 1, 2, 4])(
+    'rejects incompatible schema %s without modifying any bytes',
+    (version) => {
+      const path = databasePath();
+      const legacy = new Database(path);
+      legacy.exec(
+        `CREATE TABLE preserved (value TEXT); INSERT INTO preserved VALUES ('keep'); PRAGMA user_version=${version}`,
+      );
+      legacy.close();
+      const original = readFileSync(path);
+      expect(() => new CoordinationStore(path)).toThrow(
+        /Incompatible coordination database schema/,
+      );
+      expect(readFileSync(path)).toEqual(original);
+      const probe = new Database(path);
+      expect(probe.prepare('SELECT value FROM preserved').get()).toMatchObject({ value: 'keep' });
+      expect(
+        probe.prepare("SELECT name FROM sqlite_master WHERE name='owner'").get(),
+      ).toBeUndefined();
+      probe.close();
+    },
+  );
   test('rejects an incomplete current schema before creating an owner', () => {
     const path = databasePath();
     const invalid = new Database(path);
-    invalid.exec('PRAGMA user_version=2');
+    invalid.exec('PRAGMA user_version=3');
     invalid.close();
     const original = readFileSync(path);
     expect(() => new CoordinationStore(path)).toThrow(/missing required tables/);
     expect(readFileSync(path)).toEqual(original);
+  });
+});
+
+describe('scheduled Task persistence', () => {
+  test('rejects cross-Pass dependencies and cycles; locks dependencies after assignee selection', () => {
+    const store = new CoordinationStore(databasePath());
+    const session = store.createSession({ teamId: 'team', workspaceRoot: '/workspace' });
+    const pass = store.createPass(session.id, { title: 'Pass' });
+    const other = store.createPass(session.id, { title: 'Other' });
+    const create = (passId: string, requestId: string, dependencyIds: string[] = []) =>
+      store.createTask(session.id, {
+        passId,
+        requestId,
+        title: requestId,
+        description: '',
+        acceptance: '',
+        dependencyIds,
+      });
+    const first = create(pass.id, 'first');
+    const second = create(pass.id, 'second', [first.id]);
+    const foreign = create(other.id, 'foreign');
+    expect(() => create(pass.id, 'cross', [foreign.id])).toThrow(/same Pass/);
+    expect(() =>
+      store.updateTask(session.id, { taskId: first.id, dependencyIds: [second.id] }),
+    ).toThrow(/Cyclic/);
+    expect(() =>
+      store.updateTask(session.id, { taskId: first.id, dependencyIds: [first.id] }),
+    ).toThrow(/itself/);
+    store.setTaskAssignee(session.id, second.id, 'worker');
+    expect(() => store.updateTask(session.id, { taskId: second.id, dependencyIds: [] })).toThrow(
+      /pending and unassigned/,
+    );
+    store.close();
+  });
+
+  test('deduplicates Task requests without changing revision and rejects conflicting repeats', () => {
+    const path = databasePath();
+    const store = new CoordinationStore(path);
+    const session = store.createSession({ teamId: 'team', workspaceRoot: '/workspace' });
+    const pass = store.createPass(session.id, { title: 'Pass' });
+    const input = {
+      passId: pass.id,
+      requestId: 'user-task:execution-handoff',
+      title: 'Task',
+      description: '',
+      acceptance: '',
+      approvalScopes: [{ action: 'deploy', resourceId: 'artifact', revision: 'one' }],
+    };
+    const task = store.createTask(session.id, input);
+    expect(task.scheduled).toBe(true);
+    const revision = store.getPass(session.id, pass.id).revision;
+    expect(store.createTask(session.id, input)).toEqual(task);
+    expect(store.getPass(session.id, pass.id).revision).toBe(revision);
+    expect(() => store.createTask(session.id, { ...input, title: 'Changed' })).toThrow(
+      /Conflicting/,
+    );
+    store.close();
+    const reopened = new CoordinationStore(path);
+    expect(reopened.getTask(session.id, task.id).approvalScopes).toEqual(input.approvalScopes);
+    expect(reopened.createTask(session.id, input).id).toBe(task.id);
+    reopened.close();
+  });
+
+  test('records failed results, validates evidence, and retries after a linked correction', () => {
+    const store = new CoordinationStore(databasePath());
+    const session = store.createSession({ teamId: 'team', workspaceRoot: '/workspace' });
+    const pass = store.createPass(session.id, { title: 'Pass' });
+    const task = store.createTask(session.id, {
+      passId: pass.id,
+      requestId: 'request',
+      title: 'Task',
+      description: '',
+      acceptance: '',
+      verificationRequirements: ['tests'],
+    });
+    const assignment = store.createAssignment(session.id, {
+      taskId: task.id,
+      memberKey: 'worker',
+      nativeAgentId: 'native',
+      message: 'Work',
+    });
+    const result = {
+      assignmentId: assignment.id,
+      nativeAgentId: 'native',
+      summary: 'Failed',
+      evidence: 'Command output',
+      outcome: 'failure' as const,
+      verification: [{ requirement: 'tests', result: 'failed' as const, evidence: 'Exit 1' }],
+    };
+    expect(() => store.createReport(session.id, { ...result, verification: [] })).toThrow(
+      /Missing verification/,
+    );
+    const report = store.createReport(session.id, result);
+    expect(store.createReport(session.id, result)).toEqual(report);
+    expect(() => store.createReport(session.id, { ...result, summary: 'Changed' })).toThrow(
+      /Conflicting/,
+    );
+    expect(store.getTask(session.id, task.id).status).toBe('failed');
+    const correction = store.createTask(session.id, {
+      passId: pass.id,
+      requestId: 'fix',
+      correctionOfTaskId: task.id,
+      title: 'Fix',
+      description: '',
+      acceptance: '',
+    });
+    const retry = { taskId: task.id, requestId: 'retry', correctionTaskId: correction.id };
+    expect(() => store.retryTask(session.id, retry)).toThrow(/linked and completed/);
+    store.updateTask(session.id, { taskId: correction.id, status: 'completed' });
+    store.retryTask(session.id, retry);
+    expect(store.retryTask(session.id, retry).status).toBe('pending');
+    const next = store.createAssignment(session.id, {
+      taskId: task.id,
+      memberKey: 'worker',
+      nativeAgentId: 'native',
+      message: 'Retry',
+    });
+    expect(next.attempt).toBe(2);
+    expect(() => store.retryTask(session.id, { ...retry, taskId: correction.id })).toThrow(
+      /Conflicting/,
+    );
+    store.close();
   });
 });
