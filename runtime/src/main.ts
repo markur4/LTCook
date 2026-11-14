@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
-import type { SessionSnapshot } from './api/team.js';
+import type { SessionSnapshot } from './workflow-api/index.js';
 import { selectedTeam } from './integrations/team-loader.js';
 const EX_TEMPFAIL = 75;
 function isListenAddressInUse(error: unknown): boolean {

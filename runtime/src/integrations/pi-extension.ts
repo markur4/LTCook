@@ -1,14 +1,10 @@
+import type { GuidanceResource as InstructionResource } from '../guidance-api/index.js';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { RuntimeCommandInputSchema } from '../api/commands.js';
-import type {
-  InstructionResource,
-  RuntimeCommand,
-  SessionSnapshot,
-  TeamAgentRuntime,
-} from '../api/team.js';
+import { RuntimeCommandInputSchema } from '../workflow-api/commands.js';
+import type {} from '../workflow-api/index.js';
 import { selectedTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 const require = createRequire(import.meta.url);
@@ -65,34 +61,15 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId, nativeAgentId, ...payload }),
     });
-  const coordination: TeamAgentRuntime['coordination'] = {
-    async snapshot() {
-      const response = await rpc('/v1/snapshot', {});
-      if (!response.ok) throw new Error(`Coordination snapshot failed (${response.status})`);
-      return (await response.json()) as SessionSnapshot;
-    },
-    async execute(command: RuntimeCommand) {
-      const response = await rpc('/v1/command', { command });
-      if (!response.ok) throw new Error(`Coordination request failed (${response.status})`);
-      return await response.json();
-    },
-  };
   const member = team.definition.members.find((candidate) => candidate.key === memberKey);
   if (!member) throw new Error('Native agent identity is not a member of the selected team');
-  await team.activateAgent({
-    definition: team.definition,
-    identity: { sessionId, teamInstanceId, teamId, memberKey, nativeAgentId },
-    coordination,
-    instructions: {
-      register(values) {
-        for (const resource of values) resources.set(resource.path, resource);
-      },
-    },
-  });
+  for (const resource of team.definition.resources)
+    if ([...member.rules, ...member.skills].includes(resource.path))
+      resources.set(resource.path, resource);
 
   pi.on('resources_discover', () => ({ promptPaths: [...resources.values()].map(resourcePath) }));
   pi.on('before_agent_start', async (event) => {
-    const paths = member.instructionPaths
+    const paths = member.rules
       .map((instructionPath) => resources.get(instructionPath))
       .filter((resource): resource is InstructionResource => resource !== undefined)
       .map(resourcePath);

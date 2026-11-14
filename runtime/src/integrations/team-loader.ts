@@ -1,6 +1,6 @@
-import type { TeamPackage } from '../api/team.js';
+import type { TeamPackage } from '../workflow-api/index.js';
 
-/** Load the one selected version-1 team package for native and service entrypoints. */
+/** Load the one selected version-2 team package for native and service entrypoints. */
 export async function selectedTeam(selection: string): Promise<TeamPackage> {
   const moduleName =
     selection === 'default'
@@ -10,8 +10,8 @@ export async function selectedTeam(selection: string): Promise<TeamPackage> {
         : selection;
   const loaded = (await import(moduleName)) as { default?: TeamPackage };
   const team = loaded.default;
-  if (!team || team.apiVersion !== 1) {
-    throw new Error(`Selected team module does not export apiVersion 1: ${selection}`);
+  if (!team || team.apiVersion !== 2) {
+    throw new Error(`Selected team module does not export apiVersion 2: ${selection}`);
   }
   return team;
 }

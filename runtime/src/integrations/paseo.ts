@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { chmod, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { AgentBackend, CreateAgentOptions, NativeAgent } from '../api/team.js';
+import type { AgentBackend, CreateAgentOptions, NativeAgent } from '../workflow-api/index.js';
 import { agentEnvironment } from './native-policy.js';
 import { configurePiExtensions } from './pi-settings.js';
 export interface PaseoHost {

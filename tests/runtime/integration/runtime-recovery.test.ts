@@ -7,7 +7,7 @@ import type {
   AgentBackend,
   CreateAgentOptions,
   NativeAgent,
-} from '../../../runtime/src/api/team.js';
+} from '../../../runtime/src/workflow-api/index.js';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import team from '@ltcook/team-default-minimal';
 const reviewRequiredTeam = {
@@ -81,6 +81,66 @@ class FakeAgents implements AgentBackend {
   }
 }
 
+async function approveExecutionFixture(
+  runtime: ReturnType<typeof createRuntime>,
+  sessionId: string,
+) {
+  const { writeFileSync } = await import('node:fs');
+  const snapshot = runtime.snapshot(sessionId);
+  const designPath = join(snapshot.documentsDirectory, 'designs/Design-2026_11_14-16_00-review.md');
+  writeFileSync(designPath, '# Review design');
+  const plan = (await runtime.execute(
+    sessionId,
+    { kind: 'user' },
+    { type: 'planning.start', designPath, title: 'Review execution' },
+  )) as import('../../../runtime/src/workflow-api/index.js').PlanningRecord;
+  writeFileSync(plan.plan.path, '# Plan');
+  for (let stage = 0; stage < 2; stage++) {
+    const record = runtime.snapshot(sessionId).planning.find((p) => p.id === plan.id)!;
+    const assignment = runtime
+      .snapshot(sessionId)
+      .assignments.find((a) => a.id === record.assignmentId)!;
+    await runtime.execute(
+      sessionId,
+      { kind: 'agent', nativeAgentId: assignment.nativeAgentId },
+      {
+        type: 'planning.submit',
+        planId: plan.id,
+        assignmentId: assignment.id,
+        summary: 'Prepared',
+        evidence: plan.plan.path,
+        ...(stage === 1
+          ? {
+              coverage: (
+                ['intent', 'design', 'scope', 'implementation', 'verification', 'delivery'] as const
+              ).map((topic) => ({
+                topic,
+                disposition: 'Resolved' as const,
+                detail: 'Fixture requirements established',
+              })),
+            }
+          : {}),
+      },
+    );
+  }
+  for (const decision of runtime.snapshot(sessionId).decisions)
+    await runtime.execute(
+      sessionId,
+      { kind: 'user' },
+      {
+        type: 'decision.answer',
+        planId: plan.id,
+        decisionId: decision.id,
+        answer: 'Explicit fixture permission',
+      },
+    );
+  const approved = (await runtime.execute(
+    sessionId,
+    { kind: 'user' },
+    { type: 'planning.approve', planId: plan.id },
+  )) as import('../../../runtime/src/workflow-api/index.js').PlanningRecord;
+  return { id: approved.passId! };
+}
 test('idle runtime starts and shuts down without creating sessions or agents', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'ltcook-idle-runtime-'));
   temporaryDirectories.push(directory);
@@ -139,7 +199,13 @@ test('concurrent opens share one initialization and later opens preserve in-flig
   const task = (await runtime.execute(
     first.session.id,
     { kind: 'user' },
-    { type: 'task.create', title: 'Work', description: 'Do it', acceptance: 'Report' },
+    {
+      type: 'task.create',
+      workType: 'task.investigate',
+      title: 'Work',
+      description: 'Do it',
+      acceptance: 'Report',
+    },
   )) as { id: string };
   const sendGate = new Gate();
   agents.sendGate = sendGate;
@@ -180,7 +246,13 @@ describe('RuntimeController coordination', () => {
     const task = (await runtime.execute(
       snapshot.session.id,
       { kind: 'user' },
-      { type: 'task.create', title: 'Work', description: 'Do it', acceptance: 'Report' },
+      {
+        type: 'task.create',
+        workType: 'task.investigate',
+        title: 'Work',
+        description: 'Do it',
+        acceptance: 'Report',
+      },
     )) as { id: string };
     const member = team.definition.members.find((item) => item.key === 'adjutant')!;
     const assignment = (await runtime.execute(
@@ -217,7 +289,13 @@ describe('RuntimeController coordination', () => {
     const task = (await runtime.execute(
       snapshot.session.id,
       { kind: 'user' },
-      { type: 'task.create', title: 'Work', description: 'Do it', acceptance: 'Report' },
+      {
+        type: 'task.create',
+        workType: 'task.investigate',
+        title: 'Work',
+        description: 'Do it',
+        acceptance: 'Report',
+      },
     )) as { id: string };
     await runtime.execute(
       snapshot.session.id,
@@ -249,7 +327,13 @@ describe('RuntimeController coordination', () => {
     const task = (await runtime.execute(
       snapshot.session.id,
       { kind: 'user' },
-      { type: 'task.create', title: 'Work', description: 'Do it', acceptance: 'Report' },
+      {
+        type: 'task.create',
+        workType: 'task.investigate',
+        title: 'Work',
+        description: 'Do it',
+        acceptance: 'Report',
+      },
     )) as { id: string };
     await runtime.execute(
       snapshot.session.id,
@@ -301,7 +385,13 @@ describe('RuntimeController coordination', () => {
     const task = (await runtime.execute(
       snapshot.session.id,
       { kind: 'user' },
-      { type: 'task.create', title: 'Review', description: 'Review work', acceptance: 'Findings' },
+      {
+        type: 'task.create',
+        workType: 'task.investigate',
+        title: 'Review',
+        description: 'Review work',
+        acceptance: 'Findings',
+      },
     )) as { id: string };
     const priorCreates = agents.creates;
     const priorSends = agents.sends.length;
@@ -367,13 +457,16 @@ describe('RuntimeController coordination', () => {
   });
   test('requires current whole-Pass review before completing a Pass', async () => {
     const agents = new FakeAgents();
-    const runtime = createRuntime({ databasePath: ':memory:', team: reviewRequiredTeam, agents });
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-pass-review-'));
+    temporaryDirectories.push(directory);
+    const runtime = createRuntime({
+      databasePath: ':memory:',
+      stateDirectory: directory,
+      team: reviewRequiredTeam,
+      agents,
+    });
     const snapshot = await runtime.openSession({ workspaceRoot: '/workspace' });
-    const pass = (await runtime.execute(
-      snapshot.session.id,
-      { kind: 'user' },
-      { type: 'pass.create', title: 'Release' },
-    )) as { id: string };
+    const pass = await approveExecutionFixture(runtime, snapshot.session.id);
     const task = (await runtime.execute(
       snapshot.session.id,
       { kind: 'user' },
@@ -430,7 +523,7 @@ describe('RuntimeController coordination', () => {
     ).rejects.toThrow(/current revision/);
     expect(
       runtime.snapshot(snapshot.session.id).passes.find((item) => item.id === pass.id)?.status,
-    ).toBe('pending');
+    ).toBe('running');
     const current = runtime
       .snapshot(snapshot.session.id)
       .passes.find((item) => item.id === pass.id);
@@ -563,7 +656,13 @@ describe('RuntimeController coordination', () => {
     const task = (await runtime.execute(
       snapshot.session.id,
       { kind: 'user' },
-      { type: 'task.create', title: 'Review', description: 'Review work', acceptance: 'Findings' },
+      {
+        type: 'task.create',
+        workType: 'task.investigate',
+        title: 'Review',
+        description: 'Review work',
+        acceptance: 'Findings',
+      },
     )) as { id: string };
     const assignment = (await runtime.execute(
       snapshot.session.id,
@@ -660,5 +759,385 @@ describe('RuntimeController coordination', () => {
     ).toBe('closed');
     expect(agents.creates).toBe(createsAfterClose);
     await runtime.close();
+  });
+});
+
+describe('authoritative planning workflow', () => {
+  async function fixture(selected = team, failSends = false) {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-planning-'));
+    temporaryDirectories.push(directory);
+    const agents = new FakeAgents();
+    agents.failSends = failSends;
+    const databasePath = join(directory, 'coordination.sqlite');
+    const stateDirectory = join(directory, 'runtime');
+    const runtime = createRuntime({ databasePath, stateDirectory, team: selected, agents });
+    const snapshot = await runtime.openSession({
+      id: 'planning-session',
+      workspaceRoot: directory,
+    });
+    const { writeFileSync } = await import('node:fs');
+    const designPath = join(
+      stateDirectory,
+      'documents/designs/Design-2026_11_14-16_00-framework.md',
+    );
+    writeFileSync(designPath, '# Design\n');
+    const plan = (await runtime.execute(
+      snapshot.session.id,
+      { kind: 'user' },
+      { type: 'planning.start', designPath, title: 'Framework' },
+    )) as import('../../../runtime/src/workflow-api/index.js').PlanningRecord;
+    return { directory, agents, databasePath, stateDirectory, runtime, snapshot, plan };
+  }
+  async function finishStages(
+    f: Awaited<ReturnType<typeof fixture>>,
+    coverageDisposition: 'Resolved' | 'Unresolved' = 'Resolved',
+  ) {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(f.plan.plan.path, '# Plan\n');
+    const first = f.runtime
+      .snapshot(f.snapshot.session.id)
+      .assignments.find((item) => item.id === f.plan.assignmentId)!;
+    await f.runtime.execute(
+      first.sessionId,
+      { kind: 'agent', nativeAgentId: first.nativeAgentId },
+      {
+        type: 'planning.submit',
+        planId: f.plan.id,
+        assignmentId: first.id,
+        summary: 'Prefilled',
+        evidence: f.plan.plan.path,
+      },
+    );
+    const record = f.runtime.snapshot(first.sessionId).planning[0]!;
+    const final = f.runtime
+      .snapshot(first.sessionId)
+      .assignments.find((item) => item.id === record.assignmentId)!;
+    await f.runtime.execute(
+      first.sessionId,
+      { kind: 'agent', nativeAgentId: final.nativeAgentId },
+      {
+        type: 'planning.submit',
+        planId: record.id,
+        assignmentId: final.id,
+        summary: 'Finalized',
+        evidence: record.plan.path,
+        coverage: ['intent', 'design', 'scope', 'implementation', 'verification', 'delivery'].map(
+          (topic) => ({
+            topic: topic as import('../../../runtime/src/workflow-api/index.js').PlanTopic,
+            disposition: coverageDisposition,
+            detail: 'Investigated',
+          }),
+        ),
+      },
+    );
+  }
+  async function answerMandatory(f: Awaited<ReturnType<typeof fixture>>) {
+    for (const decision of f.runtime.snapshot(f.snapshot.session.id).decisions)
+      await f.runtime.execute(
+        f.snapshot.session.id,
+        { kind: 'user' },
+        {
+          type: 'decision.answer',
+          planId: f.plan.id,
+          decisionId: decision.id,
+          answer: `Explicit answer for ${decision.category}`,
+        },
+      );
+  }
+  test('pristine Session and generic approvals cannot bypass execution approval', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-no-plan-'));
+    temporaryDirectories.push(directory);
+    const runtime = createRuntime({
+      databasePath: join(directory, 'db.sqlite'),
+      stateDirectory: directory,
+      team,
+      agents: new FakeAgents(),
+    });
+    try {
+      const snapshot = await runtime.openSession({ workspaceRoot: directory });
+      const id = snapshot.session.id;
+      const main = snapshot.members[0]!.binding!.nativeAgentId!;
+      expect(runtime.authorizeTool(id, main, 'write', { path: 'project.ts' }).allowed).toBe(false);
+      expect(runtime.authorizeTool(id, main, 'bash', { command: 'echo mutation' }).allowed).toBe(
+        false,
+      );
+      await expect(
+        runtime.execute(
+          id,
+          { kind: 'agent', nativeAgentId: main },
+          { type: 'task.create', title: 'Unapproved', description: 'Execute', acceptance: 'Done' },
+        ),
+      ).rejects.toThrow(/approved Pass/);
+      const pass = (await runtime.execute(
+        id,
+        { kind: 'user' },
+        { type: 'pass.create', title: 'Metadata' },
+      )) as { id: string };
+      await runtime.execute(
+        id,
+        { kind: 'user' },
+        {
+          type: 'approval.create',
+          scope: { action: 'plan.execute', resourceId: pass.id, revision: 'registered-plan' },
+          decision: 'approved',
+        },
+      );
+      await expect(
+        runtime.execute(
+          id,
+          { kind: 'user' },
+          { type: 'pass.update', passId: pass.id, status: 'running' },
+        ),
+      ).rejects.toThrow(/Plan approval/);
+      const task = (await runtime.execute(
+        id,
+        { kind: 'user' },
+        {
+          type: 'task.create',
+          passId: pass.id,
+          title: 'Metadata task',
+          description: 'Not authorized',
+          acceptance: 'Done',
+        },
+      )) as { id: string };
+      await expect(
+        runtime.execute(
+          id,
+          { kind: 'user' },
+          { type: 'assignment.create', taskId: task.id, memberKey: 'main', message: 'Execute' },
+        ),
+      ).rejects.toThrow(/approved Pass/);
+      await expect(
+        runtime.execute(
+          id,
+          { kind: 'user' },
+          { type: 'task.update', taskId: task.id, status: 'running' },
+        ),
+      ).rejects.toThrow(/approved Pass/);
+      expect(runtime.authorizeTool(id, main, 'write', { path: 'project.ts' }).allowed).toBe(false);
+    } finally {
+      await runtime.close();
+    }
+  });
+  test('routes prefill/finalize, rejects forged approval, and enforces document and execution gates', async () => {
+    const f = await fixture();
+    const id = f.snapshot.session.id;
+    try {
+      const main = f.snapshot.members.find((item) => item.member.key === 'main')!.binding!
+        .nativeAgentId!;
+      const adjutant = f.snapshot.members.find((item) => item.member.key === 'adjutant')!.binding!
+        .nativeAgentId!;
+      expect(f.runtime.snapshot(id).assignments[0]!.nativeAgentId).toBe(adjutant);
+      expect(f.runtime.authorizeTool(id, main, 'read', { path: 'package.json' }).allowed).toBe(
+        true,
+      );
+      expect(f.runtime.authorizeTool(id, main, 'write', { path: f.plan.plan.path }).allowed).toBe(
+        true,
+      );
+      expect(
+        f.runtime.authorizeTool(id, main, 'write', { path: join(f.directory, 'project.ts') })
+          .allowed,
+      ).toBe(false);
+      expect(f.runtime.authorizeTool(id, main, 'bash', { command: 'pwd' }).allowed).toBe(false);
+      await expect(
+        f.runtime.execute(
+          id,
+          { kind: 'agent', nativeAgentId: main },
+          {
+            type: 'decision.answer',
+            planId: f.plan.id,
+            decisionId: f.runtime.snapshot(id).decisions[0]!.id,
+            answer: 'forged',
+          },
+        ),
+      ).rejects.toThrow(/authenticated user/);
+      await expect(
+        f.runtime.execute(id, { kind: 'user' }, { type: 'planning.approve', planId: f.plan.id }),
+      ).rejects.toThrow(/finalization/);
+      await finishStages(f);
+      expect(f.runtime.snapshot(id).assignments[1]!.nativeAgentId).toBe(main);
+      await expect(
+        f.runtime.execute(id, { kind: 'user' }, { type: 'planning.approve', planId: f.plan.id }),
+      ).rejects.toThrow(/mandatory/);
+      await answerMandatory(f);
+      await expect(
+        f.runtime.execute(
+          id,
+          { kind: 'agent', nativeAgentId: main },
+          { type: 'planning.approve', planId: f.plan.id },
+        ),
+      ).rejects.toThrow(/authenticated user/);
+      await f.runtime.execute(
+        id,
+        { kind: 'user' },
+        { type: 'planning.approve', planId: f.plan.id },
+      );
+      expect(f.runtime.authorizeTool(id, main, 'bash', { command: 'build' }).allowed).toBe(true);
+      const { appendFileSync } = await import('node:fs');
+      appendFileSync(
+        f.plan.plan.path,
+        '\n# Implementation Report\n\n## Emerging Issues\n\n## User decisions post approval\n',
+      );
+      expect(f.runtime.authorizeTool(id, main, 'edit', { path: 'project.ts' }).allowed).toBe(true);
+      const decision = (await f.runtime.execute(
+        id,
+        { kind: 'agent', nativeAgentId: main },
+        {
+          type: 'decision.create',
+          planId: f.plan.id,
+          category: 'other',
+          prompt: 'Scope expansion?',
+          blocking: true,
+        },
+      )) as import('../../../runtime/src/workflow-api/index.js').Decision;
+      expect(f.runtime.authorizeTool(id, main, 'bash', { command: 'build' }).allowed).toBe(false);
+      await f.runtime.execute(
+        id,
+        { kind: 'user' },
+        {
+          type: 'decision.answer',
+          planId: f.plan.id,
+          decisionId: decision.id,
+          answer: 'Approved specific expansion',
+        },
+      );
+      expect(f.runtime.authorizeTool(id, main, 'bash', { command: 'build' }).allowed).toBe(true);
+    } finally {
+      await f.runtime.close();
+    }
+    expect(() => f.runtime.authorizeTool(id, 'native-1', 'write', {})).toThrow(/closed/);
+  });
+  test('uncertain planning delivery survives restart without replay and stages cannot duplicate', async () => {
+    const f = await fixture(team, true);
+    const sends = f.agents.sends.length;
+    expect(f.runtime.snapshot(f.snapshot.session.id).assignments[0]!.status).toBe('uncertain');
+    await f.runtime.close();
+    const reopened = createRuntime({
+      databasePath: f.databasePath,
+      stateDirectory: f.stateDirectory,
+      team,
+      agents: f.agents,
+    });
+    try {
+      const snapshot = await reopened.openSession({
+        id: f.snapshot.session.id,
+        workspaceRoot: f.directory,
+      });
+      expect(snapshot.planning[0]!.id).toBe(f.plan.id);
+      expect(f.agents.sends).toHaveLength(sends);
+      expect(snapshot.assignments).toHaveLength(1);
+    } finally {
+      await reopened.close();
+    }
+  });
+  test('native responses are correlated, idempotent, cancel-safe and isolated by Session', async () => {
+    const f = await fixture();
+    const id = f.snapshot.session.id;
+    try {
+      const agent = f.snapshot.members[0]!.binding!.nativeAgentId!;
+      const decision = f.runtime.snapshot(id).decisions[0]!;
+      f.runtime.bindDecisionPresentation({
+        sessionId: id,
+        planId: f.plan.id,
+        decisionId: decision.id,
+        nativeAgentId: agent,
+        requestId: 'native-question',
+      });
+      await f.runtime.resolveDecisionPresentation({
+        sessionId: id,
+        nativeAgentId: agent,
+        requestId: 'native-question',
+        cancelled: true,
+      });
+      expect(f.runtime.snapshot(id).decisions[0]!.answer).toBeUndefined();
+      await expect(
+        f.runtime.resolveDecisionPresentation({
+          sessionId: id,
+          nativeAgentId: 'other-agent',
+          requestId: 'native-question',
+          answer: 'forged',
+        }),
+      ).rejects.toThrow(/registered presentation/);
+      await f.runtime.resolveDecisionPresentation({
+        sessionId: id,
+        nativeAgentId: agent,
+        requestId: 'native-question',
+        answer: 'User response',
+      });
+      await f.runtime.resolveDecisionPresentation({
+        sessionId: id,
+        nativeAgentId: agent,
+        requestId: 'native-question',
+        answer: 'User response',
+      });
+      expect(f.runtime.snapshot(id).decisions[0]!.answer).toBe('User response');
+      await f.runtime.openSession({ id: 'other-session', workspaceRoot: f.directory });
+      await expect(
+        f.runtime.execute(
+          'other-session',
+          { kind: 'user' },
+          {
+            type: 'decision.answer',
+            planId: f.plan.id,
+            decisionId: decision.id,
+            answer: 'cross-session',
+          },
+        ),
+      ).rejects.toThrow(/not registered/);
+    } finally {
+      await f.runtime.close();
+    }
+  });
+  test('unresolved coverage and rejected approval cannot start execution', async () => {
+    const f = await fixture();
+    try {
+      await finishStages(f, 'Unresolved');
+      await answerMandatory(f);
+      await expect(
+        f.runtime.execute(
+          f.snapshot.session.id,
+          { kind: 'user' },
+          { type: 'planning.approve', planId: f.plan.id },
+        ),
+      ).rejects.toThrow(/coverage/);
+      await f.runtime.execute(
+        f.snapshot.session.id,
+        { kind: 'user' },
+        { type: 'planning.reject', planId: f.plan.id },
+      );
+      expect(f.runtime.snapshot(f.snapshot.session.id).passes).toHaveLength(0);
+    } finally {
+      await f.runtime.close();
+    }
+  });
+  test('rejects invalid routing-hook selections before dispatch', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-invalid-hook-'));
+    temporaryDirectories.push(directory);
+    const agents = new FakeAgents();
+    const runtime = createRuntime({
+      databasePath: join(directory, 'db.sqlite'),
+      stateDirectory: join(directory, 'runtime'),
+      team: { ...team, selectAssignee: () => 'undeclared' },
+      agents,
+    });
+    try {
+      const snapshot = await runtime.openSession({ workspaceRoot: directory });
+      const { writeFileSync } = await import('node:fs');
+      const designPath = join(
+        directory,
+        'runtime/documents/designs/Design-2026_11_14-16_00-test.md',
+      );
+      writeFileSync(designPath, '# Design');
+      await expect(
+        runtime.execute(
+          snapshot.session.id,
+          { kind: 'user' },
+          { type: 'planning.start', designPath, title: 'Invalid Hook' },
+        ),
+      ).rejects.toThrow(/ineligible/);
+      expect(agents.sends).toHaveLength(0);
+    } finally {
+      await runtime.close();
+    }
   });
 });

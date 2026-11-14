@@ -1,13 +1,13 @@
 import process from 'node:process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
-import { isRuntimeCommand } from '../api/commands.js';
+import { isRuntimeCommand } from '../workflow-api/commands.js';
 import type {
   RuntimeActor,
   RuntimeCommand,
   RuntimeController,
   SessionSnapshot,
-} from '../api/team.js';
+} from '../workflow-api/index.js';
 import { canonicalWorkspace } from '../core/workspace.js';
 export interface RuntimeLifecycleIdentity {
   instanceId: string;
@@ -154,9 +154,13 @@ export class RuntimeApi {
     response.setHeader('content-type', 'application/json');
     if (!(
       (request.method === 'POST' &&
-        ['/v1/command', '/v1/snapshot', '/v1/session/open', '/v1/runtime/stop'].includes(
-          request.url ?? '',
-        )) ||
+        [
+          '/v1/command',
+          '/v1/snapshot',
+          '/v1/session/open',
+          '/v1/runtime/stop',
+          '/v1/tool/authorize',
+        ].includes(request.url ?? '')) ||
       (request.method === 'GET' && request.url === '/v1/status')
     )) {
       response.writeHead(404).end('{}');
@@ -241,6 +245,8 @@ export class RuntimeApi {
         nativeAgentId?: string;
         teamSelection?: string;
         shellEnvironment?: unknown;
+        toolName?: unknown;
+        input?: unknown;
       };
       const isUser = equalToken(bearer, this.secret);
       const actor: RuntimeActor | undefined = isUser
@@ -398,6 +404,25 @@ export class RuntimeApi {
           throw new Error('Native agent is not bound to this session');
         }
         response.writeHead(200).end(JSON.stringify(snapshot));
+        return;
+      }
+      if (request.url === '/v1/tool/authorize') {
+        if (
+          actor.kind !== 'agent' ||
+          !input.sessionId ||
+          typeof input.toolName !== 'string' ||
+          !input.input ||
+          typeof input.input !== 'object' ||
+          Array.isArray(input.input)
+        )
+          throw new Error('Bound agent, Session, toolName and input mapping required');
+        const authorization = runtime.authorizeTool(
+          input.sessionId,
+          actor.nativeAgentId,
+          input.toolName,
+          input.input as Record<string, unknown>,
+        );
+        response.writeHead(200).end(JSON.stringify(authorization));
         return;
       }
       if (!input.sessionId || !isRuntimeCommand(input.command))

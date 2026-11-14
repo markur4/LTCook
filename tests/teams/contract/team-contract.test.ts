@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { TeamPackage } from '@ltcook/runtime/api';
+import type { TeamPackage } from '@ltcook/runtime/team-api';
 import defaultTeam from '@ltcook/team-default';
 import minimalTeam from '@ltcook/team-default-minimal';
 import { nativeToolAllowed } from '../../../runtime/src/integrations/native-policy.js';
@@ -8,13 +8,13 @@ const packages: TeamPackage[] = [defaultTeam, minimalTeam];
 
 describe.each(packages)('team API contract: %s', (team) => {
   test('declares a supported API, a unique coordinator, and resolvable instructions', () => {
-    expect(team.apiVersion).toBe(1);
+    expect(team.apiVersion).toBe(2);
     expect(
       team.definition.members.filter((member) => member.key === team.definition.coordinatorKey),
     ).toHaveLength(1);
     for (const member of team.definition.members) {
       expect(
-        member.instructionPaths.every((path) =>
+        [...member.rules, ...member.skills].every((path) =>
           team.definition.resources.some((resource) => resource.path === path),
         ),
       ).toBe(true);
