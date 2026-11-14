@@ -1,0 +1,14 @@
+# > Keep provider credentials out of repository-scoped Codex shells.
+[shell_environment_policy]
+# inherit = "all"
+ignore_default_excludes = false
+exclude = [
+    "*_PAT*",
+    "*_KEY",
+    "*_TOKEN",
+    "*_SECRET",
+    "*PASSWORD*",
+    "*password*",
+    "*Password*",
+    "DATABASE_URL",
+]
