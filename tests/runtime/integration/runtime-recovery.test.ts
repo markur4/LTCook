@@ -1442,3 +1442,50 @@ describe('authoritative planning workflow', () => {
     }
   });
 });
+
+test('guidance inspection distinguishes missing reports from successful or failed native loading', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ltcook-guidance-status-'));
+  temporaryDirectories.push(directory);
+  const runtime = createRuntime({
+    databasePath: join(directory, 'db.sqlite'),
+    stateDirectory: directory,
+    team,
+    agents: new FakeAgents(),
+  });
+  try {
+    const snapshot = await runtime.openSession({ workspaceRoot: directory });
+    const nativeAgentId = snapshot.members[0]!.binding!.nativeAgentId!;
+    const missing = (await runtime.execute(
+      snapshot.session.id,
+      { kind: 'user' },
+      { type: 'guidance.inspect', nativeAgentId },
+    )) as { inspection: { diagnostics: { reason: string }[] } }[];
+    expect(missing[0]!.inspection.diagnostics[0]!.reason).toContain('unavailable');
+    const inspection = {
+      resources: [],
+      diagnostics: [
+        { source: '/fixture/core/rules/planning.md', reason: 'Required guidance is missing' },
+      ],
+    };
+    await runtime.execute(
+      snapshot.session.id,
+      { kind: 'agent', nativeAgentId },
+      { type: 'guidance.loaded', inspection },
+    );
+    const failed = await runtime.execute(
+      snapshot.session.id,
+      { kind: 'user' },
+      { type: 'guidance.inspect', nativeAgentId },
+    );
+    expect(failed).toEqual([{ id: nativeAgentId, inspection }]);
+    await expect(
+      runtime.execute(
+        snapshot.session.id,
+        { kind: 'user' },
+        { type: 'guidance.inspect', nativeAgentId: 'other-session-agent' },
+      ),
+    ).rejects.toThrow('not registered');
+  } finally {
+    await runtime.close();
+  }
+});

@@ -170,9 +170,36 @@ export class PlanningWorkflow {
       });
     }
     if (command.type === 'guidance.inspect') {
-      return this.store
-        .records<{ id: string; inspection: GuidanceInspection }>(sessionId, 'guidance')
-        .filter((item) => command.nativeAgentId === undefined || item.id === command.nativeAgentId);
+      const reports = this.store.records<{ id: string; inspection: GuidanceInspection }>(
+        sessionId,
+        'guidance',
+      );
+      const bindings = this.store
+        .listBindings(sessionId)
+        .filter(
+          (item) =>
+            command.nativeAgentId === undefined || item.nativeAgentId === command.nativeAgentId,
+        );
+      if (command.nativeAgentId !== undefined && bindings.length === 0)
+        throw new Error('Native agent is not registered in this Session');
+      return bindings.map((binding) => {
+        const report = reports.find((item) => item.id === binding.nativeAgentId);
+        if (report) return report;
+        return {
+          id: binding.nativeAgentId ?? binding.memberKey,
+          inspection: {
+            resources: [],
+            diagnostics: [
+              {
+                source: binding.memberKey,
+                reason:
+                  binding.blocker ??
+                  `Native loading result unavailable (binding ${binding.state}); inspect the native activation error or retry after initialization.`,
+              },
+            ],
+          } satisfies GuidanceInspection,
+        };
+      });
     }
     if (!('planId' in command)) throw new Error('Unsupported planning command');
     const record = this.get(sessionId, command.planId);
