@@ -4,6 +4,7 @@ import process from 'node:process';
 import type { SessionSnapshot } from './workflow-api/index.js';
 import { selectedTeam } from './integrations/team-loader.js';
 import { projectContextProvider } from './integrations/project-context.js';
+import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
 const EX_TEMPFAIL = 75;
 function isListenAddressInUse(error: unknown): boolean {
   return (
@@ -140,6 +141,7 @@ async function run(): Promise<void> {
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
   let shutdownPromise: Promise<void> | undefined;
+  let disconnectPlanningDialogs: (() => void) | undefined;
   let serviceStartup: Promise<unknown> | undefined;
   const ensureProjectServices = async (): Promise<void> => {
     if (serviceConnection !== 'local') return;
@@ -157,6 +159,7 @@ async function run(): Promise<void> {
     shutdownPromise ??= (async () => {
       const failures: unknown[] = [];
       api?.beginShutdown();
+      disconnectPlanningDialogs?.();
       const attempt = async (operation: () => Promise<unknown> | unknown): Promise<void> => {
         try {
           await operation();
@@ -277,6 +280,7 @@ async function run(): Promise<void> {
       },
     });
     runtime = runtimeController;
+    disconnectPlanningDialogs = connectPlanningDialogs(host, runtimeController);
     api.setRuntime(runtimeController);
     if (workspaceRoot && sessionId) {
       workspaceShellEnvironments.set(sessionId, captureShellEnvironment(process.env));
