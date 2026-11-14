@@ -408,12 +408,19 @@ def test_probe_requires_full_authenticated_installation_identity(monkeypatch, tm
 def test_probe_distinguishes_starting_from_absent(
     monkeypatch, tmp_path, exception, expected
 ):
+    import socket
+
     from ltcook import _runtime_client as client
 
     monkeypatch.setattr(
         client._HTTP, "open", lambda *_args, **_kwargs: (_ for _ in ()).throw(exception)
     )
-    assert client.probe_runtime(_runtime_environment(tmp_path)) == expected
+    with socket.socket() as owner:
+        owner.bind(("127.0.0.1", 0))
+        owner.listen()
+        environment = _runtime_environment(tmp_path)
+        environment["LTCOOK_API_LISTEN"] = f"127.0.0.1:{owner.getsockname()[1]}"
+        assert client.probe_runtime(environment) == expected
 
 
 @pytest.mark.parametrize(
@@ -638,3 +645,21 @@ def test_pinned_owner_wait_handles_listener_close(monkeypatch, transport):
 
     monkeypatch.setattr(client, "probe_runtime", closing)
     assert client._probe_pinned({}, "observed-instance") == "starting"
+
+
+def test_timeout_on_unowned_port_allows_startup(monkeypatch, tmp_path):
+    import socket
+
+    from ltcook import _runtime_client as client
+
+    with socket.socket() as unused:
+        unused.bind(("127.0.0.1", 0))
+        port = unused.getsockname()[1]
+    environment = _runtime_environment(tmp_path)
+    environment["LTCOOK_API_LISTEN"] = f"127.0.0.1:{port}"
+    monkeypatch.setattr(
+        client._HTTP,
+        "open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError()),
+    )
+    assert client.probe_runtime(environment) is None
