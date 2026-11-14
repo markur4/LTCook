@@ -224,14 +224,14 @@ On Linux and macOS, run:
 
 ```shell
 ./app-install.sh --layout native
-ltcook launch runtime
+ltcook
 ```
 
 On Windows, run:
 
 ```powershell
 .\app-install.cmd --layout native
-ltcook launch runtime
+ltcook
 ```
 
 The checkout install is editable and uses the actual project files, including
@@ -278,7 +278,7 @@ ltcook version
 ltcook diagnose --json
 ltcook installation show
 ltcook config show --json
-ltcook launch runtime
+ltcook
 ```
 
 This starts Paseo's UI without opening a project or creating agents. Select a
@@ -287,6 +287,11 @@ project directory in Paseo and use **Start session** in the LTCook panel, or run
 Registration and AppRC workspace markers are optional; existing project settings
 are used when present. Model selections are needed when starting agents, not
 merely opening the UI.
+
+Bare `ltcook` starts or reuses the local runtime, opens the host default browser
+(Windows when invoked from WSL), and follows backend logs. Ctrl+C detaches this
+terminal; use `ltcook stop` to stop the server. `ltcook launch runtime` remains
+the browser-free foreground command. Browser tab reuse/focus is best effort.
 
 Application resources use the paths declared by `APP_RC`. Config, appdata,
 cache, and state are independent capabilities; disabled paths stay absent and
