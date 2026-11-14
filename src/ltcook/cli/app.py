@@ -26,6 +26,7 @@ VERSION_FALLBACK = "0.1.0"
 LOG = logging.getLogger(__name__)
 
 app = typer.Typer(
+    cls=rc.cli.AppRCRootGroup,
     add_completion=True,
     help="Command-line tools for ltcook.",
     no_args_is_help=True,
@@ -46,6 +47,19 @@ def _package_version() -> str:
         return metadata.version(PACKAGE_NAME)
     except metadata.PackageNotFoundError:
         return VERSION_FALLBACK
+
+
+def _version_callback(value: bool, ctx: typer.Context) -> bool:
+    """Print the package version before AppRC runtime preparation.
+
+    :param value: Whether the version option was selected.
+    :param ctx: Root CLI context for this invocation.
+    :return: The parsed value during resilient parsing, or the ordinary value.
+    """
+    if value and not ctx.resilient_parsing:
+        typer.echo(_package_version())
+        raise typer.Exit()
+    return value
 
 
 def _diagnose_payload() -> dict[str, object]:
@@ -139,8 +153,7 @@ def _setup_app_logging(level: str | int = "INFO", **_: object) -> None:
     logging.basicConfig(level=level)
 
 
-rc.cli.mount_app_cli(
-    app,
+runtime = rc.cli.CliRuntime(
     APP_RC,
     runtime_policy=rc.cli.CliRuntimePolicy(
         runtime_independent_commands={
@@ -161,19 +174,58 @@ rc.cli.mount_app_cli(
                 action_prefixes={("start",), ("stop",), ("status",), ("logs",)},
                 skip_empty=True,
             ),
-            "version": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "diagnose": rc.cli.RuntimeIndependentCommand(skip_empty=True),
         },
         extra_cli_flag_options={"--json"},
     ),
+    runtime_payload=_config_show_payload,
+    setup_logging=_setup_app_logging,
+)
+runtime.mount_app_groups(
+    app,
     handlers=maintenance_handlers(),
     installation_management=True,
     installation_hooks=InstallationHooks(
         initialize="ltcook_distr.payload.app_lifecycle.actions:initialize",
     ),
-    runtime_payload=_config_show_payload,
-    setup_logging=_setup_app_logging,
 )
+
+
+@app.callback()
+def app_callback(
+    ctx: typer.Context,
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            "-V",
+            is_eager=True,
+            callback=_version_callback,
+            help="Show the package version and exit.",
+        ),
+    ] = False,
+    env_files: rc.cli.EnvFilesOption = None,
+    env_file_overrides_os_environ: rc.cli.EnvFileOverridesOption = False,
+    skip_dotenv_layers: rc.cli.SkipDotenvLayersOption = False,
+    workspace: rc.cli.WorkspaceOption = None,
+    layout: rc.cli.LayoutOption = None,
+    app_root: rc.cli.AppRootOption = None,
+    log_level: rc.cli.LogLevelOption = None,
+) -> None:
+    """Capture AppRC bootstrap inputs before optional runtime preparation."""
+    try:
+        options = rc.cli.CliRuntimeOptions.from_typer(
+            env_files=env_files,
+            env_file_overrides_os_environ=env_file_overrides_os_environ,
+            load_dotenv_layers=not skip_dotenv_layers,
+            workspace=workspace,
+            layout=layout,
+            app_root=app_root,
+            log_level=log_level,
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    runtime.prepare(ctx, options)
 
 
 @app.command("stop")
@@ -183,12 +235,6 @@ def stop_cmd() -> None:
         raise typer.Exit(stop_runtime(resolve_launch(None).environment))
     except RuntimeClientError as error:
         raise typer.BadParameter(str(error)) from error
-
-
-@app.command("version")
-def version_cmd() -> None:
-    """Print the installed package version."""
-    typer.echo(_package_version())
 
 
 @app.command("diagnose")
