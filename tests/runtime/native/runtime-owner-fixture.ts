@@ -139,5 +139,6 @@ async function run(): Promise<void> {
 
 void run().catch((error: unknown) => {
   process.stderr.write(`fixture failed: ${error instanceof Error ? error.message : error}\n`);
-  process.exitCode = 1;
+  process.exitCode =
+    error instanceof Error && 'code' in error && error.code === 'EADDRINUSE' ? 75 : 1;
 });
