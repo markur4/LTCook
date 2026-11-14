@@ -1,3 +1,4 @@
+import process from 'node:process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { isRuntimeCommand } from '../api/commands.js';
@@ -8,6 +9,16 @@ import type {
   SessionSnapshot,
 } from '../api/team.js';
 import { canonicalWorkspace } from '../core/workspace.js';
+export interface RuntimeLifecycleIdentity {
+  instanceId: string;
+  deploymentRoot: string;
+  databasePath: string;
+  paseoListen: string;
+  backendLogPath: string | null;
+  paseoLogPath: string;
+  telemetryLogPath: string;
+}
+
 export interface WorkspaceSessionRequest {
   workspaceRoot: string;
   sessionId: string;
@@ -67,6 +78,9 @@ export class RuntimeApi {
   private readonly startupShellEnvironment: Record<string, string>;
   private openWorkspace:
     ((request: WorkspaceSessionRequest) => Promise<SessionSnapshot>) | undefined;
+  private lifecycle: RuntimeLifecycleIdentity | undefined;
+  private shutdown: (() => Promise<void>) | undefined;
+  private stopping = false;
   constructor(
     runtime: RuntimeController | undefined,
     private readonly secret: string,
@@ -78,6 +92,13 @@ export class RuntimeApi {
   }
   setRuntime(runtime: RuntimeController): void {
     this.runtime = runtime;
+  }
+  setLifecycle(identity: RuntimeLifecycleIdentity, shutdown: () => Promise<void>): void {
+    this.lifecycle = { ...identity };
+    this.shutdown = shutdown;
+  }
+  beginShutdown(): void {
+    this.stopping = true;
   }
   setSession(workspaceRoot: string, sessionId: string): void {
     const canonicalRoot = canonicalWorkspace(workspaceRoot);
@@ -133,7 +154,9 @@ export class RuntimeApi {
     response.setHeader('content-type', 'application/json');
     if (!(
       (request.method === 'POST' &&
-        ['/v1/command', '/v1/snapshot', '/v1/session/open'].includes(request.url ?? '')) ||
+        ['/v1/command', '/v1/snapshot', '/v1/session/open', '/v1/runtime/stop'].includes(
+          request.url ?? '',
+        )) ||
       (request.method === 'GET' && request.url === '/v1/status')
     )) {
       response.writeHead(404).end('{}');
@@ -147,11 +170,17 @@ export class RuntimeApi {
         response.writeHead(401).end('{"error":"unauthorized"}');
         return;
       }
-      if (!this.openWorkspace || !this.selectedTeam) {
-        response.writeHead(503).end('{"error":"Runtime session activation is not ready"}');
+      if (this.stopping || !this.lifecycle || !this.openWorkspace || !this.selectedTeam) {
+        response.writeHead(503).end('{"error":"LTCook runtime is starting or stopping"}');
         return;
       }
-      response.writeHead(200).end(JSON.stringify({ teamSelection: this.selectedTeam }));
+      response
+        .writeHead(200)
+        .end(JSON.stringify({ teamSelection: this.selectedTeam, ...this.lifecycle }));
+      return;
+    }
+    if (request.url === '/v1/runtime/stop' && !equalToken(bearer, this.secret)) {
+      response.writeHead(401).end('{"error":"user authentication required"}');
       return;
     }
     try {
@@ -164,6 +193,46 @@ export class RuntimeApi {
       const parsed: unknown = JSON.parse(body);
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new Error('request must be a JSON object');
+      }
+      if (request.url === '/v1/runtime/stop') {
+        if (
+          !('instanceId' in parsed) ||
+          typeof parsed.instanceId !== 'string' ||
+          !parsed.instanceId
+        ) {
+          response.writeHead(400).end('{"error":"instanceId is required"}');
+          return;
+        }
+        if (
+          this.stopping ||
+          !this.lifecycle ||
+          !this.shutdown ||
+          !this.openWorkspace ||
+          !this.selectedTeam
+        ) {
+          response.writeHead(503).end('{"error":"LTCook runtime is starting or stopping"}');
+          return;
+        }
+        if (parsed.instanceId !== this.lifecycle.instanceId) {
+          response.writeHead(409).end('{"error":"Runtime instance changed; probe again"}');
+          return;
+        }
+        const shutdown = this.shutdown;
+        this.beginShutdown();
+        response.once('finish', () => {
+          setImmediate(() => {
+            void shutdown().catch((error: unknown) => {
+              const message =
+                error instanceof Error
+                  ? error.message.replace(/(token|password|api.?key)=?[^\s]*/gi, '$1=<redacted>')
+                  : 'unknown shutdown error';
+              process.stderr.write(`LTCook runtime shutdown failed: ${message}\n`);
+              process.exitCode = 1;
+            });
+          });
+        });
+        response.writeHead(202).end('{"stopping":true}');
+        return;
       }
       const input = parsed as {
         sessionId?: string;
@@ -185,6 +254,10 @@ export class RuntimeApi {
       }
       if (request.url === '/v1/session/open' && actor.kind !== 'user') {
         response.writeHead(403).end('{"error":"user authentication required"}');
+        return;
+      }
+      if (this.stopping) {
+        response.writeHead(503).end('{"error":"LTCook runtime is stopping"}');
         return;
       }
       const runtime = this.runtime;

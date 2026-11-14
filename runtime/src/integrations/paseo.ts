@@ -8,10 +8,10 @@ import path from 'node:path';
 import type { AgentBackend, CreateAgentOptions, NativeAgent } from '../api/team.js';
 import { agentEnvironment } from './native-policy.js';
 import { configurePiExtensions } from './pi-settings.js';
-
 export interface PaseoHost {
   api: PaseoApi;
   listen: string;
+  logPath: string;
   close(): Promise<void>;
 }
 export interface AgentRpcIdentity {
@@ -103,7 +103,7 @@ export async function startPaseoHost(input: {
   const serverEntry = fileURLToPath(import.meta.resolve('@getpaseo/server'));
   const serverRoot = path.resolve(path.dirname(serverEntry), '../../..');
   const supervisor = path.join(serverRoot, 'dist/scripts/supervisor-entrypoint.js');
-  const { startDaemonInstance, waitForDaemonReady, stopDaemonInstance } =
+  const { startDaemonInstance, waitForDaemonReady, stopDaemonInstance, daemonLogPath } =
     await import('@getpaseo/server/daemon-control');
   const { hashDaemonPassword } = await import('@getpaseo/server');
   const appBin = path.join(appRoot, 'node_modules', '.bin');
@@ -120,6 +120,7 @@ export async function startPaseoHost(input: {
     LTCOOK_RUNTIME_USER_TOKEN: input.userToken,
   };
   delete env.LTCOOK_API_TOKEN;
+  delete env.LTCOOK_BACKEND_LOG_PATH;
   delete env.LTCOOK_PASEO_PASSWORD;
   delete env.LTCOOK_SHELL_PROVENANCE;
   delete env.PASEO_DICTATION_ENABLED;
@@ -169,16 +170,44 @@ export async function startPaseoHost(input: {
     return {
       api,
       listen: instance.listen,
+      logPath: daemonLogPath(home),
       async close() {
-        await api.dispose();
-        await connectedClient.close();
-        if (started.spawned) await stopDaemonInstance(home, { instance: started.instance });
+        const failures: unknown[] = [];
+        for (const cleanup of [
+          () => api.dispose(),
+          () => connectedClient.close(),
+          () =>
+            started.spawned
+              ? stopDaemonInstance(home, { instance: started.instance })
+              : Promise.resolve(),
+        ]) {
+          try {
+            await cleanup();
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length) throw new AggregateError(failures, 'Paseo cleanup failed');
       },
     };
   } catch (error) {
-    await client?.close().catch(() => undefined);
+    const cleanupFailures: unknown[] = [];
+    if (client) {
+      try {
+        await client.close();
+      } catch (cleanupError) {
+        cleanupFailures.push(cleanupError);
+      }
+    }
     if (started.spawned) {
-      await stopDaemonInstance(home, { instance: started.instance }).catch(() => undefined);
+      try {
+        await stopDaemonInstance(home, { instance: started.instance });
+      } catch (cleanupError) {
+        cleanupFailures.push(cleanupError);
+      }
+    }
+    if (cleanupFailures.length) {
+      throw new AggregateError([error, ...cleanupFailures], 'Paseo startup and cleanup failed');
     }
     throw error;
   }

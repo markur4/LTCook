@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import type { SessionSnapshot } from './api/team.js';
@@ -11,6 +12,14 @@ function isListenAddressInUse(error: unknown): boolean {
     'syscall' in error &&
     error.syscall === 'listen'
   );
+}
+function safeErrorMessage(error: unknown): string {
+  if (error instanceof AggregateError) {
+    return [...error.errors].map(safeErrorMessage).join('; ');
+  }
+  return error instanceof Error
+    ? error.message.replace(/(token|password|api.?key)=?[^\s]*/gi, '$1=<redacted>')
+    : 'unknown runtime error';
 }
 
 function metadataCommand(argv: string[]): boolean {
@@ -102,17 +111,82 @@ async function run(): Promise<void> {
     );
   }
   await fs.mkdir(deploymentRoot, { recursive: true, mode: 0o700 });
-  const telemetry = new Telemetry(logs, traces);
+  const canonicalDeploymentRoot = await fs.realpath(deploymentRoot);
+  let canonicalDatabasePath = databasePath ?? '';
+  if (databasePath && databasePath !== ':memory:') {
+    const databaseCandidate = path.resolve(databasePath);
+    try {
+      canonicalDatabasePath = await fs.realpath(databaseCandidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      canonicalDatabasePath = path.join(
+        await fs.realpath(path.dirname(databaseCandidate)),
+        path.basename(databaseCandidate),
+      );
+    }
+  }
+  const telemetry = new Telemetry(path.resolve(logs), path.resolve(traces));
   const startup = telemetry.begin('runtime.start');
   let api: InstanceType<typeof RuntimeApi> | undefined;
   let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
+  let apiListening = false;
   let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined;
-  let stopped = false;
+  let initialSnapshot: SessionSnapshot | undefined;
+  let stopping = false;
+  let shutdownPromise: Promise<void> | undefined;
+  const cleanup = (signal: string, exitCode: number): Promise<void> => {
+    stopping = true;
+    startup.end();
+    shutdownPromise ??= (async () => {
+      const failures: unknown[] = [];
+      api?.beginShutdown();
+      const attempt = async (operation: () => Promise<unknown> | unknown): Promise<void> => {
+        try {
+          await operation();
+        } catch (error) {
+          failures.push(error);
+        }
+      };
+      await attempt(() =>
+        telemetry.log('info', 'runtime.shutdown', {
+          signal,
+          sessionId: initialSnapshot?.session.id,
+        }),
+      );
+      if (runtime) await attempt(() => runtime!.close());
+      if (host) await attempt(() => host!.close());
+      if (api && apiListening) await attempt(() => api!.close());
+      await attempt(() => telemetry.exportTrace());
+      if (failures.length) {
+        for (const error of failures) {
+          process.stderr.write(`LTCook runtime shutdown failed: ${safeErrorMessage(error)}\n`);
+        }
+        process.exitCode = 1;
+      } else {
+        process.exitCode = exitCode;
+      }
+    })();
+    return shutdownPromise;
+  };
+  process.on('SIGINT', () => {
+    void cleanup('SIGINT', 130);
+  });
+  process.on('SIGTERM', () => {
+    void cleanup('SIGTERM', 143);
+  });
   try {
     if (!paseoHome || !piHome || !node || !databasePath || !apiListen || !paseoListen) {
       throw new Error(
         'AppRC did not resolve required native runtime paths; launch through `ltcook launch runtime`.',
       );
+    }
+    api = new RuntimeApi(undefined, apiToken, apiListen);
+    const apiUrl = await api.listen();
+    apiListening = true;
+    if (stopping) {
+      await api.close();
+      apiListening = false;
+      return;
     }
     if (workspaceRoot) {
       const configResult = childProcess.spawnSync(
@@ -129,28 +203,36 @@ async function run(): Promise<void> {
         );
       }
     }
+    if (stopping) return;
     if (serviceConnection === 'local') {
       const { createServiceController } = await import('./services/controller.js');
       await createServiceController(process.env).start();
     } else if (serviceConnection !== 'direct' && serviceConnection !== 'paseo-tunnel') {
       throw new Error('LTCOOK_SERVICE_CONNECTION must be local, direct, or paseo-tunnel.');
     }
-    api = new RuntimeApi(undefined, apiToken, apiListen);
-    const apiUrl = await api.listen();
+    if (stopping) return;
     host = await startPaseoHost({
       node,
       home: paseoHome,
-      deploymentRoot,
+      deploymentRoot: canonicalDeploymentRoot,
       listen: paseoListen,
       password: process.env.LTCOOK_PASEO_PASSWORD,
       runtimeApiUrl: apiUrl,
       userToken: apiToken,
       pluginDirectory: path.join(appRoot, 'runtime', 'dist', 'paseo-plugin'),
     });
+    if (stopping) {
+      await host.close();
+      host = undefined;
+      return;
+    }
     const workspaceShellEnvironments = new Map<string, Record<string, string>>();
     const receipt = JSON.parse(
-      await fs.readFile(path.join(deploymentRoot, 'runtime.json'), 'utf8').catch(() => '{}'),
+      await fs
+        .readFile(path.join(canonicalDeploymentRoot, 'runtime.json'), 'utf8')
+        .catch(() => '{}'),
     ) as { browser_available?: boolean; browser_executable?: string };
+    if (stopping) return;
     const backend = await createPaseoAgentBackend({
       api: host.api,
       python,
@@ -161,15 +243,16 @@ async function run(): Promise<void> {
       deploymentNode: node,
       browserAvailable: receipt.browser_available === true,
       browserExecutable: receipt.browser_executable,
-      originalShellEnvironment(_workspace, sessionId) {
-        return workspaceShellEnvironments.get(sessionId);
+      originalShellEnvironment(_workspace, currentSessionId) {
+        return workspaceShellEnvironments.get(currentSessionId);
       },
       identity(agentId) {
         return { agentId, token: agentBearer(apiToken, agentId) };
       },
     });
+    if (stopping) return;
     const runtimeController = createRuntime({
-      databasePath,
+      databasePath: canonicalDatabasePath,
       team,
       agents: backend,
       onEvent(event) {
@@ -178,12 +261,12 @@ async function run(): Promise<void> {
     });
     runtime = runtimeController;
     api.setRuntime(runtimeController);
-    let initialSnapshot: SessionSnapshot | undefined;
     if (workspaceRoot && sessionId) {
       workspaceShellEnvironments.set(sessionId, captureShellEnvironment(process.env));
       initialSnapshot = await runtimeController.openSession({ id: sessionId, workspaceRoot });
       api.setSession(workspaceRoot, initialSnapshot.session.id);
     }
+    if (stopping) return;
     api.setOpenWorkspaceHandler(
       teamSelection,
       async (request) => {
@@ -203,6 +286,43 @@ async function run(): Promise<void> {
       },
       team.definition.id,
     );
+    let backendLogPath: string | null = null;
+    const capturePath = process.env.LTCOOK_BACKEND_LOG_PATH;
+    if (capturePath) {
+      if (!path.isAbsolute(capturePath)) {
+        throw new Error('LTCOOK_BACKEND_LOG_PATH must be an absolute deployment-owned path.');
+      }
+      const candidate = path.resolve(capturePath);
+      const parent = await fs.realpath(path.dirname(candidate));
+      const relativeParent = path.relative(canonicalDeploymentRoot, parent);
+      const file = await fs.lstat(candidate);
+      if (
+        file.isSymbolicLink() ||
+        !file.isFile() ||
+        (relativeParent !== '' &&
+          (relativeParent === '..' ||
+            relativeParent.startsWith(`..${path.sep}`) ||
+            path.isAbsolute(relativeParent)))
+      ) {
+        throw new Error('LTCOOK_BACKEND_LOG_PATH must be a regular file inside the deployment.');
+      }
+      backendLogPath = path.join(parent, path.basename(candidate));
+    }
+    if (stopping) return;
+    const instanceId = randomUUID();
+    api.setLifecycle(
+      {
+        instanceId,
+        deploymentRoot: canonicalDeploymentRoot,
+        databasePath: canonicalDatabasePath,
+        paseoListen: host.listen,
+        backendLogPath,
+        paseoLogPath: host.logPath,
+        telemetryLogPath: path.resolve(logs),
+      },
+      () => cleanup('API stop', 0),
+    );
+    if (stopping) return;
     const summary = initialSnapshot
       ? `${teamSelection}, ${initialSnapshot.members.length} declared members, ` +
         `${
@@ -223,42 +343,18 @@ async function run(): Promise<void> {
         ).length ?? 0,
       blockerCount: initialSnapshot?.blockers.length ?? 0,
     });
-    const shutdown = async (signal: string, exitCode: number) => {
-      if (stopped) return;
-      stopped = true;
-      await telemetry.log('info', 'runtime.shutdown', {
-        signal,
-        sessionId: initialSnapshot?.session.id,
-      });
-      await runtime?.close();
-      await api?.close();
-      await host?.close();
-      await telemetry.exportTrace();
-      process.exitCode = exitCode;
-    };
-    process.once('SIGINT', () => {
-      void shutdown('SIGINT', 130);
-    });
-    process.once('SIGTERM', () => {
-      void shutdown('SIGTERM', 143);
-    });
     await new Promise<void>((resolve) => process.once('beforeExit', resolve));
   } catch (error) {
-    await runtime?.close().catch(() => undefined);
-    await api?.close().catch(() => undefined);
-    await host?.close().catch(() => undefined);
+    await cleanup('startup failure', 1);
     throw error;
   } finally {
     startup.end();
-    await telemetry.exportTrace();
+    if (stopping) await shutdownPromise;
+    else await telemetry.exportTrace();
   }
 }
 
 void run().catch((error) => {
-  const message =
-    error instanceof Error
-      ? error.message.replace(/(token|password|api.?key)=?[^\s]*/gi, '$1=<redacted>')
-      : 'runtime startup failed';
-  process.stderr.write(`LTCook runtime failed: ${message}\n`);
+  process.stderr.write(`LTCook runtime failed: ${safeErrorMessage(error)}\n`);
   process.exitCode = isListenAddressInUse(error) ? EX_TEMPFAIL : 1;
 });
