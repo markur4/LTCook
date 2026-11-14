@@ -13,10 +13,11 @@ import apprc as rc
 import typer
 
 import ltcook
+from ltcook._runtime_client import RuntimeClientError, stop_runtime
 from ltcook.auth import auth_cli
 from ltcook.config.app import APP_RC
 from ltcook.config.bundle import LtcookConfig
-from ltcook.launch import launch_cli, services_cli
+from ltcook.launch import desktop_command, launch_cli, resolve_launch, services_cli
 from ltcook_distr.payload.app_lifecycle.actions import maintenance_handlers
 
 PACKAGE_NAME = "ltcook"
@@ -142,6 +143,7 @@ rc.cli.mount_app_cli(
     APP_RC,
     runtime_policy=rc.cli.CliRuntimePolicy(
         runtime_independent_commands={
+            "stop": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "launcher": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "auth": rc.cli.RuntimeIndependentCommand(
                 action_prefixes={("login",), ("logout",), ("check",)},
@@ -168,6 +170,15 @@ rc.cli.mount_app_cli(
     runtime_payload=_config_show_payload,
     setup_logging=_setup_app_logging,
 )
+
+
+@app.command("stop")
+def stop_cmd() -> None:
+    """Stop only the authenticated runtime instance for this installation."""
+    try:
+        raise typer.Exit(stop_runtime(resolve_launch(None).environment))
+    except RuntimeClientError as error:
+        raise typer.BadParameter(str(error)) from error
 
 
 @app.command("launcher")
@@ -230,9 +241,18 @@ def diagnose_cmd(
         typer.echo(f"{key}: {payload[key]}")
 
 
-def main() -> None:
-    """Run the Typer application."""
-    app()
+def main(argv: list[str] | None = None) -> None:
+    """Dispatch bare startup separately while preserving all Typer argument routing."""
+    arguments = sys.argv[1:] if argv is None else argv
+    if not arguments:
+        if any(
+            key.startswith("_") and key.endswith("_COMPLETE") and value
+            for key, value in os.environ.items()
+        ):
+            app()
+            return
+        raise SystemExit(desktop_command())
+    app(args=arguments)
 
 
 if __name__ == "__main__":

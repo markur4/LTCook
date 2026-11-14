@@ -6,6 +6,7 @@ import errno
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -18,6 +19,15 @@ from uuid import uuid4
 
 import typer
 
+from ltcook._runtime_client import (
+    RuntimeClientError,
+    RuntimeStatus,
+    follow_runtime_logs,
+    probe_runtime,
+    runtime_api_url,
+    start_runtime,
+    wait_for_runtime,
+)
 from ltcook.config.bundle import LtcookConfig
 from ltcook.config.pi_config import (
     resolve_config,
@@ -27,8 +37,6 @@ from ltcook.config.pi_config import (
 
 services_cli = typer.Typer(no_args_is_help=True)
 launch_cli = typer.Typer(no_args_is_help=True)
-
-RUNTIME_STATUS_PROBE_TIMEOUT_SECONDS = 1
 
 
 @dataclass(frozen=True)
@@ -187,31 +195,6 @@ def environment_command(
     )
 
 
-def _runtime_api_url(address: str) -> str:
-    """Validate a local TCP address and return its HTTP base URL.
-
-    :param address: Host and port from `LTCOOK_API_LISTEN`.
-    :return: HTTP URL for the local runtime API.
-    """
-    if address.startswith("["):
-        separator = address.find("]")
-        host = address[1:separator]
-        port = address[separator + 2 :] if separator >= 0 else ""
-    else:
-        host, separator, port = address.rpartition(":")
-        if not separator:
-            raise ValueError("LTCOOK_API_LISTEN requires a loopback host and port")
-    if (
-        host not in {"127.0.0.1", "::1"}
-        or not port.isdigit()
-        or not 1 <= int(port) <= 65535
-    ):
-        raise ValueError(
-            "LTCOOK_API_LISTEN must be a local loopback address with a valid port"
-        )
-    return f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
-
-
 def _open_existing_runtime(
     launch: LaunchConfig, shell_environment: Mapping[str, str]
 ) -> bool:
@@ -225,30 +208,23 @@ def _open_existing_runtime(
     if workspace_root is None:
         raise ValueError("Opening a session requires an explicit workspace.")
     environment = launch.environment
-    token = environment.get("LTCOOK_API_TOKEN", "")
-    if not token:
-        raise typer.BadParameter(
-            "LTCOOK_API_TOKEN is missing; run the LTCook installer to initialize "
-            "service credentials, or set LTCOOK_API_TOKEN through AppRC."
-        )
-    # > Bound owner discovery, but leave session initialization
-    # > on its normal deadline.
-    if _existing_runtime_team(launch) is None:
+    status = probe_runtime(environment)
+    if status is None:
         return False
-    endpoint = _runtime_api_url(environment["LTCOOK_API_LISTEN"])
-    request_body = json.dumps(
-        {
-            "workspaceRoot": str(workspace_root),
-            "sessionId": environment["LTCOOK_SESSION"],
-            "teamSelection": environment["LTCOOK_TEAM"],
-            "shellEnvironment": dict(shell_environment),
-        }
-    ).encode("utf-8")
+    if status == "starting":
+        status = wait_for_runtime(environment, None, timeout=60)
     request = urllib.request.Request(
-        f"{endpoint}/v1/session/open",
-        data=request_body,
+        f"{runtime_api_url(environment['LTCOOK_API_LISTEN'])}/v1/session/open",
+        data=json.dumps(
+            {
+                "workspaceRoot": str(workspace_root),
+                "sessionId": environment["LTCOOK_SESSION"],
+                "teamSelection": environment["LTCOOK_TEAM"],
+                "shellEnvironment": dict(shell_environment),
+            }
+        ).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {environment['LTCOOK_API_TOKEN']}",
             "Content-Type": "application/json",
         },
         method="POST",
@@ -256,9 +232,11 @@ def _open_existing_runtime(
     deadline = time.monotonic() + 60
     while True:
         try:
-            with urllib.request.urlopen(request) as response:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
+                request, timeout=max(0.1, deadline - time.monotonic())
+            ) as response:
                 if response.status != 200:
-                    raise typer.BadParameter(
+                    raise RuntimeClientError(
                         f"Running LTCook runtime returned HTTP {response.status}."
                     )
                 return True
@@ -266,83 +244,51 @@ def _open_existing_runtime(
             if error.code == 503 and time.monotonic() < deadline:
                 time.sleep(0.2)
                 continue
-            detail = ""
-            try:
-                detail = json.loads(error.read().decode("utf-8")).get("error", "")
-            except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
-                pass
-            raise typer.BadParameter(
-                detail
-                or f"Running LTCook runtime rejected the workspace (HTTP {error.code})."
+            raise RuntimeClientError(
+                f"Running LTCook runtime rejected the workspace (HTTP {error.code})."
             ) from error
         except urllib.error.URLError as error:
             reason = error.reason
             if isinstance(reason, OSError) and reason.errno == errno.ECONNREFUSED:
                 return False
-            raise typer.BadParameter(
+            raise RuntimeClientError(
                 "Could not contact the local LTCook runtime API."
             ) from error
 
 
-def _existing_runtime_team(launch: LaunchConfig) -> str | None:
-    """Read a running server's configured team without opening a session.
-
-    :param launch: Global configuration and managed server environment.
-    :return: Active team selection, or None if no ready server is listening.
-    """
-    environment = launch.environment
-    token = environment.get("LTCOOK_API_TOKEN", "")
-    if not token:
-        return None
-    request = urllib.request.Request(
-        f"{_runtime_api_url(environment['LTCOOK_API_LISTEN'])}/v1/status",
-        headers={"Authorization": f"Bearer {token}"},
-        method="GET",
+def _run_foreground_runtime(launch: LaunchConfig, shell: Mapping[str, str]) -> int:
+    """Run explicit server-only startup while preserving terminal output and Ctrl+C."""
+    child = start_runtime(
+        launch.environment,
+        workspace_root=launch.workspace_root,
+        shell_environment=shell,
+        detached=False,
     )
     try:
-        with urllib.request.urlopen(
-            request, timeout=RUNTIME_STATUS_PROBE_TIMEOUT_SECONDS
-        ) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        if error.code == 503:
-            return None
-        if error.code == 401:
-            raise typer.BadParameter(
-                "The configured runtime token was rejected by the running runtime."
-            ) from error
-        raise typer.BadParameter(
-            f"Running LTCook runtime returned HTTP {error.code} for status."
-        ) from error
-    except TimeoutError:
-        return None
-    except urllib.error.URLError as error:
-        reason = error.reason
-        if isinstance(reason, TimeoutError) or (
-            isinstance(reason, OSError)
-            and reason.errno in {errno.ECONNREFUSED, errno.ETIMEDOUT}
-        ):
-            return None
-        raise typer.BadParameter(
-            "Could not contact the local LTCook runtime API."
-        ) from error
-    team = payload.get("teamSelection") if isinstance(payload, dict) else None
-    if not isinstance(team, str):
-        raise typer.BadParameter("Running LTCook runtime returned invalid status data.")
-    return team
-
-
-def _reuse_matching_runtime(launch: LaunchConfig) -> bool:
-    """Reuse a ready global runtime only when its team matches this invocation."""
-    active_team = _existing_runtime_team(launch)
-    if active_team is None:
-        return False
-    if active_team != launch.environment["LTCOOK_TEAM"]:
-        raise typer.BadParameter(
-            "A runtime is already active with a different team selection."
+        status = wait_for_runtime(launch.environment, child)
+    except KeyboardInterrupt:
+        if child.process.poll() is None:
+            child.process.terminate()
+            try:
+                child.process.wait(timeout=30)
+            except subprocess.TimeoutExpired as error:
+                raise RuntimeClientError(
+                    "The owned runtime did not stop after startup interruption; inspect its backend log."
+                ) from error
+        return 130
+    if child.process.poll() == 75:
+        if launch.workspace_root is None:
+            typer.echo(f"Reusing LTCook runtime for team {status.team_selection}.")
+            return 0
+        if _open_existing_runtime(launch, shell):
+            typer.echo(f"Opened workspace session for {launch.workspace_root}")
+            return 0
+        raise RuntimeClientError(
+            "The runtime that won the listen race disappeared before workspace activation."
         )
-    typer.echo(f"Reusing LTCook runtime for team {active_team}.")
-    return True
+    return follow_runtime_logs(
+        launch.environment, status, child=child, stop_owned_on_interrupt=True
+    )
 
 
 @launch_cli.command("runtime")
@@ -356,37 +302,60 @@ def runtime_command(
     """
     shell = _shell_environment(os.environ)
     launch = resolve_launch(workspace, original_environment=shell)
-    if workspace is None:
-        if _reuse_matching_runtime(launch):
-            return
-    elif _open_existing_runtime(launch, shell):
-        assert launch.workspace_root is not None
-        typer.echo(f"Opened workspace session for {launch.workspace_root}")
-        return
-    native = Path(launch.environment["LTCOOK_JS_ROOT"]) / "runtime" / "dist" / "main.js"
-    node = launch.environment["LTCOOK_NODE_EXECUTABLE"]
-    if not Path(node).is_file() or not native.is_file():
-        raise typer.BadParameter(
-            "Runtime prerequisites are not prepared; re-run the LTCook installer to prepare prerequisites."
-        )
-    import subprocess
+    try:
+        status = probe_runtime(launch.environment)
+        if isinstance(status, RuntimeStatus):
+            if workspace is None:
+                typer.echo(f"Reusing LTCook runtime for team {status.team_selection}.")
+                return
+            if _open_existing_runtime(launch, shell):
+                typer.echo(f"Opened workspace session for {launch.workspace_root}")
+                return
+        elif status == "starting":
+            status = wait_for_runtime(launch.environment, None)
+            if workspace is None:
+                typer.echo(f"Reusing LTCook runtime for team {status.team_selection}.")
+                return
+            if _open_existing_runtime(launch, shell):
+                typer.echo(f"Opened workspace session for {launch.workspace_root}")
+                return
+        raise typer.Exit(_run_foreground_runtime(launch, shell))
+    except RuntimeClientError as error:
+        raise typer.BadParameter(str(error)) from error
 
-    env = dict(launch.environment)
-    env["LTCOOK_SHELL_PROVENANCE"] = json.dumps(shell, separators=(",", ":"))
-    completed = subprocess.run(
-        [node, str(native)],
-        cwd=launch.workspace_root,
-        env=env,
-        check=False,
-    )
-    if completed.returncode == 75:
-        if workspace is not None and _open_existing_runtime(launch, shell):
-            assert launch.workspace_root is not None
-            typer.echo(f"Opened workspace session for {launch.workspace_root}")
-            return
-        if workspace is None and _reuse_matching_runtime(launch):
-            return
-    raise typer.Exit(completed.returncode)
+
+def desktop_command() -> int:
+    """Start or reuse the global owner, open Paseo, and attach its logs."""
+    try:
+        shell = _shell_environment(os.environ)
+        launch = resolve_launch(None, original_environment=shell)
+        child = None
+        status = probe_runtime(launch.environment)
+        if status is None:
+            child = start_runtime(
+                launch.environment,
+                workspace_root=None,
+                shell_environment=shell,
+                detached=True,
+            )
+        if status is None or status == "starting":
+            status = wait_for_runtime(launch.environment, child)
+        from ltcook._browser import open_paseo_url, paseo_url
+
+        url = paseo_url(status.paseo_listen)
+        try:
+            open_paseo_url(url)
+        except (OSError, RuntimeError, ValueError) as error:
+            print(
+                f"Could not open the default browser: {error}. Open {url}",
+                file=sys.stderr,
+            )
+        return follow_runtime_logs(launch.environment, status, child=child)
+    except KeyboardInterrupt:
+        return 130
+    except (OSError, ValueError, KeyError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
 
 
 def service_action(action: str, workspace: Path) -> None:
