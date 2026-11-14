@@ -8,12 +8,14 @@ afterEach(() => {
 });
 test('every native call requires runtime authorization and runtime failures block calls', async () => {
   const requests: string[] = [];
+  const paths: unknown[] = [];
   let allowed = false;
   let failure = false;
   const server = Bun.serve({
     port: 0,
     fetch: async (request) => {
-      const body = (await request.json()) as { toolName: string };
+      const body = (await request.json()) as { toolName: string; input?: { path?: unknown } };
+      paths.push(body.input?.path);
       requests.push(body.toolName);
       return failure
         ? new Response('Unavailable', { status: 503 })
@@ -32,10 +34,13 @@ test('every native call requires runtime authorization and runtime failures bloc
       LTCOOK_TEAM: 'default-minimal',
       LTCOOK_BROWSER_ENABLED: 'false',
     });
-    let guard!: (event: {
-      toolName: string;
-      input: Record<string, unknown>;
-    }) => Promise<{ block: boolean; reason: string } | undefined>;
+    let guard!: (
+      event: {
+        toolName: string;
+        input: Record<string, unknown>;
+      },
+      ctx?: { cwd: string },
+    ) => Promise<{ block: boolean; reason: string } | undefined>;
     let registered: Parameters<ExtensionAPI['registerTool']>[0] | undefined;
     const pi = {
       on(name: string, handler: unknown) {
@@ -89,9 +94,16 @@ test('every native call requires runtime authorization and runtime failures bloc
     expect(
       await guard({ toolName: 'write', input: { path: '/documents/plans/Plan.md' } }),
     ).toBeUndefined();
+    expect(
+      await guard(
+        { toolName: 'write', input: { path: '../plans/Plan.md' } },
+        { cwd: '/different/project' },
+      ),
+    ).toBeUndefined();
+    expect(paths.at(-1)).toBe('/different/plans/Plan.md');
     failure = true;
     expect((await guard({ toolName: 'bash', input: { command: 'anything' } }))?.block).toBe(true);
-    expect(requests).toEqual(['write', 'write', 'bash']);
+    expect(requests).toEqual(['write', 'write', 'write', 'bash']);
     server.stop(true);
     expect((await guard({ toolName: 'read', input: { path: '/project/file' } }))?.block).toBe(true);
   } finally {

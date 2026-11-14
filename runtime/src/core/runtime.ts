@@ -288,22 +288,24 @@ export class RuntimeController implements RuntimeControllerContract {
         return this.store.createStep(sessionId, command);
       case 'assignment.create': {
         this.requireCoordinator(actor, coordinator);
+        const task = this.store.getTask(sessionId, command.taskId);
+        const workType = task.workType === 'design' ? 'design' : 'task.execute';
         const eligible = this.team.definition.members.filter((member) =>
-          member.workTypes.includes('task.execute'),
+          member.workTypes.includes(workType),
         );
         const selected =
           command.memberKey ??
           (await this.team.selectAssignee?.(
             Object.freeze({
-              workType: 'task.execute' as const,
+              workType,
               sessionId,
               workspaceRoot: session.workspaceRoot,
             }),
             Object.freeze(eligible.map((member) => Object.freeze({ ...member }))),
           )) ??
-          this.team.definition.routing['task.execute'];
+          this.team.definition.routing[workType];
         if (!eligible.some((member) => member.key === selected))
-          throw new Error('Selected execution member is not eligible');
+          throw new Error(`Selected member is not eligible for ${workType}`);
         const member = this.member(selected);
         const binding =
           member.lifetime === 'temporary'
@@ -333,6 +335,15 @@ export class RuntimeController implements RuntimeControllerContract {
         const assignment = this.store.getAssignment(sessionId, command.assignmentId);
         if (actor.kind !== 'agent' || assignment.nativeAgentId !== actor.nativeAgentId)
           throw new Error('Only the assigned native agent may report this task');
+        const requestId = this.store.getTask(sessionId, assignment.taskId).requestId;
+        if (
+          this.planning
+            .list(sessionId)
+            .some((record) =>
+              [`${record.id}:prefill`, `${record.id}:finalize`].includes(requestId ?? ''),
+            )
+        )
+          throw new Error('Planning stages require planning.submit with validated document output');
         return this.store.createReport(sessionId, {
           ...command,
           nativeAgentId: actor.nativeAgentId,

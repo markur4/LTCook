@@ -125,17 +125,6 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
     throw new Error(
       'Managed LTCook sessions require Core extensions, skills, and standing context.',
     );
-  const guidance = managed
-    ? new NativeGuidance(
-        await selectedTeam(process.env.LTCOOK_TEAM ?? ''),
-        process.env.LTCOOK_MEMBER_KEY ?? '',
-        process.env.LTCOOK_GUIDANCE_DIR ??
-          (() => {
-            throw new Error('LTCOOK_GUIDANCE_DIR must be resolved before native HOME changes');
-          })(),
-        coreGuidanceDirectory(),
-      )
-    : undefined;
   const cwd = process.cwd();
   const mcpServers = loadMcpServerConfigs(mcpConfigPaths, cwd);
   const agentDir = absolutePath(getAgentDir());
@@ -167,6 +156,17 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
     sessionManager,
     sessionStartEvent,
   }) => {
+    const guidance = managed
+      ? new NativeGuidance(
+          await selectedTeam(process.env.LTCOOK_TEAM ?? ''),
+          process.env.LTCOOK_MEMBER_KEY ?? '',
+          process.env.LTCOOK_GUIDANCE_DIR ??
+            (() => {
+              throw new Error('LTCOOK_GUIDANCE_DIR must be resolved before native HOME changes');
+            })(),
+          coreGuidanceDirectory(),
+        )
+      : undefined;
     // > Recreate cwd-bound resources on native new/resume/fork, retaining the shared auth path.
     const projectTrusted =
       parsed.projectTrustOverride ?? trustStore.get(cwd) ?? !hasTrustRequiringProjectResources(cwd);

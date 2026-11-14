@@ -2,8 +2,9 @@ import type { GuidanceInspection } from '../guidance-api/index.js';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { setTimeout } from 'node:timers';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { AgentRuntimeCommandInputSchema, type RuntimeCommand } from '../workflow-api/commands.js';
+import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { selectedTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
@@ -97,13 +98,21 @@ export default async function activate(
   pi.on('before_agent_start', async () => {
     await publishGuidance();
   });
-  pi.on('tool_call', async (event) => {
+  pi.on('tool_call', async (event, ctx) => {
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
     try {
+      // > Native new/resume may change cwd; authorize exactly the path the tool will use.
+      const input =
+        ['write', 'edit'].includes(event.toolName) &&
+        'path' in event.input &&
+        typeof event.input.path === 'string' &&
+        !path.isAbsolute(event.input.path)
+          ? { ...event.input, path: path.resolve(ctx.cwd, event.input.path) }
+          : event.input;
       const response = await rpc('/v1/tool/authorize', {
         toolName: event.toolName,
-        input: event.input,
+        input,
       });
       if (!response.ok)
         return { block: true, reason: `Runtime authorization unavailable (${response.status}).` };
@@ -124,8 +133,8 @@ export default async function activate(
     description: 'Submit a coordination command.',
     parameters: AgentRuntimeCommandInputSchema,
     async execute(_id, input, _signal, _onUpdate, ctx) {
-      // > Native Pi validates the narrower agent schema before this shared command boundary.
-      const command = input.command as RuntimeCommand;
+      // > Native Pi validates the narrower projection of the shared command schema.
+      const command = input.command;
       const response = await rpc('/v1/command', { command });
       if (!response.ok) throw new Error(`Coordination request failed (${response.status})`);
       const result: unknown = await response.json();
