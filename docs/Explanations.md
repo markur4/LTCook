@@ -291,7 +291,8 @@ Core owns the planning sequence: Adjutant prefills, Main investigates and finali
 then the user approves. Teams declare eligible members, default routes and an
 optional selection hook. The hook receives work context and eligible members; it
 cannot answer user questions, approve execution or operate a second scheduler.
-Main continues scheduling execution Tasks. Both bundled Teams preserve their
+Main registers execution Tasks; the runtime schedules eligible work after Main
+completes the post-approval registration handoff. Both bundled Teams preserve their
 existing member models, lifetimes, read-only settings and review policy.
 
 The Team writes Designs and Plans through native file tools in the global runtime
@@ -330,7 +331,8 @@ scripts or services, or build a semantic index. See the
 
 One runtime owns the SQLite coordination database. It records TeamInstances,
 Sessions, explicit Passes, optionally Pass-associated Tasks, ordered Steps,
-assignments, reports, whole-Pass reviews, scoped approvals, and native bindings.
+assignment attempts, Task dependencies and gates, reports, whole-Pass reviews,
+scoped approvals, and native bindings.
 It is not a configuration database or transcript mirror.
 
 A Pass can reference a Plan document through `planRef`. Completing a Task does
@@ -343,13 +345,36 @@ A completed Pass is final and cannot be reopened or mutated; create another
 explicit Pass for later work. Starting a new Pass does not itself create a Plan
 or Task.
 
+Scheduled Pass Tasks have stable request IDs, optional assignees, dependency IDs,
+named verification requirements, and exact approval scopes. Dependencies may
+change only while pending and unassigned. Self, cyclic, and cross-Pass edges are
+rejected. The scheduler serializes dispatch decisions per Session and permits
+parallel work across members, with one active assignment per member. Routing
+choices and assignments persist before native sends; temporary members still
+require Main's explicit spawn.
+
+A successful result completes a Task only when dependencies, required passed
+verification entries with evidence, and exact user approvals hold. The runtime
+validates the recorded structure and declared outcomes; it does not establish
+whether an agent's technical conclusion is true. Failed prerequisites block
+dependents. A linked correction followed by Main's explicit retry creates a new
+attempt at the original Task. Identical duplicate requests, results, retries, and
+review responses are idempotent; conflicting repeats fail.
+
+One Pass-wide review starts when all execution Tasks finish. Requested changes
+can lead to a correction and another attempt at that same gate. Independent
+review uses a declared eligible reviewer; optional self-inspection under the
+minimal Team is never recorded as independent review. Standalone Tasks and
+planning assignments retain their manual status and assignment behavior.
+
 Only the requested Session is initialized. Concurrent requests for that Session
 share initialization, and a transient initialization failure can be retried.
 Recovery reconciles saved bindings with native agents before dispatching work.
 An uncertain external outcome is a blocker, not permission to resend an action.
 A restart does not mint approvals or silently replace the selected team.
 
-The runtime creates its schema only in a new empty store and rejects incompatible
+Coordination schema version 3 is a prototype breaking replacement. The runtime
+creates its schema only in a new empty store and rejects incompatible
 databases before modifying them. Preserve an old database and explicitly select a
 fresh `runtime.database` under AppRC state. No conversion, compatibility layer or
 chat-history import is performed. Native Pi/Paseo histories and authentication

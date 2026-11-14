@@ -154,8 +154,9 @@ The **Team status** panel contains three views:
   report, plus native model/activity when available. **Open conversation** uses
   Paseo's existing chat and is unavailable for disconnected members.
 
-Use **Refresh** to reload coordination state. Task dependencies are not recorded
-by the current runtime; the board does not infer a dependency graph. Private work
+Use **Refresh** to reload coordination state. Recorded dependencies, verification
+and approval gates, unavailable members, and uncertain deliveries explain why
+work is waiting or blocked. Private work
 text is fetched only for the selected detail, not included in bulk status data.
 
 To open an existing project directory directly from the terminal:
@@ -336,6 +337,17 @@ choosing further action. Restarting is not renewed permission to repeat an
 external operation. [Coordination and recovery](Explanations.md#coordination-and-recovery)
 explains the ownership boundary.
 
+For an incompatible prototype coordination database, stop its owning runtime,
+preserve the old database, and select a new empty store before restarting:
+
+```shell
+ltcook config set runtime.database /absolute/path/to/new-coordination.sqlite --scope user
+```
+
+The new store starts new coordination Sessions. Existing Pi/Paseo histories and
+shared authentication remain with their native owners; selecting a fresh store
+does not import them or authorize replay of an uncertain action.
+
 ## Plan work and answer decisions
 
 Open an explicit project Session first. Have the Team write its Design under
@@ -365,6 +377,16 @@ mandatory categories and no outstanding blocking decisions. Rejection does not
 permit execution. Missing responses, defaults and cancellation remain pending.
 Session and Plan context are always explicit; these commands do not create a
 Session or infer one from the current directory.
+
+After approval, Main registers the initial execution Tasks and completes the
+scheduling handoff. The runtime dispatches eligible Tasks in creation order,
+allowing different members to work concurrently and one active assignment per
+member. A blocking decision pauses new dispatch. A failed prerequisite keeps
+its dependents blocked: Main registers a linked correction, waits for it to
+finish, then explicitly retries the original Task. Its dependents unlock only
+when that original Task succeeds. The full Team receives one independent
+Pass-wide review; the minimal Team may register optional self-inspection before
+the final execution Task finishes.
 
 The Team appends detailed implementation reporting to the Plan, including
 `Implementation Report`, `Emerging Issues` and `User decisions post approval`.

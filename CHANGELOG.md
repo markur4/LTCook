@@ -47,6 +47,11 @@ All notable changes to `ltcook` will be documented in this file.
 ### 💥 Breaking changes
 
 <br>
+- Breaking: Coordination schema 3 adds scheduled Task graphs, gates and assignment
+  attempts. Affected: users with older prototype coordination stores and custom
+  command consumers. Migration: preserve the old store, select a new empty
+  `runtime.database`, and adopt the extended Task/result/retry contracts. No
+  database conversion or automatic uncertain-action replay is provided.
 - Breaking: RIED replaces the Python project-context scanner and its JSON
   format. Affected: callers of `ltcook.project_context`, `LTCOOK_PROJECT_CACHE_DIR`
   and Team API v2 `WorkContext.projectContext`. Migration: use the authenticated
@@ -98,6 +103,12 @@ All notable changes to `ltcook` will be documented in this file.
 ### ➕ Added
 
 <br>
+- Added runtime dispatch of eligible approved Pass Tasks, persisted dependencies,
+  verification and user approval gates, same-member serialization, correction and
+  explicit retry, restart delivery handling, and one current-revision Pass review.
+- Added required Linux real Pi/Paseo system acceptance using a scripted local
+  endpoint, plus an opt-in local Pi/llama.cpp guidance benchmark with per-run
+  outcomes, provider usage, tool/delegation counts and action candidates.
 - Added Core/Team/Project/User guidance with required standing Core rules, native
   progressive skills, source diagnostics and `ltcook guidance inspect`.
 - Added Team-routed Plan prefill/finalization, Team-authored timestamped Markdown,
