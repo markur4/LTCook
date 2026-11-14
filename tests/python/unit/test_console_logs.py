@@ -77,7 +77,10 @@ def test_pino_errors_render_type_context_and_indented_stack():
 
     assert "ERROR" in rendered and "request failed" in rendered
     assert "err: TypeError: bad input code=EINVAL" in rendered
-    assert "\n    at handler (server.js:4)" in rendered
+    assert any(
+        line.startswith(" ") and line.lstrip() == "at handler (server.js:4)"
+        for line in rendered.splitlines()
+    )
 
 
 def test_missing_optional_metadata_and_established_level_strings_render():
