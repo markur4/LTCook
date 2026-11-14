@@ -6,6 +6,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { Type } from 'typebox';
+import { RiedService, type RiedRequest } from '../ried.js';
 import { selectedTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
@@ -167,10 +168,23 @@ export default async function activate(
       return { content: [{ type: 'text', text: serialized }], details: result };
     },
   });
+  registerRiedTool(pi, async (input) => {
+    const response = await rpc('/v1/ried', input);
+    if (!response.ok) throw new Error(`RIED request failed (${response.status})`);
+    return response.json();
+  });
+  await activateOptionalBrowser(pi);
+}
+
+/** Register the same read-only inventory contract for managed and standalone Pi. */
+function registerRiedTool(
+  pi: ExtensionAPI,
+  read: (request: RiedRequest) => Promise<unknown>,
+): void {
   pi.registerTool({
     name: 'ltcook_ried',
     label: 'Repository and environment inventory',
-    description: 'Read a bounded inventory of this Session workspace or refresh it.',
+    description: 'Read a bounded inventory of this chat workspace or refresh it.',
     parameters: Type.Object({
       operation: Type.Union([
         Type.Literal('summary'),
@@ -187,14 +201,23 @@ export default async function activate(
       ),
     }),
     async execute(_id, input) {
-      const response = await rpc('/v1/ried', {
-        operation: input.operation,
-        ...(input.section ? { section: input.section } : {}),
-      });
-      if (!response.ok) throw new Error(`RIED request failed (${response.status})`);
-      const result: unknown = await response.json();
+      const result = await read(input);
       return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
     },
   });
-  await activateOptionalBrowser(pi);
+}
+
+/** Bind standalone inventory to the native runtime workspace, without Team authority. */
+export function activateStandaloneRied(
+  pi: ExtensionAPI,
+  workspaceRoot: string,
+  sessionId: string,
+): void {
+  const cache = process.env.LTCOOK_RIED_CACHE_DIR;
+  const brief = process.env.LTCOOK_BRIEF_EXECUTABLE;
+  if (!cache || !path.isAbsolute(cache) || !brief || !path.isAbsolute(brief)) return;
+  const service = new RiedService(cache, brief, () => ({ PATH: process.env.PATH ?? '' }));
+  registerRiedTool(pi, async (request) => ({
+    value: await service.get({ id: sessionId, workspaceRoot }, request),
+  }));
 }

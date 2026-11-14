@@ -195,17 +195,18 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
         additionalPromptTemplatePaths: promptTemplatePaths,
         additionalThemePaths: themePaths,
         extensionFactories: [
-          ...(managed
+          ...(managed || !parsed.noExtensions
             ? [
                 async (pi: Parameters<ExtensionFactory>[0]) => {
                   const extensionFile = path.join(
                     path.dirname(fileURLToPath(import.meta.url)),
                     import.meta.url.endsWith('.ts') ? 'pi-extension.ts' : 'pi-extension.js',
                   );
-                  const { default: activate } = (await import(
+                  const { default: activate, activateStandaloneRied } = (await import(
                     pathToFileURL(extensionFile).href
-                  )) as { default: typeof import('./pi-extension.js').default };
-                  await activate(pi, () => guidance!.inspection);
+                  )) as typeof import('./pi-extension.js');
+                  if (managed) await activate(pi, () => guidance!.inspection);
+                  else activateStandaloneRied(pi, cwd, sessionManager.getSessionId());
                 },
               ]
             : []),

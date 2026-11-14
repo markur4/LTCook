@@ -319,7 +319,9 @@ are not an operating-system sandbox.
 RIED combines bounded `brief` repository discovery with Git state, host tool
 availability and Just recipe names. It stores one versioned cache under AppRC
 and refreshes Git status when read. Session activation starts cache warmup without
-waiting. RIED reports partial or stale results; it does not run recipes, project
+waiting. Standalone LTCook Pi chats reuse the same discovery implementation and
+AppRC cache, bound to their native Pi workspace without creating a Team Session.
+RIED reports partial or stale results; it does not run recipes, project
 scripts or services, or build a semantic index. See the
 [runtime API](References.md#workflow-api) and
 [planning guide](How-To-User-Guides.md#plan-work-and-answer-decisions).

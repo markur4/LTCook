@@ -329,8 +329,12 @@ The `ltcook_team` native tool uses that schema and Core enforces actor permissio
 RIED is a separate runtime service. `POST /v1/ried` accepts an authenticated
 Session and `operation` of `summary`, `section` or `refresh`; `section` requires
 `repository`, `git`, `host` or `recipes`. The `ltcook_ried` native tool exposes
-these operations to bound agents, including read-only members. The runtime
-derives the scan root from the Session. Its schema-version-1 result reports
+these operations to bound agents, including read-only members. Standalone Pi
+chats in LTCook also expose the tool when AppRC inventory paths are resolved;
+they use the same discovery service and AppRC cache directly, with the native
+Pi runtime workspace as the scan root and no Team Session or bearer. New, resumed
+and forked Pi sessions rebind that workspace. The managed runtime derives its
+scan root from the Session. Its schema-version-1 result reports
 provenance, capture time, partial or stale status and diagnostics. Neither
 Team API v2 nor coordination snapshots carry the full inventory.
 
