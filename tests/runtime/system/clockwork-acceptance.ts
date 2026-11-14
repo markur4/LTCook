@@ -304,6 +304,31 @@ process.env.PI_OFFLINE = '1';
 const apiListen = `127.0.0.1:${await freePort()}`;
 const endpoint = `http://${apiListen}`;
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
+let shutdown: Promise<void> | undefined;
+function cleanup(): Promise<void> {
+  shutdown ??= (async () => {
+    const failures: unknown[] = [];
+    for (const operation of [
+      () => runtime.close(),
+      () => host?.close(),
+      () =>
+        new Promise<void>((resolve, reject) =>
+          provider.close((error) => (error ? reject(error) : resolve())),
+        ),
+    ]) {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length) throw new AggregateError(failures, 'Native fixture cleanup failed');
+  })();
+  return shutdown;
+}
+process.once('SIGTERM', () => {
+  void cleanup().finally(() => process.exit(143));
+});
 try {
   host = await startPaseoHost({
     node: process.env.LTCOOK_TEST_NODE ?? 'node',
@@ -527,9 +552,5 @@ try {
     }),
   );
 } finally {
-  await runtime?.close();
-  await host?.close();
-  await new Promise<void>((resolve, reject) =>
-    provider.close((error) => (error ? reject(error) : resolve())),
-  );
+  await cleanup();
 }
