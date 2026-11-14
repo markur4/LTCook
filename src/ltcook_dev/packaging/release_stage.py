@@ -1,28 +1,33 @@
-"""Stage exact release-only native entries beside validated packages."""
+"""Stage exact validated package and Linux native release assets."""
 
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import hashlib
 import shutil
-import subprocess
-import tempfile
-from pathlib import Path, PurePosixPath
+import zipfile
+from pathlib import Path
 
-from apprc.distribution import (
-    PayloadTree,
-    build_main_installer,
-    install_support_files,
-    read_project_metadata,
-    render_bootstraps,
-)
+from apprc.distribution import decode_native_binding, read_distribution_spec
 
 from ltcook_dev.packaging import release_assets
 from ltcook_dev.packaging.package_validation import validate_package
-from ltcook_distr.make_artifacts import distribution_spec
+from ltcook_dev.packaging.release_manifest import LINUX_SETUP_SUFFIX, MANIFEST_NAME
 
 REPOSITORY = "markur4/ltcook"
+
+
+def _no_links(path: Path) -> None:
+    """Reject symlinked release inputs and outputs before filesystem access."""
+    if any(parent.is_symlink() for parent in (path, *path.parents)):
+        raise ValueError(f"Release asset path contains a link: {path}")
+
+
+def _regular_file(path: Path) -> None:
+    """Require a regular file reached without following linked ancestors."""
+    _no_links(path)
+    if not path.is_file():
+        raise ValueError(f"Release asset is not a regular file: {path.name}.")
 
 
 def _package_files(directory: Path, project: str, version: str) -> tuple[Path, Path]:
@@ -37,59 +42,62 @@ def _package_files(directory: Path, project: str, version: str) -> tuple[Path, P
             "Release staging requires exactly one wheel and one source archive."
         )
     for path in (*wheels, *sdists):
+        _regular_file(path)
         validate_package(path, project, version)
     return wheels[0], sdists[0]
 
 
-def _locked_runtime_requirements(root: Path) -> tuple[str, ...]:
-    """Export only the application's locked runtime constraints.
+def _native_identity(
+    executable: Path,
+    *,
+    app_id: str,
+    distribution: str,
+    command: str,
+    version: str,
+    commit: str,
+) -> None:
+    """Require the executable's appended binding to match the requested release."""
+    _regular_file(executable)
+    try:
+        with zipfile.ZipFile(executable) as archive:
+            binding = decode_native_binding(archive.read("binding.json"))
+    except (OSError, KeyError, zipfile.BadZipFile, ValueError) as error:
+        raise ValueError("Linux setup has no valid embedded native binding.") from error
+    if (
+        binding.identity.app_id != app_id
+        or binding.identity.distribution != distribution
+        or binding.command_name != command
+        or binding.version != version
+        or binding.source.commit != commit
+    ):
+        raise ValueError(
+            "Linux setup embedded app/distribution/command/version/commit identity does not match."
+        )
 
-    Management requirements belong to the separate standalone helper
-    ``main-installer-requirements.txt`` and must not become application runtime
-    constraints.
-    """
-    result = subprocess.run(
-        [
-            "uv",
-            "export",
-            "--format",
-            "requirements-txt",
-            "--locked",
-            "--no-dev",
-            "--no-default-groups",
-            "--no-hashes",
-            "--no-emit-project",
-        ],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    constraints = tuple(
-        line.strip()
-        for line in result.stdout.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    )
-    if any(requirement.startswith("-") for requirement in constraints):
-        raise ValueError("Locked runtime export contains unsupported pip options.")
-    return tuple(dict.fromkeys(constraints))
+
+def _checksum_matches(checksums: Path, setup: Path) -> bool:
+    """Require SHA256SUMS to contain exactly the matching Linux setup digest."""
+    _regular_file(checksums)
+    try:
+        lines = checksums.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError):
+        return False
+    expected = f"{hashlib.sha256(setup.read_bytes()).hexdigest()}  {setup.name}"
+    return lines == [expected]
 
 
 def stage_release(
-    tag: str,
-    commit: str,
-    *,
-    root: Path,
-    repository: str = REPOSITORY,
+    tag: str, commit: str, *, root: Path, repository: str = REPOSITORY
 ) -> tuple[str, ...]:
-    """Stage final validated packages and release-specific AppRC outputs.
+    """Stage validated wheel/sdist and the SDK's Linux setup/checksum pair.
 
     :param tag: Final release tag, without creating or pushing a tag.
-    :param commit: Full immutable source commit to record in the manifest.
+    :param commit: Full immutable source commit represented by native binding.
     :param root: Application repository root, which must be the current directory.
     :param repository: Immutable OWNER/REPO release identity.
     :return: Strict manifest validator's exact upload filename set.
     """
+    _no_links(root)
     root = root.resolve()
     if root != Path.cwd().resolve():
         raise ValueError("Run release staging from the application repository root.")
@@ -97,129 +105,63 @@ def stage_release(
     if tag != f"v{version}":
         raise ValueError("Release tag does not match project metadata.")
     wheel, sdist = _package_files(root / "dist", name, version)
-    asset = f"https://github.com/{repository}/releases/download/{tag}/{sdist.name}"
-    digest = hashlib.sha256(sdist.read_bytes()).hexdigest()
-    metadata = read_project_metadata(root)
-    base_spec = distribution_spec(root, metadata)
-    spec = dataclasses.replace(
-        base_spec,
-        source_mode="release",
-        repository_url=f"https://github.com/{repository}.git",
-        release_version=version,
-        release_commit=commit,
-        release_asset=asset,
-        release_digest=digest,
-        runtime_requirements=tuple(
-            dict.fromkeys(
-                (
-                    *base_spec.runtime_requirements,
-                    *_locked_runtime_requirements(root),
-                )
-            )
-        ),
+    spec = read_distribution_spec(root)
+    app_id = spec.metadata.identity.app_id
+    distribution = spec.metadata.identity.distribution
+    command = spec.metadata.command_name or spec.metadata.identity.commands[0]
+    setup = root / "dist" / f"{app_id}{LINUX_SETUP_SUFFIX}"
+    checksums = root / "dist/SHA256SUMS"
+    _native_identity(
+        setup,
+        app_id=app_id,
+        distribution=distribution,
+        command=command,
+        version=version,
+        commit=commit,
     )
-    payload_root = root / metadata.distribution_path / "payload"
-    modules = tuple(
-        PurePosixPath("app_lifecycle") / filename
-        for filename in (
-            "__init__.py",
-            "install.py",
-            "uninstall.py",
-            "actions.py",
-        )
-    )
-    with tempfile.TemporaryDirectory(prefix="app-release-payload-") as temporary:
-        staged_payload = Path(temporary) / "payload"
-        shutil.copytree(payload_root, staged_payload)
-        base_payload = PayloadTree(staged_payload, modules)
-        for relative, content in install_support_files(spec, base_payload).items():
-            resource = PurePosixPath("app_lifecycle/_support") / relative
-            destination = staged_payload.joinpath(*resource.parts)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(content)
-            if relative.name in {"launch.sh", "uninstall.sh"}:
-                destination.chmod(0o700)
-        support_root = staged_payload / "app_lifecycle" / "_support"
-        resources = tuple(
-            PurePosixPath(
-                "app_lifecycle/_support", *path.relative_to(support_root).parts
-            )
-            for path in sorted(support_root.rglob("*"))
-            if path.is_file()
-        )
-        payload = PayloadTree(staged_payload, modules, resources=resources)
-        installer = build_main_installer(spec, payload)
-    artifacts = (*render_bootstraps(spec), installer)
-    payload_format = spec.payload_format
-    payload_filename = (
-        "main-installer.pyz" if payload_format == "zipapp" else "main-installer.py"
-    )
-    installer_path = (
-        metadata.distribution_path / "artifacts/installer" / payload_filename
-    )
-    destinations = {
-        PurePosixPath("app-install.sh"): "app-install.sh",
-        PurePosixPath("app-install.cmd"): "app-install.cmd",
-        PurePosixPath("bootstrap.ps1"): "bootstrap.ps1",
-        installer_path: payload_filename,
-    }
-    if payload_format == "zipapp":
-        requirements_path = (
-            metadata.distribution_path
-            / "artifacts/installer/main-installer-requirements.txt"
-        )
-        destinations[requirements_path] = "main-installer-requirements.txt"
-    rendered: dict[str, tuple[bytes, bool]] = {}
-    for artifact in artifacts:
-        filename = destinations.get(artifact.destination)
-        if filename is not None:
-            if filename in rendered:
-                raise ValueError(f"Release generator repeated {filename}.")
-            rendered[filename] = (artifact.content, artifact.executable)
-    expected_native = set(destinations.values())
-    if set(rendered) != expected_native:
+    if not _checksum_matches(checksums, setup):
         raise ValueError(
-            f"AppRC did not emit the complete {payload_format}-mode release entry set."
+            "SHA256SUMS is missing, contains extra entries, or does not match the Linux setup."
         )
-    destination = root / "release" / "assets"
+    destination = root / "release/assets"
+    _no_links(destination)
     destination.mkdir(parents=True, exist_ok=True)
-    staged_names = [wheel.name, sdist.name, *sorted(expected_native)]
-    allowed = set(staged_names) | {"release-manifest.json"}
-    if {path.name for path in destination.iterdir()} - allowed:
+    _no_links(destination / MANIFEST_NAME)
+    expected = {wheel.name, sdist.name, setup.name, "SHA256SUMS", MANIFEST_NAME}
+    if {path.name for path in destination.iterdir()} - expected:
         raise ValueError(
             "Release staging directory contains stale or unexpected files."
         )
-    for package in (wheel, sdist):
-        shutil.copyfile(package, destination / package.name)
-    for filename, (content, executable) in rendered.items():
-        output = destination / filename
-        output.write_bytes(content)
-        if executable:
-            output.chmod(0o755)
+    for source in (wheel, sdist, setup, checksums):
+        _regular_file(source)
+        _no_links(destination / source.name)
+        shutil.copyfile(source, destination / source.name)
     return release_assets.stage(
         destination,
-        staged_names,
+        [wheel.name, sdist.name, setup.name, "SHA256SUMS"],
         repository=repository,
         tag=tag,
         commit=commit,
-        payload_format=payload_format,
     )
 
 
 def main() -> None:
-    """Parse release identity and stage exact native helper assets."""
+    """Parse release identity and stage exact validated assets."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tag")
     parser.add_argument("commit")
     parser.add_argument("--repository", default=REPOSITORY)
     arguments = parser.parse_args()
-    files = stage_release(
-        arguments.tag,
-        arguments.commit,
-        root=Path.cwd(),
-        repository=arguments.repository,
+    print(
+        "\n".join(
+            stage_release(
+                arguments.tag,
+                arguments.commit,
+                root=Path.cwd(),
+                repository=arguments.repository,
+            )
+        )
     )
-    print("\n".join(files))
 
 
 if __name__ == "__main__":

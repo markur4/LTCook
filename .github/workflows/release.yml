@@ -1,6 +1,6 @@
 name: Build release assets
 
-run-name: ${{ github.actor }} - manual LTCook asset build
+run-name: ${{ github.actor }} - manual LTCook Linux asset build
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    name: Linux wheel, source archive, and installer
+    name: Linux wheel, source archive, and native setup
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,52 +23,30 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version-file: .node-version
-      - name: Install Python and uv
+      - name: Install Python and pinned uv
         uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
+          version: "0.13.6"
           enable-cache: true
       - name: Install just
         uses: extractions/setup-just@v4
         with:
           just-version: "1.56.0"
-      - name: Install locked JavaScript dependencies
-        run: bun install --frozen-lockfile
-      - name: Build wheel, source archive, and staged runtime bundle
-        run: just build
-      - name: Generate AppRC installer artifacts
-        run: just make-artifacts
-      - name: Fetch official PyApp source
+      - name: Build wheel, source archive, and canonical runtime bundle
         run: |
-          curl --fail --location --silent --show-error \
-            https://github.com/ofek/pyapp/releases/download/v0.31.0/source.tar.gz \
-            --output pyapp-source.tar.gz
-          mkdir pyapp-source
-          tar -xzf pyapp-source.tar.gz --strip-components=1 -C pyapp-source
-      - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Build PyApp installer launcher
-        run: |
-          set -- dist/*.whl
-          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
-            echo "Expected exactly one wheel in dist/" >&2
-            exit 1
-          fi
-          PYTHONPATH=src uv run --locked python \
-            -m ltcook_dev.packaging.build_pyapp \
-            --pyapp-source pyapp-source \
-            --installer src/ltcook_distr/artifacts/installer/main-installer.pyz \
-            --wheel "$1" \
-            --output artifacts/ltcook-install
-
-      - name: Upload checkout-independent build assets
+          bun install --frozen-lockfile
+          just build
+      - name: Build Linux native setup from this commit
+        run: PYTHONPATH=src uv run --locked python -m ltcook_distr.build_native --revision "$GITHUB_SHA" --uv "$(command -v uv)"
+      - name: Stage exact release assets and schema-two manifest
+        run: just stage-release-assets "v$(uv version --short)" "$GITHUB_SHA"
+      - name: Verify native checksum
+        run: (cd dist && sha256sum -c SHA256SUMS)
+      - name: Upload Linux release assets
         uses: actions/upload-artifact@v7
         with:
           name: ltcook-linux-assets-${{ github.sha }}
-          path: |
-            artifacts/*.whl
-            dist/*.tar.gz
-            artifacts/ltcook-install
-            artifacts/main-installer.pyz
+          path: release/assets/*
           if-no-files-found: error
           retention-days: 14

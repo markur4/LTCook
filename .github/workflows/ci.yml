@@ -46,8 +46,8 @@ jobs:
         run: bun run test
       - name: Build runtime, plugins, and teams
         run: bun run build
-      - name: Stage runtime bundle
-        run: PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.package_assets --root . --destination src/ltcook_distr/bundle
+      - name: Stage canonical runtime archive
+        run: PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.package_assets --root . --destination src/ltcook_distr/bundle.zip
       - name: Install staged Python application and build packages
         run: |
           uv sync --locked --all-groups
