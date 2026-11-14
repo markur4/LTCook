@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from ltcook._browser import paseo_url
+from ltcook._console_logs import _format_console_log
 
 
 class RuntimeClientError(ValueError):
@@ -458,9 +459,9 @@ class _LogFollower:
         self.fragment += text
         while "\n" in self.fragment:
             line, self.fragment = self.fragment.split("\n", 1)
-            print(f"[{self.label}] {line}", flush=True)
+            print(_format_console_log(line, self.label), flush=True)
         if final and self.fragment:
-            print(f"[{self.label}] {self.fragment}", flush=True)
+            print(_format_console_log(self.fragment, self.label), flush=True)
             self.fragment = ""
 
     def _drain(self) -> None:

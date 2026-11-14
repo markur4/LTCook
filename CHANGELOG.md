@@ -137,6 +137,9 @@ All notable changes to `ltcook` will be documented in this file.
 - Added one-command desktop startup with Windows-host browser opening from WSL,
   detached runtime ownership, cross-terminal backend logs, and authenticated
   `ltcook stop`. Ctrl+C detaches desktop logs without stopping the shared server.
+- Added human-readable terminal logs for LTCook telemetry and Paseo/Pino records,
+  with severity colors, source labels, context and readable error stacks.
+  Redirected output stays uncolored; raw diagnostic files remain unchanged.
 
 ### 💔 Changed
 

@@ -235,22 +235,49 @@ def test_concurrent_cli_attach_detach_incremental_logs_and_explicit_stop(tmp_pat
             (Path(status.telemetry_log_path), "events"),
             (Path(status.paseo_log_path), "paseo"),
         ]
-        for path, _label in sources:
+        telemetry = Path(status.telemetry_log_path)
+        paseo = Path(status.paseo_log_path)
+        for path in (telemetry, paseo):
             path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("ab") as output:
-                output.write(b"attached-part")
-                output.flush()
-                time.sleep(0.15)
-                output.write(b"ial\n")
+        telemetry_record = (
+            b'{"timestamp":"2026-11-14T10:20:30.000Z","level":"info",'
+            b'"event":"runtime.ready","sessionId":"fixture-session"}\n'
+        )
+        paseo_record = (
+            b'{"time":1794651630000,"level":50,"msg":"request failed",'
+            b'"name":"fixture-daemon","err":{"type":"TypeError",'
+            b'"message":"bad input","code":"EINVAL",'
+            b'"stack":"TypeError: bad input\\n    at handler (server.js:4)"}}\n'
+        )
+        with telemetry.open("ab") as output:
+            output.write(telemetry_record[:35])
+            output.flush()
+            time.sleep(0.15)
+            output.write(telemetry_record[35:])
+        with paseo.open("ab") as output:
+            output.write(paseo_record)
+            output.flush()
+        raw_sources = {
+            telemetry: telemetry.read_bytes(),
+            paseo: paseo.read_bytes(),
+        }
         assert second.stdout is not None
         import select
 
         deadline = time.monotonic() + 5
         seen = ""
         expected = {
-            "[runtime] attached-partial",
-            "[events] attached-partial",
-            "[paseo] attached-partial",
+            "2026-11-14T10:20:30.000Z",
+            "INFO",
+            "[events]",
+            "runtime.ready",
+            "sessionId=fixture-session",
+            "ERROR",
+            "[paseo] [fixture-daemon]",
+            "request failed",
+            "TypeError: bad input",
+            "code=EINVAL",
+            "at handler (server.js:4)",
         }
         while time.monotonic() < deadline and not all(
             marker in seen for marker in expected
@@ -261,7 +288,29 @@ def test_concurrent_cli_attach_detach_incremental_logs_and_explicit_stop(tmp_pat
                     "utf-8", errors="replace"
                 )
         assert all(marker in seen for marker in expected)
-        events_log = Path(status.telemetry_log_path)
+        assert {path: path.read_bytes() for path in raw_sources} == raw_sources
+        for path, _label in sources:
+            with path.open("ab") as output:
+                output.write(b"attached-part")
+                output.flush()
+                time.sleep(0.15)
+                output.write(b"ial\n")
+        expected_plain = {
+            "[runtime] attached-partial",
+            "[events] attached-partial",
+            "[paseo] attached-partial",
+        }
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not all(
+            marker in seen for marker in expected_plain
+        ):
+            ready, _, _ = select.select([second.stdout], [], [], 0.2)
+            if ready:
+                seen += os.read(second.stdout.fileno(), 4096).decode(
+                    "utf-8", errors="replace"
+                )
+        assert all(marker in seen for marker in expected_plain)
+        events_log = telemetry
         events_log.unlink()
         time.sleep(0.2)
         events_log.write_bytes(b"created-late\n")
@@ -275,19 +324,21 @@ def test_concurrent_cli_attach_detach_incremental_logs_and_explicit_stop(tmp_pat
         assert "[events] created-late" in seen
 
         # > Replace and truncate an actual owner-reported source without wedging the follower.
-        paseo = Path(status.paseo_log_path)
         rotated = paseo.with_suffix(".previous")
         if paseo.exists():
             paseo.replace(rotated)
-        paseo.write_bytes(b"rotation-marker\n")
+        rotated_record = (
+            b'{"time":1794651630000,"level":30,"msg":"rotated after replacement"}\n'
+        )
+        paseo.write_bytes(rotated_record)
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and "[paseo] rotation-marker" not in seen:
+        while time.monotonic() < deadline and "rotated after replacement" not in seen:
             ready, _, _ = select.select([second.stdout], [], [], 0.2)
             if ready:
                 seen += os.read(second.stdout.fileno(), 4096).decode(
                     "utf-8", errors="replace"
                 )
-        assert "[paseo] rotation-marker" in seen
+        assert "rotated after replacement" in seen
         paseo.write_bytes(b"short\n")
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and "[paseo] short" not in seen:
