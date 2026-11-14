@@ -159,6 +159,15 @@ export class RuntimeController implements RuntimeControllerContract {
       .map((binding) => `${binding.memberKey}: ${binding.blocker ?? binding.state}`);
     for (const task of this.store.listTasks(sessionId)) {
       if (task.scheduled && !['completed', 'failed', 'cancelled'].includes(task.status)) {
+        const barrier = this.store
+          .listTasks(sessionId)
+          .find(
+            (item) => item.passId === task.passId && item.requestId?.endsWith(':execution-handoff'),
+          );
+        if (barrier?.status !== 'completed')
+          blockers.push(`Task ${task.id}: Waiting for Main to complete initial Task registration`);
+        if (task.phase === 'review' && task.assigneeKey === undefined)
+          blockers.push(`Task ${task.id}: Waiting for an available declared Pass reviewer`);
         blockers.push(
           ...this.taskGates(sessionId, task).map((reason) => `Task ${task.id}: ${reason}`),
         );
@@ -341,6 +350,13 @@ export class RuntimeController implements RuntimeControllerContract {
             });
           }
         }
+        if (
+          command.assigneeKey &&
+          !this.member(command.assigneeKey).workTypes.includes(
+            command.workType === 'design' ? 'design' : 'task.execute',
+          )
+        )
+          throw new Error('Selected member is not eligible for this Task');
         return this.store.createTask(sessionId, command);
       }
       case 'task.retry':
@@ -477,6 +493,13 @@ export class RuntimeController implements RuntimeControllerContract {
           .find(
             (task) => task.passId === command.passId && task.scheduled && task.phase === 'review',
           );
+        if (
+          !gate &&
+          this.store
+            .listTasks(sessionId)
+            .some((task) => task.passId === command.passId && task.scheduled)
+        )
+          throw new Error('Scheduled Pass review awaits its runtime review gate');
         if (gate) {
           if (!command.assignmentId || command.revision === undefined)
             throw new Error('Scheduled review requires its assignmentId and current Pass revision');
@@ -639,7 +662,9 @@ export class RuntimeController implements RuntimeControllerContract {
       const work = current.filter((task) => task.phase !== 'review');
       if (
         !current.some((task) => task.scheduled) ||
-        !work.every((task) => task.status === 'completed')
+        !work.every(
+          (task) => task.status === 'completed' && this.taskGates(session.id, task).length === 0,
+        )
       )
         continue;
       let gate = current.find((task) => task.scheduled && task.phase === 'review');
@@ -712,6 +737,10 @@ export class RuntimeController implements RuntimeControllerContract {
             Object.freeze(eligible.map((member) => Object.freeze({ ...member }))),
           )) ?? this.team.definition.routing['task.execute']);
       if (!selected) return;
+      if (!eligible.some((member) => member.key === selected))
+        throw new Error(
+          `Selected member is not eligible for ${review ? 'Pass review' : 'task.execute'}`,
+        );
       this.store.setTaskAssignee(session.id, task.id, selected);
     }
     if (!eligible.some((member) => member.key === selected))
@@ -893,7 +922,10 @@ export class RuntimeController implements RuntimeControllerContract {
   private async deliverAssignment(assignment: Assignment): Promise<void> {
     this.store.updateAssignment(assignment.sessionId, assignment.id, 'sending');
     try {
-      await this.agents.send(assignment.nativeAgentId, assignment.handoff);
+      await this.agents.send(
+        assignment.nativeAgentId,
+        `Assignment ID: ${assignment.id}. Task ID: ${assignment.taskId}. Attempt: ${assignment.attempt ?? 1}.\n${assignment.handoff}`,
+      );
       this.store.updateAssignment(assignment.sessionId, assignment.id, 'sent');
       this.emit({
         type: 'assignment.sent',
