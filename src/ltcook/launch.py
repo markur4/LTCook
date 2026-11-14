@@ -34,6 +34,7 @@ from ltcook.config.pi_config import (
     resolve_global_config,
     write_pi_config,
 )
+from ltcook_distr.payload.app_lifecycle.actions import ensure_service_secrets
 
 services_cli = typer.Typer(no_args_is_help=True)
 launch_cli = typer.Typer(no_args_is_help=True)
@@ -301,6 +302,7 @@ def runtime_command(
     :return: None.
     """
     shell = _shell_environment(os.environ)
+    ensure_service_secrets(shell)
     launch = resolve_launch(workspace, original_environment=shell)
     try:
         status = probe_runtime(launch.environment)
@@ -328,6 +330,7 @@ def desktop_command() -> int:
     """Start or reuse the global owner, open Paseo, and attach its logs."""
     try:
         shell = _shell_environment(os.environ)
+        ensure_service_secrets(shell)
         launch = resolve_launch(None, original_environment=shell)
         child = None
         status = probe_runtime(launch.environment)
@@ -366,6 +369,8 @@ def service_action(action: str, workspace: Path) -> None:
     :return: None.
     """
     shell = _shell_environment(os.environ)
+    if action == "start":
+        ensure_service_secrets(shell)
     launch = resolve_launch(workspace, original_environment=shell)
     assert launch.workspace_root is not None
     native = Path(launch.environment["LTCOOK_JS_ROOT"]) / "runtime" / "dist" / "main.js"

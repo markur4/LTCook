@@ -569,6 +569,7 @@ def test_explicit_global_runtime_reuses_ready_owner_without_session_or_spawn(
     )
     configuration = launch.LaunchConfig({"LTCOOK_TEAM": "default-minimal"}, None, None)
     monkeypatch.setattr(launch, "_shell_environment", lambda _environment: {})
+    monkeypatch.setattr(launch, "ensure_service_secrets", lambda _environment: None)
     monkeypatch.setattr(
         launch, "resolve_launch", lambda *_args, **_kwargs: configuration
     )
@@ -584,6 +585,132 @@ def test_explicit_global_runtime_reuses_ready_owner_without_session_or_spawn(
         lambda *_args, **_kwargs: pytest.fail("ready owner must not be spawned again"),
     )
     assert launch.runtime_command(None) is None
+
+
+@pytest.fixture
+def secret_start_environment(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    native = tmp_path / "deployment/app/runtime/dist/main.js"
+    native.parent.mkdir(parents=True)
+    native.touch()
+    node = tmp_path / "node"
+    node.touch()
+    return {
+        "HOME": str(tmp_path / "home"),
+        "USERPROFILE": str(tmp_path / "home"),
+        "APPDATA": str(tmp_path / "config"),
+        "LOCALAPPDATA": str(tmp_path / "data"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "LTCOOK_JS_ROOT": str(tmp_path / "deployment/app"),
+        "LTCOOK_NODE_EXECUTABLE": str(node),
+        "CRAWL4AI_API_TOKEN": "shell-crawl-token",
+    }
+
+
+@pytest.mark.parametrize("command", ["runtime", "desktop", "service-start"])
+def test_start_persists_missing_secrets_before_the_child_uses_them(
+    monkeypatch, tmp_path, secret_start_environment, command
+):
+    from ltcook import _browser
+    from ltcook._runtime_client import RuntimeStatus
+    from ltcook.config.app import APP_RC
+    from ltcook.config.bundle import LtcookConfig
+
+    shell = secret_start_environment
+    monkeypatch.setenv("LTCOOK_SHELL_PROVENANCE", json.dumps(shell))
+    monkeypatch.setenv("LTCOOK_API_TOKEN", "overlay-must-not-be-used")
+    captured = []
+    status = RuntimeStatus(
+        "default-minimal",
+        "d30f894c-5fdc-4fa6-aa83-9829f64be3c4",
+        "/deployment",
+        "/deployment/database.sqlite",
+        "127.0.0.1:6767",
+        "/deployment/logs/backend.log",
+        "/deployment/paseo/daemon.log",
+        "/deployment/logs/runtime.jsonl",
+    )
+
+    def probe(environment):
+        captured.append(dict(environment))
+        return status
+
+    def service_process(*_arguments, env, **_kwargs):
+        captured.append(dict(env))
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(launch, "probe_runtime", probe)
+    monkeypatch.setattr(launch.subprocess, "run", service_process)
+    monkeypatch.setattr(_browser, "open_paseo_url", lambda _url: None)
+    monkeypatch.setattr(launch, "follow_runtime_logs", lambda *_args, **_kwargs: 0)
+
+    def start():
+        if command == "runtime":
+            launch.runtime_command(None)
+        elif command == "desktop":
+            assert launch.desktop_command() == 0
+        else:
+            launch.service_action("start", tmp_path / "workspace")
+
+    start()
+    configuration = (
+        APP_RC.manage(environment=shell)
+        .inspect(include_workspace=False)
+        .resolved.build(LtcookConfig)
+    )
+    assert configuration.runtime.api_token
+    assert configuration.runtime.api_token != "overlay-must-not-be-used"
+    assert configuration.searxng.secret
+    assert configuration.crawl4ai.api_token == "shell-crawl-token"
+    assert captured[-1]["LTCOOK_API_TOKEN"] == configuration.runtime.api_token
+    assert captured[-1]["SEARXNG_SECRET"] == configuration.searxng.secret
+    assert captured[-1]["CRAWL4AI_API_TOKEN"] == "shell-crawl-token"
+    config_root = Path(shell["XDG_CONFIG_HOME"])
+    persisted = {
+        path.relative_to(config_root): path.read_bytes()
+        for path in config_root.rglob("*")
+        if path.is_file()
+    }
+    assert any(
+        configuration.runtime.api_token.encode() in content
+        for content in persisted.values()
+    )
+    assert any(
+        configuration.searxng.secret.encode() in content
+        for content in persisted.values()
+    )
+    assert all(b"shell-crawl-token" not in content for content in persisted.values())
+    start()
+    assert captured[-1]["LTCOOK_API_TOKEN"] == configuration.runtime.api_token
+    assert persisted == {
+        path.relative_to(config_root): path.read_bytes()
+        for path in config_root.rglob("*")
+        if path.is_file()
+    }
+
+
+@pytest.mark.parametrize("action", ["status", "stop", "logs"])
+def test_read_only_service_actions_leave_missing_secrets_unwritten(
+    monkeypatch, tmp_path, secret_start_environment, action
+):
+    shell = secret_start_environment
+    monkeypatch.setenv("LTCOOK_SHELL_PROVENANCE", json.dumps(shell))
+    captured = []
+
+    def service_process(*_arguments, env, **_kwargs):
+        captured.append(dict(env))
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(launch.subprocess, "run", service_process)
+    launch.service_action(action, tmp_path / "workspace")
+
+    assert captured[-1]["LTCOOK_API_TOKEN"] == ""
+    assert captured[-1]["SEARXNG_SECRET"] == ""
+    assert not Path(shell["XDG_CONFIG_HOME"]).exists()
 
 
 def test_bare_completion_dispatches_to_typer_without_starting_runtime(
@@ -607,6 +734,29 @@ def test_bare_completion_dispatches_to_typer_without_starting_runtime(
     assert calls == [((), {})]
 
 
+def test_inspection_and_authenticated_stop_do_not_initialize_secrets(monkeypatch):
+    import importlib
+
+    import typer
+
+    app_module = importlib.import_module("ltcook.cli.app")
+    monkeypatch.setattr(app_module, "_diagnose_payload", lambda: {"package": "ltcook"})
+    monkeypatch.setattr(app_module.rc.cli, "dump_json", lambda _payload: None)
+    monkeypatch.setattr(
+        app_module, "resolve_launch", lambda *_args: SimpleNamespace(environment={})
+    )
+    monkeypatch.setattr(app_module, "stop_runtime", lambda _environment: 0)
+    monkeypatch.setattr(
+        launch,
+        "ensure_service_secrets",
+        lambda *_args: pytest.fail("read-only commands must not create secrets"),
+    )
+
+    app_module.diagnose_cmd(json_output=True)
+    with pytest.raises(typer.Exit):
+        app_module.stop_cmd()
+
+
 def test_unavailable_or_incompatible_runtime_never_spawns_or_opens_browser(
     monkeypatch, capsys
 ):
@@ -614,6 +764,7 @@ def test_unavailable_or_incompatible_runtime_never_spawns_or_opens_browser(
 
     configuration = launch.LaunchConfig({"LTCOOK_TEAM": "default-minimal"}, None, None)
     monkeypatch.setattr(launch, "_shell_environment", lambda _environment: {})
+    monkeypatch.setattr(launch, "ensure_service_secrets", lambda _environment: None)
     monkeypatch.setattr(
         launch, "resolve_launch", lambda *_args, **_kwargs: configuration
     )

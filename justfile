@@ -375,7 +375,7 @@ sync:
     {{quote(BUN)}} install --frozen-lockfile
     {{quote(BUN)}} run build
     uv sync --locked --all-extras --all-groups --no-install-project
-    PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.package_assets --root . --destination src/ltcook_distr/bundle
+    PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.package_assets --root . --destination src/ltcook_distr/bundle.zip
     uv sync --locked --all-extras --all-groups
 alias install := sync
 
@@ -520,11 +520,12 @@ _release-artifact-check notes_output build_only="false" notes_input="":
     fi
     uv run --with twine --no-project -- twine check "${wheels[0]}" "${sdists[0]}"
 
-make-artifacts:
-    PYTHONPATH=src uv run --locked python -m ltcook_distr.make_artifacts
+build-native:
+    PYTHONPATH=src uv run --locked python -m ltcook_distr.build_native
 
-check-artifacts:
-    PYTHONPATH=src uv run --locked python -m ltcook_distr.make_artifacts --check
+check-native:
+    test -x dist/ltcook-setup-linux-x86_64
+    (cd dist && sha256sum -c SHA256SUMS)
 
 # -- Stage versioned installer assets without publishing them.
 stage-release-assets tag commit:
@@ -553,34 +554,9 @@ release-wheel-smoke:
     trap 'rm -rf "$smoke_root"' EXIT
     (cd "$smoke_root"; uv run --isolated --python 3.12 --with "ltcook @ $artifact_uri" python "$smoke_script" --expected-version "$version")
 
-# Exercise the editable Python entry against an immutable main-source archive.
 release-install-smoke:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ -n "${INSTALLER_SMOKE_MAIN_SOURCE:-}" && -z "${INSTALLER_SMOKE_MAIN_COMMIT:-}" || -z "${INSTALLER_SMOKE_MAIN_SOURCE:-}" && -n "${INSTALLER_SMOKE_MAIN_COMMIT:-}" ]]; then
-        echo "INSTALLER_SMOKE_MAIN_SOURCE and INSTALLER_SMOKE_MAIN_COMMIT must be supplied together." >&2
-        exit 1
-    fi
-    just check-artifacts
-    smoke_root="$(mktemp -d)"
-    trap 'rm -rf "$smoke_root"' EXIT
-    if [[ -n "${INSTALLER_SMOKE_MAIN_SOURCE:-}" ]]; then
-        if [[ ! -f "$INSTALLER_SMOKE_MAIN_SOURCE" ]]; then
-            echo "Main source archive does not exist: $INSTALLER_SMOKE_MAIN_SOURCE" >&2
-            exit 1
-        fi
-        main_commit="$INSTALLER_SMOKE_MAIN_COMMIT"
-    else
-        main_commit="$(git rev-parse HEAD)"
-        archive_file="$smoke_root/main-source.tar.gz"
-        git archive --format=tar.gz --prefix="ltcook-${main_commit}/" --output="$archive_file" "$main_commit"
-        main_source="$(realpath "$archive_file")"
-        if command -v cygpath >/dev/null 2>&1; then main_source="$(cygpath -m "$main_source")"; fi
-        export INSTALLER_SMOKE_MAIN_SOURCE="$main_source"
-        export INSTALLER_SMOKE_MAIN_COMMIT="$main_commit"
-    fi
-    export INSTALLER_SMOKE_CLIENT="${INSTALLER_SMOKE_CLIENT:-curl}"
-    uv run --locked --group dev -- python -m pytest -q "tests/test_ltcook_package.py" -k "source_install_smoke"
+    LTCOOK_NATIVE_SETUP="$(realpath dist/ltcook-setup-linux-x86_64)" PYTHONPATH=src uv run --locked --no-sync pytest tests/test_ltcook_package.py::test_native_setup_initializes_ready_authority_and_retains_resources
+
 # Rehearse the release gate. It does not upload anything.
 release-check:
     #!/usr/bin/env bash
@@ -787,5 +763,5 @@ test-system:
 build:
     {{quote(BUN)}} run build
     uv sync --locked --all-groups --no-install-project
-    PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.package_assets --root . --destination src/ltcook_distr/bundle
+    PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.package_assets --root . --destination src/ltcook_distr/bundle.zip
     uv build --no-sources --no-build-logs

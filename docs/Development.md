@@ -93,7 +93,7 @@ requirement imposed on users of the application.
 | --- | --- |
 | Python application, configuration, CLI, launcher | `src/ltcook` |
 | Authored installer/lifecycle and maintenance behavior | `src/ltcook_distr/payload/app_lifecycle` |
-| Generated AppRC support artifacts | `src/ltcook_distr/artifacts` |
+| Committed-source native builder | `src/ltcook_distr/build_native.py` |
 | Developer packaging and asset-staging helpers | `src/ltcook_dev/packaging` |
 | AppRC-aware TypeScript development launcher | `src/ltcook_dev/runtime.py` |
 | TypeScript runtime, native integrations, panel | `runtime/src` |
@@ -160,34 +160,29 @@ model prompt loop to quick checks.
 
 ## Asset packaging
 
-`src/ltcook_dev/packaging/package_assets.py` stages validated production outputs
-from the repository root into `src/ltcook_distr/bundle`. The staged bundle
-contains compiled runtime entry, shared-auth Pi SDK/RPC launcher, Pi extension,
-Paseo panel plugin, both built team packages and their Markdown resources,
-Compose assets, package declarations, locks, and selected Node version.
-It excludes development `node_modules` and
-test/development-only dependencies. `BuildPy` refuses to build a wheel unless
-the bundle is staged and validated; it copies that bundle into the wheel.
+`src/ltcook_dev/packaging/package_assets.py` builds the canonical
+`src/ltcook_distr/bundle.zip` from validated production outputs. It contains the
+compiled runtime, Pi/Paseo plugins, built teams/resources, services, production
+manifests/lock and Node selection, but no development dependencies.
+`BuildPy` validates and copies that archive; initialization extracts it into
+private staging while preparing the deployment.
 
-The normal `just build` recipe builds TypeScript, stages the bundle, then builds
-the Python wheel and source archive. It does not generate AppRC lifecycle
-artifacts. Run `just make-artifacts` only after editing authored installer
-composition or payload; `just check-artifacts` checks generated artifacts without
-rewriting. `src/ltcook_distr/artifacts/_support` is installer support and is not a
-runtime bundle. The wheel includes `ltcook_distr/bundle` because installed runtime
-needs it; the Python developer tools in `ltcook_dev` and development dependency
-group are not installed runtime requirements.
+`just sync` and `just build` create the archive; the latter also builds wheel
+and sdist. The ZIP is required because AppRC's snapshot cleanup removes every
+new generated `dist` directory, including nested staged package assets.
 
-PyApp runs the standalone AppRC installer from a separate bootstrap environment
-named `ltcook-installer`, whose dependency file declares `apprc-core` and its
-transitive requirements, not `ltcook`. AppRC's configured `uv tool` backend
-installs LTCook itself and owns its application environment.
-During explicit installer setup/retry, LTCook prepares its private
-Node/JavaScript deployment and local Podman/Compose prerequisites. It may need
-network access and normal host elevation; the installer does not start Compose.
-Starting the runtime in local service mode starts the Compose project, but does
-not prove service health. Use `ltcook services status` to inspect local
-containers. Status inspection and directory entry do not install prerequisites.
+`just build-native` uses the exact committed tree and `uv.lock`, builds assets
+inside its private export and calls the SDK snapshot/native APIs. It emits
+`dist/ltcook-setup-linux-x86_64` and `dist/SHA256SUMS`, with intermediates under
+ignored `.cache/apprc/`. Native compilation requires uv 0.13.6 and Rust/LLVM;
+use a cache-scoped uv version rather than replacing a global installation.
+Editable registration uses the existing checkout `.venv` and needs no Rust.
+
+Explicit registration/setup prepares private Node and configured service
+prerequisites without starting Compose. Local mode validates Podman; a receipt
+alone is not proof of readiness. Missing service secrets are persisted only
+at explicit runtime/service starts after Ready. Inspection does not provision
+software or initialize those secrets.
 
 ## Integration and system procedures
 
@@ -199,10 +194,10 @@ tests. These selected suites are separate from quick Python tests, and may need
 their scenario-specific environment. The slow CI workflow is manual; it is not
 part of the ordinary quick-check loop.
 
-Installer source-smoke scenarios require an explicitly supplied immutable source
-commit/archive through `INSTALLER_SMOKE_MAIN_SOURCE` and
-`INSTALLER_SMOKE_MAIN_COMMIT`, plus network/transport prerequisites. They are
-not ordinary smoke checks and must not be run without those inputs. Live local
+Native package smoke requires a built setup from an explicit immutable commit
+and normal download/toolchain prerequisites. Run only the selected maintained
+system test; its isolated direct-service mode does not prove local Podman health.
+Live local
 service verification additionally requires a usable Podman engine, Compose
 provider, configured credentials, and the actual Compose assets. Live research
 requires reachable services and a working model provider. Browser verification
@@ -218,12 +213,10 @@ executables from WSL.
 
 The root `justfile` sets `RELEASE_PYPI := "false"`; do not recommend or run PyPI
 publication commands. There is currently no published LTCook release. The manual
-GitHub Actions release workflow builds Linux wheel/source assets, generated
-AppRC installer support, and a portable PyApp bundle of three adjacent assets:
-`ltcook-install`, `main-installer.pyz`, and the canonical LTCook wheel matching
-the project version. It uploads a workflow artifact but does not create a tag,
-publish a GitHub Release, or publish to PyPI. Do not infer a release or a
-completed installation from a successful asset build.
+GitHub Actions release workflow builds Linux wheel/sdist, committed-source native
+setup and SDK checksums. It uploads workflow artifacts but creates no tag,
+GitHub Release or PyPI publication. Neither an asset build nor a passing
+fixture-based check establishes a live installation or model-backed session.
 
 The scaffold's local release commands are adapted to this asset-only policy.
 `just build-release-inputs` builds packages and notes; `just release-check`
@@ -235,10 +228,9 @@ or publishes to PyPI. These mutation and remote operations require separate
 authorization; they are not ordinary checks. The incompatible scaffold
 `publish-pypi` recipe is deliberately absent.
 
-The PyApp builder validates the wheel's name, project version, and SHA-256.
-AppRC selects the adjacent wheel as a noneditable local package; this portable
-route needs no source checkout and does not download project source. The native
-shell bootstrap generated by `just make-artifacts` remains a separate,
-checkout-based route. On native Windows, the launcher is named
-`ltcook-install.exe`. The manual workflow is Linux-only and does not establish
-native Windows behavior.
+Release staging checks the setup's embedded binding against application,
+distribution, version, command and requested source commit, then verifies its
+exact SDK checksum entry. The schema-2 manifest hashes the final package/native
+assets without hashing itself; stale setup binaries and legacy script/zipapp
+manifests are rejected. Windows/macOS native behavior needs independent native
+verification; never run Windows verification executables from WSL.

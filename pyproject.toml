@@ -11,8 +11,9 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
-    "apprc-core==0.33.0",
-    "apprc==0.33.0",
+    "apprc-core @ git+https://github.com/HisQu/apprc.git@4f26a397a040a50d76f27b035881641404661188",
+    "apprc @ git+https://github.com/HisQu/apprc.git@4f26a397a040a50d76f27b035881641404661188#subdirectory=src/apprc_dev/packaging/terminal",
+    "filelock>=3.18",
     "typer",
 ]
 
@@ -21,7 +22,7 @@ Repository = "https://github.com/markur4/LTCook.git"
 
 [dependency-groups]
 dev = [
-    "apprc-core[distribution]==0.33.0",
+    "apprc-core[distribution] @ git+https://github.com/HisQu/apprc.git@4f26a397a040a50d76f27b035881641404661188",
     "setuptools>=68",
     "pytest>=8.2",
     "ruff>=0.4",
@@ -38,14 +39,29 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "ltcook" = ["config/apprc.defaults.env"]
-"ltcook_distr" = ["bundle/**/*", "bundle/.node-version"]
+"ltcook_distr" = ["bundle.zip"]
 
 [tool.apprc.distribution]
 app-id = "ltcook"
 apprc-reference = "ltcook.config.app:APP_RC"
 project-path = "."
 distribution-path = "src/ltcook_distr"
-launcher-command = "ltcook"
+command-name = "ltcook"
+runtime-python = "3.12"
+display-name = "LTCook"
+bootstrap-env-prefix = "LTCOOK"
+maintenance-group-name = "app"
+launch-enabled = false
+config = true
+appdata = true
+cache = true
+state = true
+user-dotenv = true
+workspaces = true
+workspace-registry = true
+
+[tool.apprc.distribution.hooks]
+initialize = "ltcook_distr.payload.app_lifecycle.actions:initialize"
 
 [project.scripts]
 ltcook = "ltcook.main:main"
@@ -63,19 +79,11 @@ exclude = [
     "dist",
     "**/__pycache__",
     "**/node_modules",
-    "src/ltcook_distr/artifacts",
-    "src/ltcook_distr/bundle",
-    "src/ltcook_distr/payload/app_lifecycle/_support",
 ]
 
 [tool.ruff]
 line-length = 88
 
-extend-exclude = [
-    "src/ltcook_distr/artifacts",
-    "src/ltcook_distr/bundle",
-    "src/ltcook_distr/payload/app_lifecycle/_support",
-]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -14,7 +14,7 @@ import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 from .package_validation import validate_package
 from .release_manifest import (
@@ -300,12 +300,9 @@ def _project_app_id(distribution: str) -> str:
     return value
 
 
-def _check_asset_names(names: list[str]) -> tuple[str, ...]:
+def _check_asset_names(names: list[str], *, app_id: str) -> tuple[str, ...]:
     try:
-        return expected_asset_names(
-            names,
-            payload_format="zipapp" if "main-installer.pyz" in names else "script",
-        )
+        return expected_asset_names(names, app_id=app_id)
     except ValueError as error:
         raise ReleaseError(str(error)) from error
 
@@ -317,7 +314,7 @@ def _validate_local_files(
     *,
     expected_version: str | None = None,
 ) -> dict[str, bytes]:
-    _check_asset_names(names)
+    _check_asset_names(names, app_id=_project_app_id(_project()[0]))
     name, current_version = _project()
     version = current_version if expected_version is None else expected_version
     if identity.tag != f"v{version}":
@@ -355,16 +352,14 @@ def stage(
     repository: str,
     tag: str,
     commit: str,
-    payload_format: Literal["script", "zipapp"] = "script",
 ) -> tuple[str, ...]:
-    """Create integrity metadata after final package and native-entry generation.
+    """Create integrity metadata after final packages and native build.
 
     :param directory: Dedicated final release staging directory.
-    :param names: Explicit package/native-entry names, excluding the manifest.
+    :param names: Package, Linux setup, and checksum names excluding the manifest.
     :param repository: Explicit owner/repository release identity.
     :param tag: Exact version tag; no tag is created.
     :param commit: Immutable source identity; no Git mutation is performed.
-    :param payload_format: Explicit selected installer format.
     :return: Complete deterministic upload list, including the manifest.
     """
     identity = Identity(_repository(repository), _tag(tag), _sha(commit))
@@ -373,10 +368,10 @@ def stage(
         raise ReleaseError("Project version does not match the release tag.")
     complete = [*names, MANIFEST_NAME]
     try:
-        expected_asset_names(complete, payload_format=payload_format)
+        expected_asset_names(complete, app_id=_project_app_id(name))
         if {entry.name for entry in directory.iterdir()} - set(complete):
             raise ReleaseError("Staging directory contains unexpected release files.")
-        payload = {}
+        payload: dict[str, bytes] = {}
         for filename in names:
             path = directory / filename
             if not path.is_file() or path.is_symlink():
@@ -391,7 +386,6 @@ def stage(
             distribution=re.sub(r"[-_.]+", "-", name).lower(),
             version=version,
             commit=identity.commit,
-            payload_format=payload_format,
         )
     except ValueError as error:
         raise ReleaseError(str(error)) from error
@@ -542,7 +536,7 @@ def finalize(api: Api, repository: str, tag: str, commit: str) -> None:
     release = _release(api, identity)
     assets = _assets(release)
     names = set(assets)
-    _check_asset_names(list(names))
+    _check_asset_names(list(names), app_id=_project_app_id(_project()[0]))
     with tempfile.TemporaryDirectory(prefix="buildben-release-finalize-") as temp:
         directory = Path(temp)
         for name, asset in assets.items():
@@ -673,7 +667,7 @@ def verify_pypi_packages(
     ):
         raise ReleaseError("Manual publication requires the exact non-draft release.")
     assets = _assets(release)
-    _check_asset_names(list(assets))
+    _check_asset_names(list(assets), app_id=_project_app_id(_project()[0]))
     with tempfile.TemporaryDirectory(prefix="buildben-pypi-contract-") as temporary:
         root = Path(temporary)
         for name, asset in assets.items():
@@ -731,11 +725,6 @@ def _parser() -> argparse.ArgumentParser:
         item.add_argument("--directory", type=Path, required=True)
         if verb == "stage":
             item.add_argument("--files", nargs="+", required=True)
-            item.add_argument(
-                "--payload-format",
-                choices=("script", "zipapp"),
-                default="script",
-            )
         elif verb == "verify-pypi":
             item.add_argument("--metadata", type=Path, required=True)
     return parser
@@ -752,7 +741,6 @@ def main(argv: list[str] | None = None, *, api: Api | None = None) -> int:
                 repository=args.repository,
                 tag=args.tag,
                 commit=args.commit,
-                payload_format=args.payload_format,
             )
             print("\n".join(names))
         elif args.command == "verify":

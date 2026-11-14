@@ -1,12 +1,14 @@
-"""Stage runtime and native plugin payloads for wheels and installers."""
+"""Stage and archive production runtime/plugin assets for package builds."""
 
 from __future__ import annotations
 
 import argparse
 import os
 import shutil
+import stat
 import tempfile
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 
 from setuptools.command.build_py import build_py as BuildPyBase
 
@@ -28,15 +30,21 @@ REQUIRED_PASEO_PLUGIN_ASSETS = (
 )
 
 
+def _no_links(path: Path) -> None:
+    """Reject linked owned paths before reading or replacing their contents."""
+    if any(part.is_symlink() for part in (path, *path.parents)):
+        raise ValueError(f"Unsafe production bundle destination or input link: {path}")
+
+
 def _copy_tree(source: Path, destination: Path, *, required: bool) -> None:
     """Copy a production subtree without links or development dependencies."""
-    if not source.is_dir() or source.is_symlink():
+    _no_links(source)
+    if not source.is_dir():
         if required:
             raise FileNotFoundError(f"Required production assets are missing: {source}")
         return
     for item in sorted(source.rglob("*")):
-        if item.is_symlink():
-            raise ValueError(f"Production payload contains a link: {item}")
+        _no_links(item)
         if item.is_dir():
             continue
         if not item.is_file() or "node_modules" in item.parts or ".git" in item.parts:
@@ -53,11 +61,13 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
     :param destination: Exact LTCook-owned staging directory to replace.
     :return: Relative file paths included in the staged payload.
     """
+    _no_links(root)
     root = root.resolve(strict=True)
     if not destination.is_absolute():
         raise ValueError("Production bundle destination must be absolute.")
     if destination.is_symlink() or destination == Path(destination.anchor):
         raise ValueError("Unsafe production bundle destination.")
+    _no_links(destination)
     for declaration in ROOT_DECLARATIONS:
         path = root / declaration
         if path.is_symlink() or not path.is_file():
@@ -112,6 +122,7 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
         launcher.chmod(launcher.stat().st_mode | 0o111)
         for team in ("default", "default-minimal"):
             source = root / "teams" / team
+            _no_links(source)
             target = staging / "teams" / team
             manifest = source / "package.json"
             if not manifest.is_file() or manifest.is_symlink():
@@ -126,6 +137,7 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
             marker = destination / ".ltcook-bundle"
             if (
                 destination.is_symlink()
+                or marker.is_symlink()
                 or not marker.is_file()
                 or marker.read_text(encoding="utf-8") != "ltcook\n"
             ):
@@ -141,55 +153,155 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
     )
 
 
+def validate_bundle(archive: Path) -> tuple[str, ...]:
+    """Validate the sole packaged payload without extracting untrusted paths.
+
+    :param archive: Canonical production ZIP, never a directory fallback.
+    :return: Validated regular-file member names in archive order.
+    """
+    _no_links(archive)
+    required = {
+        ".ltcook-bundle",
+        *ROOT_DECLARATIONS,
+        "runtime/package.json",
+        *(f"runtime/{entry}" for entry in REQUIRED_RUNTIME_ENTRIES),
+        *(f"runtime/dist/paseo-plugin/{name}" for name in REQUIRED_PASEO_PLUGIN_ASSETS),
+        "services/compose.yaml",
+    }
+    try:
+        with zipfile.ZipFile(archive) as source:
+            names = source.namelist()
+            if len(names) != len(set(names)):
+                raise ValueError("Production bundle contains duplicate members.")
+            for member in source.infolist():
+                path = PurePosixPath(member.filename)
+                mode = member.external_attr >> 16
+                if (
+                    not path.parts
+                    or path.is_absolute()
+                    or ".." in path.parts
+                    or str(path) != member.filename
+                    or any(character in member.filename for character in "\\\x00:")
+                    or any(part in {"node_modules", ".git"} for part in path.parts)
+                    or not stat.S_ISREG(mode)
+                ):
+                    raise ValueError(
+                        f"Unsafe production bundle member: {member.filename}"
+                    )
+                source.read(member)
+            if not required.issubset(names):
+                raise ValueError(
+                    "Production bundle is missing a required production asset."
+                )
+            for team in ("default", "default-minimal"):
+                for subtree in ("dist", "resources"):
+                    if not any(
+                        name.startswith(f"teams/{team}/{subtree}/") for name in names
+                    ):
+                        raise ValueError(
+                            "Production bundle is missing required team assets."
+                        )
+                if f"teams/{team}/package.json" not in names:
+                    raise ValueError("Production bundle is missing a team declaration.")
+            if source.read(".ltcook-bundle") != b"ltcook\n":
+                raise ValueError("Production bundle ownership marker does not match.")
+    except (OSError, zipfile.BadZipFile) as error:
+        raise ValueError(f"Invalid production bundle archive: {archive}") from error
+    return tuple(names)
+
+
+def _write_bundle(bundle: Path, destination: Path) -> Path:
+    """Publish deterministically staged directory members to one ZIP file."""
+    _no_links(destination)
+    if destination.exists():
+        validate_bundle(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    _no_links(destination)
+    descriptor, name = tempfile.mkstemp(
+        prefix=".ltcook-bundle-", dir=destination.parent
+    )
+    candidate = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            with zipfile.ZipFile(
+                stream, "w", compression=zipfile.ZIP_DEFLATED
+            ) as archive:
+                files = sorted(
+                    (path for path in bundle.rglob("*") if path.is_file()),
+                    key=lambda path: path.relative_to(bundle).as_posix(),
+                )
+                for source in files:
+                    relative = source.relative_to(bundle).as_posix()
+                    member = zipfile.ZipInfo(relative, (1980, 1, 1, 0, 0, 0))
+                    member.create_system = 3
+                    mode = 0o755 if source.stat().st_mode & 0o111 else 0o644
+                    member.external_attr = (stat.S_IFREG | mode) << 16
+                    member.compress_type = zipfile.ZIP_DEFLATED
+                    archive.writestr(member, source.read_bytes())
+            stream.flush()
+            os.fsync(stream.fileno())
+        validate_bundle(candidate)
+        _no_links(destination)
+        candidate.replace(destination)
+    finally:
+        candidate.unlink(missing_ok=True)
+    return destination
+
+
+def archive_assets(
+    root: Path, destination: Path, *, staging_parent: Path | None = None
+) -> Path:
+    """Stage privately outside the source tree and atomically publish its ZIP.
+
+    :param root: Repository or exported snapshot containing compiled assets.
+    :param destination: Exact archive output; linked or unowned outputs are refused.
+    :param staging_parent: Optional private workspace outside the exported source.
+    :return: Validated canonical archive path.
+    """
+    _no_links(root)
+    root = root.resolve(strict=True)
+    destination = Path(os.path.abspath(destination))
+    _no_links(destination)
+    if destination.exists():
+        validate_bundle(destination)
+    if staging_parent is not None:
+        _no_links(staging_parent)
+    parent = staging_parent.resolve(strict=True) if staging_parent else None
+    with tempfile.TemporaryDirectory(prefix="ltcook-assets-", dir=parent) as temporary:
+        private = Path(temporary).resolve()
+        if private.is_relative_to(root):
+            raise ValueError(
+                "Production bundle staging must be outside the source tree."
+            )
+        bundle = private / "bundle"
+        stage_assets(root, bundle)
+        _write_bundle(bundle, destination)
+    return destination
+
+
 class BuildPy(BuildPyBase):
-    """Validate and copy explicitly staged assets into the wheel tree."""
+    """Validate the canonical archive and copy it with the Python package."""
 
     def run(self) -> None:
-        """Keep wheel build offline and fail if its source bundle is incomplete."""
+        """Keep wheel builds offline and refuse linked package outputs."""
+        source = Path(__file__).absolute().parents[2] / "ltcook_distr/bundle.zip"
+        validate_bundle(source)
+        destination = Path(os.path.abspath(self.build_lib)) / "ltcook_distr/bundle.zip"
+        _no_links(destination)
         super().run()
-        source = Path(__file__).resolve().parents[2] / "ltcook_distr" / "bundle"
-        marker = source / ".ltcook-bundle"
-        if (
-            source.is_symlink()
-            or not marker.is_file()
-            or marker.read_text(encoding="utf-8") != "ltcook\n"
-        ):
-            raise RuntimeError(
-                "Run the explicit package_assets staging command before building the wheel."
-            )
-        required = [source / name for name in ROOT_DECLARATIONS]
-        required.extend(
-            (
-                source / "runtime/dist/main.js",
-                source / "runtime/dist/integrations/pi-rpc.js",
-                source / "services/compose.yaml",
-            )
-        )
-        for team in ("default", "default-minimal"):
-            required.extend(
-                (
-                    source / "teams" / team / "dist",
-                    source / "teams" / team / "resources",
-                )
-            )
-        if any(not path.exists() for path in required):
-            raise RuntimeError(
-                "Staged wheel payload is missing a required production asset."
-            )
-        destination = Path(self.build_lib) / "ltcook_distr" / "bundle"
-        if destination.exists():
-            shutil.rmtree(destination)
-        shutil.copytree(source, destination, symlinks=False)
+        _no_links(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        self.copy_file(str(source), str(destination))
 
 
 def main() -> int:
-    """Stage checked production build outputs into the source bundle directory."""
+    """Archive checked production outputs from private external staging."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--destination", type=Path, required=True)
     arguments = parser.parse_args()
     destination = Path(os.path.abspath(arguments.destination))
-    print("\n".join(map(str, stage_assets(arguments.root, destination))))
+    print(archive_assets(arguments.root, destination))
     return 0
 
 

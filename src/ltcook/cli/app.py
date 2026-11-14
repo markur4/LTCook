@@ -11,6 +11,7 @@ from typing import Annotated
 
 import apprc as rc
 import typer
+from apprc.definition.installation import InstallationHooks
 
 import ltcook
 from ltcook._runtime_client import RuntimeClientError, stop_runtime
@@ -144,7 +145,6 @@ rc.cli.mount_app_cli(
     runtime_policy=rc.cli.CliRuntimePolicy(
         runtime_independent_commands={
             "stop": rc.cli.RuntimeIndependentCommand(skip_empty=True),
-            "launcher": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "auth": rc.cli.RuntimeIndependentCommand(
                 action_prefixes={("login",), ("logout",), ("check",)},
                 skip_empty=True,
@@ -167,6 +167,10 @@ rc.cli.mount_app_cli(
         extra_cli_flag_options={"--json"},
     ),
     handlers=maintenance_handlers(),
+    installation_management=True,
+    installation_hooks=InstallationHooks(
+        initialize="ltcook_distr.payload.app_lifecycle.actions:initialize",
+    ),
     runtime_payload=_config_show_payload,
     setup_logging=_setup_app_logging,
 )
@@ -179,45 +183,6 @@ def stop_cmd() -> None:
         raise typer.Exit(stop_runtime(resolve_launch(None).environment))
     except RuntimeClientError as error:
         raise typer.BadParameter(str(error)) from error
-
-
-@app.command("launcher")
-def launcher_cmd(ctx: typer.Context) -> None:
-    """Open the optional installed AppRC launcher."""
-    context = rc.cli.installation_command_context_from(ctx)
-    if context is None:
-        raise RuntimeError("Launcher recovery context was not prepared.")
-    controls = context.runtime_options
-    executable = Path(sys.executable).with_name(
-        PACKAGE_NAME + (".exe" if os.name == "nt" else "")
-    )
-    arguments = tuple(rc.cli.cli_runtime_options_to_args(controls))
-    rc.tui.run_launcher(
-        APP_RC,
-        spec=rc.tui.LauncherSpec(
-            actions=(
-                rc.tui.LauncherAction(
-                    id="main",
-                    label="Run ltcook",
-                    argv=lambda _launcher, _interactive: (
-                        str(executable),
-                        *arguments,
-                    ),
-                    group="main",
-                    interactive=True,
-                ),
-            ),
-            title="ltcook",
-        ),
-        options=rc.ResolveOptions(
-            workspace=controls.workspace,
-            layout=controls.layout,
-            env_files=controls.env_files,
-            env_file_overrides_os_environ=controls.env_file_overrides_os_environ,
-            load_dotenv_layers=controls.load_dotenv_layers,
-        ),
-        environment=context.environment,
-    )
 
 
 @app.command("version")

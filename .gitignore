@@ -34,7 +34,8 @@ apprc.toml
 .env.1password
 
 # === Virtual Environments ======================================
-src/ltcook_distr/bundle/
+src/ltcook_distr/bundle.zip
+.cache/apprc/
 .venv/
 venv/
 venv.bak/

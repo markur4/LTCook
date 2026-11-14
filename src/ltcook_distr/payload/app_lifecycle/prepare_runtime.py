@@ -47,46 +47,6 @@ def _node_asset(version: str, system: str, machine: str) -> tuple[str, str, str]
     return f"https://nodejs.org/dist/v{version}/{basename}{suffix}", basename, suffix
 
 
-def _bundle_root(source: Any) -> Path:
-    """Find staged declarations in source trees or safely unpacked wheel payloads."""
-    candidates = (source.project_directory, source.source_root)
-    if (
-        source.project_directory is None
-        and source.source_root is None
-        and source.source.kind == "editable"
-    ):
-        # > AppRC keeps the live checkout in the editable requirement, not its roots.
-        candidates = (Path(source.requirement), None)
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        for root in (
-            candidate / "src/ltcook_distr/bundle",
-            candidate / "ltcook_distr/bundle",
-            candidate / "bundle",
-            candidate,
-        ):
-            if all(
-                (root / name).is_file()
-                for name in ("package.json", "package-lock.json", ".node-version")
-            ):
-                return root
-    archive = source.archive
-    source_root = source.source_root
-    if archive is not None and archive.suffix == ".whl" and source_root is not None:
-        extracted = source_root / ".ltcook-wheel-payload"
-        if extracted.exists():
-            raise SetupError("Wheel payload extraction directory already exists.")
-        extract_archive(archive, extracted)
-        root = extracted / "ltcook_distr/bundle"
-        if all(
-            (root / name).is_file()
-            for name in ("package.json", "package-lock.json", ".node-version")
-        ):
-            return root
-    raise SetupError("Prepared source lacks staged runtime manifests and Node version.")
-
-
 def _inputs(root: Path) -> tuple[Path, ...]:
     """Select exact production payload inputs, excluding checkout/development files."""
     required = [
@@ -231,16 +191,15 @@ def _retry_browser(
 
 
 def prepare_runtime(
-    source: Any, appdata: Path, *, environment: dict[str, str] | None = None
+    root: Path, appdata: Path, *, environment: dict[str, str] | None = None
 ) -> Path:
     """Install the selected Node version and production lock into AppRC appdata.
 
-    :param source: AppRC ``PreparedSource`` for the immutable selected application.
+    :param root: Extracted canonical bundle containing production declarations.
     :param appdata: AppRC-owned appdata root.
     :param environment: Environment for package-manager and browser child commands.
     :return: LTCook-owned deployment directory.
     """
-    root = _bundle_root(source)
     inputs = _inputs(root)
     version = (root / ".node-version").read_text(encoding="utf-8").strip()
     if re.fullmatch(r"\d+\.\d+\.\d+", version) is None:
@@ -409,19 +368,14 @@ def prepare_runtime(
 
 def main() -> int:
     """Prepare only the bundled Node runtime without invoking Podman or AppRC."""
-    from types import SimpleNamespace
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle-root", type=Path, required=True)
     parser.add_argument("--appdata", type=Path, required=True)
     arguments = parser.parse_args()
-    source = SimpleNamespace(
-        project_directory=arguments.bundle_root.resolve(strict=True),
-        source_root=None,
-        archive=None,
-    )
     deployment = prepare_runtime(
-        source, arguments.appdata.resolve(), environment=dict(os.environ)
+        arguments.bundle_root.resolve(strict=True),
+        arguments.appdata.resolve(),
+        environment=dict(os.environ),
     )
     print(deployment)
     return 0
