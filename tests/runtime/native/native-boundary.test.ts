@@ -1047,6 +1047,7 @@ describe('native runtime boundary', () => {
     expect(nativeToolAllowed(true, 'web_search')).toBe(true);
     expect(nativeToolAllowed(true, 'web_enable')).toBe(true);
     expect(nativeToolAllowed(true, 'ltcook_team')).toBe(true);
+    expect(nativeToolAllowed(true, 'ltcook_ried')).toBe(true);
     expect(nativeToolAllowed(true, 'bash')).toBe(false);
     expect(nativeToolAllowed(true, 'edit')).toBe(false);
     expect(nativeToolAllowed(true, 'web_disable')).toBe(false);

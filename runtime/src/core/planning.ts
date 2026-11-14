@@ -34,6 +34,7 @@ const readTools = new Set([
   'code_search',
   'code_fetch',
   'web_enable',
+  'ltcook_ried',
 ]);
 export interface PlanningDependencies {
   stateDirectory: string;

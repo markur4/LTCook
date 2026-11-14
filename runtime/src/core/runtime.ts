@@ -691,10 +691,28 @@ export class RuntimeController implements RuntimeControllerContract {
     if (binding.state !== 'bound' || binding.nativeAgentId === null)
       throw new Error(`Planning member ${selected} is unavailable`);
     const requestId = `${record.id}:${stage}`;
-    const riedSummary = await this.ried(session.id, { operation: 'summary' }).catch(() => ({
-      status: 'partial',
-      diagnostics: ['RIED unavailable'],
-    }));
+    let summaryTimer: ReturnType<typeof setTimeout> | undefined;
+    let riedSummary: unknown;
+    try {
+      riedSummary = await Promise.race([
+        this.ried(session.id, { operation: 'summary' }).catch(() => ({
+          status: 'partial',
+          diagnostics: ['RIED unavailable'],
+        })),
+        new Promise((resolve) => {
+          summaryTimer = setTimeout(
+            () =>
+              resolve({
+                status: 'partial',
+                diagnostics: ['RIED discovery is pending; call ltcook_ried for the inventory'],
+              }),
+            250,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(summaryTimer);
+    }
     const task =
       this.store.listTasks(session.id).find((task) => task.requestId === requestId) ??
       this.store.createTask(session.id, {
@@ -747,6 +765,7 @@ export class RuntimeController implements RuntimeControllerContract {
         'code_search',
         'code_fetch',
         'ltcook_team',
+        'ltcook_ried',
         'web_enable',
       ].includes(toolName)
     )

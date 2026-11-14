@@ -9,6 +9,7 @@ const READ_ONLY_TOOLS = new Set([
   'code_search',
   'code_fetch',
   'ltcook_team',
+  'ltcook_ried',
   'web_enable',
 ]);
 

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import defaultTeam from '@ltcook/team-default';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import type {
   AgentBackend,
   CreateAgentOptions,
@@ -950,6 +950,45 @@ describe('authoritative planning workflow', () => {
       await runtime.close();
     }
   });
+  test('planning finalization dispatch completes while inventory discovery is pending', async () => {
+    const f = await fixture();
+    const discovery = new Gate();
+    let discovered = false;
+    const inventory = spyOn(f.runtime, 'ried').mockImplementation(async () => {
+      await discovery.wait();
+      discovered = true;
+      return { status: 'fresh' };
+    });
+    try {
+      const { writeFileSync } = await import('node:fs');
+      writeFileSync(f.plan.plan.path, '# Plan\n');
+      const first = f.runtime.snapshot(f.snapshot.session.id).assignments[0]!;
+      const result = (await f.runtime.execute(
+        first.sessionId,
+        { kind: 'agent', nativeAgentId: first.nativeAgentId },
+        {
+          type: 'planning.submit',
+          planId: f.plan.id,
+          assignmentId: first.id,
+          summary: 'Prefilled',
+          evidence: f.plan.plan.path,
+        },
+      )) as import('../../../runtime/src/workflow-api/index.js').PlanningRecord;
+      expect(result.stage).toBe('finalize');
+      expect(discovered).toBe(false);
+      const task = f.runtime
+        .snapshot(first.sessionId)
+        .tasks.find((item) => item.id === result.taskId);
+      expect(task?.description).toContain('RIED discovery is pending; call ltcook_ried');
+      discovery.resolve();
+      await inventory.mock.results[0]!.value;
+      expect(discovered).toBe(true);
+    } finally {
+      discovery.resolve();
+      inventory.mockRestore();
+      await f.runtime.close();
+    }
+  }, 2000);
   test('routes prefill/finalize, rejects forged approval, and enforces document and execution gates', async () => {
     const f = await fixture();
     const id = f.snapshot.session.id;
@@ -959,6 +998,12 @@ describe('authoritative planning workflow', () => {
       const adjutant = f.snapshot.members.find((item) => item.member.key === 'adjutant')!.binding!
         .nativeAgentId!;
       expect(f.runtime.snapshot(id).assignments[0]!.nativeAgentId).toBe(adjutant);
+      for (const nativeAgentId of [main, adjutant]) {
+        expect(
+          f.runtime.authorizeTool(id, nativeAgentId, 'ltcook_ried', { operation: 'summary' })
+            .allowed,
+        ).toBe(true);
+      }
       expect(f.runtime.authorizeTool(id, main, 'read', { path: 'package.json' }).allowed).toBe(
         true,
       );
