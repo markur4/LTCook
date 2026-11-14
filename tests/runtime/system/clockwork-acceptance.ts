@@ -96,7 +96,18 @@ function script(
   const text = JSON.stringify(latestUser);
   const assignment = [...snapshot.assignments]
     .reverse()
-    .find((entry) => entry.memberKey === memberKey && ['sent', 'sending'].includes(entry.status));
+    .find(
+      (entry) =>
+        entry.memberKey === memberKey &&
+        (['sent', 'sending'].includes(entry.status) ||
+          (entry.status === 'reported' &&
+            snapshot.tasks.some(
+              (task) =>
+                task.id === entry.taskId &&
+                task.requestId?.endsWith(':execution-handoff') &&
+                task.status !== 'completed',
+            ))),
+    );
   const task = snapshot.tasks.find((entry) => entry.id === assignment?.taskId);
   if (!pass) return;
   const original = snapshot.tasks.find((entry) => entry.requestId === 'system-original');
