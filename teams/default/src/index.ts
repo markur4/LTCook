@@ -1,10 +1,4 @@
-import type {
-  TeamDefinition,
-  TeamMember,
-  TeamPackage,
-  TeamServiceRuntime,
-  TeamAgentRuntime,
-} from '@ltcook/runtime/api';
+import type { TeamDefinition, TeamMember, TeamPackage } from '@ltcook/runtime/team-api';
 
 const members: readonly TeamMember[] = [
   {
@@ -14,12 +8,10 @@ const members: readonly TeamMember[] = [
     modelAlias: 'smart',
     thinking: 'high',
     readOnly: false,
-    instructionPaths: [
-      'rules/delegation.md',
-      'rules/clear-writing.md',
-      'skills/lookup.md',
-      'skills/explore.md',
-    ],
+    roles: ['coordinator'],
+    workTypes: ['design', 'plan.finalize', 'task.execute'],
+    rules: ['rules/delegation.md', 'rules/clear-writing.md'],
+    skills: ['skills/lookup.md', 'skills/explore.md'],
   },
   {
     key: 'adjutant',
@@ -28,7 +20,10 @@ const members: readonly TeamMember[] = [
     modelAlias: 'smol',
     thinking: 'medium',
     readOnly: false,
-    instructionPaths: ['rules/delegation.md', 'rules/clear-writing.md'],
+    roles: ['adjutant'],
+    workTypes: ['plan.prefill', 'task.execute'],
+    rules: ['rules/delegation.md', 'rules/clear-writing.md'],
+    skills: [],
   },
   {
     key: 'senior',
@@ -37,7 +32,10 @@ const members: readonly TeamMember[] = [
     modelAlias: 'smart',
     thinking: 'medium',
     readOnly: false,
-    instructionPaths: ['rules/engineering.md'],
+    roles: ['senior'],
+    workTypes: ['task.execute'],
+    rules: ['rules/engineering.md'],
+    skills: [],
   },
   {
     key: 'junior',
@@ -46,7 +44,10 @@ const members: readonly TeamMember[] = [
     modelAlias: 'smol',
     thinking: 'high',
     readOnly: false,
-    instructionPaths: ['rules/engineering.md'],
+    roles: ['junior'],
+    workTypes: ['task.execute'],
+    rules: ['rules/engineering.md'],
+    skills: [],
   },
   {
     key: 'reviewer',
@@ -55,7 +56,10 @@ const members: readonly TeamMember[] = [
     modelAlias: 'plan',
     thinking: 'high',
     readOnly: false,
-    instructionPaths: ['rules/review.md'],
+    roles: ['reviewer'],
+    workTypes: ['task.execute'],
+    rules: ['rules/review.md'],
+    skills: [],
   },
   {
     key: 'explorer',
@@ -64,7 +68,10 @@ const members: readonly TeamMember[] = [
     modelAlias: 'smol',
     thinking: 'xhigh',
     readOnly: true,
-    instructionPaths: ['skills/lookup.md', 'skills/explore.md'],
+    roles: ['explorer'],
+    workTypes: ['task.execute'],
+    rules: [],
+    skills: ['skills/lookup.md', 'skills/explore.md'],
   },
   {
     key: 'senior-tmp',
@@ -73,7 +80,10 @@ const members: readonly TeamMember[] = [
     modelAlias: 'smart',
     thinking: 'medium',
     readOnly: false,
-    instructionPaths: ['rules/engineering.md'],
+    roles: ['senior'],
+    workTypes: ['task.execute'],
+    rules: ['rules/engineering.md'],
+    skills: [],
   },
   {
     key: 'junior-tmp',
@@ -82,7 +92,10 @@ const members: readonly TeamMember[] = [
     modelAlias: 'smol',
     thinking: 'medium',
     readOnly: false,
-    instructionPaths: ['rules/engineering.md'],
+    roles: ['junior'],
+    workTypes: ['task.execute'],
+    rules: ['rules/engineering.md'],
+    skills: [],
   },
   {
     key: 'reviewer-tmp',
@@ -91,7 +104,10 @@ const members: readonly TeamMember[] = [
     modelAlias: 'plan',
     thinking: 'high',
     readOnly: false,
-    instructionPaths: ['rules/review.md'],
+    roles: ['reviewer'],
+    workTypes: ['task.execute'],
+    rules: ['rules/review.md'],
+    skills: [],
   },
   {
     key: 'explorer-tmp',
@@ -100,7 +116,10 @@ const members: readonly TeamMember[] = [
     modelAlias: 'smol',
     thinking: 'medium',
     readOnly: true,
-    instructionPaths: ['skills/lookup.md', 'skills/explore.md'],
+    roles: ['explorer'],
+    workTypes: ['task.execute'],
+    rules: [],
+    skills: ['skills/lookup.md', 'skills/explore.md'],
   },
 ];
 const resources = [
@@ -115,29 +134,20 @@ export const definition: TeamDefinition = {
   id: '@ltcook/team-default',
   name: 'Default',
   coordinatorKey: 'main',
+  routing: {
+    design: 'main',
+    'plan.prefill': 'adjutant',
+    'plan.finalize': 'main',
+    'task.execute': 'senior',
+  },
   members,
   resources: resources.map((path) => ({
     path,
+    kind: path.startsWith('rules/') ? ('rule' as const) : ('skill' as const),
+    scope: 'team' as const,
     url: new URL(`../resources/${path}`, import.meta.url).href,
   })),
   reviewPolicy: { mode: 'independent', reviewerKeys: ['reviewer', 'reviewer-tmp'], required: true },
 };
-export function activateService(runtime: TeamServiceRuntime): void {
-  if (runtime.definition.id !== definition.id)
-    throw new Error('Default team activation received a different definition');
-}
-export function activateAgent(runtime: TeamAgentRuntime): void {
-  if (runtime.definition.id !== definition.id)
-    throw new Error('Default team agent received a different definition');
-  const member = runtime.definition.members.find(
-    (candidate) => candidate.key === runtime.identity.memberKey,
-  );
-  if (member === undefined) throw new Error(`Unknown team member: ${runtime.identity.memberKey}`);
-  runtime.instructions.register(
-    runtime.definition.resources.filter((resource) =>
-      member.instructionPaths.includes(resource.path),
-    ),
-  );
-}
-const team: TeamPackage = { apiVersion: 1, definition, activateService, activateAgent };
+const team: TeamPackage = { apiVersion: 2, definition };
 export default team;

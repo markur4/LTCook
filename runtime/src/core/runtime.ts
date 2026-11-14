@@ -1,3 +1,6 @@
+import path from 'node:path';
+import { PlanningWorkflow } from './planning.js';
+import type { WorkType } from '../team-api/index.js';
 import type {
   AgentBackend,
   Assignment,
@@ -11,8 +14,10 @@ import type {
   Session,
   SessionSnapshot,
   TeamPackage,
-  TeamServiceRuntime,
-} from '../api/team.js';
+  PlanningRecord,
+  DecisionPresentation,
+  ProjectSnapshot,
+} from '../workflow-api/index.js';
 import { CoordinationStore } from '../storage/coordination.js';
 import { canonicalWorkspace } from './workspace.js';
 
@@ -20,6 +25,8 @@ type RuntimeOptions = {
   databasePath: string;
   team: TeamPackage;
   agents: AgentBackend;
+  stateDirectory?: string;
+  projectContext?: (workspaceRoot: string) => Promise<ProjectSnapshot>;
   onEvent?: (event: RuntimeEvent) => void;
 };
 
@@ -36,15 +43,33 @@ export class RuntimeController implements RuntimeControllerContract {
   private readonly sessions = new Map<string, Session>();
   private readonly nativeById = new Map<string, NativeAgent>();
   private closed = false;
+  private readonly planning: PlanningWorkflow;
   private readonly initializedSessions = new Set<string>();
   private readonly initializingSessions = new Map<string, Promise<void>>();
   constructor(options: RuntimeOptions) {
-    if (options.team.apiVersion !== 1)
+    if (options.team.apiVersion !== 2)
       throw new Error(`Unsupported team API version ${String(options.team.apiVersion)}`);
     this.team = options.team;
     this.agents = options.agents;
     this.onEvent = options.onEvent ?? (() => undefined);
+    for (const type of ['design', 'plan.prefill', 'plan.finalize', 'task.execute'] as const) {
+      const key = this.team.definition.routing[type];
+      if (
+        !this.team.definition.members.some(
+          (member) => member.key === key && member.workTypes.includes(type),
+        )
+      )
+        throw new Error(`Invalid routing for ${type}`);
+    }
     this.store = new CoordinationStore(options.databasePath);
+    this.planning = new PlanningWorkflow(this.store, {
+      stateDirectory:
+        options.stateDirectory ??
+        process.env.LTCOOK_RUNTIME_STATE_DIR ??
+        path.join(path.dirname(options.databasePath), 'runtime'),
+      ...(options.projectContext ? { projectContext: options.projectContext } : {}),
+      dispatch: (session, record, stage) => this.dispatchPlanning(session, record, stage),
+    });
   }
 
   async openSession(input: { id?: string; workspaceRoot: string }): Promise<SessionSnapshot> {
@@ -78,7 +103,7 @@ export class RuntimeController implements RuntimeControllerContract {
     this.sessions.set(session.id, session);
     const initialization = (async () => {
       await this.reconcile(session);
-      await this.team.activateService(this.serviceRuntime(session));
+      await this.planning.recover(session);
       this.initializedSessions.add(session.id);
     })();
     this.initializingSessions.set(session.id, initialization);
@@ -135,7 +160,10 @@ export class RuntimeController implements RuntimeControllerContract {
       reports: this.store.listReports(sessionId),
       reviews: this.store.listReviews(sessionId),
       approvals: this.store.listApprovals(sessionId),
+      documentsDirectory: this.planning.documentsDirectory,
       blockers,
+      planning: this.planning.list(sessionId),
+      decisions: this.planning.decisions(sessionId),
     };
   }
 
@@ -154,12 +182,62 @@ export class RuntimeController implements RuntimeControllerContract {
     if (actor.kind === 'agent' && identity === undefined)
       throw new Error('Agent identity is not bound to this session');
     const coordinator = identity?.memberKey === this.team.definition.coordinatorKey;
+    if (
+      command.type.startsWith('planning.') ||
+      command.type.startsWith('decision.') ||
+      command.type.startsWith('guidance.')
+    )
+      return this.planning.execute(session, actor, command);
+
+    const executionPass = (passId: string | undefined) => {
+      if (
+        passId === undefined ||
+        this.store.getPass(sessionId, passId).status !== 'running' ||
+        !this.planning.approvedPass(sessionId, passId)
+      )
+        throw new Error('Execution work requires an active approved Pass');
+    };
+    if (command.type === 'assignment.create') {
+      const task = this.store.getTask(sessionId, command.taskId);
+      if (task.workType === 'task.execute') executionPass(task.passId);
+    }
+    if (command.type === 'task.update' && command.status === 'running') {
+      const task = this.store.getTask(sessionId, command.taskId);
+      if (task.workType === 'task.execute') executionPass(task.passId);
+    }
+    if (actor.kind === 'agent') {
+      const assertTask = (taskId: string) => {
+        const task = this.store.getTask(sessionId, taskId);
+        if (task.workType === 'task.execute') executionPass(task.passId);
+      };
+      switch (command.type) {
+        case 'pass.create':
+          throw new Error('Core creates execution Passes only after Plan approval');
+        case 'task.create':
+          if (command.workType === undefined || command.workType === 'task.execute')
+            executionPass(command.passId);
+          break;
+        case 'task.update':
+        case 'step.create':
+        case 'assignment.create':
+          assertTask(command.taskId);
+          break;
+        case 'step.update':
+          assertTask(this.store.getStep(sessionId, command.stepId).taskId);
+          break;
+        case 'pass.update':
+          executionPass(command.passId);
+          break;
+      }
+    }
     switch (command.type) {
       case 'pass.create':
         this.requireCoordinator(actor, coordinator);
         return this.store.createPass(sessionId, command);
       case 'pass.update': {
         this.requireCoordinator(actor, coordinator);
+        if (command.status === 'running' && !this.planning.approvedPass(sessionId, command.passId))
+          throw new Error('Pass execution requires its registered Plan approval');
         if (command.status === 'completed' && this.team.definition.reviewPolicy.required) {
           const pass = this.store.getPass(sessionId, command.passId);
           const latest = this.store
@@ -196,7 +274,23 @@ export class RuntimeController implements RuntimeControllerContract {
         return this.store.createStep(sessionId, command);
       case 'assignment.create': {
         this.requireCoordinator(actor, coordinator);
-        const member = this.member(command.memberKey);
+        const eligible = this.team.definition.members.filter((member) =>
+          member.workTypes.includes('task.execute'),
+        );
+        const selected =
+          command.memberKey ??
+          (await this.team.selectAssignee?.(
+            Object.freeze({
+              workType: 'task.execute' as const,
+              sessionId,
+              workspaceRoot: session.workspaceRoot,
+            }),
+            Object.freeze(eligible.map((member) => Object.freeze({ ...member }))),
+          )) ??
+          this.team.definition.routing['task.execute'];
+        if (!eligible.some((member) => member.key === selected))
+          throw new Error('Selected execution member is not eligible');
+        const member = this.member(selected);
         const binding =
           member.lifetime === 'temporary'
             ? this.store.listBindings(sessionId).find((item) => item.memberKey === member.key)
@@ -215,6 +309,7 @@ export class RuntimeController implements RuntimeControllerContract {
           );
         const assignment = this.store.createAssignment(sessionId, {
           ...command,
+          memberKey: member.key,
           nativeAgentId: binding.nativeAgentId,
         });
         await this.deliverAssignment(assignment);
@@ -492,41 +587,122 @@ export class RuntimeController implements RuntimeControllerContract {
     }
   }
 
-  private serviceRuntime(session: Session): TeamServiceRuntime {
-    const operations = this.operations(session.id);
-    return {
-      definition: this.team.definition,
-      session,
-      coordination: operations,
-      agents: {
-        ensure: (key) => {
-          const member = this.member(key);
-          if (member.lifetime === 'temporary')
-            throw new Error('Temporary members require an explicit team.spawn command');
-          return this.ensureMember(session, key);
-        },
-        list: () => this.snapshot(session.id).members,
-        close: async (key) => {
-          await this.closeTemporaryMember(session, key);
-        },
-      },
-      messaging: {
-        send: async (key, message) => {
-          await this.execute(
-            session.id,
-            { kind: 'user' },
-            { type: 'team.message', memberKey: key, message },
-          );
-        },
-      },
+  private async dispatchPlanning(
+    session: Session,
+    record: PlanningRecord,
+    stage: 'prefill' | 'finalize',
+  ): Promise<Assignment> {
+    const workType: WorkType = stage === 'prefill' ? 'plan.prefill' : 'plan.finalize';
+    const eligible = this.team.definition.members.filter((member) =>
+      member.workTypes.includes(workType),
+    );
+    const context = {
+      workType,
+      sessionId: session.id,
+      workspaceRoot: session.workspaceRoot,
+      ...(record.projectContext ? { projectContext: record.projectContext } : {}),
     };
+    const selected =
+      (await this.team.selectAssignee?.(
+        Object.freeze(context),
+        Object.freeze(eligible.map((member) => Object.freeze({ ...member }))),
+      )) ?? this.team.definition.routing[workType];
+    if (!eligible.some((member) => member.key === selected))
+      throw new Error(`Assignee hook selected ineligible member ${selected} for ${workType}`);
+    const binding = await this.ensureMember(session, selected);
+    if (binding.state !== 'bound' || binding.nativeAgentId === null)
+      throw new Error(`Planning member ${selected} is unavailable`);
+    const requestId = `${record.id}:${stage}`;
+    const task =
+      this.store.listTasks(session.id).find((task) => task.requestId === requestId) ??
+      this.store.createTask(session.id, {
+        title: `${workType}: ${record.title}`,
+        description: `Read Design ${record.design.path}; ${stage === 'prefill' ? 'write the proposed Plan' : 'investigate gaps and finalize the same Plan'} at ${record.plan.path}. Consult the required planning skill and preserve Modes requirements. Include document metadata createdAt ${record.plan.createdAt} and timezone ${record.plan.timezone}. Register user questions through decision.create. Submit planning.submit for this assignment. Project context: ${JSON.stringify(record.projectContext ?? { incomplete: ['Project context provider unavailable'] })}`,
+        acceptance:
+          'Team-authored Plan with all six coverage topics; required user decisions are persisted',
+        workType: 'design',
+        requestId,
+      });
+    const existing = this.store
+      .listAssignments(session.id)
+      .find((assignment) => assignment.taskId === task.id);
+    if (existing) return existing;
+    const assignment = this.store.createAssignment(session.id, {
+      taskId: task.id,
+      memberKey: selected,
+      nativeAgentId: binding.nativeAgentId,
+      message: `Planning ${workType}. Plan ID: ${record.id}. ${task.description}`,
+    });
+    record.taskId = task.id;
+    record.assignmentId = assignment.id;
+    this.store.putRecord(session.id, 'planning', record);
+    await this.deliverAssignment(assignment);
+    return this.store.getAssignment(session.id, assignment.id);
   }
-
-  private operations(sessionId: string, actor: RuntimeActor = { kind: 'user' }) {
-    return {
-      snapshot: async () => this.snapshot(sessionId),
-      execute: (command: RuntimeCommand) => this.execute(sessionId, actor, command),
-    };
+  authorizeTool(
+    sessionId: string,
+    nativeAgentId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+  ) {
+    this.assertOpen();
+    this.session(sessionId);
+    const member = this.snapshot(sessionId).members.find(
+      (item) => item.binding?.nativeAgentId === nativeAgentId,
+    )?.member;
+    if (
+      member?.readOnly &&
+      ![
+        'read',
+        'grep',
+        'find',
+        'ls',
+        'web_search',
+        'fetch_content',
+        'get_search_content',
+        'code_search',
+        'code_fetch',
+        'ltcook_team',
+        'web_enable',
+      ].includes(toolName)
+    )
+      return { allowed: false, reason: 'Member is read-only' };
+    if (
+      (member?.key === this.team.definition.coordinatorKey ||
+        (member && this.team.definition.reviewPolicy.reviewerKeys.includes(member.key))) &&
+      this.store
+        .listPasses(sessionId)
+        .some((pass) => pass.status === 'running' && this.planning.approvedPass(sessionId, pass.id))
+    ) {
+      // > Main may execute directly while it schedules the active Pass.
+      if (
+        !this.planning
+          .decisions(sessionId)
+          .some(
+            (decision) =>
+              decision.blocking &&
+              decision.answer === undefined &&
+              this.planning.get(sessionId, decision.planId).stage === 'approved',
+          )
+      )
+        return { allowed: true, reason: 'Coordinator of an active approved Pass' };
+    }
+    return this.planning.authorize(sessionId, nativeAgentId, toolName, input);
+  }
+  bindDecisionPresentation(input: DecisionPresentation): void {
+    this.assertOpen();
+    this.session(input.sessionId);
+    this.planning.bind(input);
+  }
+  async resolveDecisionPresentation(input: {
+    sessionId: string;
+    nativeAgentId: string;
+    requestId: string;
+    answer?: string;
+    cancelled?: boolean;
+  }): Promise<void> {
+    this.assertOpen();
+    await this.planning.resolve(this.session(input.sessionId), input);
   }
   private session(sessionId: string): Session {
     const session = this.sessions.get(sessionId);

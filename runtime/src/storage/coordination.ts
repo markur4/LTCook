@@ -3,6 +3,7 @@ import Database from 'libsql';
 import process from 'node:process';
 import type {
   Approval,
+  PlanningRecord,
   Assignment,
   CoordinationApi,
   CreateApprovalInput,
@@ -22,7 +23,7 @@ import type {
   UpdatePassInput,
   UpdateStepInput,
   UpdateTaskInput,
-} from '../api/team.js';
+} from '../workflow-api/index.js';
 import { canonicalWorkspace } from '../core/workspace.js';
 
 type TaskRow = Omit<Task, 'passId' | 'blocker' | 'report' | 'phase' | 'requestId'> & {
@@ -34,7 +35,7 @@ type TaskRow = Omit<Task, 'passId' | 'blocker' | 'report' | 'phase' | 'requestId
 };
 type BindingRow = Omit<NativeBinding, 'blocker'> & { blocker: string | null };
 type PassRow = Omit<Pass, 'planRef'> & { planRef: string | null };
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 /** Owns the coordination database exclusively until close(). */
 export class CoordinationStore implements CoordinationApi {
@@ -44,134 +45,87 @@ export class CoordinationStore implements CoordinationApi {
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath);
-    this.database.exec('PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON');
-    this.acquireOwner();
-    try {
-      this.migrate();
-    } catch (error) {
-      this.database
-        .prepare('DELETE FROM owner WHERE singleton = 1 AND pid = ? AND token = ?')
-        .run(process.pid, this.ownerToken);
-      this.database.close();
-      throw error;
-    }
-  }
-  private migrate(): void {
     const version = (this.database.prepare('PRAGMA user_version').get() as { user_version: number })
       .user_version;
-    if (version > SCHEMA_VERSION)
-      throw new Error(
-        `Coordination database version ${version} is newer than supported version ${SCHEMA_VERSION}`,
-      );
-    if (version === SCHEMA_VERSION) return;
-
-    const foreignKeysWereEnabled =
-      (this.database.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number })
-        .foreign_keys === 1;
-    let transactionStarted = false;
-    try {
-      if (foreignKeysWereEnabled) this.database.exec('PRAGMA foreign_keys = OFF');
-      this.database.exec('BEGIN IMMEDIATE');
-      transactionStarted = true;
-      const existing = new Set(
-        (
-          this.database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
-            name: string;
-          }[]
-        ).map(({ name }) => name),
-      );
-      if (existing.has('reviews')) {
-        const columns = new Set(
-          (this.database.prepare('PRAGMA table_info(reviews)').all() as { name: string }[]).map(
-            ({ name }) => name,
-          ),
-        );
-        if (columns.has('task_id') && !existing.has('legacy_reviews'))
-          this.database.exec('ALTER TABLE reviews RENAME TO legacy_reviews');
-      }
-      this.database.exec(`
-        CREATE TABLE IF NOT EXISTS team_instances (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, workspace_root TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(team_id, workspace_root));
-        CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, workspace_root TEXT NOT NULL, created_at TEXT NOT NULL, team_instance_id TEXT REFERENCES team_instances(id));
-        CREATE TABLE IF NOT EXISTS passes (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), title TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', revision INTEGER NOT NULL DEFAULT 1, plan_ref TEXT);
-        CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), pass_id TEXT REFERENCES passes(id), title TEXT NOT NULL, description TEXT NOT NULL, acceptance TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL, blocker TEXT, report TEXT, phase TEXT, request_id TEXT);
-        CREATE TABLE IF NOT EXISTS assignments (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), member_key TEXT NOT NULL, native_agent_id TEXT NOT NULL, status TEXT NOT NULL, handoff TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), assignment_id TEXT NOT NULL REFERENCES assignments(id), native_agent_id TEXT NOT NULL, summary TEXT NOT NULL, evidence TEXT NOT NULL, revision INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS legacy_reviews (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), report_id TEXT NOT NULL REFERENCES reports(id), native_agent_id TEXT NOT NULL, kind TEXT NOT NULL, outcome TEXT NOT NULL, summary TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS reviews (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), pass_id TEXT NOT NULL REFERENCES passes(id), native_agent_id TEXT NOT NULL, kind TEXT NOT NULL, outcome TEXT NOT NULL, summary TEXT NOT NULL, revision INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS steps (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), title TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, UNIQUE(task_id, position));
-        CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), action TEXT NOT NULL, resource_id TEXT NOT NULL, revision TEXT NOT NULL, decision TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS bindings (session_id TEXT NOT NULL REFERENCES sessions(id), team_id TEXT NOT NULL, member_key TEXT NOT NULL, native_agent_id TEXT, workspace_root TEXT NOT NULL, state TEXT NOT NULL, blocker TEXT, PRIMARY KEY(session_id, member_key));
-      `);
-      const columns = (table: string) =>
-        new Set(
-          (this.database.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(
-            ({ name }) => name,
-          ),
-        );
-      const sessionColumns = columns('sessions');
-      if (!sessionColumns.has('team_instance_id'))
-        this.database.exec(
-          'ALTER TABLE sessions ADD COLUMN team_instance_id TEXT REFERENCES team_instances(id)',
-        );
-      const passColumns = columns('passes');
-      if (!passColumns.has('status'))
-        this.database.exec("ALTER TABLE passes ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'");
-      if (!passColumns.has('revision'))
-        this.database.exec('ALTER TABLE passes ADD COLUMN revision INTEGER NOT NULL DEFAULT 1');
-      if (!passColumns.has('plan_ref'))
-        this.database.exec('ALTER TABLE passes ADD COLUMN plan_ref TEXT');
-      const taskColumns = columns('tasks');
-      if (!taskColumns.has('phase')) this.database.exec('ALTER TABLE tasks ADD COLUMN phase TEXT');
-      if (!taskColumns.has('request_id'))
-        this.database.exec('ALTER TABLE tasks ADD COLUMN request_id TEXT');
-      if (
-        (
-          this.database.prepare('PRAGMA table_info(tasks)').all() as {
-            name: string;
-            notnull: number;
-          }[]
-        ).some((column) => column.name === 'pass_id' && column.notnull === 1)
-      ) {
-        this.database.exec(`
-          CREATE TABLE tasks_new (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), pass_id TEXT REFERENCES passes(id), title TEXT NOT NULL, description TEXT NOT NULL, acceptance TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL, blocker TEXT, report TEXT, phase TEXT, request_id TEXT);
-          INSERT INTO tasks_new (id,session_id,pass_id,title,description,acceptance,status,revision,blocker,report,phase,request_id)
-            SELECT id,session_id,pass_id,title,description,acceptance,status,revision,blocker,report,phase,request_id FROM tasks;
-          DROP TABLE tasks;
-          ALTER TABLE tasks_new RENAME TO tasks;
-        `);
-      }
-      for (const session of this.database
-        .prepare('SELECT id, team_id, workspace_root, created_at FROM sessions')
-        .all() as { id: string; team_id: string; workspace_root: string; created_at: string }[]) {
-        const root = canonicalWorkspace(session.workspace_root);
-        let instance = this.database
-          .prepare('SELECT id FROM team_instances WHERE team_id = ? AND workspace_root = ?')
-          .get(session.team_id, root) as { id: string } | undefined;
-        if (instance === undefined) {
-          instance = { id: randomUUID() };
-          this.database
-            .prepare('INSERT INTO team_instances VALUES (?, ?, ?, ?)')
-            .run(instance.id, session.team_id, root, session.created_at);
-        }
-        this.database
-          .prepare('UPDATE sessions SET workspace_root = ?, team_instance_id = ? WHERE id = ?')
-          .run(root, instance.id, session.id);
-        this.database
-          .prepare('UPDATE bindings SET workspace_root = ? WHERE session_id = ?')
-          .run(root, session.id);
-      }
-      this.database.exec('CREATE INDEX IF NOT EXISTS steps_task_order ON steps(task_id, position)');
-      const violations = this.database.prepare('PRAGMA foreign_key_check').all();
-      if (violations.length > 0)
-        throw new Error('Coordination migration produced foreign-key violations');
-      this.database.exec(`PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT`);
-      transactionStarted = false;
-    } catch (error) {
-      if (transactionStarted) this.database.exec('ROLLBACK');
-      throw error;
-    } finally {
-      if (foreignKeysWereEnabled) this.database.exec('PRAGMA foreign_keys = ON');
+    const tables = this.database
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as { name: string }[];
+    const expectedTables = [
+      'team_instances',
+      'sessions',
+      'passes',
+      'tasks',
+      'assignments',
+      'reports',
+      'reviews',
+      'steps',
+      'approvals',
+      'bindings',
+      'workflow_records',
+      'owner',
+    ];
+    if (
+      version === SCHEMA_VERSION &&
+      expectedTables.some((name) => !tables.some((table) => table.name === name))
+    ) {
+      this.database.close();
+      throw new Error('Incompatible coordination database schema: missing required tables');
     }
+    if (version !== SCHEMA_VERSION && (version !== 0 || tables.length > 0)) {
+      this.database.close();
+      throw new Error(
+        `Incompatible coordination database schema ${version}; use a new empty store`,
+      );
+    }
+    this.database.exec('PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON');
+    if (version === 0)
+      this.database.exec(`BEGIN IMMEDIATE;
+        CREATE TABLE team_instances (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, workspace_root TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(team_id, workspace_root));
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, workspace_root TEXT NOT NULL, created_at TEXT NOT NULL, team_instance_id TEXT REFERENCES team_instances(id));
+        CREATE TABLE passes (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), title TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', revision INTEGER NOT NULL DEFAULT 1, plan_ref TEXT);
+        CREATE TABLE tasks (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), pass_id TEXT REFERENCES passes(id), title TEXT NOT NULL, description TEXT NOT NULL, acceptance TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL, blocker TEXT, report TEXT, phase TEXT, request_id TEXT, work_type TEXT NOT NULL);
+        CREATE TABLE assignments (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), member_key TEXT NOT NULL, native_agent_id TEXT NOT NULL, status TEXT NOT NULL, handoff TEXT NOT NULL);
+        CREATE TABLE reports (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), assignment_id TEXT NOT NULL REFERENCES assignments(id), native_agent_id TEXT NOT NULL, summary TEXT NOT NULL, evidence TEXT NOT NULL, revision INTEGER NOT NULL);
+        CREATE TABLE reviews (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), pass_id TEXT NOT NULL REFERENCES passes(id), native_agent_id TEXT NOT NULL, kind TEXT NOT NULL, outcome TEXT NOT NULL, summary TEXT NOT NULL, revision INTEGER NOT NULL);
+        CREATE TABLE steps (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), title TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, UNIQUE(task_id, position));
+        CREATE TABLE approvals (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), action TEXT NOT NULL, resource_id TEXT NOT NULL, revision TEXT NOT NULL, decision TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE bindings (session_id TEXT NOT NULL REFERENCES sessions(id), team_id TEXT NOT NULL, member_key TEXT NOT NULL, native_agent_id TEXT, workspace_root TEXT NOT NULL, state TEXT NOT NULL, blocker TEXT, PRIMARY KEY(session_id, member_key));
+      CREATE TABLE owner (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), pid INTEGER NOT NULL, token TEXT NOT NULL);
+      CREATE TABLE workflow_records (session_id TEXT NOT NULL REFERENCES sessions(id), kind TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(session_id,kind,id));
+      CREATE INDEX steps_task_order ON steps(task_id,position);
+      PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
+    this.acquireOwner();
+  }
+  approvePlan(record: PlanningRecord): PlanningRecord {
+    return this.transaction(() => {
+      const pass = this.createPass(record.sessionId, { title: record.title, planRef: record.id });
+      this.createApproval(record.sessionId, {
+        scope: { action: 'plan.execute', resourceId: record.id, revision: 'registered-plan' },
+        decision: 'approved',
+      });
+      this.updatePass(record.sessionId, { passId: pass.id, status: 'running' });
+      return this.putRecord(record.sessionId, 'planning', {
+        ...record,
+        passId: pass.id,
+        stage: 'approved',
+      });
+    });
+  }
+  records<T>(sessionId: string, kind: string): T[] {
+    return this.rows<{ value: string }>(
+      'SELECT value FROM workflow_records WHERE session_id=? AND kind=? ORDER BY rowid',
+      sessionId,
+      kind,
+    ).map((row) => JSON.parse(row.value) as T);
+  }
+  putRecord<T extends { id: string }>(sessionId: string, kind: string, record: T): T {
+    this.getSession(sessionId);
+    this.database
+      .prepare(
+        'INSERT INTO workflow_records VALUES (?,?,?,?) ON CONFLICT(session_id,kind,id) DO UPDATE SET value=excluded.value',
+      )
+      .run(sessionId, kind, record.id, JSON.stringify(record));
+    return record;
   }
   private assertOpen(): void {
     if (this.closed) throw new Error('Coordination store is closed');
@@ -345,6 +299,7 @@ export class CoordinationStore implements CoordinationApi {
         id: randomUUID(),
         sessionId,
         ...(input.passId === undefined ? {} : { passId: input.passId }),
+        workType: input.workType ?? 'task.execute',
         title: input.title,
         description: input.description,
         acceptance: input.acceptance,
@@ -355,7 +310,7 @@ export class CoordinationStore implements CoordinationApi {
       };
       this.database
         .prepare(
-          'INSERT INTO tasks (id,session_id,pass_id,title,description,acceptance,status,revision,blocker,report,phase,request_id) VALUES (?,?,?,?,?,?,?, ?,NULL,NULL,?,?)',
+          'INSERT INTO tasks (id,session_id,pass_id,title,description,acceptance,status,revision,blocker,report,phase,request_id,work_type) VALUES (?,?,?,?,?,?,?, ?,NULL,NULL,?,?,?)',
         )
         .run(
           task.id,
@@ -368,6 +323,7 @@ export class CoordinationStore implements CoordinationApi {
           task.revision,
           task.phase ?? null,
           task.requestId ?? null,
+          task.workType,
         );
       return task;
     });
@@ -375,7 +331,7 @@ export class CoordinationStore implements CoordinationApi {
   getTask(sessionId: string, taskId: string): Task {
     return this.taskFromRow(
       this.row<TaskRow>(
-        'SELECT id, session_id AS sessionId, pass_id AS passId, title, description, acceptance, status, revision, blocker, report, phase, request_id AS requestId FROM tasks WHERE session_id = ? AND id = ?',
+        'SELECT id, session_id AS sessionId, pass_id AS passId, title, description, acceptance, status, revision, blocker, report, phase, request_id AS requestId, work_type AS workType FROM tasks WHERE session_id = ? AND id = ?',
         sessionId,
         taskId,
       ),
@@ -383,7 +339,7 @@ export class CoordinationStore implements CoordinationApi {
   }
   listTasks(sessionId: string): Task[] {
     return this.rows<TaskRow>(
-      'SELECT id, session_id AS sessionId, pass_id AS passId, title, description, acceptance, status, revision, blocker, report, phase, request_id AS requestId FROM tasks WHERE session_id = ? ORDER BY rowid',
+      'SELECT id, session_id AS sessionId, pass_id AS passId, title, description, acceptance, status, revision, blocker, report, phase, request_id AS requestId, work_type AS workType FROM tasks WHERE session_id = ? ORDER BY rowid',
       sessionId,
     ).map((row) => this.taskFromRow(row));
   }
@@ -456,7 +412,7 @@ export class CoordinationStore implements CoordinationApi {
   }
   createAssignment(
     sessionId: string,
-    input: CreateAssignmentInput & { nativeAgentId: string },
+    input: CreateAssignmentInput & { nativeAgentId: string; memberKey: string },
   ): Assignment {
     return this.transaction(() => {
       const task = this.getTask(sessionId, input.taskId);

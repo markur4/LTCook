@@ -10,7 +10,7 @@ import type {
   RuntimeController,
   SessionSnapshot,
   TeamPackage,
-} from '../../../runtime/src/api/team.js';
+} from '../../../runtime/src/workflow-api/index.js';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import {
   agentEnvironment,
@@ -49,6 +49,9 @@ function snapshotFor(
   workspaceRoot = '/workspace',
 ): SessionSnapshot {
   return {
+    documentsDirectory: '/runtime/documents',
+    planning: [],
+    decisions: [],
     session: {
       id: sessionId,
       teamId: 'team-1',
@@ -60,6 +63,12 @@ function snapshotFor(
       id: 'team-1',
       name: 'Team',
       coordinatorKey: 'lead',
+      routing: {
+        design: 'lead',
+        'plan.prefill': 'lead',
+        'plan.finalize': 'lead',
+        'task.execute': 'lead',
+      },
       members: [],
       resources: [],
       reviewPolicy: { mode: 'self', reviewerKeys: [], required: false },
@@ -73,7 +82,10 @@ function snapshotFor(
           modelAlias: 'smart',
           thinking: '',
           readOnly,
-          instructionPaths: [],
+          roles: ['member'],
+          workTypes: ['design', 'plan.prefill', 'plan.finalize', 'task.execute'],
+          rules: [],
+          skills: [],
         },
         binding: {
           sessionId,
@@ -396,11 +408,17 @@ describe('native runtime boundary', () => {
     };
     const reviewPolicy = { mode: 'self' as const, reviewerKeys: [] as string[], required: false };
     const team: TeamPackage = {
-      apiVersion: 1,
+      apiVersion: 2,
       definition: {
         id: 'native-api-test-team',
         name: 'Native API test team',
         coordinatorKey: 'lead',
+        routing: {
+          design: 'lead',
+          'plan.prefill': 'lead',
+          'plan.finalize': 'lead',
+          'task.execute': 'lead',
+        },
         members: [
           {
             key: 'lead',
@@ -409,7 +427,10 @@ describe('native runtime boundary', () => {
             modelAlias: 'smart',
             thinking: '',
             readOnly: false,
-            instructionPaths: [],
+            roles: ['member'],
+            workTypes: ['design', 'plan.prefill', 'plan.finalize', 'task.execute'],
+            rules: [],
+            skills: [],
           },
           {
             key: 'explorer',
@@ -418,14 +439,15 @@ describe('native runtime boundary', () => {
             modelAlias: 'smol',
             thinking: '',
             readOnly: true,
-            instructionPaths: [],
+            roles: ['member'],
+            workTypes: ['design', 'plan.prefill', 'plan.finalize', 'task.execute'],
+            rules: [],
+            skills: [],
           },
         ],
         resources: [],
         reviewPolicy,
       },
-      activateService() {},
-      async activateAgent() {},
     };
     const runtime = createRuntime({
       databasePath: join(directory, 'coordination.sqlite'),
@@ -444,6 +466,7 @@ describe('native runtime boundary', () => {
         {
           type: 'task.create',
           title: 'Explore',
+          workType: 'task.investigate',
           description: 'Inspect files',
           acceptance: 'Report findings',
         },
@@ -464,6 +487,21 @@ describe('native runtime boundary', () => {
       if (!nativeAgentId) throw new Error('Readonly explorer was not bound');
       api = new RuntimeApi(runtime, 'readonly-report-user-secret', `127.0.0.1:${await freePort()}`);
       const endpoint = await api.listen();
+      const denied = await fetch(`${endpoint}/v1/tool/authorize`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${agentBearer('readonly-report-user-secret', nativeAgentId)}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId: opened.session.id,
+          nativeAgentId,
+          toolName: 'write',
+          input: { path: 'project.ts' },
+        }),
+      });
+      expect(denied.status).toBe(200);
+      expect(((await denied.json()) as { allowed: boolean }).allowed).toBe(false);
       const post = (command: unknown) =>
         fetch(`${endpoint}/v1/command`, {
           method: 'POST',
@@ -891,6 +929,7 @@ describe('native runtime boundary', () => {
       sessionId: 'session-1',
       passId: 'pass-1',
       title: 'Visible task',
+      workType: 'task.execute',
       description: 'private-description',
       acceptance: 'private-acceptance',
       status: 'blocked',

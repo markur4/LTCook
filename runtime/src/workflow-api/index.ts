@@ -1,3 +1,12 @@
+export {
+  RuntimeCommandSchema,
+  RuntimeCommandInputSchema,
+  AgentRuntimeCommandSchema,
+  AgentRuntimeCommandInputSchema,
+  isRuntimeCommand,
+} from './commands.js';
+import type { TeamDefinition, TeamMember } from '../team-api/index.js';
+export type { TeamDefinition, TeamMember, TeamPackage, ModelAlias } from '../team-api/index.js';
 /** Public, versioned contract shared by native hosts and interchangeable teams. */
 export type {
   WorkStatus,
@@ -29,33 +38,6 @@ import type {
   CreateReviewInput,
   CreateApprovalInput,
 } from './commands.js';
-export type ModelAlias = 'smart' | 'smol' | 'plan';
-export interface InstructionResource {
-  path: string;
-  url: string;
-}
-export interface TeamMember {
-  key: string;
-  name: string;
-  lifetime: 'persistent' | 'temporary';
-  modelAlias: ModelAlias;
-  thinking: string;
-  readOnly: boolean;
-  instructionPaths: readonly string[];
-}
-export interface ReviewPolicy {
-  mode: 'independent' | 'self';
-  reviewerKeys: readonly string[];
-  required: boolean;
-}
-export interface TeamDefinition {
-  id: string;
-  name: string;
-  coordinatorKey: string;
-  members: readonly TeamMember[];
-  resources: readonly InstructionResource[];
-  reviewPolicy: ReviewPolicy;
-}
 export interface TeamInstance {
   id: string;
   teamId: string;
@@ -79,6 +61,7 @@ export interface Pass {
   createdAt: string;
 }
 export interface Task {
+  workType: 'design' | 'task.investigate' | 'task.execute';
   id: string;
   sessionId: string;
   passId?: string;
@@ -175,6 +158,7 @@ export interface MemberSnapshot {
   nativeStatus: string | null;
 }
 export interface SessionSnapshot {
+  documentsDirectory: string;
   session: Session;
   definition: TeamDefinition;
   members: MemberSnapshot[];
@@ -186,6 +170,8 @@ export interface SessionSnapshot {
   reviews: Review[];
   approvals: Approval[];
   blockers: string[];
+  planning: PlanningRecord[];
+  decisions: Decision[];
 }
 export type RuntimeActor = { kind: 'user' } | { kind: 'agent'; nativeAgentId: string };
 export interface RuntimeEvent {
@@ -199,6 +185,20 @@ export interface RuntimeController {
   openSession(options: { id?: string; workspaceRoot: string }): Promise<SessionSnapshot>;
   snapshot(sessionId: string): SessionSnapshot;
   execute(sessionId: string, actor: RuntimeActor, command: RuntimeCommand): Promise<unknown>;
+  authorizeTool(
+    sessionId: string,
+    nativeAgentId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+  ): ToolAuthorization;
+  bindDecisionPresentation(input: DecisionPresentation): void;
+  resolveDecisionPresentation(input: {
+    sessionId: string;
+    nativeAgentId: string;
+    requestId: string;
+    answer?: string;
+    cancelled?: boolean;
+  }): Promise<void>;
   close(): Promise<void>;
 }
 /** Storage operations are synchronous and owned by the single runtime, never agent processes. */
@@ -220,7 +220,7 @@ export interface CoordinationApi {
   updateStep(sessionId: string, input: UpdateStepInput): Step;
   createAssignment(
     sessionId: string,
-    input: CreateAssignmentInput & { nativeAgentId: string },
+    input: CreateAssignmentInput & { nativeAgentId: string; memberKey: string },
   ): Assignment;
   getAssignment(sessionId: string, assignmentId: string): Assignment;
   listAssignments(sessionId: string): Assignment[];
@@ -241,37 +241,69 @@ export interface CoordinationApi {
   putBinding(binding: NativeBinding): NativeBinding;
   listBindings(sessionId: string): NativeBinding[];
 }
-export interface SessionOperations {
-  snapshot(): Promise<SessionSnapshot>;
-  execute(command: RuntimeCommand): Promise<unknown>;
-}
-export interface NativeAgentOperations {
-  ensure(memberKey: string): Promise<NativeBinding>;
-  list(): readonly MemberSnapshot[];
-  close(memberKey: string): Promise<void>;
-}
-export interface TeamServiceRuntime {
-  definition: TeamDefinition;
-  session: Session;
-  coordination: SessionOperations;
-  agents: NativeAgentOperations;
-  messaging: { send(memberKey: string, message: string): Promise<void> };
-}
-export interface TeamAgentRuntime {
-  definition: TeamDefinition;
-  identity: {
-    sessionId: string;
-    teamInstanceId: string;
-    teamId: string;
-    memberKey: string;
-    nativeAgentId: string;
+
+export interface ProjectSnapshot {
+  workspaceRoot: string;
+  capturedAt: string;
+  facts: {
+    manifests: {
+      path: string;
+      kind: string;
+      languages: string[];
+      packages: { name: string; version: string }[];
+      commands: Record<string, string>;
+    }[];
+    justRecipes: { name: string; definition: string }[];
+    tools: { name: string; version: string; source: string }[];
   };
-  coordination: SessionOperations;
-  instructions: { register(resources: readonly InstructionResource[]): void };
+  cache: { path: string; refreshedAt: string; reused: boolean };
+  git: { capturedAt: string; root?: string; branch?: string; status?: string; error?: string };
+  sources: { path: string; fingerprint: string }[];
+  incomplete: string[];
 }
-export interface TeamPackage {
-  apiVersion: 1;
-  definition: TeamDefinition;
-  activateService(runtime: TeamServiceRuntime): void | Promise<void>;
-  activateAgent(runtime: TeamAgentRuntime): void | Promise<void>;
+export type PlanCoverage = NonNullable<
+  Extract<RuntimeCommand, { type: 'planning.submit' }>['coverage']
+>[number];
+export type PlanTopic = PlanCoverage['topic'];
+export interface DocumentReference {
+  id: string;
+  kind: 'design' | 'plan';
+  path: string;
+  createdAt: string;
+  timezone: string;
+}
+export interface PlanningRecord {
+  id: string;
+  sessionId: string;
+  design: DocumentReference;
+  plan: DocumentReference;
+  title: string;
+  stage: 'prefill' | 'finalize' | 'awaiting-approval' | 'approved' | 'rejected';
+  taskId?: string;
+  assignmentId?: string;
+  passId?: string;
+  coverage: PlanCoverage[];
+  projectContext?: ProjectSnapshot;
+}
+export interface Decision {
+  id: string;
+  sessionId: string;
+  planId: string;
+  category: 'intent' | 'breaking-changes' | 'verification' | 'other';
+  prompt: string;
+  blocking: boolean;
+  answer?: string;
+  answeredAt?: string;
+}
+export interface DecisionPresentation {
+  sessionId: string;
+  planId: string;
+  decisionId: string;
+  nativeAgentId: string;
+  requestId: string;
+  kind?: 'question' | 'approval';
+}
+export interface ToolAuthorization {
+  allowed: boolean;
+  reason: string;
 }
