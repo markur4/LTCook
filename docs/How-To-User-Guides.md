@@ -97,7 +97,7 @@ Inspect the application without starting agents:
 
 ```shell
 ltcook --help
-ltcook version
+ltcook --version
 ltcook diagnose --json
 ltcook app paths
 ltcook app doctor --json

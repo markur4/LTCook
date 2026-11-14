@@ -1,0 +1,138 @@
+"""User-facing root CLI contracts."""
+
+from __future__ import annotations
+
+import importlib
+from pathlib import Path
+
+import apprc as rc
+import pytest
+from typer.main import get_command
+from typer.testing import CliRunner
+
+from ltcook.cli.app import _package_version, app
+
+RUNNER = CliRunner()
+
+
+def _skip_runtime_prepare(*_args: object, **_kwargs: object) -> None:
+    """Keep help-only invocations independent of local AppRC installation state."""
+
+
+@pytest.mark.parametrize("option", ["--version", "-V"])
+@pytest.mark.parametrize("root_kind", ["invalid", "unowned"])
+def test_version_option_exits_before_apprc_preparation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    option: str,
+    root_kind: str,
+) -> None:
+    """Both version aliases work without resolving invalid or unowned appdata."""
+    app_root = tmp_path / "app-root"
+    sentinel = app_root / "unowned-data.txt"
+    if root_kind == "invalid":
+        app_root.write_text("not an AppRC root", encoding="utf-8")
+    else:
+        app_root.mkdir()
+        sentinel.write_text("leave this data alone", encoding="utf-8")
+
+    def fail_if_prepared(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("version must exit before CliRuntime.prepare")
+
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", fail_if_prepared)
+    result = RUNNER.invoke(
+        app,
+        [
+            option,
+            "--layout",
+            "single-root",
+            "--app-root",
+            str(app_root),
+        ],
+        color=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == f"{_package_version()}\n"
+    if root_kind == "unowned":
+        assert sentinel.read_text(encoding="utf-8") == "leave this data alone"
+        assert sorted(path.name for path in app_root.iterdir()) == [sentinel.name]
+
+
+def test_version_option_is_quiet_during_resilient_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shell completion parsing does not print the package version."""
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    result = RUNNER.invoke(
+        app,
+        ["--version"],
+        color=False,
+        resilient_parsing=True,
+    )
+
+    assert _package_version() not in result.output
+
+
+def test_root_help_orders_panels_and_lists_host_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Host commands precede AppRC panels and shared help stays last."""
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    result = RUNNER.invoke(app, ["--help"], color=False)
+
+    assert result.exit_code == 0, result.output
+    panel_titles = [
+        "Commands",
+        "Options",
+        "AppRC: Commands",
+        "AppRC: Runtime Options",
+        "Help & Completion",
+    ]
+    positions = [result.output.index(title) for title in panel_titles]
+    assert positions == sorted(positions)
+    for command_name in ("stop", "diagnose", "launch", "auth", "services", "app"):
+        assert command_name in result.output
+    assert "--version" in result.output
+    assert "-V" in result.output
+    assert "Inspect and maintain the application" in result.output
+    for child in ("install", "doctor", "paths"):
+        assert child in result.output
+
+
+def test_app_help_lists_its_immediate_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AppRC maintenance help continues to show available app children."""
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    result = RUNNER.invoke(app, ["app", "--help"], color=False)
+
+    assert result.exit_code == 0, result.output
+    for command_name in ("install", "doctor", "paths"):
+        assert command_name in result.output
+
+
+def test_legacy_version_subcommand_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Version is exposed as a root option and the former command is removed."""
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    command = get_command(app)
+    result = RUNNER.invoke(app, ["version"], color=False)
+
+    assert "version" not in command.commands
+    assert result.exit_code != 0
+    assert "No such command 'version'" in result.output
+
+
+def test_main_without_arguments_still_starts_the_desktop_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The installed entry point keeps its existing bare-startup behavior."""
+    cli_module = importlib.import_module("ltcook.cli.app")
+    monkeypatch.setattr(cli_module, "desktop_command", lambda: 19)
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli_module.main([])
+
+    assert exit_info.value.code == 19

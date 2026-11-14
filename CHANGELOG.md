@@ -47,6 +47,10 @@ All notable changes to `ltcook` will be documented in this file.
 ### 💥 Breaking changes
 
 <br>
+- Breaking: The `ltcook version` command is replaced with the eager root option
+  `ltcook --version` (alias `ltcook -V`). Affected: users and scripts invoking
+  the former subcommand. Migration: use `ltcook --version` or `ltcook -V`;
+  version output exits before AppRC runtime preparation.
 - Breaking: Opening a project with unset `LTCOOK_SESSION` now starts a new chat
   instead of selecting a workspace-derived Session. To resume, set `LTCOOK_SESSION`
   to an existing saved identifier; IDs and native bindings survive migration.

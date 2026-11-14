@@ -241,7 +241,7 @@ The installed command and AppRC management remain available before business
 setup. Run these commands from the installed application environment:
 
 ```shell
-ltcook version
+ltcook --version
 ltcook diagnose --json
 ltcook app doctor --json
 ltcook config show --json

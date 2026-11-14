@@ -53,7 +53,7 @@ commands provide launch operations and diagnostics:
 | `ltcook` | Start/reuse the local runtime, open Paseo in the host default browser, and follow backend logs; Ctrl+C detaches. |
 | `ltcook stop` | Gracefully stop the matching local runtime; does not stop Compose containers or close browser tabs. |
 | `ltcook --help` | Show application and mounted AppRC command help. |
-| `ltcook version` | Print the installed package version. |
+| `ltcook --version`, `ltcook -V` | Print the installed package version before runtime preparation. |
 | `ltcook diagnose --json` | Report package, interpreter, and AppRC paths without writing files. |
 | `ltcook config setup --yes` | Initialize declared configuration files; it does not install Node or prepare services. |
 | `ltcook config show --json` | Show app settings, paths, and selected workspace. |
@@ -303,7 +303,7 @@ work rather than reopening or mutating the completed Pass.
 | [`pyproject.toml`](../pyproject.toml) | Python runtime requirements and local `dev` dependency group. |
 | [`.node-version`](../.node-version) | Exact Node version selected for deployment and development. |
 
-The application runtime declares AppRC core and terminal packages at version 0.33.0.
+The application runtime declares AppRC core and terminal packages at version 0.34.0.
 Do not add old Git pins, source overrides, migration layers, or a second Python
 environment owner.
 
