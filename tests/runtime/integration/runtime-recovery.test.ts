@@ -11,6 +11,7 @@ import type {
   NativeAgent,
 } from '../../../runtime/src/workflow-api/index.js';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
+import { CoordinationStore } from '../../../runtime/src/storage/coordination.js';
 import team from '@ltcook/team-default-minimal';
 const reviewRequiredTeam = {
   ...defaultTeam,
@@ -86,6 +87,7 @@ class FakeAgents implements AgentBackend {
 async function approveExecutionFixture(
   runtime: ReturnType<typeof createRuntime>,
   sessionId: string,
+  release = true,
 ) {
   const { writeFileSync } = await import('node:fs');
   const snapshot = runtime.snapshot(sessionId);
@@ -147,22 +149,24 @@ async function approveExecutionFixture(
   const handoff = runtime
     .snapshot(sessionId)
     .assignments.find((assignment) => assignment.taskId === scheduling.id)!;
-  await runtime.execute(
-    sessionId,
-    { kind: 'agent', nativeAgentId: handoff.nativeAgentId },
-    {
-      type: 'report.create',
-      assignmentId: handoff.id,
-      summary: 'Execution scheduling prepared',
-      evidence: 'Fixture execution follows',
-    },
-  );
-  await runtime.execute(
-    sessionId,
-    { kind: 'agent', nativeAgentId: handoff.nativeAgentId },
-    { type: 'task.update', taskId: scheduling.id, status: 'completed' },
-  );
-  return { id: approved.passId! };
+  if (release) {
+    await runtime.execute(
+      sessionId,
+      { kind: 'agent', nativeAgentId: handoff.nativeAgentId },
+      {
+        type: 'report.create',
+        assignmentId: handoff.id,
+        summary: 'Execution scheduling prepared',
+        evidence: 'Fixture execution follows',
+      },
+    );
+    await runtime.execute(
+      sessionId,
+      { kind: 'agent', nativeAgentId: handoff.nativeAgentId },
+      { type: 'task.update', taskId: scheduling.id, status: 'completed' },
+    );
+  }
+  return { id: approved.passId!, schedulingTaskId: scheduling.id, handoff };
 }
 test('idle runtime starts and shuts down without creating sessions or agents', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'ltcook-idle-runtime-'));
@@ -478,105 +482,74 @@ describe('RuntimeController coordination', () => {
     ).toBe('missing');
     await runtime.close();
   });
-  test('requires current whole-Pass review before completing a Pass', async () => {
-    const agents = new FakeAgents();
+  test('runtime dispatches one whole-Pass review and completes only current acceptance', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-pass-review-'));
     temporaryDirectories.push(directory);
     const runtime = createRuntime({
       databasePath: ':memory:',
       stateDirectory: directory,
       team: reviewRequiredTeam,
-      agents,
+      agents: new FakeAgents(),
     });
-    const snapshot = await runtime.openSession({ workspaceRoot: '/workspace' });
-    const pass = await approveExecutionFixture(runtime, snapshot.session.id);
+    const opened = await runtime.openSession({ workspaceRoot: '/workspace' });
+    const id = opened.session.id;
+    const pass = await approveExecutionFixture(runtime, id);
     const task = (await runtime.execute(
-      snapshot.session.id,
+      id,
       { kind: 'user' },
       {
         type: 'task.create',
         passId: pass.id,
+        requestId: 'implementation',
         title: 'Implement',
         description: 'Change code',
         acceptance: 'Pass checks',
+        assigneeKey: 'junior',
       },
     )) as { id: string };
-    const assignment = (await runtime.execute(
-      snapshot.session.id,
-      { kind: 'user' },
-      {
-        type: 'assignment.create',
-        taskId: task.id,
-        memberKey: 'junior',
-        message: 'Implement the task',
-      },
-    )) as { id: string; nativeAgentId: string };
+    const assignment = runtime.snapshot(id).assignments.find((item) => item.taskId === task.id)!;
     await runtime.execute(
-      snapshot.session.id,
+      id,
       { kind: 'agent', nativeAgentId: assignment.nativeAgentId },
       {
         type: 'report.create',
         assignmentId: assignment.id,
         summary: 'Implemented',
-        evidence: 'Changes recorded',
+        evidence: 'Recorded changes',
+        outcome: 'success',
+        verification: [],
       },
     );
-    const reviewerId = snapshot.members.find((member) => member.member.key === 'reviewer')?.binding
-      ?.nativeAgentId;
-    if (reviewerId === undefined || reviewerId === null)
-      throw new Error('Expected a bound Reviewer');
-    const reviewer = { kind: 'agent', nativeAgentId: reviewerId } as const;
-    await runtime.execute(snapshot.session.id, reviewer, {
-      type: 'review.create',
-      passId: pass.id,
-      outcome: 'accepted',
-      summary: 'Review accepted',
-    });
-    await runtime.execute(
-      snapshot.session.id,
-      { kind: 'user' },
-      { type: 'task.update', taskId: task.id, status: 'completed' },
-    );
+    const snapshot = runtime.snapshot(id);
+    const gate = snapshot.tasks.find((item) => item.requestId === `${pass.id}:review`)!;
+    const reviewAssignment = snapshot.assignments.find((item) => item.taskId === gate.id)!;
+    expect(reviewAssignment.memberKey).toBe('reviewer');
+    const actor = { kind: 'agent' as const, nativeAgentId: reviewAssignment.nativeAgentId };
     await expect(
-      runtime.execute(
-        snapshot.session.id,
-        { kind: 'user' },
-        { type: 'pass.update', passId: pass.id, status: 'completed' },
-      ),
-    ).rejects.toThrow(/current revision/);
-    expect(
-      runtime.snapshot(snapshot.session.id).passes.find((item) => item.id === pass.id)?.status,
-    ).toBe('running');
-    const current = runtime
-      .snapshot(snapshot.session.id)
-      .passes.find((item) => item.id === pass.id);
-    if (current === undefined) throw new Error('Expected the Pass');
-    await runtime.execute(snapshot.session.id, reviewer, {
-      type: 'review.create',
+      runtime.execute(id, actor, {
+        type: 'review.create',
+        passId: pass.id,
+        assignmentId: reviewAssignment.id,
+        revision: 1,
+        outcome: 'accepted',
+        summary: 'Stale',
+      }),
+    ).rejects.toThrow(/revision/);
+    const command = {
+      type: 'review.create' as const,
       passId: pass.id,
-      outcome: 'accepted',
-      summary: 'Current whole-Pass review accepted',
-    });
-    const completed = await runtime.execute(
-      snapshot.session.id,
-      { kind: 'user' },
-      { type: 'pass.update', passId: pass.id, status: 'completed' },
+      assignmentId: reviewAssignment.id,
+      revision: snapshot.passes.find((item) => item.id === pass.id)!.revision,
+      outcome: 'accepted' as const,
+      summary: 'Complete Pass accepted',
+    };
+    await runtime.execute(id, actor, command);
+    await runtime.execute(id, actor, command);
+    expect(runtime.snapshot(id).passes.find((item) => item.id === pass.id)?.status).toBe(
+      'completed',
     );
-    expect(completed).toMatchObject({ status: 'completed', revision: current.revision });
-    -(await expect(
-      runtime.execute(
-        snapshot.session.id,
-        { kind: 'user' },
-        { type: 'pass.update', passId: pass.id, status: 'active' },
-      ),
-    ).rejects.toThrow(/cannot be reopened/));
-    +(await expect(
-      runtime.execute(
-        snapshot.session.id,
-        { kind: 'user' },
-        { type: 'pass.update', passId: pass.id, status: 'pending' },
-      ),
-    ).rejects.toThrow(/cannot be reopened/));
+    expect(runtime.snapshot(id).reviews).toHaveLength(1);
+    expect(runtime.snapshot(id).tasks.filter((item) => item.phase === 'review')).toHaveLength(1);
     await runtime.close();
   });
   test('restart rehydrates persisted sessions across workspaces', async () => {
@@ -1603,4 +1576,402 @@ test('guidance inspection distinguishes missing reports from successful or faile
   } finally {
     await runtime.close();
   }
+});
+
+describe('approved Pass scheduling', () => {
+  async function fixture(selected = defaultTeam) {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-scheduler-'));
+    temporaryDirectories.push(directory);
+    const agents = new FakeAgents();
+    const databasePath = join(directory, 'coordination.sqlite');
+    const runtime = createRuntime({
+      databasePath,
+      stateDirectory: directory,
+      team: selected,
+      agents,
+    });
+    const opened = await runtime.openSession({ workspaceRoot: '/workspace' });
+    const id = opened.session.id;
+    const pass = await approveExecutionFixture(runtime, id, false);
+    const create = async (
+      requestId: string,
+      extra: Partial<import('../../../runtime/src/workflow-api/index.js').CreateTaskInput> = {},
+    ) =>
+      runtime.execute(
+        id,
+        { kind: 'user' },
+        {
+          type: 'task.create',
+          passId: pass.id,
+          requestId,
+          title: requestId,
+          description: 'Perform scoped work',
+          acceptance: 'Report with evidence',
+          ...extra,
+        },
+      ) as Promise<import('../../../runtime/src/workflow-api/index.js').Task>;
+    const release = async () => {
+      await runtime.execute(
+        id,
+        { kind: 'agent', nativeAgentId: pass.handoff.nativeAgentId },
+        {
+          type: 'report.create',
+          assignmentId: pass.handoff.id,
+          summary: 'Registered Tasks',
+          evidence: 'Graph recorded',
+        },
+      );
+      await runtime.execute(
+        id,
+        { kind: 'agent', nativeAgentId: pass.handoff.nativeAgentId },
+        { type: 'task.update', taskId: pass.schedulingTaskId, status: 'completed' },
+      );
+    };
+    const report = async (
+      taskId: string,
+      outcome: 'success' | 'failure' = 'success',
+      verification: import('../../../runtime/src/workflow-api/index.js').VerificationEntry[] = [],
+    ) => {
+      const assignment = runtime
+        .snapshot(id)
+        .assignments.filter((item) => item.taskId === taskId)
+        .at(-1)!;
+      const command = {
+        type: 'report.create' as const,
+        assignmentId: assignment.id,
+        summary: outcome,
+        evidence: 'Observed command output',
+        outcome,
+        verification,
+      };
+      return {
+        value: await runtime.execute(
+          id,
+          { kind: 'agent', nativeAgentId: assignment.nativeAgentId },
+          command,
+        ),
+        actor: { kind: 'agent' as const, nativeAgentId: assignment.nativeAgentId },
+        command,
+      };
+    };
+    return { runtime, id, pass, agents, create, release, report, databasePath, directory };
+  }
+
+  test('registration barrier, stable parallel dispatch, same-member serialization and dependencies', async () => {
+    const f = await fixture();
+    try {
+      const a = await f.create('a', { assigneeKey: 'junior' });
+      const b = await f.create('b', { assigneeKey: 'senior' });
+      const c = await f.create('c', { assigneeKey: 'junior' });
+      const d = await f.create('d', { assigneeKey: 'adjutant', dependencyIds: [a.id, b.id] });
+      expect(
+        f.runtime
+          .snapshot(f.id)
+          .assignments.filter((item) => [a.id, b.id, c.id, d.id].includes(item.taskId)),
+      ).toHaveLength(0);
+      await f.release();
+      expect(
+        f.runtime
+          .snapshot(f.id)
+          .assignments.filter((item) => [a.id, b.id, c.id, d.id].includes(item.taskId))
+          .map((item) => item.taskId),
+      ).toEqual([a.id, b.id]);
+      expect(
+        f.runtime.snapshot(f.id).blockers.some((item) => item.includes(`Dependency ${a.id}`)),
+      ).toBe(true);
+      await f.report(a.id);
+      expect(f.runtime.snapshot(f.id).assignments.some((item) => item.taskId === c.id)).toBe(true);
+      expect(f.runtime.snapshot(f.id).assignments.some((item) => item.taskId === d.id)).toBe(false);
+      await f.report(b.id);
+      expect(f.runtime.snapshot(f.id).assignments.some((item) => item.taskId === d.id)).toBe(true);
+      await f.report(c.id);
+      await f.report(d.id);
+      expect(f.runtime.snapshot(f.id).tasks.filter((item) => item.phase === 'review')).toHaveLength(
+        1,
+      );
+    } finally {
+      await f.runtime.close();
+    }
+  });
+
+  test('failed prerequisites require linked correction and explicit idempotent retry', async () => {
+    const f = await fixture();
+    try {
+      const original = await f.create('original', {
+        assigneeKey: 'junior',
+        verificationRequirements: ['unit'],
+      });
+      const dependent = await f.create('dependent', {
+        assigneeKey: 'senior',
+        dependencyIds: [original.id],
+      });
+      await f.release();
+      await f.report(original.id, 'success', [
+        { requirement: 'unit', result: 'failed', evidence: 'Unit assertion failed' },
+      ]);
+      expect(f.runtime.snapshot(f.id).tasks.find((item) => item.id === original.id)?.status).toBe(
+        'failed',
+      );
+      expect(f.runtime.snapshot(f.id).tasks.find((item) => item.id === dependent.id)?.status).toBe(
+        'blocked',
+      );
+      const correction = await f.create('correction', {
+        assigneeKey: 'junior',
+        correctionOfTaskId: original.id,
+      });
+      await f.report(correction.id);
+      expect(
+        f.runtime.snapshot(f.id).assignments.some((item) => item.taskId === dependent.id),
+      ).toBe(false);
+      const retry = {
+        type: 'task.retry' as const,
+        taskId: original.id,
+        requestId: 'retry-original',
+        correctionTaskId: correction.id,
+      };
+      await f.runtime.execute(f.id, { kind: 'user' }, retry);
+      await f.runtime.execute(f.id, { kind: 'user' }, retry);
+      expect(
+        f.runtime
+          .snapshot(f.id)
+          .assignments.filter((item) => item.taskId === original.id)
+          .map((item) => item.attempt),
+      ).toEqual([1, 2]);
+      const result = await f.report(original.id, 'success', [
+        { requirement: 'unit', result: 'passed', evidence: 'All assertions passed' },
+      ]);
+      await f.runtime.execute(f.id, result.actor, result.command);
+      expect(
+        f.runtime.snapshot(f.id).assignments.filter((item) => item.taskId === dependent.id),
+      ).toHaveLength(1);
+    } finally {
+      await f.runtime.close();
+    }
+  });
+
+  test('approval scopes, blocking decisions, temporary members, and minimal self-inspection gate dispatch', async () => {
+    const f = await fixture(team);
+    try {
+      const scope = { action: 'deploy', resourceId: 'artifact', revision: 'sha-1' };
+      const task = await f.create('gated', {
+        approvalScopes: [scope],
+        verificationRequirements: ['unit'],
+      });
+      const review = await f.create('self-inspection', { phase: 'review' });
+      await f.release();
+      expect(f.runtime.snapshot(f.id).assignments.some((item) => item.taskId === task.id)).toBe(
+        false,
+      );
+      await f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        { type: 'approval.create', scope: { ...scope, revision: 'wrong' }, decision: 'approved' },
+      );
+      expect(f.runtime.snapshot(f.id).assignments.some((item) => item.taskId === task.id)).toBe(
+        false,
+      );
+      const plan = f.runtime.snapshot(f.id).planning.find((item) => item.passId === f.pass.id)!;
+      const decision = (await f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        {
+          type: 'decision.create',
+          planId: plan.id,
+          category: 'other',
+          prompt: 'Confirm new issue?',
+          blocking: true,
+        },
+      )) as { id: string };
+      await f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        { type: 'approval.create', scope, decision: 'approved' },
+      );
+      expect(f.runtime.snapshot(f.id).assignments.some((item) => item.taskId === task.id)).toBe(
+        false,
+      );
+      await f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        { type: 'decision.answer', planId: plan.id, decisionId: decision.id, answer: 'Proceed' },
+      );
+      const assignment = f.runtime
+        .snapshot(f.id)
+        .assignments.find((item) => item.taskId === task.id)!;
+      await expect(
+        f.runtime.execute(
+          f.id,
+          { kind: 'agent', nativeAgentId: assignment.nativeAgentId },
+          {
+            type: 'report.create',
+            assignmentId: assignment.id,
+            summary: 'done',
+            evidence: 'proof',
+            outcome: 'success',
+            verification: [],
+          },
+        ),
+      ).rejects.toThrow(/verification/i);
+      await f.report(task.id, 'success', [
+        { requirement: 'unit', result: 'passed', evidence: 'Unit check passed' },
+      ]);
+      const snapshot = f.runtime.snapshot(f.id);
+      const reviewing = snapshot.assignments.find((item) => item.taskId === review.id)!;
+      await f.runtime.execute(
+        f.id,
+        { kind: 'agent', nativeAgentId: reviewing.nativeAgentId },
+        {
+          type: 'review.create',
+          passId: f.pass.id,
+          assignmentId: reviewing.id,
+          revision: snapshot.passes.find((item) => item.id === f.pass.id)!.revision,
+          outcome: 'accepted',
+          summary: 'Self-inspection accepted',
+        },
+      );
+      expect(f.runtime.snapshot(f.id).reviews[0]?.kind).toBe('self');
+      expect(f.runtime.snapshot(f.id).passes.find((item) => item.id === f.pass.id)?.status).toBe(
+        'completed',
+      );
+    } finally {
+      await f.runtime.close();
+    }
+  });
+  test('restart sends only pending scheduled attempts and retains sent and uncertain attempts', async () => {
+    const f = await fixture();
+    const a = await f.create('pending', { assigneeKey: 'junior' });
+    const b = await f.create('sent', { assigneeKey: 'senior' });
+    const c = await f.create('interrupted', { assigneeKey: 'adjutant' });
+    await f.release();
+    const assignments = f.runtime.snapshot(f.id).assignments;
+    await f.runtime.close();
+    const store = new CoordinationStore(f.databasePath);
+    store.updateAssignment(f.id, assignments.find((item) => item.taskId === a.id)!.id, 'pending');
+    store.updateAssignment(f.id, assignments.find((item) => item.taskId === c.id)!.id, 'sending');
+    store.close();
+    const before = f.agents.sends.length;
+    const runtime = createRuntime({
+      databasePath: f.databasePath,
+      stateDirectory: f.directory,
+      team: defaultTeam,
+      agents: f.agents,
+    });
+    try {
+      await runtime.openSession({ id: f.id, workspaceRoot: '/workspace' });
+      expect(f.agents.sends.length).toBe(before + 1);
+      const snapshot = runtime.snapshot(f.id);
+      expect(snapshot.assignments.find((item) => item.taskId === a.id)?.status).toBe('sent');
+      expect(snapshot.assignments.find((item) => item.taskId === b.id)?.status).toBe('sent');
+      expect(snapshot.assignments.find((item) => item.taskId === c.id)?.status).toBe('uncertain');
+      expect(snapshot.blockers.some((item) => item.includes('may have been delivered'))).toBe(true);
+      await runtime.openSession({ id: f.id, workspaceRoot: '/workspace' });
+      expect(f.agents.sends.length).toBe(before + 1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  test('requested changes retry the same Pass-wide review gate after linked correction', async () => {
+    const f = await fixture();
+    try {
+      const task = await f.create('implementation', { assigneeKey: 'junior' });
+      await f.release();
+      await f.report(task.id);
+      const first = f.runtime.snapshot(f.id);
+      const gate = first.tasks.find((item) => item.requestId === `${f.pass.id}:review`)!;
+      const assignment = first.assignments.find((item) => item.taskId === gate.id)!;
+      await f.runtime.execute(
+        f.id,
+        { kind: 'agent', nativeAgentId: assignment.nativeAgentId },
+        {
+          type: 'review.create',
+          passId: f.pass.id,
+          assignmentId: assignment.id,
+          revision: first.passes.find((item) => item.id === f.pass.id)!.revision,
+          outcome: 'changes-requested',
+          summary: 'Fix one finding',
+        },
+      );
+      expect(f.runtime.snapshot(f.id).tasks.find((item) => item.id === gate.id)?.status).toBe(
+        'failed',
+      );
+      const correction = await f.create('review-correction', {
+        correctionOfTaskId: gate.id,
+        assigneeKey: 'reviewer',
+      });
+      await f.report(correction.id);
+      await f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        {
+          type: 'task.retry',
+          taskId: gate.id,
+          requestId: 'review-retry',
+          correctionTaskId: correction.id,
+        },
+      );
+      const current = f.runtime.snapshot(f.id);
+      const retry = current.assignments.filter((item) => item.taskId === gate.id).at(-1)!;
+      expect(retry.attempt).toBe(2);
+      await f.runtime.execute(
+        f.id,
+        { kind: 'agent', nativeAgentId: retry.nativeAgentId },
+        {
+          type: 'review.create',
+          passId: f.pass.id,
+          assignmentId: retry.id,
+          revision: current.passes.find((item) => item.id === f.pass.id)!.revision,
+          outcome: 'accepted',
+          summary: 'Finding fixed and complete Pass accepted',
+        },
+      );
+      expect(f.runtime.snapshot(f.id).tasks.filter((item) => item.phase === 'review')).toHaveLength(
+        1,
+      );
+      expect(f.runtime.snapshot(f.id).passes.find((item) => item.id === f.pass.id)?.status).toBe(
+        'completed',
+      );
+    } finally {
+      await f.runtime.close();
+    }
+  });
+
+  test('temporary assignments wait for explicit spawn and minimal Pass completes without optional review', async () => {
+    const f = await fixture();
+    try {
+      const task = await f.create('temporary', { assigneeKey: 'junior-tmp' });
+      await f.release();
+      expect(f.runtime.snapshot(f.id).assignments.some((item) => item.taskId === task.id)).toBe(
+        false,
+      );
+      expect(
+        f.runtime
+          .snapshot(f.id)
+          .blockers.some((item) => item.includes('junior-tmp') && item.includes('unavailable')),
+      ).toBe(true);
+      await f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        { type: 'team.spawn', memberKey: 'junior-tmp' },
+      );
+      expect(f.runtime.snapshot(f.id).assignments.some((item) => item.taskId === task.id)).toBe(
+        true,
+      );
+    } finally {
+      await f.runtime.close();
+    }
+    const minimal = await fixture(team);
+    try {
+      const task = await minimal.create('direct');
+      await minimal.release();
+      await minimal.report(task.id);
+      expect(
+        minimal.runtime.snapshot(minimal.id).passes.find((item) => item.id === minimal.pass.id)
+          ?.status,
+      ).toBe('completed');
+      expect(minimal.runtime.snapshot(minimal.id).reviews).toHaveLength(0);
+    } finally {
+      await minimal.runtime.close();
+    }
+  });
 });

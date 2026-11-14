@@ -23,6 +23,7 @@ import type {
   UpdatePassInput,
   UpdateStepInput,
   UpdateTaskInput,
+  RetryTaskInput,
 } from '../workflow-api/index.js';
 import { canonicalWorkspace } from '../core/workspace.js';
 
@@ -32,10 +33,11 @@ type TaskRow = Omit<Task, 'passId' | 'blocker' | 'report' | 'phase' | 'requestId
   report: string | null;
   phase: Task['phase'] | null;
   requestId: string | null;
+  metadata: string;
 };
 type BindingRow = Omit<NativeBinding, 'blocker'> & { blocker: string | null };
 type PassRow = Omit<Pass, 'planRef'> & { planRef: string | null };
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 /** Owns the coordination database exclusively until close(). */
 export class CoordinationStore implements CoordinationApi {
@@ -83,15 +85,16 @@ export class CoordinationStore implements CoordinationApi {
         CREATE TABLE team_instances (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, workspace_root TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(team_id, workspace_root));
         CREATE TABLE sessions (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, workspace_root TEXT NOT NULL, created_at TEXT NOT NULL, team_instance_id TEXT REFERENCES team_instances(id));
         CREATE TABLE passes (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), title TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', revision INTEGER NOT NULL DEFAULT 1, plan_ref TEXT);
-        CREATE TABLE tasks (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), pass_id TEXT REFERENCES passes(id), title TEXT NOT NULL, description TEXT NOT NULL, acceptance TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL, blocker TEXT, report TEXT, phase TEXT, request_id TEXT, work_type TEXT NOT NULL);
-        CREATE TABLE assignments (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), member_key TEXT NOT NULL, native_agent_id TEXT NOT NULL, status TEXT NOT NULL, handoff TEXT NOT NULL);
-        CREATE TABLE reports (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), assignment_id TEXT NOT NULL REFERENCES assignments(id), native_agent_id TEXT NOT NULL, summary TEXT NOT NULL, evidence TEXT NOT NULL, revision INTEGER NOT NULL);
-        CREATE TABLE reviews (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), pass_id TEXT NOT NULL REFERENCES passes(id), native_agent_id TEXT NOT NULL, kind TEXT NOT NULL, outcome TEXT NOT NULL, summary TEXT NOT NULL, revision INTEGER NOT NULL);
+        CREATE TABLE tasks (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), pass_id TEXT REFERENCES passes(id), title TEXT NOT NULL, description TEXT NOT NULL, acceptance TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL, blocker TEXT, report TEXT, phase TEXT, request_id TEXT, work_type TEXT NOT NULL, metadata TEXT NOT NULL);
+        CREATE TABLE assignments (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), member_key TEXT NOT NULL, native_agent_id TEXT NOT NULL, status TEXT NOT NULL, handoff TEXT NOT NULL, attempt INTEGER NOT NULL, request_id TEXT);
+        CREATE TABLE reports (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), assignment_id TEXT NOT NULL REFERENCES assignments(id), native_agent_id TEXT NOT NULL, summary TEXT NOT NULL, evidence TEXT NOT NULL, revision INTEGER NOT NULL, outcome TEXT, verification TEXT);
+        CREATE TABLE reviews (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), pass_id TEXT NOT NULL REFERENCES passes(id), native_agent_id TEXT NOT NULL, kind TEXT NOT NULL, outcome TEXT NOT NULL, summary TEXT NOT NULL, revision INTEGER NOT NULL, assignment_id TEXT);
         CREATE TABLE steps (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), task_id TEXT NOT NULL REFERENCES tasks(id), title TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL, UNIQUE(task_id, position));
         CREATE TABLE approvals (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), action TEXT NOT NULL, resource_id TEXT NOT NULL, revision TEXT NOT NULL, decision TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL);
         CREATE TABLE bindings (session_id TEXT NOT NULL REFERENCES sessions(id), team_id TEXT NOT NULL, member_key TEXT NOT NULL, native_agent_id TEXT, workspace_root TEXT NOT NULL, state TEXT NOT NULL, blocker TEXT, PRIMARY KEY(session_id, member_key));
       CREATE TABLE owner (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), pid INTEGER NOT NULL, token TEXT NOT NULL);
       CREATE TABLE workflow_records (session_id TEXT NOT NULL REFERENCES sessions(id), kind TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(session_id,kind,id));
+      CREATE UNIQUE INDEX task_request ON tasks(session_id,request_id) WHERE request_id IS NOT NULL;
       CREATE INDEX steps_task_order ON steps(task_id,position);
       PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
     this.acquireOwner();
@@ -291,6 +294,21 @@ export class CoordinationStore implements CoordinationApi {
   }
   createTask(sessionId: string, input: CreateTaskInput): Task {
     return this.transaction(() => {
+      const original = JSON.stringify(input);
+      if (input.requestId !== undefined) {
+        const duplicate = this.listTasks(sessionId).find(
+          (task) => task.requestId === input.requestId,
+        );
+        if (duplicate) {
+          const row = this.row<{ metadata: string }>(
+            'SELECT metadata FROM tasks WHERE id=?',
+            duplicate.id,
+          );
+          if (JSON.parse(row.metadata).original !== original)
+            throw new Error('Conflicting duplicate Task request');
+          return duplicate;
+        }
+      }
       if (input.passId !== undefined) {
         this.getPass(sessionId, input.passId);
         this.bumpPassForTask(sessionId, input.passId);
@@ -306,11 +324,34 @@ export class CoordinationStore implements CoordinationApi {
         status: 'pending',
         revision: 1,
         ...(input.phase === undefined ? {} : { phase: input.phase }),
-        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        ...(input.requestId === undefined
+          ? input.passId
+            ? { requestId: randomUUID() }
+            : {}
+          : { requestId: input.requestId }),
+        scheduled:
+          input.scheduled ??
+          (input.passId !== undefined &&
+            (input.workType ?? 'task.execute') === 'task.execute' &&
+            !input.requestId?.endsWith(':execution-handoff')),
+        ...(input.assigneeKey === undefined ? {} : { assigneeKey: input.assigneeKey }),
+        attempt: 1,
+        dependencyIds: input.dependencyIds ?? [],
+        verificationRequirements: input.verificationRequirements ?? [],
+        approvalScopes: input.approvalScopes ?? [],
+        ...(input.correctionOfTaskId === undefined
+          ? {}
+          : { correctionOfTaskId: input.correctionOfTaskId }),
       };
+      this.validateDependencies(sessionId, task, task.dependencyIds ?? []);
+      if (task.correctionOfTaskId !== undefined) {
+        const originalTask = this.getTask(sessionId, task.correctionOfTaskId);
+        if (!task.passId || task.passId !== originalTask.passId)
+          throw new Error('Correction must link to a Task in the same Pass');
+      }
       this.database
         .prepare(
-          'INSERT INTO tasks (id,session_id,pass_id,title,description,acceptance,status,revision,blocker,report,phase,request_id,work_type) VALUES (?,?,?,?,?,?,?, ?,NULL,NULL,?,?,?)',
+          'INSERT INTO tasks (id,session_id,pass_id,title,description,acceptance,status,revision,blocker,report,phase,request_id,work_type,metadata) VALUES (?,?,?,?,?,?,?, ?,NULL,NULL,?,?,?,?)',
         )
         .run(
           task.id,
@@ -324,6 +365,16 @@ export class CoordinationStore implements CoordinationApi {
           task.phase ?? null,
           task.requestId ?? null,
           task.workType,
+          JSON.stringify({
+            original,
+            attempt: task.attempt,
+            scheduled: task.scheduled,
+            assigneeKey: task.assigneeKey,
+            dependencyIds: task.dependencyIds,
+            verificationRequirements: task.verificationRequirements,
+            approvalScopes: task.approvalScopes,
+            correctionOfTaskId: task.correctionOfTaskId,
+          }),
         );
       return task;
     });
@@ -331,7 +382,7 @@ export class CoordinationStore implements CoordinationApi {
   getTask(sessionId: string, taskId: string): Task {
     return this.taskFromRow(
       this.row<TaskRow>(
-        'SELECT id, session_id AS sessionId, pass_id AS passId, title, description, acceptance, status, revision, blocker, report, phase, request_id AS requestId, work_type AS workType FROM tasks WHERE session_id = ? AND id = ?',
+        'SELECT id, session_id AS sessionId, pass_id AS passId, title, description, acceptance, status, revision, blocker, report, phase, request_id AS requestId, work_type AS workType, metadata FROM tasks WHERE session_id = ? AND id = ?',
         sessionId,
         taskId,
       ),
@@ -339,14 +390,16 @@ export class CoordinationStore implements CoordinationApi {
   }
   listTasks(sessionId: string): Task[] {
     return this.rows<TaskRow>(
-      'SELECT id, session_id AS sessionId, pass_id AS passId, title, description, acceptance, status, revision, blocker, report, phase, request_id AS requestId, work_type AS workType FROM tasks WHERE session_id = ? ORDER BY rowid',
+      'SELECT id, session_id AS sessionId, pass_id AS passId, title, description, acceptance, status, revision, blocker, report, phase, request_id AS requestId, work_type AS workType, metadata FROM tasks WHERE session_id = ? ORDER BY rowid',
       sessionId,
     ).map((row) => this.taskFromRow(row));
   }
   private taskFromRow(row: TaskRow): Task {
-    const { blocker, report, phase, requestId, passId, ...task } = row;
+    const { blocker, report, phase, requestId, passId, metadata, ...task } = row;
+    const { original: _original, ...fields } = JSON.parse(metadata);
     return {
       ...task,
+      ...fields,
       ...(passId === null ? {} : { passId }),
       ...(phase === null ? {} : { phase }),
       ...(requestId === null ? {} : { requestId }),
@@ -354,13 +407,99 @@ export class CoordinationStore implements CoordinationApi {
       ...(report === null ? {} : { report }),
     };
   }
+  private validateDependencies(sessionId: string, task: Task, ids: string[]): void {
+    if (new Set(ids).size !== ids.length) throw new Error('Duplicate dependency');
+    for (const id of ids) {
+      if (id === task.id) throw new Error('A Task cannot depend on itself');
+      const dependency = this.getTask(sessionId, id);
+      if (!task.passId || dependency.passId !== task.passId)
+        throw new Error('Dependencies must belong to the same Pass');
+      const visited = new Set<string>();
+      const visit = (current: Task): void => {
+        if (current.id === task.id) throw new Error('Cyclic Task dependency');
+        if (visited.has(current.id)) return;
+        visited.add(current.id);
+        for (const parent of current.dependencyIds ?? []) visit(this.getTask(sessionId, parent));
+      };
+      visit(dependency);
+    }
+  }
+  private updateTaskMetadata(
+    sessionId: string,
+    taskId: string,
+    fields: Record<string, unknown>,
+  ): void {
+    const row = this.row<{ metadata: string }>(
+      'SELECT metadata FROM tasks WHERE session_id=? AND id=?',
+      sessionId,
+      taskId,
+    );
+    this.database
+      .prepare('UPDATE tasks SET metadata=? WHERE id=?')
+      .run(JSON.stringify({ ...JSON.parse(row.metadata), ...fields }), taskId);
+  }
+  setTaskAssignee(sessionId: string, taskId: string, memberKey: string): Task {
+    const task = this.getTask(sessionId, taskId);
+    if (task.assigneeKey !== undefined && task.assigneeKey !== memberKey)
+      throw new Error('Task assignee already selected');
+    this.updateTaskMetadata(sessionId, taskId, { assigneeKey: memberKey });
+    return this.getTask(sessionId, taskId);
+  }
+  retryTask(sessionId: string, input: RetryTaskInput): Task {
+    return this.transaction(() => {
+      const previous = this.records<{ id: string; input: string }>(sessionId, 'task-retry').find(
+        (record) => record.id === input.requestId,
+      );
+      if (previous) {
+        if (previous.input !== JSON.stringify(input)) throw new Error('Conflicting retry request');
+        return this.getTask(sessionId, input.taskId);
+      }
+      const task = this.getTask(sessionId, input.taskId);
+      if (!task.scheduled || task.status !== 'failed')
+        throw new Error('Only a failed scheduled Task may be retried');
+      if (input.correctionTaskId) {
+        const correction = this.getTask(sessionId, input.correctionTaskId);
+        if (correction.correctionOfTaskId !== task.id || correction.status !== 'completed')
+          throw new Error('Retry correction must be linked and completed');
+      }
+      this.bumpPassForTask(sessionId, task.passId);
+      this.updateTaskMetadata(sessionId, task.id, { attempt: (task.attempt ?? 1) + 1 });
+      this.database
+        .prepare(
+          "UPDATE tasks SET status='pending', blocker=NULL, report=NULL, revision=revision+1 WHERE id=?",
+        )
+        .run(task.id);
+      this.putRecord(sessionId, 'task-retry', {
+        id: input.requestId,
+        input: JSON.stringify(input),
+      });
+      return this.getTask(sessionId, task.id);
+    });
+  }
   updateTask(sessionId: string, input: UpdateTaskInput): Task {
     this.transaction(() => {
       const task = this.getTask(sessionId, input.taskId);
+      if (input.dependencyIds !== undefined) {
+        if (
+          task.status !== 'pending' ||
+          task.assigneeKey !== undefined ||
+          this.listAssignments(sessionId).some((a) => a.taskId === task.id)
+        )
+          throw new Error('Dependencies may change only while pending and unassigned');
+        this.validateDependencies(sessionId, task, input.dependencyIds);
+        this.updateTaskMetadata(sessionId, task.id, { dependencyIds: input.dependencyIds });
+      }
+      const status = input.status ?? task.status;
+      if (
+        status === task.status &&
+        input.blocker === task.blocker &&
+        input.dependencyIds === undefined
+      )
+        return;
       this.bumpPassForTask(sessionId, task.passId);
       this.database
         .prepare('UPDATE tasks SET status = ?, revision = ?, blocker = ? WHERE id = ?')
-        .run(input.status, task.revision + 1, input.blocker ?? null, task.id);
+        .run(status, task.revision + 1, input.blocker ?? null, task.id);
     });
     return this.getTask(sessionId, input.taskId);
   }
@@ -416,6 +555,21 @@ export class CoordinationStore implements CoordinationApi {
   ): Assignment {
     return this.transaction(() => {
       const task = this.getTask(sessionId, input.taskId);
+      if (task.scheduled) {
+        const previous = this.listAssignments(sessionId).find(
+          (assignment) =>
+            assignment.taskId === task.id && assignment.attempt === (task.attempt ?? 1),
+        );
+        if (previous) {
+          if (
+            previous.memberKey !== input.memberKey ||
+            previous.nativeAgentId !== input.nativeAgentId ||
+            previous.handoff !== input.message
+          )
+            throw new Error('Conflicting assignment attempt');
+          return previous;
+        }
+      }
       this.bumpPassForTask(sessionId, task.passId);
       const assignment: Assignment = {
         id: randomUUID(),
@@ -425,9 +579,13 @@ export class CoordinationStore implements CoordinationApi {
         nativeAgentId: input.nativeAgentId,
         status: 'pending',
         handoff: input.message,
+        attempt: task.scheduled
+          ? (task.attempt ?? 1)
+          : this.listAssignments(sessionId).filter((a) => a.taskId === task.id).length + 1,
+        ...(task.scheduled ? { requestId: `${task.requestId}:${task.attempt ?? 1}` } : {}),
       };
       this.database
-        .prepare('INSERT INTO assignments VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .prepare('INSERT INTO assignments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(
           assignment.id,
           sessionId,
@@ -436,20 +594,22 @@ export class CoordinationStore implements CoordinationApi {
           assignment.nativeAgentId,
           assignment.status,
           assignment.handoff,
+          assignment.attempt ?? 1,
+          assignment.requestId ?? null,
         );
       return assignment;
     });
   }
   getAssignment(sessionId: string, assignmentId: string): Assignment {
     return this.row<Assignment>(
-      'SELECT id, session_id AS sessionId, task_id AS taskId, member_key AS memberKey, native_agent_id AS nativeAgentId, status, handoff FROM assignments WHERE session_id = ? AND id = ?',
+      'SELECT id, session_id AS sessionId, task_id AS taskId, member_key AS memberKey, native_agent_id AS nativeAgentId, status, handoff, attempt, request_id AS requestId FROM assignments WHERE session_id = ? AND id = ?',
       sessionId,
       assignmentId,
     );
   }
   listAssignments(sessionId: string): Assignment[] {
     return this.rows<Assignment>(
-      'SELECT id, session_id AS sessionId, task_id AS taskId, member_key AS memberKey, native_agent_id AS nativeAgentId, status, handoff FROM assignments WHERE session_id = ? ORDER BY rowid',
+      'SELECT id, session_id AS sessionId, task_id AS taskId, member_key AS memberKey, native_agent_id AS nativeAgentId, status, handoff, attempt, request_id AS requestId FROM assignments WHERE session_id = ? ORDER BY rowid',
       sessionId,
     );
   }
@@ -467,14 +627,34 @@ export class CoordinationStore implements CoordinationApi {
   createReport(sessionId: string, input: CreateReportInput & { nativeAgentId: string }): Report {
     return this.transaction(() => {
       const assignment = this.getAssignment(sessionId, input.assignmentId);
-      if (
-        this.rows(
-          'SELECT id FROM reports WHERE session_id = ? AND assignment_id = ?',
-          sessionId,
-          assignment.id,
-        ).length > 0
-      )
-        throw new Error('This assignment already has a report');
+      const previous = this.listReports(sessionId).find(
+        (report) => report.assignmentId === assignment.id,
+      );
+      if (previous) {
+        if (
+          previous.nativeAgentId !== input.nativeAgentId ||
+          previous.summary !== input.summary ||
+          previous.evidence !== input.evidence ||
+          previous.outcome !== input.outcome ||
+          JSON.stringify(previous.verification ?? []) !== JSON.stringify(input.verification ?? [])
+        )
+          throw new Error('Conflicting duplicate result');
+        return previous;
+      }
+      if (assignment.nativeAgentId !== input.nativeAgentId)
+        throw new Error('Only the assigned agent may report');
+      const task = this.getTask(sessionId, assignment.taskId);
+      if (task.scheduled && input.outcome === undefined)
+        throw new Error('Scheduled Task results require an outcome');
+      const verification = input.verification ?? [];
+      if (new Set(verification.map((entry) => entry.requirement)).size !== verification.length)
+        throw new Error('Duplicate verification entries');
+      for (const requirement of task.verificationRequirements ?? []) {
+        if (
+          !verification.some((entry) => entry.requirement === requirement && entry.evidence.trim())
+        )
+          throw new Error(`Missing verification evidence: ${requirement}`);
+      }
       const report: Report = {
         id: randomUUID(),
         sessionId,
@@ -483,10 +663,12 @@ export class CoordinationStore implements CoordinationApi {
         nativeAgentId: input.nativeAgentId,
         summary: input.summary,
         evidence: input.evidence,
+        ...(input.outcome === undefined ? {} : { outcome: input.outcome }),
+        ...(input.verification === undefined ? {} : { verification: input.verification }),
         revision: 1,
       };
       this.database
-        .prepare('INSERT INTO reports VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .prepare('INSERT INTO reports VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(
           report.id,
           sessionId,
@@ -496,55 +678,109 @@ export class CoordinationStore implements CoordinationApi {
           report.summary,
           report.evidence,
           report.revision,
+          report.outcome ?? null,
+          report.verification === undefined ? null : JSON.stringify(report.verification),
         );
       this.updateAssignment(sessionId, assignment.id, 'reported');
-      const task = this.getTask(sessionId, assignment.taskId);
       this.bumpPassForTask(sessionId, task.passId);
       this.database
         .prepare('UPDATE tasks SET report = ?, revision = ? WHERE id = ?')
         .run(report.summary, task.revision + 1, task.id);
+      if (
+        task.scheduled &&
+        (input.outcome === 'failure' || verification.some((entry) => entry.result !== 'passed'))
+      ) {
+        this.database.prepare("UPDATE tasks SET status='failed' WHERE id=?").run(task.id);
+      }
       return report;
     });
   }
   listReports(sessionId: string): Report[] {
-    return this.rows<Report>(
-      'SELECT id, session_id AS sessionId, task_id AS taskId, assignment_id AS assignmentId, native_agent_id AS nativeAgentId, summary, evidence, revision FROM reports WHERE session_id = ? ORDER BY rowid',
+    return this.rows<
+      Omit<Report, 'outcome' | 'verification'> & {
+        outcome: Report['outcome'] | null;
+        verification: string | null;
+      }
+    >(
+      'SELECT id, session_id AS sessionId, task_id AS taskId, assignment_id AS assignmentId, native_agent_id AS nativeAgentId, summary, evidence, revision, outcome, verification FROM reports WHERE session_id = ? ORDER BY rowid',
       sessionId,
-    );
+    ).map(({ outcome, verification, ...report }) => ({
+      ...report,
+      ...(outcome === null ? {} : { outcome }),
+      ...(verification === null ? {} : { verification: JSON.parse(verification) }),
+    }));
   }
   createReview(
     sessionId: string,
     input: CreateReviewInput & { nativeAgentId: string; kind: Review['kind'] },
   ): Review {
-    const pass = this.getPass(sessionId, input.passId);
-    if (pass.status === 'completed') throw new Error('A completed Pass cannot be reviewed again');
-    const review: Review = {
-      id: randomUUID(),
-      sessionId,
-      passId: pass.id,
-      nativeAgentId: input.nativeAgentId,
-      kind: input.kind,
-      outcome: input.outcome,
-      summary: input.summary,
-      revision: pass.revision,
-    };
-    this.database
-      .prepare('INSERT INTO reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(
-        review.id,
+    return this.transaction(() => {
+      const previous =
+        input.assignmentId === undefined
+          ? undefined
+          : this.listReviews(sessionId).find(
+              (review) => review.assignmentId === input.assignmentId,
+            );
+      if (previous) {
+        if (
+          previous.outcome !== input.outcome ||
+          previous.summary !== input.summary ||
+          previous.nativeAgentId !== input.nativeAgentId ||
+          previous.passId !== input.passId
+        )
+          throw new Error('Conflicting duplicate review');
+        return previous;
+      }
+      let pass = this.getPass(sessionId, input.passId);
+      if (pass.status === 'completed') throw new Error('A completed Pass cannot be reviewed again');
+      if (input.revision !== undefined && input.revision !== pass.revision)
+        throw new Error('Review revision is stale');
+      if (input.assignmentId !== undefined) {
+        const assignment = this.getAssignment(sessionId, input.assignmentId);
+        const task = this.getTask(sessionId, assignment.taskId);
+        if (
+          task.passId !== pass.id ||
+          task.phase !== 'review' ||
+          assignment.nativeAgentId !== input.nativeAgentId
+        )
+          throw new Error('Review must match the assigned Pass review gate');
+        this.bumpPassForTask(sessionId, task.passId);
+        this.database
+          .prepare('UPDATE tasks SET status=?, revision=revision+1, blocker=NULL WHERE id=?')
+          .run(input.outcome === 'accepted' ? 'completed' : 'failed', task.id);
+        this.updateAssignment(sessionId, assignment.id, 'reported');
+        pass = this.getPass(sessionId, pass.id);
+      }
+      const review: Review = {
+        id: randomUUID(),
         sessionId,
-        review.passId,
-        review.nativeAgentId,
-        review.kind,
-        review.outcome,
-        review.summary,
-        review.revision,
-      );
-    return review;
+        passId: pass.id,
+        nativeAgentId: input.nativeAgentId,
+        kind: input.kind,
+        outcome: input.outcome,
+        summary: input.summary,
+        revision: pass.revision,
+        ...(input.assignmentId === undefined ? {} : { assignmentId: input.assignmentId }),
+      };
+      this.database
+        .prepare('INSERT INTO reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(
+          review.id,
+          sessionId,
+          review.passId,
+          review.nativeAgentId,
+          review.kind,
+          review.outcome,
+          review.summary,
+          review.revision,
+          review.assignmentId ?? null,
+        );
+      return review;
+    });
   }
   listReviews(sessionId: string): Review[] {
     return this.rows<Review>(
-      'SELECT id, session_id AS sessionId, pass_id AS passId, native_agent_id AS nativeAgentId, kind, outcome, summary, revision FROM reviews WHERE session_id = ? ORDER BY rowid',
+      'SELECT id, session_id AS sessionId, pass_id AS passId, native_agent_id AS nativeAgentId, kind, outcome, summary, revision, assignment_id AS assignmentId FROM reviews WHERE session_id = ? ORDER BY rowid',
       sessionId,
     );
   }
