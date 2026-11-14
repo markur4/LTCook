@@ -1,3 +1,4 @@
+import type { PlanningDialogEvent } from './planning-dialogs.js';
 import { createHostClient } from '@getpaseo/client/node';
 import { createPaseoApi, type PaseoApi } from '@getpaseo/client';
 import { randomUUID } from 'node:crypto';
@@ -12,6 +13,7 @@ export interface PaseoHost {
   api: PaseoApi;
   listen: string;
   logPath: string;
+  subscribePlanningDialogs(handler: (event: PlanningDialogEvent) => Promise<void>): () => void;
   close(): Promise<void>;
 }
 export interface AgentRpcIdentity {
@@ -171,6 +173,31 @@ export async function startPaseoHost(input: {
       api,
       listen: instance.listen,
       logPath: daemonLogPath(home),
+      subscribePlanningDialogs(handler) {
+        const feed = connectedClient.observeEvents([
+          'agent_permission_request',
+          'agent_permission_resolved',
+        ]);
+        let sequence = Promise.resolve();
+        const unsubscribe = connectedClient.subscribe((event) => {
+          if (
+            event.type !== 'agent_permission_request' &&
+            event.type !== 'agent_permission_resolved'
+          )
+            return;
+          sequence = sequence
+            .then(() => handler(event))
+            .catch(() => {
+              console.error(
+                'Native planning dialog could not be correlated; decision remains pending.',
+              );
+            });
+        });
+        return () => {
+          unsubscribe();
+          void feed.release();
+        };
+      },
       async close() {
         const failures: unknown[] = [];
         for (const cleanup of [
@@ -293,7 +320,6 @@ export async function createPaseoAgentBackend(input: {
         input.browserAvailable && workspaceEnv.LTCOOK_BROWSER_ENABLED !== 'false';
       const codeSearchEnabled = workspaceEnv.LTCOOK_CODESEARCH_ENABLED === 'true';
       const ownedExtensions = [
-        extensionPath,
         ...webAccessExtensions,
         ...(codeSearchEnabled ? codeSearchExtensions : []),
       ];

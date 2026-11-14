@@ -1,12 +1,12 @@
-import type { GuidanceResource as InstructionResource } from '../guidance-api/index.js';
+import type { GuidanceInspection } from '../guidance-api/index.js';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { readFile } from 'node:fs/promises';
+import { setTimeout } from 'node:timers';
 import { createRequire } from 'node:module';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { RuntimeCommandInputSchema } from '../workflow-api/commands.js';
-import type {} from '../workflow-api/index.js';
 import { selectedTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
+import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
 const require = createRequire(import.meta.url);
 async function activateOptionalBrowser(pi: ExtensionAPI): Promise<void> {
   if (process.env.LTCOOK_BROWSER_ENABLED !== 'true') return;
@@ -26,11 +26,10 @@ async function activateOptionalBrowser(pi: ExtensionAPI): Promise<void> {
   }
 }
 
-function resourcePath(resource: InstructionResource): string {
-  return resource.url.startsWith('file:') ? fileURLToPath(resource.url) : resource.path;
-}
-
-export default async function activate(pi: ExtensionAPI): Promise<void> {
+export default async function activate(
+  pi: ExtensionAPI,
+  inspection?: () => GuidanceInspection,
+): Promise<void> {
   const nativeAgentId = process.env.LTCOOK_NATIVE_AGENT_ID;
   const sessionId = process.env.LTCOOK_SESSION_ID;
   const teamInstanceId = process.env.LTCOOK_TEAM_INSTANCE_ID;
@@ -48,42 +47,75 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
     !endpoint ||
     !token ||
     !teamSelection
-  )
+  ) {
+    if (nativeAgentId)
+      throw new Error('Managed native identity and authenticated runtime context are incomplete.');
     return;
+  }
 
   const team = await selectedTeam(teamSelection);
   if (team.definition.id !== teamId)
     throw new Error('Selected native team does not match the active session');
-  const resources = new Map<string, InstructionResource>();
   const rpc = async (pathname: string, payload: Record<string, unknown>): Promise<Response> =>
     fetch(`${endpoint}${pathname}`, {
+      signal: globalThis.AbortSignal.timeout(3000) as NonNullable<
+        Parameters<typeof fetch>[1]
+      >['signal'],
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId, nativeAgentId, ...payload }),
     });
   const member = team.definition.members.find((candidate) => candidate.key === memberKey);
   if (!member) throw new Error('Native agent identity is not a member of the selected team');
-  for (const resource of team.definition.resources)
-    if ([...member.rules, ...member.skills].includes(resource.path))
-      resources.set(resource.path, resource);
-
-  pi.on('resources_discover', () => ({ promptPaths: [...resources.values()].map(resourcePath) }));
-  pi.on('before_agent_start', async (event) => {
-    const paths = member.rules
-      .map((instructionPath) => resources.get(instructionPath))
-      .filter((resource): resource is InstructionResource => resource !== undefined)
-      .map(resourcePath);
-    const content = await Promise.all(
-      paths.map(async (resource) => `\n\n${await readFile(resource, 'utf8')}`),
-    );
-    return content.length
-      ? { systemPrompt: `${event.systemPrompt}${content.join('')}` }
-      : undefined;
+  const publishGuidance = async () => {
+    if (!inspection) throw new Error('Managed native guidance inspection is unavailable.');
+    const response = await rpc('/v1/command', {
+      command: { type: 'guidance.loaded', inspection: inspection() },
+    });
+    if (!response.ok) throw new Error(`Native guidance registration failed (${response.status}).`);
+  };
+  pi.on('session_start', () => {
+    // > Agent creation precedes Core binding. Retry only this idempotent inspection publication.
+    let attempts = 0;
+    const publish = async () => {
+      try {
+        await publishGuidance();
+      } catch {
+        attempts += 1;
+        if (attempts < 5)
+          setTimeout(() => {
+            void publish();
+          }, 1000);
+        else
+          console.error(
+            'Native guidance loaded, but runtime inspection publication is unavailable.',
+          );
+      }
+    };
+    void publish();
   });
-
-  pi.on('tool_call', (event) => {
+  pi.on('before_agent_start', async () => {
+    await publishGuidance();
+  });
+  pi.on('tool_call', async (event) => {
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
+    try {
+      const response = await rpc('/v1/tool/authorize', {
+        toolName: event.toolName,
+        input: event.input,
+      });
+      if (!response.ok)
+        return { block: true, reason: `Runtime authorization unavailable (${response.status}).` };
+      const authorization = (await response.json()) as { allowed?: boolean; reason?: string };
+      if (authorization.allowed !== true)
+        return { block: true, reason: authorization.reason ?? 'Runtime denied tool execution.' };
+    } catch {
+      return {
+        block: true,
+        reason: 'Runtime authorization unavailable; tool execution is blocked.',
+      };
+    }
     return undefined;
   });
   pi.registerTool({
@@ -91,10 +123,33 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
     label: 'Team coordination',
     description: 'Submit a coordination command.',
     parameters: RuntimeCommandInputSchema,
-    async execute(_id, input) {
+    async execute(_id, input, _signal, _onUpdate, ctx) {
       const response = await rpc('/v1/command', { command: input.command });
       if (!response.ok) throw new Error(`Coordination request failed (${response.status})`);
       const result: unknown = await response.json();
+      const value = (
+        result as {
+          value?: { id?: string; stage?: string; answer?: string; plan?: { path?: string } };
+        }
+      ).value;
+      if (input.command.type === 'decision.create' && value?.id && value.answer === undefined) {
+        await ctx.ui.input(
+          decisionTitle(
+            { sessionId, planId: input.command.planId, decisionId: value.id, kind: 'question' },
+            input.command.prompt,
+          ),
+        );
+      } else if (input.command.type === 'planning.submit' && value?.stage === 'awaiting-approval') {
+        if (!value.plan?.path)
+          throw new Error('Registered Plan path is unavailable; approval remains pending.');
+        await ctx.ui.confirm(
+          decisionTitle(
+            { sessionId, planId: input.command.planId, decisionId: '', kind: 'approval' },
+            `Approve Plan ${input.command.planId}?`,
+          ),
+          readPlanForApproval(value.plan.path),
+        );
+      }
       const serialized = JSON.stringify(result);
       if (serialized === undefined) throw new Error('Coordination response could not be encoded.');
       return { content: [{ type: 'text', text: serialized }], details: result };

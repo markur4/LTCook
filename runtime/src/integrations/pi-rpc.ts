@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+import { NativeGuidance, coreGuidanceDirectory } from './native-guidance.js';
+import { selectedTeam } from './team-loader.js';
 import { Console } from 'node:console';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
@@ -118,6 +120,22 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
   if (parsed.sessionId && (parsed.session || parsed.continue || parsed.resume)) {
     throw new Error('--session-id cannot be combined with --session, --continue, or --resume.');
   }
+  const managed = Boolean(process.env.LTCOOK_NATIVE_AGENT_ID);
+  if (managed && (parsed.noExtensions || parsed.noSkills || parsed.noContextFiles))
+    throw new Error(
+      'Managed LTCook sessions require Core extensions, skills, and standing context.',
+    );
+  const guidance = managed
+    ? new NativeGuidance(
+        await selectedTeam(process.env.LTCOOK_TEAM ?? ''),
+        process.env.LTCOOK_MEMBER_KEY ?? '',
+        process.env.LTCOOK_GUIDANCE_DIR ??
+          (() => {
+            throw new Error('LTCOOK_GUIDANCE_DIR must be resolved before native HOME changes');
+          })(),
+        coreGuidanceDirectory(),
+      )
+    : undefined;
   const cwd = process.cwd();
   const mcpServers = loadMcpServerConfigs(mcpConfigPaths, cwd);
   const agentDir = absolutePath(getAgentDir());
@@ -171,13 +189,30 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
       extensionFlagValues: parsed.unknownFlags,
       resourceLoaderOptions: {
         additionalExtensionPaths: extensionPaths,
-        additionalSkillPaths: skillPaths,
+        additionalSkillPaths: [...(skillPaths ?? []), ...(guidance?.skillPaths ?? [])],
+        skillsOverride: guidance?.skillsOverride,
+        agentsFilesOverride: guidance?.agentsFilesOverride,
         additionalPromptTemplatePaths: promptTemplatePaths,
         additionalThemePaths: themePaths,
-        extensionFactories:
-          mcpServers.length > 0 && !parsed.noExtensions && !parsed.noMcp
+        extensionFactories: [
+          ...(managed
+            ? [
+                async (pi: Parameters<ExtensionFactory>[0]) => {
+                  const extensionFile = path.join(
+                    path.dirname(fileURLToPath(import.meta.url)),
+                    import.meta.url.endsWith('.ts') ? 'pi-extension.ts' : 'pi-extension.js',
+                  );
+                  const { default: activate } = (await import(
+                    pathToFileURL(extensionFile).href
+                  )) as { default: typeof import('./pi-extension.js').default };
+                  await activate(pi, () => guidance!.inspection);
+                },
+              ]
+            : []),
+          ...(mcpServers.length > 0 && !parsed.noExtensions && !parsed.noMcp
             ? [paseoMcpExtension]
-            : undefined,
+            : []),
+        ],
         noExtensions: parsed.noExtensions,
         disabledBuiltinExtensions: parsed.noMcp ? ['mcp'] : undefined,
         noSkills: parsed.noSkills,
