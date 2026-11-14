@@ -28,7 +28,7 @@ from ._common import SetupError, no_links, run
 def prepare_project(
     source: object, appdata: Path, environment: Mapping[str, str]
 ) -> None:
-    """Prepare private Node and service prerequisites before AppRC commits Python."""
+    """Prepare private Node and services after AppRC initializes resource ownership."""
     from .prepare_runtime import prepare_runtime
     from .prepare_services import prepare_services
 

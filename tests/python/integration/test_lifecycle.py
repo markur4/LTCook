@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
+import sys
 import tarfile
+import tempfile
 from pathlib import Path
 
 import pytest
+from apprc.definition.installation import (
+    InstallationPlacement,
+    InstallationSource,
+    UvToolTarget,
+)
+from apprc.distribution import read_project_metadata
+from apprc.distribution.runtime.acquisition import PreparedSource, prepare_source
 
 from ltcook_distr.payload.app_lifecycle import prepare_runtime
 from ltcook_distr.payload.app_lifecycle._common import (
@@ -252,6 +262,7 @@ def test_browser_failure_is_retryable_without_invalidating_core(
     assert updated["browser_executable"] == str(node)
 
 
+@pytest.mark.parametrize("editable", [False, True], ids=["staged-root", "editable"])
 @pytest.mark.parametrize(
     ("browser_setting", "expected_browser_install"),
     [("false", False), ("true", True), (None, True)],
@@ -261,8 +272,14 @@ def test_browser_flag_controls_optional_setup_without_skipping_node(
     monkeypatch: pytest.MonkeyPatch,
     browser_setting: str | None,
     expected_browser_install: bool,
+    editable: bool,
 ) -> None:
-    root = tmp_path / ".cache" / "bundle"
+    checkout = tmp_path / "checkout"
+    root = (
+        checkout / "src/ltcook_distr/bundle"
+        if editable
+        else tmp_path / ".cache" / "bundle"
+    )
     for name in ("package.json", "package-lock.json", ".node-version"):
         (root / name).parent.mkdir(parents=True, exist_ok=True)
         (root / name).write_text("26.13.1" if name == ".node-version" else "{}")
@@ -284,6 +301,25 @@ def test_browser_flag_controls_optional_setup_without_skipping_node(
     source = type(
         "PreparedSource", (), {"project_directory": root, "source_root": None}
     )()
+    if editable:
+        (checkout / "pyproject.toml").write_text(
+            '[project]\nname = "ltcook"\nversion = "0.0.0"\n', encoding="utf-8"
+        )
+        for name in ("package.json", "package-lock.json", ".node-version"):
+            (checkout / name).write_text(
+                "99.0.0" if name == ".node-version" else '{"development": true}',
+                encoding="utf-8",
+            )
+        (checkout / "runtime/dist").mkdir(parents=True)
+        (checkout / "runtime/dist/main.js").write_text(
+            "development runtime", encoding="utf-8"
+        )
+        source = prepare_source(
+            InstallationSource(kind="editable", requirement=str(checkout)),
+            tmp_path / "source-staging",
+        )
+        assert source.project_directory is None
+        assert source.source_root is None
     calls: list[list[str]] = []
     chrome = tmp_path / "chrome"
     chrome.write_text("browser")
@@ -334,6 +370,9 @@ def test_browser_flag_controls_optional_setup_without_skipping_node(
     assert record["browser_available"] is expected_browser_install
     app = deployment / "app"
     assert (app / "runtime/dist/main.js").read_text(encoding="utf-8") == "runtime"
+    assert (app / "package.json").read_text(encoding="utf-8") == "{}"
+    assert (app / "package-lock.json").read_text(encoding="utf-8") == "{}"
+    assert (app / ".node-version").read_text(encoding="utf-8") == "26.13.1"
     assert not (app / "runtime/node_modules").exists()
     assert not (app / "runtime/.cache").exists()
     assert not (app / "runtime/.git").exists()
@@ -397,6 +436,144 @@ def test_service_secret_initialization_persists_app_rc_fields(
         resolved_again.crawl4ai.api_token,
         resolved_again.searxng.secret,
     )
+
+
+def test_installer_initializes_appdata_ownership_before_project_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real AppRC initialization owns appdata before LTCook writes deployment files."""
+    from types import SimpleNamespace
+
+    from apprc.definition.installation import OperationContext
+    from apprc.definition.paths import Layout
+
+    from ltcook_distr.payload.app_lifecycle import install
+
+    home = tmp_path / "home"
+    environment = {
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "LOCALAPPDATA": str(tmp_path / "local"),
+        "APPDATA": str(tmp_path / "roaming"),
+    }
+    from ltcook.config.app import APP_RC
+
+    manager = APP_RC.installation(environment=environment)
+    resources = tmp_path / "resources"
+    appdata = resources / "appdata"
+    placement = InstallationPlacement(
+        layout=Layout.single_root(resources),
+        config_dir=resources / "config",
+        appdata_dir=appdata,
+        cache_dir=resources / "cache",
+        state_dir=resources / "state",
+        logs_dir=resources / "state/logs",
+        capabilities=frozenset({"config", "appdata", "cache", "state"}),
+    )
+    root = Path(__file__).resolve().parents[3]
+    metadata = read_project_metadata(root)
+    source = InstallationSource("editable", str(root))
+    backend = UvToolTarget(
+        executable=tmp_path / "uv",
+        tool_dir=tmp_path / "uv-tools",
+        bin_dir=tmp_path / "uv-bin",
+    )
+    plan = manager.plan_install(metadata.identity, source, placement, backend)
+    staged = tmp_path / "source"
+    staged.mkdir()
+    project_file = staged / "pyproject.toml"
+    project_file.write_text("staged project", encoding="utf-8")
+    prepared = PreparedSource(
+        str(root),
+        None,
+        source,
+        project_directory=staged,
+    )
+    observed: dict[str, Path] = {}
+    snapshot = SimpleNamespace(interpreter=Path(sys.executable))
+
+    def install_with_real_resource_initialization(*args: object, **kwargs: object):
+        manager.begin_operation(plan)
+        pending = manager.inspect()
+        operation = pending.record.operation
+        assert operation is not None
+        context = OperationContext(
+            plan.directory,
+            operation.operation_id,
+            pending.record.generation_id,
+            placement,
+        )
+        manager.initialize(context=context)
+        assert appdata.joinpath(".apprc-owner.json").is_file()
+        observed["appdata"] = appdata
+        return SimpleNamespace(status="ready", record=SimpleNamespace(current=snapshot))
+
+    def setup(staged_source: object, target: Path, _environment: dict[str, str]):
+        assert staged_source is prepared
+        assert project_file.is_file()
+        assert (target / ".apprc-owner.json").is_file()
+        (target / "deployment").mkdir()
+        (target / "deployment" / "ready").write_text("yes", encoding="utf-8")
+
+    monkeypatch.setattr(
+        install,
+        "install_prepared_application",
+        install_with_real_resource_initialization,
+    )
+    monkeypatch.setattr(install, "prepare_project", setup)
+    with tempfile.TemporaryDirectory(prefix="installer-source-") as staging:
+        staged_project = Path(staging) / "project"
+        staged_project.mkdir()
+        project_file = staged_project / "pyproject.toml"
+        project_file.write_text("staged project", encoding="utf-8")
+        prepared = dataclasses.replace(prepared, project_directory=staged_project)
+        install._install_and_prepare_project(
+            plan,
+            prepared,
+            appdata,
+            environment,
+            tmp_path / "probe.py",
+            {},
+            ">=3.12",
+        )
+        assert project_file.is_file()
+    assert (appdata / "deployment" / "ready").read_text() == "yes"
+    assert observed["appdata"] == appdata
+
+
+def test_installer_rejects_nonready_snapshot_before_project_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from ltcook_distr.payload.app_lifecycle import install
+
+    monkeypatch.setattr(
+        install,
+        "install_prepared_application",
+        lambda *args, **kwargs: SimpleNamespace(
+            status="incomplete", record=SimpleNamespace(current=None)
+        ),
+    )
+    monkeypatch.setattr(
+        install,
+        "prepare_project",
+        lambda *args, **kwargs: pytest.fail("setup ran without a ready snapshot"),
+    )
+    with pytest.raises(RuntimeError, match="ready installation"):
+        install._install_and_prepare_project(
+            object(),
+            object(),
+            tmp_path / "appdata",
+            {},
+            tmp_path / "probe",
+            {},
+            ">=3.12",
+        )
 
 
 @pytest.mark.system

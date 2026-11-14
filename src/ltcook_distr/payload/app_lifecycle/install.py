@@ -18,6 +18,8 @@ from apprc.definition.installation import (
     InstallationInspection,
     InstallationPlacement,
     InstallationSource,
+    InstalledSnapshot,
+    InstallPlan,
 )
 from apprc.definition.paths import Layout, Paths, ResourceKind
 from apprc.distribution.models import (
@@ -32,6 +34,7 @@ from apprc.distribution.runtime import (
     plan_repair,
     resume_migration,
 )
+from apprc.distribution.runtime.acquisition import PreparedSource
 from apprc.distribution.runtime.backend import select_uv_target
 from apprc.user_files.installation.discovery import (
     inspect_installation,
@@ -331,6 +334,34 @@ def _select_package_wheel(
     )
 
 
+def _install_and_prepare_project(
+    plan: InstallPlan,
+    prepared: PreparedSource,
+    appdata: Path,
+    environment: dict[str, str],
+    probe_path: Path,
+    support_files: dict[PurePosixPath, bytes],
+    python_requirement: str,
+) -> InstalledSnapshot:
+    """Install and verify AppRC ownership before LTCook populates appdata."""
+    installed = install_prepared_application(
+        plan,
+        prepared,
+        environment=environment,
+        probe_path=probe_path,
+        support_files=support_files,
+        python_requirement=python_requirement,
+    )
+    record = installed.record
+    snapshot = record.current if record is not None else None
+    if installed.status != "ready" or snapshot is None:
+        raise RuntimeError(
+            "AppRC did not return a ready installation for runtime and secret setup."
+        )
+    prepare_project(prepared, appdata, environment)
+    return snapshot
+
+
 def main() -> int:
     """Acquire the selected immutable source and perform a managed install."""
     bundle = _bundle()
@@ -476,20 +507,14 @@ def main() -> int:
         prepared = selection.prepare(Path(staging).resolve())
         if placement.appdata_dir is None:
             raise RuntimeError("LTCook appdata is required for runtime preparation.")
-        prepare_project(prepared, placement.appdata_dir, environment)
-        installed = install_prepared_application(
+        snapshot = _install_and_prepare_project(
             plan,
             prepared,
-            environment=environment,
-            probe_path=probe_path,
-            support_files=_support_files(bundle["app_id"]),
-            python_requirement=spec.metadata.python_requirement,
-        )
-    record = installed.record
-    snapshot = record.current if record is not None else None
-    if installed.status != "ready" or snapshot is None:
-        raise RuntimeError(
-            "AppRC did not return a ready installation for secret setup."
+            placement.appdata_dir,
+            environment,
+            probe_path,
+            _support_files(bundle["app_id"]),
+            spec.metadata.python_requirement,
         )
     initialize_service_secrets(snapshot.interpreter, environment)
     return 0

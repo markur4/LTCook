@@ -49,7 +49,15 @@ def _node_asset(version: str, system: str, machine: str) -> tuple[str, str, str]
 
 def _bundle_root(source: Any) -> Path:
     """Find staged declarations in source trees or safely unpacked wheel payloads."""
-    for candidate in (source.project_directory, source.source_root):
+    candidates = (source.project_directory, source.source_root)
+    if (
+        source.project_directory is None
+        and source.source_root is None
+        and source.source.kind == "editable"
+    ):
+        # > AppRC keeps the live checkout in the editable requirement, not its roots.
+        candidates = (Path(source.requirement), None)
+    for candidate in candidates:
         if candidate is None:
             continue
         for root in (
