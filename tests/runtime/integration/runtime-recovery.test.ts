@@ -1411,6 +1411,76 @@ describe('authoritative planning workflow', () => {
       await reopened.close();
     }
   });
+  test('generic reports cannot bypass planning output validation or recovery', async () => {
+    const f = await fixture();
+    try {
+      const assignment = f.runtime
+        .snapshot(f.snapshot.session.id)
+        .assignments.find((item) => item.id === f.plan.assignmentId)!;
+      await expect(
+        f.runtime.execute(
+          f.snapshot.session.id,
+          { kind: 'agent', nativeAgentId: assignment.nativeAgentId },
+          {
+            type: 'report.create',
+            assignmentId: assignment.id,
+            summary: 'Done',
+            evidence: 'No Plan written',
+          },
+        ),
+      ).rejects.toThrow('planning.submit');
+      expect(
+        f.runtime
+          .snapshot(f.snapshot.session.id)
+          .assignments.find((item) => item.id === assignment.id)?.status,
+      ).toBe('sent');
+      await finishStages(f);
+      expect(f.runtime.snapshot(f.snapshot.session.id).planning[0]?.stage).toBe(
+        'awaiting-approval',
+      );
+    } finally {
+      await f.runtime.close();
+    }
+  });
+  test('Design assignments honor Design eligibility and routing in the full Team', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-design-routing-'));
+    temporaryDirectories.push(directory);
+    const runtime = createRuntime({
+      databasePath: join(directory, 'db.sqlite'),
+      stateDirectory: join(directory, 'runtime'),
+      team: defaultTeam,
+      agents: new FakeAgents(),
+    });
+    try {
+      const snapshot = await runtime.openSession({ workspaceRoot: directory });
+      const task = (await runtime.execute(
+        snapshot.session.id,
+        { kind: 'user' },
+        {
+          type: 'task.create',
+          workType: 'design',
+          title: 'Design',
+          description: 'Investigate',
+          acceptance: 'Design written',
+        },
+      )) as { id: string };
+      await expect(
+        runtime.execute(
+          snapshot.session.id,
+          { kind: 'user' },
+          { type: 'assignment.create', taskId: task.id, memberKey: 'senior', message: 'Design' },
+        ),
+      ).rejects.toThrow('not eligible');
+      const assignment = (await runtime.execute(
+        snapshot.session.id,
+        { kind: 'user' },
+        { type: 'assignment.create', taskId: task.id, message: 'Design' },
+      )) as { memberKey: string };
+      expect(assignment.memberKey).toBe('main');
+    } finally {
+      await runtime.close();
+    }
+  });
   test('rejects invalid routing-hook selections before dispatch', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-invalid-hook-'));
     temporaryDirectories.push(directory);

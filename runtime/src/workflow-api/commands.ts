@@ -271,17 +271,17 @@ export function isRuntimeCommand(value: unknown): value is RuntimeCommand {
 }
 
 /** Agent tool schemas are projected from the authoritative command union. */
-export const AgentRuntimeCommandSchema = Type.Union(
-  RuntimeCommandSchema.anyOf.filter(
-    (schema) =>
-      ![
-        'planning.start',
-        'planning.approve',
-        'planning.reject',
-        'decision.answer',
-        'approval.create',
-      ].includes(schema.properties.type.const),
-  ),
+export const AgentRuntimeCommandSchema = Type.Exclude(
+  RuntimeCommandSchema,
+  Type.Object({
+    type: Type.Union([
+      Type.Literal('planning.start'),
+      Type.Literal('planning.approve'),
+      Type.Literal('planning.reject'),
+      Type.Literal('decision.answer'),
+      Type.Literal('approval.create'),
+    ]),
+  }),
 );
 export const AgentRuntimeCommandInputSchema = Type.Object(
   { command: AgentRuntimeCommandSchema },

@@ -193,3 +193,29 @@ test('managed roots preserve native trusted and untrusted project discovery', as
     );
   }
 });
+
+test('native reload replaces loading inspection and refreshes standing rules', async () => {
+  const f = fixture();
+  const skill = f.file(
+    'project/.pi/skills/transient/SKILL.md',
+    '---\nname: transient\ndescription: Temporary project method\n---\nMethod.',
+  );
+  const projectRule = f.file('project/AGENTS.md', 'Temporary project guidance.');
+  const managed = f.guidance();
+  const loader = await f.load(managed);
+  expect(managed.inspection.resources.find((row) => row.name === 'transient')?.loaded).toBe(true);
+  rmSync(skill);
+  rmSync(projectRule);
+  f.file('core/rules/baseline.md', 'Updated Core requirement.');
+  await loader.reload();
+  expect(loader.getSkills().skills.some((item) => item.name === 'transient')).toBe(false);
+  expect(managed.inspection.resources.find((row) => row.name === 'transient')?.loaded).toBe(false);
+  expect(managed.inspection.resources.find((row) => row.path === projectRule)?.loaded).toBe(false);
+  expect(
+    loader
+      .getAgentsFiles()
+      .agentsFiles.some((item) => item.content === 'Updated Core requirement.'),
+  ).toBe(true);
+  rmSync(path.join(f.core, 'rules/baseline.md'));
+  await expect(loader.reload()).rejects.toThrow('Required guidance is missing');
+});

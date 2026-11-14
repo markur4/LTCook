@@ -15,6 +15,7 @@ export class NativeGuidance {
   readonly rules: Array<{ path: string; content: string }> = [];
   private readonly sources = new Map<string, GuidanceResource>();
   private readonly userDirectory: string;
+  private readonly resourceDiagnostics: GuidanceInspection['diagnostics'] = [];
 
   constructor(team: TeamPackage, memberKey: string, userDirectory: string, coreDirectory: string) {
     if (!path.isAbsolute(userDirectory))
@@ -87,10 +88,18 @@ export class NativeGuidance {
     }
     const userSkills = path.join(userDirectory, 'skills');
     if (existsSync(userSkills)) this.skillPaths.push(userSkills);
+    this.resourceDiagnostics.push(...this.inspection.diagnostics);
   }
 
   /** Native parser supplies names, invocation settings and actual successful load results. */
   skillsOverride = (base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] }) => {
+    // > A reload replaces native loading results rather than accumulating old successes.
+    this.inspection.diagnostics.splice(
+      0,
+      this.inspection.diagnostics.length,
+      ...this.resourceDiagnostics,
+    );
+    for (const row of this.inspection.resources) if (row.kind === 'skill') row.loaded = false;
     for (const diagnostic of base.diagnostics) {
       const collision = diagnostic.collision;
       if (collision && realpathSync(collision.winnerPath) !== realpathSync(collision.loserPath))
@@ -147,15 +156,26 @@ export class NativeGuidance {
 
   agentsFilesOverride = (base: { agentsFiles: Array<{ path: string; content: string }> }) => {
     const files = new Map<string, { path: string; content: string }>();
-    for (const item of [...base.agentsFiles, ...this.rules]) {
+    for (const row of this.inspection.resources) if (row.kind === 'rule') row.loaded = false;
+    const rules: Array<{ path: string; content: string }> = [];
+    for (const [file, resource] of this.sources) {
+      if (resource.kind !== 'rule') continue;
+      if (!existsSync(file)) {
+        if (resource.required)
+          throw new NativeGuidanceError(`Required guidance is missing: ${file}`);
+        continue;
+      }
+      rules.push({ path: file, content: readFileSync(file, 'utf8') });
+    }
+    for (const item of [...base.agentsFiles, ...rules]) {
       const file = realpathSync(item.path);
       if (files.has(file)) continue;
       files.set(file, item);
-      if (
-        !this.inspection.resources.some(
-          (row) => existsSync(row.path) && realpathSync(row.path) === file,
-        )
-      )
+      const row = this.inspection.resources.find(
+        (item) => existsSync(item.path) && realpathSync(item.path) === file,
+      );
+      if (row) row.loaded = true;
+      else
         this.inspection.resources.push({
           name: path.basename(file),
           path: file,
