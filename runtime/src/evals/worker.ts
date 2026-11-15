@@ -10,7 +10,7 @@ import { createPaseoAgentBackend, startPaseoHost } from '../integrations/paseo.j
 import { selectedTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import type { GuidanceInspection } from '../guidance-api/index.js';
-import { EVAL_MODEL, EVAL_COMPACTION, hash, resourceIdentity } from './setup.js';
+import { EVAL_MODEL, EVAL_COMPACTION, EVAL_MODEL_COMPAT, hash, resourceIdentity } from './setup.js';
 import { EVALUATION_STOP_FILE, type EvaluationJob } from './runner.js';
 import {
   EvaluationDiagnosticCollector,
@@ -55,6 +55,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   let verificationCalls = 0;
   let inferenceFailed = false;
   let inferenceFailedAt = 0;
+  let scopeFailed = false;
   let toolErrors = 0;
   let failureCategory = 'runtime';
   const checkStopRequest = async () => {
@@ -117,6 +118,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
               name: 'Local Spark evaluation',
               contextWindow,
               maxTokens,
+              compat: EVAL_MODEL_COMPAT,
               reasoning: true,
               thinkingLevelMap: { off: 'none', low: 'low' },
             },
@@ -156,6 +158,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       maxTokens,
       thinking: job.thinking,
       compaction: EVAL_COMPACTION,
+      compat: EVAL_MODEL_COMPAT,
     };
     return capture;
   };
@@ -259,6 +262,14 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     });
     api.setRuntime(runtime);
     api.setEvaluationObserver((agentId, value) => {
+      if (value.kind === 'scope.request') {
+        const pass = runtime?.snapshot(sessionId).passes.find((pass) => pass.status === 'running');
+        if (value.sessionId === sessionId && pass) return { sessionId, passId: pass.id };
+        scopeFailed = true;
+        return;
+      }
+      if (value.kind === 'runtime.error' && value.operation === 'evaluation.scope')
+        scopeFailed = true;
       const diagnostic = diagnostics.observe(agentId, value);
       if (diagnostic) {
         telemetry.instant(`evaluation.${value.kind}`, diagnostic, agentId);
@@ -336,6 +347,10 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     while (true) {
       await checkStopRequest();
       const snapshot = runtime.snapshot(sessionId);
+      if (scopeFailed) {
+        failureCategory = 'runtime';
+        throw new Error('Authenticated evaluation execution scope could not be confirmed');
+      }
       if (snapshot.passes[0]?.status === 'completed') break;
       // > Let Pi announce its existing overflow/compaction recovery before ending the case.
       if (inferenceFailed && performance.now() - inferenceFailedAt >= 250) {

@@ -385,6 +385,62 @@ describe('native runtime boundary', () => {
       await api.close();
     }
   });
+  test('evaluation context confirms only a bound agent and an actual running scope', async () => {
+    const master = 'evaluation-scope-secret';
+    const nativeAgentId = 'evaluation-native-agent';
+    const snapshot = snapshotFor(nativeAgentId);
+    snapshot.passes.push({
+      id: 'actual-pass',
+      sessionId: 'session-1',
+      title: 'Scenario',
+      status: 'running',
+      revision: 1,
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+    const controller = { snapshot: () => snapshot } as RuntimeController;
+    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
+    const endpoint = await api.listen();
+    const request = (bearer = agentBearer(master, nativeAgentId), id = nativeAgentId) =>
+      fetch(`${endpoint}/v1/evaluation/observe`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'session-1',
+          nativeAgentId: id,
+          kind: 'scope.request',
+          passId: 'caller-chosen-pass',
+        }),
+      });
+    try {
+      expect((await request()).status).toBe(403);
+      let callbacks = 0;
+      let scope = { sessionId: 'session-1', passId: 'actual-pass' };
+      api.setEvaluationObserver((_id, value) => {
+        callbacks++;
+        if (value.kind === 'scope.request') return scope;
+      });
+      expect((await request('wrong-token')).status).toBe(401);
+      expect((await request(master)).status).toBe(403);
+      expect((await request(agentBearer(master, 'unbound'), 'unbound')).status).toBe(403);
+      expect(callbacks).toBe(0);
+      const valid = await request();
+      expect(valid.status).toBe(200);
+      expect(await valid.json()).toEqual({ evaluationScope: scope });
+      scope = { sessionId: 'another-session', passId: 'actual-pass' };
+      expect((await request()).status).toBe(403);
+      scope = { sessionId: 'session-1', passId: 'caller-chosen-pass' };
+      expect((await request()).status).toBe(403);
+      scope = { sessionId: 'session-1', passId: 'actual-pass' };
+      snapshot.passes[0]!.status = 'completed';
+      expect((await request()).status).toBe(403);
+      snapshot.passes[0]!.status = 'running';
+      snapshot.members[0]!.binding!.state = 'closed';
+      expect((await request()).status).toBe(403);
+    } finally {
+      await api.close();
+    }
+  });
+
   test('persists an assigned readonly report through the authenticated HTTP boundary', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-runtime-api-'));
     directories.push(directory);

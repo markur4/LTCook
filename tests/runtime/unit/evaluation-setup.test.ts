@@ -50,11 +50,17 @@ test.each([1, 2])(
     await mkdir(folder, { recursive: true });
     const record = JSON.stringify({ schema, runId: id, status: 'running', preset: 'quick' });
     await writeFile(path.join(folder, 'run.json'), record);
+    const oldExecution = path.join(folder, '.execution-old');
+    await mkdir(oldExecution);
+    await writeFile(path.join(oldExecution, 'output.json'), 'preserve unsupported state');
     const service = new EvalRunService(root, async () => {
       throw new Error('Old record must not execute');
     });
     await service.initialize();
     expect(service.list()).toEqual([]);
     expect(await readFile(path.join(folder, 'run.json'), 'utf8')).toBe(record);
+    expect(await readFile(path.join(oldExecution, 'output.json'), 'utf8')).toBe(
+      'preserve unsupported state',
+    );
   },
 );

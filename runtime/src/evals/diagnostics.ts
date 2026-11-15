@@ -154,6 +154,7 @@ export type EvaluationDiagnostics = {
     maxTokens: number;
     thinking: string;
     compaction?: { enabled: boolean; reserveTokens: number; keepRecentTokens: number };
+    compat?: { supportsDeveloperRole: boolean };
   };
 };
 export type EvaluationCapture = {

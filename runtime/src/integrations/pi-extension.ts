@@ -11,7 +11,7 @@ import { selectedTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
 import { evaluationToolError, sanitizeEvaluationText } from '../evals/diagnostics.js';
-import { EVAL_MODEL } from '../evals/setup.js';
+import { EVAL_MODEL, EVALUATION_EXECUTION_CONTEXT } from '../evals/setup.js';
 const require = createRequire(import.meta.url);
 async function activateOptionalBrowser(pi: ExtensionAPI): Promise<void> {
   if (process.env.LTCOOK_BROWSER_ENABLED !== 'true') return;
@@ -204,8 +204,39 @@ export default async function activate(
     };
     void publish();
   });
-  pi.on('before_agent_start', async () => {
+  pi.on('before_agent_start', async (event) => {
     await publishGuidance();
+    if (!evaluation) return;
+    try {
+      const response = await rpc('/v1/evaluation/observe', { kind: 'scope.request' });
+      if (!response.ok)
+        throw new Error(`Evaluation scope confirmation failed (${response.status})`);
+      const confirmation: unknown = await response.json();
+      const scope =
+        confirmation && typeof confirmation === 'object' && 'evaluationScope' in confirmation
+          ? confirmation.evaluationScope
+          : undefined;
+      if (
+        !scope ||
+        typeof scope !== 'object' ||
+        !('sessionId' in scope) ||
+        scope.sessionId !== sessionId ||
+        !('passId' in scope) ||
+        typeof scope.passId !== 'string' ||
+        !scope.passId
+      )
+        throw new Error('Evaluation scope confirmation does not match this disposable session');
+      return {
+        systemPrompt: `${event.systemPrompt}\n\n${EVALUATION_EXECUTION_CONTEXT}\nSession: ${sessionId}. Pass: ${scope.passId}.`,
+      };
+    } catch {
+      const reason = 'Authenticated evaluation execution scope confirmation failed';
+      // > Native hooks log exceptions; notify the worker so it can terminate the failed case.
+      await observe({ kind: 'runtime.error', operation: 'evaluation.scope', error: reason }).catch(
+        () => undefined,
+      );
+      throw new Error(reason);
+    }
   });
   pi.on('tool_call', async (event, ctx) => {
     if (!nativeToolAllowed(member.readOnly, event.toolName))

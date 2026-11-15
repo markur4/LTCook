@@ -172,6 +172,18 @@ export class EvalRunService {
         }
         this.summaries.set(summary.runId, summary);
         await this.loadArtifacts(summary, directory);
+        // > A crashed engine or failed finally can leave private snapshots and Pi histories.
+        for (const temporary of await readdir(directory, { withFileTypes: true }))
+          if (temporary.isDirectory() && temporary.name.startsWith('.execution-')) {
+            try {
+              await rm(path.join(directory, temporary.name), { recursive: true, force: true });
+            } catch (error) {
+              const message = `Disposable evaluation state cleanup failed: ${safeError(error)}`;
+              summary.limitations = [...(summary.limitations ?? []), message];
+              summary.updatedAt = new Date().toISOString();
+              await this.saveSummary(summary);
+            }
+          }
       } catch {
         // A malformed history entry remains isolated and is never executed on startup.
       }

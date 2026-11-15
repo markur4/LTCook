@@ -19,6 +19,8 @@ import {
   copyGuidance,
   EVAL_MODEL,
   EVAL_COMPACTION,
+  EVAL_MODEL_COMPAT,
+  EVALUATION_EXECUTION_CONTEXT,
   FIXTURE_REVISION,
   hash,
   resolveEvaluationContext,
@@ -128,6 +130,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
               : 'global-configuration',
         files,
         guidanceFiles,
+        evaluationExecutionContextSha256: hash(EVALUATION_EXECUTION_CONTEXT),
         configurationSha256: hash(
           JSON.stringify({
             team: context.teamSelection,
@@ -135,6 +138,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
             model: EVAL_MODEL,
             limits: { timeoutMs: 120000, toolCalls: 64 },
             compaction: EVAL_COMPACTION,
+            modelCompat: EVAL_MODEL_COMPAT,
           }),
         ),
         fixtureRevision: FIXTURE_REVISION,

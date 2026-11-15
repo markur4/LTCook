@@ -1,5 +1,6 @@
-import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { afterEach, expect, spyOn, test } from 'bun:test';
+import * as fileSystem from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -84,6 +85,10 @@ test('restart does not count progress newer than the last complete evidence chec
   const summaryFile = path.join(root, 'evals/runs', id, 'run.json');
   const summary = JSON.parse(await readFile(summaryFile, 'utf8'));
   await writeFile(summaryFile, JSON.stringify({ ...summary, status: 'running' }));
+  const disposable = path.join(path.dirname(summaryFile), '.execution-interrupted');
+  await mkdir(disposable);
+  await writeFile(path.join(disposable, 'output.json'), 'private unfinished prompt');
+  await writeFile(path.join(path.dirname(summaryFile), 'retained-note.txt'), 'preserve');
   const restarted = new EvalRunService(root, async () => {
     throw new Error('Must not replay');
   });
@@ -93,6 +98,40 @@ test('restart does not count progress newer than the last complete evidence chec
     result: { cases: [1] },
     trace: { traceEvents: [1] },
   });
+  expect(await readdir(path.dirname(summaryFile))).not.toContain('.execution-interrupted');
+  expect(await readFile(path.join(path.dirname(summaryFile), 'retained-note.txt'), 'utf8')).toBe(
+    'preserve',
+  );
+});
+
+test('restart reports failed disposable cleanup and retries it without replaying a terminal run', async () => {
+  const { root, instance } = await service(async () => {
+    throw new Error('Fixture failed');
+  });
+  const id = await instance.start({ preset: 'behavior', setup: 'synthetic' });
+  await finished(instance, id);
+  const disposable = path.join(root, 'evals/runs', id, '.execution-residue');
+  await mkdir(disposable);
+  await writeFile(path.join(disposable, 'output.json'), 'private unfinished prompt');
+  const remove = fileSystem.rm;
+  const failure = spyOn(fileSystem, 'rm').mockImplementation(async (target, options) => {
+    if (target === disposable) throw new Error('EACCES: private cleanup denied');
+    return remove(target, options);
+  });
+  const restarted = new EvalRunService(root, async () => {
+    throw new Error('Must not replay');
+  });
+  try {
+    await restarted.initialize();
+    expect(restarted.report(id).summary).toMatchObject({
+      status: 'failed',
+      limitations: ['Disposable evaluation state cleanup failed: EACCES: private cleanup denied'],
+    });
+  } finally {
+    failure.mockRestore();
+  }
+  await restarted.initialize();
+  expect(await readdir(path.dirname(disposable))).not.toContain('.execution-residue');
 });
 
 test('uses last five comparable successes and separates failed, reasoning, and unverified samples', async () => {

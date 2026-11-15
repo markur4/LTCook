@@ -247,6 +247,20 @@ Pi's existing context compaction remains enabled for the pinned 8,192-token
 model, reserving 2,048 tokens and keeping 1,024 recent tokens. Summary calls use
 the same isolated model and provider state. Diagnostics record compaction timing,
 reported usage and failures, while excluding summary text.
+Pi sends the full instructions using the `system` message role supported by the
+Spark template, with `supportsDeveloperRole: false` in its isolated model state.
+
+Evaluation agents retain full standing guidance and receive an appended execution
+scope only after the authenticated runtime confirms their disposable Session and
+running Pass. This clarification describes the predefined scenario's existing
+authorization; it does not approve a Plan or change normal sessions. The effective
+prompt hash and timing provenance include this clarification. Failed confirmation
+is reported as a runtime failure. If the runtime API is unreachable, Pi's hook
+error and the existing safeguard provide the remaining diagnostics and limit.
+On restart, supported run records retain sanitized checkpoints while leftover
+temporary execution folders are removed. Cleanup failures remain visible in the
+run's limitations and are retried on the next restart; unsupported histories stay
+unchanged.
 
 Agent evaluation safeguards use three times the slowest of the five most recent
 comparable successful attempts. Reasoning modes have separate histories, and

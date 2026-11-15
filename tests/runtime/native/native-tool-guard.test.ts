@@ -5,6 +5,7 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { Model } from '@earendil-works/pi-ai';
 import activate from '../../../runtime/src/integrations/pi-extension.js';
 import { guardEvaluationModelRuntime } from '../../../runtime/src/integrations/pi-rpc.js';
+import { EVALUATION_EXECUTION_CONTEXT } from '../../../runtime/src/evals/setup.js';
 const original = { ...process.env };
 afterEach(() => {
   process.env = { ...original };
@@ -173,6 +174,90 @@ test('managed RPC rejects flags which would remove required guidance or guards',
     await expect(createPiRpcRuntime(['--mode', 'rpc', flag])).rejects.toThrow(
       'Managed LTCook sessions require',
     );
+  }
+});
+
+test('evaluation standing context requires matching authenticated runtime scope and preserves full guidance', async () => {
+  const observed: Array<Record<string, unknown>> = [];
+  let confirmation: unknown = { evaluationScope: { sessionId: 'session', passId: 'runtime-pass' } };
+  let status = 200;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      expect(request.headers.get('authorization')).toBe('Bearer fixture-agent-token');
+      const body = (await request.json()) as Record<string, unknown>;
+      if (new URL(request.url).pathname === '/v1/command') return Response.json({});
+      observed.push(body);
+      return body.kind === 'scope.request'
+        ? Response.json(confirmation, { status })
+        : Response.json({});
+    },
+  });
+  try {
+    Object.assign(process.env, {
+      LTCOOK_NATIVE_AGENT_ID: 'native',
+      LTCOOK_SESSION_ID: 'session',
+      LTCOOK_TEAM_INSTANCE_ID: 'team-instance',
+      LTCOOK_TEAM_ID: '@ltcook/team-default-minimal',
+      LTCOOK_MEMBER_KEY: 'main',
+      LTCOOK_RUNTIME_API_URL: `http://127.0.0.1:${server.port}`,
+      LTCOOK_AGENT_API_TOKEN: 'fixture-agent-token',
+      LTCOOK_TEAM: 'default-minimal',
+      LTCOOK_BROWSER_ENABLED: 'false',
+    });
+    const originalPrompt = 'Full Core, Team, User and Project standing guidance.';
+    for (const evaluation of [false, true]) {
+      if (evaluation) process.env.LTCOOK_EVAL_ARM = 'complete';
+      else delete process.env.LTCOOK_EVAL_ARM;
+      const handlers = new Map<string, (event: unknown, context?: unknown) => Promise<unknown>>();
+      await activate(
+        {
+          on(name: string, handler: unknown) {
+            handlers.set(name, handler as (event: unknown, context?: unknown) => Promise<unknown>);
+          },
+          registerTool() {},
+        } as unknown as ExtensionAPI,
+        () => ({ resources: [], diagnostics: [] }),
+      );
+      const result = await handlers.get('before_agent_start')!({ systemPrompt: originalPrompt });
+      if (!evaluation) {
+        expect(result).toBeUndefined();
+        expect(observed).toEqual([]);
+        continue;
+      }
+      const prompt = (result as { systemPrompt: string }).systemPrompt;
+      expect(prompt).toBe(
+        `${originalPrompt}\n\n${EVALUATION_EXECUTION_CONTEXT}\nSession: session. Pass: runtime-pass.`,
+      );
+      expect(observed[0]).toMatchObject({
+        kind: 'scope.request',
+        sessionId: 'session',
+        nativeAgentId: 'native',
+      });
+      expect(observed[0]).not.toHaveProperty('passId');
+      await handlers.get('agent_start')!({}, { getSystemPrompt: () => prompt });
+      expect(observed.find((item) => item.kind === 'prompt')?.prompt).toBe(prompt);
+      for (const invalid of [
+        {},
+        { evaluationScope: { sessionId: 'another-session', passId: 'runtime-pass' } },
+        { evaluationScope: { sessionId: 'session', passId: '' } },
+        { error: 'private response body' },
+      ]) {
+        confirmation = invalid;
+        status = 'error' in invalid ? 403 : 200;
+        await expect(
+          handlers.get('before_agent_start')!({ systemPrompt: originalPrompt }),
+        ).rejects.toThrow('Authenticated evaluation execution scope confirmation failed');
+        expect(observed.at(-1)).toMatchObject({
+          kind: 'runtime.error',
+          operation: 'evaluation.scope',
+          error: 'Authenticated evaluation execution scope confirmation failed',
+        });
+        expect(JSON.stringify(observed.at(-1))).not.toContain('private response body');
+      }
+    }
+  } finally {
+    server.stop(true);
   }
 });
 

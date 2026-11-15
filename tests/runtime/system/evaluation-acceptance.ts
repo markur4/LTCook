@@ -5,7 +5,11 @@ import { mkdtemp, rm, mkdir, writeFile, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createEvalEngine } from '../../../runtime/src/evals/engine.js';
-import { EVAL_MODEL } from '../../../runtime/src/evals/setup.js';
+import {
+  EVAL_MODEL,
+  EVALUATION_EXECUTION_CONTEXT,
+  hash,
+} from '../../../runtime/src/evals/setup.js';
 
 const directory = await mkdtemp(path.join(os.tmpdir(), 'ltcook-evaluation-system-'));
 const root = path.resolve(import.meta.dir, '../../..');
@@ -17,6 +21,7 @@ const verificationMarker = 'LTCook fixture verified';
 let requests = 0;
 let compactions = 0;
 const assignmentText = new Map<string, string>();
+const effectivePrompts = new Map<string, Map<string, string>>();
 let semanticRequests = 0;
 let failure: unknown;
 const scenario = process.argv[2] ?? 'behavior';
@@ -39,6 +44,16 @@ const server = createServer(async (request, response) => {
       messages: Array<{ role: string; content: unknown; tool_call_id?: string }>;
     };
     assert.equal(input.model, EVAL_MODEL);
+    if (request.url === '/v1/chat/completions') {
+      assert(
+        input.messages.some((message) => message.role === 'system'),
+        'Ollama instructions must use the supported system role',
+      );
+      assert(
+        !input.messages.some((message) => message.role === 'developer'),
+        'Spark template does not support developer-role instructions',
+      );
+    }
     if (request.url === '/api/chat') {
       semanticRequests++;
       assert.equal(input.think, false);
@@ -77,6 +92,17 @@ const server = createServer(async (request, response) => {
       response.end('data: [DONE]\n\n');
       return;
     }
+    const systemPrompt = input.messages.find(
+      (message) => message.role === 'system' || message.role === 'developer',
+    )?.content;
+    assert.equal(typeof systemPrompt, 'string');
+    const prompt = systemPrompt as string;
+    assert(prompt.includes(EVALUATION_EXECUTION_CONTEXT));
+    const passScope = /Session: [a-f0-9-]+\. Pass: ([a-f0-9-]+)\./.exec(prompt)?.[1];
+    assert(passScope, 'Provider must receive the authenticated disposable execution scope');
+    const memberPrompts = effectivePrompts.get(passScope) ?? new Map<string, string>();
+    memberPrompts.set(String(request.headers['x-ltcook-member']), prompt);
+    effectivePrompts.set(passScope, memberPrompts);
     if (scenario === 'cancel' && requests === 5) {
       controller.abort();
       response.destroy();
@@ -100,6 +126,7 @@ const server = createServer(async (request, response) => {
     if (bootstrap) {
       const passId = /scope for Pass ([a-f0-9-]+)/.exec(text)?.[1];
       assert(passId);
+      assert.equal(passScope, passId, 'Standing context must name the runtime-assigned Pass');
       if (index === 0)
         command({
           type: 'task.create',
@@ -316,12 +343,24 @@ try {
                 failureCategory?: string;
                 delegations?: number;
                 toolCalls: number;
+                instructions: { promptSha256?: string; effectivePrompt?: string };
               }>;
             }>;
           };
         };
       }
     ).results.behavior.tasks;
+    const observedPromptHashes = new Set(
+      [...effectivePrompts.values()].map((prompts) => hash([...prompts.values()].join('\n\n'))),
+    );
+    for (const task of tasks)
+      for (const attempt of task.attempts) {
+        assert(attempt.instructions.promptSha256);
+        assert(
+          observedPromptHashes.has(attempt.instructions.promptSha256),
+          'Loaded prompt evidence must hash the complete provider-observed standing context',
+        );
+      }
     assert.equal(
       tasks.length,
       ['behavior', 'full'].includes(scenario) ? 3 : scenario === 'repeated' ? 2 : 1,
@@ -395,6 +434,8 @@ try {
   }
   assert.deepEqual((await readdir(workspace)).sort(), ['.env', 'AGENTS.md']);
   assert(!(await readdir(directory)).some((entry) => entry.startsWith('.execution-')));
+} catch (error) {
+  throw failure ?? error;
 } finally {
   if (previousOpenAI === undefined) delete process.env.OPENAI_API_KEY;
   else process.env.OPENAI_API_KEY = previousOpenAI;

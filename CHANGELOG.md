@@ -119,6 +119,7 @@ All notable changes to `ltcook` will be documented in this file.
 - Agent Evals supports Current Setup and Synthetic Setup selection in the CLI and Paseo panel, a model-free `eval audit --static-only`, full-instruction Behavior Evaluation by default, `--case` selection, and `--repetitions` defaulting to one. Bottleneck Attribution uses the same executions and traces; `eval run --all` also performs Instruction Audit. Failed cases stop after their low-reasoning fallback, with saved partial results and safeguard history.
   Evaluation attempts use independent copy-on-write workspace copies where supported, release disposable state between attempts, and avoid duplicate runtime-state polling.
   Pi context compaction uses the same pinned local model; sanitized diagnostics and traces include summary-call timing, usage and failures.
+  Agents receive an authenticated disposable execution-scope clarification alongside full instructions, using the Spark-supported system role. Restart removes temporary execution state for supported run records and reports cleanup failures.
 
 <br>
 - Added normal-install Ollama/Spark provisioning and opt-in local Agent Evals with private Perfetto-compatible traces and safeguards derived from comparable successful runs.

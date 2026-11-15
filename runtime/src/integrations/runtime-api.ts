@@ -33,6 +33,11 @@ export interface WorkspaceSessionRequest {
   shellEnvironment: Record<string, string>;
 }
 
+export interface EvaluationExecutionScope {
+  sessionId: string;
+  passId: string;
+}
+
 /** Captures the shell before AppRC overlays, without retaining nested provenance. */
 export function captureShellEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
   const encoded = source.LTCOOK_SHELL_PROVENANCE;
@@ -90,8 +95,11 @@ export class RuntimeApi {
   private stopping = false;
   private evals: EvalRunService | undefined;
   private evaluationObserver:
-    ((agentId: string, value: Record<string, unknown>) => void) | undefined;
-  setEvaluationObserver(observer: (agentId: string, value: Record<string, unknown>) => void): void {
+    | ((agentId: string, value: Record<string, unknown>) => EvaluationExecutionScope | void)
+    | undefined;
+  setEvaluationObserver(
+    observer: (agentId: string, value: Record<string, unknown>) => EvaluationExecutionScope | void,
+  ): void {
     this.evaluationObserver = observer;
   }
   constructor(
@@ -301,7 +309,24 @@ export class RuntimeApi {
           response.writeHead(403).end('{}');
           return;
         }
-        this.evaluationObserver(actor.nativeAgentId, parsed as Record<string, unknown>);
+        const scope = this.evaluationObserver(
+          actor.nativeAgentId,
+          parsed as Record<string, unknown>,
+        );
+        if ((parsed as Record<string, unknown>).kind === 'scope.request') {
+          if (
+            !scope ||
+            scope.sessionId !== input.sessionId ||
+            !this.runtime
+              .snapshot(input.sessionId)
+              .passes.some((pass) => pass.id === scope.passId && pass.status === 'running')
+          ) {
+            response.writeHead(403).end('{"error":"Evaluation execution scope is unavailable"}');
+            return;
+          }
+          response.writeHead(200).end(JSON.stringify({ evaluationScope: scope }));
+          return;
+        }
         response.writeHead(200).end('{}');
         return;
       }
