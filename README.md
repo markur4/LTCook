@@ -66,7 +66,7 @@ design. Before editing, read "README maintenance" in CONTRIBUTING.md.
 LTCook connects Pi agents to Paseo's existing chat interface. AppRC owns
 configuration and installation management; a small TypeScript runtime owns
 coordination in SQLite. Choose the full default team or a two-agent team
-containing only Main and Adjutant.
+containing only Leader and Adjutant.
 
 This is a new application named `ltcook`, not an upgrade or compatibility layer
 for `lcook`. Its setup and cleanup must leave existing `lcook` installations,
@@ -250,8 +250,8 @@ ltcook config show --json
 ltcook
 ```
 
-This starts Paseo's UI without opening a project or creating agents. Select a
-project directory in Paseo and use **Start session** in the LTCook panel, or run
+This starts Paseo's UI without creating agents. Use **+ → LTCook**, choose an
+installed **Team**, and send a message to open its Leader chat. Or run
 `ltcook launch runtime --workspace ROOT` to open it from the terminal.
 Registration and AppRC workspace markers are optional; existing project settings
 are used when present. Model selections are needed when starting agents, not
@@ -298,9 +298,13 @@ LTCook still selects team models through `runtime.smart_model`,
 
 ## Choose a team
 
-Set `LTCOOK_TEAM` through AppRC's configuration editor or a deliberate shell
-override. `default` has six persistent roles plus explicitly requested temporary
-specialists. `default-minimal` has exactly Main and Adjutant; Main does the work
+In Paseo, choose a Team in the new-agent composer. The **Teams** sidebar opens
+the most recently active Leader for that Team and Workspace; **New Session**
+creates a separate conversation. Each Session keeps its chosen Team.
+
+For CLI-created Sessions, set `LTCOOK_TEAM` through AppRC's configuration editor
+or a deliberate shell override. `default` has six persistent roles plus explicitly requested temporary
+specialists. `default-minimal` has exactly Leader and Adjutant; Leader does the work
 of absent specialists and does not claim an independent review.
 
 ```shell
@@ -315,8 +319,8 @@ keep separate native conversations and agent bindings. See
 [domain terminology](docs/Explanations.md#domain-terminology).
 
 The selected team stays fixed for a running session. Teams use the purpose-named
-[Team API v2](docs/References.md#team-api). Core routes Design and Plan work;
-Main registers execution Tasks after explicit user approval; the runtime then
+[Team API v3](docs/References.md#team-api). Core routes Design and Plan work;
+Leader registers execution Tasks after explicit user approval; the runtime then
 dispatches eligible work, checks recorded gates, and advances the Pass. Rules provide standing
 context, and native Pi skills load their bodies on demand across Core, Team,
 Project and User scopes. See [planning and guidance](docs/How-To-User-Guides.md#plan-work-and-answer-decisions).

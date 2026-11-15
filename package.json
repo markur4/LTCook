@@ -13,12 +13,12 @@
   "scripts": {
     "dev": "uv run --locked --no-sync python -m ltcook_dev.runtime --root . --bun \"$npm_execpath\" --",
     "dev:watch": "uv run --locked --no-sync python -m ltcook_dev.runtime --root . --watch --bun \"$npm_execpath\" --",
-    "check": "\"$npm_execpath\" run format:check && \"$npm_execpath\" run --cwd runtime check && \"$npm_execpath\" run --cwd teams/default check && \"$npm_execpath\" run --cwd teams/default-minimal check",
+    "check": "\"$npm_execpath\" run format:check && \"$npm_execpath\" run --cwd runtime check && \"$npm_execpath\" run --filter './teams/*' check",
     "test": "\"$npm_execpath\" test tests/runtime/unit tests/runtime/native tests/runtime/integration tests/teams/contract",
     "test:integration": "\"$npm_execpath\" test tests/runtime/integration",
     "format": "prettier --write \"runtime/src/**/*.{ts,tsx}\" \"teams/*/src/**/*.ts\" \"tests/{runtime,teams}/**/*.ts\"",
     "format:check": "prettier --check \"runtime/src/**/*.{ts,tsx}\" \"teams/*/src/**/*.ts\" \"tests/{runtime,teams}/**/*.ts\"",
-    "build": "\"$npm_execpath\" run --cwd runtime build && \"$npm_execpath\" run --cwd teams/default build && \"$npm_execpath\" run --cwd teams/default-minimal build"
+    "build": "\"$npm_execpath\" run --cwd runtime build && \"$npm_execpath\" run --filter './teams/*' build"
   },
   "devDependencies": {
     "@types/bun": "1.4.4",
