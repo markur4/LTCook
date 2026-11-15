@@ -38,7 +38,7 @@ type TaskRow = Omit<Task, 'passId' | 'blocker' | 'report' | 'phase' | 'requestId
 };
 type BindingRow = Omit<NativeBinding, 'blocker'> & { blocker: string | null };
 type PassRow = Omit<Pass, 'planRef'> & { planRef: string | null };
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 /** Owns the coordination database exclusively until close(). */
 export class CoordinationStore implements CoordinationApi {
@@ -77,7 +77,7 @@ export class CoordinationStore implements CoordinationApi {
     if (version !== SCHEMA_VERSION && (version !== 0 || tables.length > 0)) {
       this.database.close();
       throw new Error(
-        `Incompatible coordination database schema ${version}; use a new empty store`,
+        `Incompatible coordination database schema ${version}; stop LTCook, preserve this database, and configure LTCOOK_DATABASE to a new empty store`,
       );
     }
     this.database.exec('PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON');
