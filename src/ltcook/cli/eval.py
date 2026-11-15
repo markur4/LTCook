@@ -123,6 +123,8 @@ def _print_report(report: dict) -> None:
     if summary.get("error"):
         console.print(summary["error"], style="red")
 
+    for limitation in summary.get("limitations", []):
+        console.print(f"Limitation: {limitation}")
     table = Table("Component", "Outcome", "Details")
     labels = {
         "static": "Instruction Audit · static",
@@ -245,10 +247,12 @@ def watch(run_id: str):
 def list_runs():
     environment, _ = _runtime()
     rows = _call(environment, "/v1/evals/list")["runs"]
-    table = Table("Run", "Preset", "Status", "Progress", "Started")
+    table = Table("Run", "Setup", "Team", "Preset", "Status", "Progress", "Started")
     for item in rows:
         table.add_row(
             item["runId"],
+            item["setup"],
+            item.get("teamSelection", "Preparing team"),
             item["preset"],
             item["status"],
             f"{item['completed']}/{item['total']}",

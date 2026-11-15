@@ -20,16 +20,22 @@ const evalsRpc = defineRpc({
   input: EvalRequestSchema,
   output: EvalResponseSchema,
 });
+const evalLabels: Record<string, string> = {
+  static: 'Instruction Audit · static',
+  semantic: 'Instruction Audit · semantic',
+  behavior: 'Behavior Evaluation',
+  bottlenecks: 'Bottleneck Attribution',
+};
 function resultSummary(report: any): string[] {
   return Object.entries(report.result?.results ?? {}).map(([name, value]: [string, any]) => {
     const tasks = Array.isArray(value) ? value : value?.tasks;
     if (Array.isArray(tasks)) {
       const passed = tasks.filter((task) => task.success).length;
-      return `${name}: ${passed}/${tasks.length} passed; ${tasks.filter((task) => task.attempts?.length > 1).length} retried`;
+      return `${evalLabels[name] ?? name}: ${passed}/${tasks.length} passed; ${tasks.filter((task) => task.attempts?.length > 1).length} retried`;
     }
     if (Array.isArray(value?.findings))
-      return `${name}: ${value.findings.length} potential findings`;
-    return `${name}: ${value?.resourceCount ?? 0} resources`;
+      return `${evalLabels[name] ?? name}: ${value.findings.length} potential findings`;
+    return `${evalLabels[name] ?? name}: ${value?.resourceCount ?? 0} resources`;
   });
 }
 
@@ -179,6 +185,11 @@ function Diagnostics({
       {report && (
         <Card theme={theme}>
           <Label theme={theme}>Results</Label>
+          {(report.summary.limitations ?? []).map((limitation: string, index: number) => (
+            <Label key={index} theme={theme} muted>
+              {limitation}
+            </Label>
+          ))}
           {Object.entries(report.result?.results ?? {}).map(([name, value]: [string, any]) => {
             const tasks = Array.isArray(value) ? value : value?.tasks;
             const findings = value?.findings;
@@ -187,14 +198,7 @@ function Diagnostics({
               : undefined;
             return (
               <View key={name} style={{ gap: 4, paddingVertical: 4 }}>
-                <Label theme={theme}>
-                  {{
-                    static: 'Instruction Audit · static',
-                    semantic: 'Instruction Audit · semantic',
-                    behavior: 'Behavior Evaluation',
-                    bottlenecks: 'Bottleneck Attribution',
-                  }[name] ?? name.replaceAll('-', ' ')}
-                </Label>
+                <Label theme={theme}>{evalLabels[name] ?? name.replaceAll('-', ' ')}</Label>
                 <Label theme={theme} muted>
                   {Array.isArray(tasks)
                     ? `${passed}/${tasks.length} behavior cases passed after retry`
