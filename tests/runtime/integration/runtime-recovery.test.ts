@@ -2172,3 +2172,164 @@ test('one runtime isolates multiple Teams and Sessions while adopting native Lea
     await runtime.close();
   }
 });
+
+test('adoption returns before startup, then reconciles one child and resumes without duplicate creation', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ltcook-adoption-'));
+  temporaryDirectories.push(directory);
+  const databasePath = join(directory, 'coordination.sqlite');
+  const agents = new FakeAgents();
+  agents.agents.set('native-leader', { id: 'native-leader', status: 'idle' });
+  agents.createGate = new Gate();
+  let runtime = createRuntime({ databasePath, team, agents });
+  const open = {
+    id: 'native-leader',
+    workspaceRoot: '/workspace',
+    teamSelection: team.definition.id,
+    leaderAgentId: 'native-leader',
+  };
+  try {
+    await runtime.openSession(open);
+    expect(agents.creates).toBe(0);
+    await runtime.execute(
+      open.id,
+      { kind: 'agent', nativeAgentId: open.id },
+      { type: 'guidance.loaded', inspection: { resources: [], diagnostics: [] } },
+    );
+    await agents.createStarted.wait();
+    expect(agents.creates).toBe(1);
+    agents.createGate.resolve();
+    await runtime.openSession({ id: open.id, workspaceRoot: open.workspaceRoot });
+    expect(
+      runtime.snapshot(open.id).members.every((member) => member.binding?.state === 'bound'),
+    ).toBe(true);
+    await runtime.close();
+    runtime = createRuntime({ databasePath, team, agents });
+    const resumed = await runtime.openSession(open);
+    expect(
+      resumed.members.find((member) => member.member.key === 'leader')?.binding?.nativeAgentId,
+    ).toBe(open.id);
+    await runtime.openSession({ id: open.id, workspaceRoot: open.workspaceRoot });
+    expect(agents.creates).toBe(1);
+  } finally {
+    agents.createGate.resolve();
+    await runtime.close();
+  }
+});
+
+test('catalog, list, adoption and preparation APIs enforce explicit authenticated Session identity', async () => {
+  const agents = new FakeAgents();
+  const runtime = createRuntime({
+    databasePath: ':memory:',
+    team,
+    teams: new TeamRegistry([team, defaultTeam]),
+    agents,
+  });
+  const socket = createServer();
+  await new Promise<void>((resolve) => socket.listen(0, '127.0.0.1', resolve));
+  const address = socket.address();
+  if (!address || typeof address === 'string') throw new Error('Missing fixture address');
+  await new Promise<void>((resolve, reject) =>
+    socket.close((error) => (error ? reject(error) : resolve())),
+  );
+  const api = new RuntimeApi(runtime, 'local-user-secret', `127.0.0.1:${address.port}`);
+  api.setOpenWorkspaceHandler((request) =>
+    runtime.openSession({
+      id: request.sessionId,
+      workspaceRoot: request.workspaceRoot,
+      teamSelection: request.teamSelection,
+      leaderAgentId: request.leaderAgentId,
+    }),
+  );
+  let preparations = 0;
+  api.setPrepareSessionHandler(async () => {
+    preparations++;
+    return { env: { LTCOOK_AGENT_API_TOKEN: 'scoped-agent-secret' } };
+  });
+  const endpoint = await api.listen();
+  const post = (route: string, input: unknown, token = 'local-user-secret') =>
+    fetch(`${endpoint}/v1/${route}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+  const identity = {
+    sessionId: 'api-leader',
+    leaderAgentId: 'api-leader',
+    workspaceRoot: '/workspace',
+    teamSelection: team.definition.id,
+  };
+  try {
+    expect((await post('team/catalog', {}, 'wrong-token')).status).toBe(401);
+    expect(
+      ((await (await post('team/catalog', {})).json()) as { teams: unknown[] }).teams,
+    ).toHaveLength(2);
+    const opened = await post('session/open', identity);
+    expect(opened.status).toBe(200);
+    const safe = await opened.text();
+    expect(safe).not.toContain('secret');
+    expect(JSON.parse(safe).leaderAgentId).toBe(identity.leaderAgentId);
+    expect(
+      (await post('session/open', { ...identity, teamSelection: defaultTeam.definition.id }))
+        .status,
+    ).toBe(400);
+    expect((await post('session/prepare', { ...identity, workspaceRoot: '/other' })).status).toBe(
+      400,
+    );
+    expect(preparations).toBe(0);
+    expect((await post('session/prepare', identity)).status).toBe(200);
+    expect(preparations).toBe(1);
+    expect(
+      (
+        (await (await post('session/list', { workspaceRoot: '/workspace' })).json()) as {
+          sessions: unknown[];
+        }
+      ).sessions,
+    ).toHaveLength(1);
+    expect((await post('snapshot', { workspaceRoot: '/workspace' })).status).toBe(404);
+    expect(
+      (await post('snapshot', { sessionId: identity.sessionId, workspaceRoot: '/other' })).status,
+    ).toBe(400);
+    expect(
+      (await post('snapshot', { sessionId: identity.sessionId, workspaceRoot: '/workspace' }))
+        .status,
+    ).toBe(200);
+    expect(agents.creates).toBe(0);
+  } finally {
+    await api.close();
+    await runtime.close();
+  }
+});
+
+test('registry loads only known local Teams and validates nested contracts before starting agents', async () => {
+  const registry = await TeamRegistry.load();
+  expect(registry.resolve('default').definition.id).toBe(defaultTeam.definition.id);
+  expect(registry.resolve('default-minimal').definition.id).toBe(team.definition.id);
+  expect(registry.catalog().every((entry) => entry.status === 'installed')).toBe(true);
+  expect(() => registry.resolve('arbitrary-browser-package')).toThrow('unavailable');
+  expect(
+    () =>
+      new TeamRegistry([
+        {
+          ...team,
+          definition: {
+            ...team.definition,
+            members: team.definition.members.map((member) => ({ ...member, readOnly: 'false' })),
+          },
+        } as unknown as typeof team,
+      ]),
+  ).toThrow();
+  const runtime = createRuntime({
+    databasePath: ':memory:',
+    teams: new TeamRegistry(),
+    agents: new FakeAgents(),
+  });
+  try {
+    expect(runtime.teamCatalog()).toEqual([]);
+    await expect(runtime.openSession({ workspaceRoot: '/workspace' })).rejects.toThrow(
+      'unavailable',
+    );
+    expect(runtime.listSessions('/workspace')).toEqual([]);
+  } finally {
+    await runtime.close();
+  }
+});
