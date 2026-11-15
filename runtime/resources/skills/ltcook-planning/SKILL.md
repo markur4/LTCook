@@ -7,7 +7,7 @@ description: Use LTCook’s registered Design and Plan operations, decisions and
 
 Write Designs and Plans through native file tools under the runtime state directory’s `documents/designs/` and `documents/plans/`. Keep registered document references and filenames stable. Apply relevant User and Project planning guidance for personal methods and formats.
 
-Start explicit planning with `ltcook planning start --session SESSION --design ABSOLUTE_DESIGN_PATH --title TITLE`. Use the returned Plan ID for `ltcook planning show` and `ltcook planning questions`, always with the explicit Session and Plan context. Adjutant prefills the Plan; Main investigates and finalizes it through the registered workflow.
+The actual user starts explicit planning with `ltcook planning start --session SESSION --design ABSOLUTE_DESIGN_PATH --title TITLE`. Use the returned Plan ID for `ltcook planning show` and `ltcook planning questions`, always with the explicit Session and Plan context. Agents use only the planning operations permitted by their bound `ltcook_team` tool; never invoke authenticated user-only start, answer, approve or reject operations on the user’s behalf. Adjutant prefills the Plan; Main investigates and finalizes it through the registered workflow.
 
 Cover intent, design, scope, implementation, verification and delivery. Resolve outstanding decisions, including the runtime’s mandatory question categories. Only actual user answers through native dialogs or authenticated `ltcook planning answer` operations resolve user questions. Only actual user `ltcook planning approve` authorizes execution; rejection, cancellation, defaults and agent reports grant no approval.
 
