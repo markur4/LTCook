@@ -124,6 +124,12 @@ type DiagnosticEvent = {
   error?: string;
   status?: number;
   operation?: string;
+  phase?: string;
+  reason?: string;
+  willRetry?: boolean;
+  fromExtension?: boolean;
+  aborted?: boolean;
+  tokensBefore?: number;
   commandType?: string;
   hasPassId?: boolean;
   durationMs?: number;
@@ -142,7 +148,13 @@ export type EvaluationDiagnostics = {
   activeModels: string[];
   activeTools: Array<{ agentId: string; callId: string; tool: string }>;
   runtime?: EvaluationRuntimeState;
-  configuredModel?: { id: string; contextWindow: number; maxTokens: number; thinking: string };
+  configuredModel?: {
+    id: string;
+    contextWindow: number;
+    maxTokens: number;
+    thinking: string;
+    compaction?: { enabled: boolean; reserveTokens: number; keepRecentTokens: number };
+  };
 };
 export type EvaluationCapture = {
   diagnostics: EvaluationDiagnostics;
@@ -172,6 +184,9 @@ export class EvaluationDiagnosticCollector {
         'agent.end',
         'model.start',
         'model.end',
+        'compaction.start',
+        'compaction.end',
+        'compaction.failed',
         'tool.start',
         'tool.end',
         'runtime.error',
@@ -190,17 +205,25 @@ export class EvaluationDiagnosticCollector {
       'rawStopReason',
       'error',
       'operation',
+      'phase',
+      'reason',
       'commandType',
     ] as const)
       if (typeof value[key] === 'string') event[key] = sanitizeEvaluationText(value[key]);
-    for (const key of ['durationMs', 'status'] as const)
+    for (const key of ['durationMs', 'status', 'tokensBefore'] as const)
       if (typeof value[key] === 'number' && Number.isFinite(value[key])) event[key] = value[key];
+    for (const key of ['willRetry', 'fromExtension', 'aborted'] as const)
+      if (typeof value[key] === 'boolean') event[key] = value[key];
     if (typeof value.hasPassId === 'boolean') event.hasPassId = value.hasPassId;
     const usage = evaluationTokenUsage(value.usage);
     if (usage) event.usage = usage;
     if (value.kind === 'agent.start') this.activeAgents.add(agentId);
     if (value.kind === 'agent.end') this.activeAgents.delete(agentId);
     if (value.kind === 'model.start') this.activeModels.add(agentId);
+    if (value.kind === 'compaction.start') this.activeModels.add(agentId);
+    if (value.kind === 'compaction.end' || value.kind === 'compaction.failed')
+      this.activeModels.delete(agentId);
+    if (value.kind === 'compaction.failed') this.retain(this.modelFailures, event, 8);
     if (value.kind === 'model.end') {
       this.activeModels.delete(agentId);
       if (evaluationModelFailed(value.stopReason)) this.retain(this.modelFailures, event, 8);

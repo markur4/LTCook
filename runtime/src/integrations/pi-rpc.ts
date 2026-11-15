@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { EVAL_MODEL } from '../evals/setup.js';
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
@@ -104,6 +105,35 @@ async function sessionManagerFor(
     : SessionManager.create(cwd, sessionDir, { id: parsed.sessionId });
 }
 
+/** Enforce the evaluation model at the SDK stream boundary, including default compaction calls. */
+export function guardEvaluationModelRuntime(
+  runtime: Pick<ModelRuntime, 'stream' | 'streamSimple'>,
+  endpoint: string | undefined,
+): void {
+  if (!endpoint) throw new Error('Evaluation Ollama endpoint is missing');
+  const assertModel = (model: { id: string; provider: string; baseUrl: string }) => {
+    if (
+      model.id !== EVAL_MODEL ||
+      model.provider !== 'ollama' ||
+      model.baseUrl !== `${endpoint}/v1`
+    )
+      throw new Error(
+        'Evaluation model pin violation: model, provider and endpoint must match the prepared local Spark configuration',
+      );
+  };
+  // > SDK complete methods delegate here; default compaction also uses streamSimple directly.
+  const stream = runtime.stream.bind(runtime);
+  runtime.stream = (model, context, options) => {
+    assertModel(model);
+    return stream(model, context, options);
+  };
+  const streamSimple = runtime.streamSimple.bind(runtime);
+  runtime.streamSimple = (model, context, options) => {
+    assertModel(model);
+    return streamSimple(model, context, options);
+  };
+}
+
 /** Create native Pi services while keeping credentials outside workspace state. */
 export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRuntime> {
   const { parsed, mcpConfigPaths } = parseRpcArguments(argv);
@@ -179,6 +209,8 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
       authPath,
       modelsPath: path.join(agentDir, 'models.json'),
     });
+    if (process.env.LTCOOK_EVAL_ARM)
+      guardEvaluationModelRuntime(modelRuntime, process.env.LTCOOK_EVAL_ENDPOINT);
     const paseoMcpExtension: ExtensionFactory = (pi) => {
       // > Pi validates raw configs at registration; its public type describes
       // > validated input. Keep file values unknown until that native boundary.

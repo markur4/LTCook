@@ -6,6 +6,7 @@ import type { EvalSetup } from './contracts.js';
 
 export const EVAL_MODEL = 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest';
 export const FIXTURE_REVISION = 'agent-evals-v3';
+export const EVAL_COMPACTION = { enabled: true, reserveTokens: 2048, keepRecentTokens: 1024 };
 export type EvaluationContext = {
   teamSelection: string;
   guidanceDirectory: string;

@@ -11,6 +11,7 @@ import { selectedTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
 import { evaluationToolError, sanitizeEvaluationText } from '../evals/diagnostics.js';
+import { EVAL_MODEL } from '../evals/setup.js';
 const require = createRequire(import.meta.url);
 async function activateOptionalBrowser(pi: ExtensionAPI): Promise<void> {
   if (process.env.LTCOOK_BROWSER_ENABLED !== 'true') return;
@@ -75,6 +76,43 @@ export default async function activate(
     if (!response.ok) throw new Error('Evaluation observation unavailable');
   };
   if (evaluation) {
+    let compacting = false;
+    pi.on('session_before_compact', async (event) => {
+      compacting = true;
+      await observe({
+        kind: 'compaction.start',
+        phase: 'compaction',
+        reason: event.reason,
+        willRetry: event.willRetry,
+        tokensBefore: event.preparation.tokensBefore,
+      });
+    });
+    pi.on('session_compact', async (event) => {
+      compacting = false;
+      await observe({
+        kind: 'compaction.end',
+        phase: 'compaction',
+        reason: event.reason,
+        willRetry: event.willRetry,
+        fromExtension: event.fromExtension,
+        tokensBefore: event.compactionEntry.tokensBefore,
+        usage: event.compactionEntry.usage,
+      });
+    });
+    pi.on('session_compact_failed', async (event) => {
+      compacting = false;
+      await observe({
+        kind: 'compaction.failed',
+        phase: 'compaction',
+        reason: event.reason,
+        willRetry: event.willRetry,
+        fromExtension: event.fromExtension,
+        aborted: event.aborted,
+        error: sanitizeEvaluationText(
+          event.errorMessage ?? (event.aborted ? 'Compaction aborted' : 'Compaction failed'),
+        ),
+      });
+    });
     // > Validation rejects before tool_result hooks; bound their feedback before the next request.
     pi.on('context', async (event) => ({
       messages: event.messages.map((message) => {
@@ -93,12 +131,12 @@ export default async function activate(
     });
     pi.on('before_provider_request', async (_event, context) => {
       if (
-        context.model?.id !== 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest' ||
+        context.model?.id !== EVAL_MODEL ||
         context.model.provider !== 'ollama' ||
         context.model.baseUrl !== `${process.env.LTCOOK_EVAL_ENDPOINT}/v1`
       )
         throw new Error('Evaluation model pin violation');
-      await observe({ kind: 'model.start' });
+      if (!compacting) await observe({ kind: 'model.start' });
     });
     pi.on('before_provider_headers', (event) => {
       event.headers['x-ltcook-member'] = memberKey;

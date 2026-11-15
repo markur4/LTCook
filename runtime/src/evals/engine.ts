@@ -18,6 +18,7 @@ import {
 import {
   copyGuidance,
   EVAL_MODEL,
+  EVAL_COMPACTION,
   FIXTURE_REVISION,
   hash,
   resolveEvaluationContext,
@@ -133,6 +134,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
             web: context.webConfiguration,
             model: EVAL_MODEL,
             limits: { timeoutMs: 120000, toolCalls: 64 },
+            compaction: EVAL_COMPACTION,
           }),
         ),
         fixtureRevision: FIXTURE_REVISION,

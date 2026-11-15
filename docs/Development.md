@@ -243,6 +243,11 @@ that fails its fallback stops the run before later cases or repetitions. Each
 attempt uses an independent workspace, requests copy-on-write copies where
 supported, and releases disposable state after its diagnostics are preserved.
 
+Pi's existing context compaction remains enabled for the pinned 8,192-token
+model, reserving 2,048 tokens and keeping 1,024 recent tokens. Summary calls use
+the same isolated model and provider state. Diagnostics record compaction timing,
+reported usage and failures, while excluding summary text.
+
 Agent evaluation safeguards use three times the slowest of the five most recent
 comparable successful attempts. Reasoning modes have separate histories, and
 model, fixture, setup, instruction/tool configuration and verified inference

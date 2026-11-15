@@ -1,10 +1,63 @@
 import { Value } from 'typebox/value';
 import { afterEach, expect, test } from 'bun:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import type { Model } from '@earendil-works/pi-ai';
 import activate from '../../../runtime/src/integrations/pi-extension.js';
+import { guardEvaluationModelRuntime } from '../../../runtime/src/integrations/pi-rpc.js';
 const original = { ...process.env };
 afterEach(() => {
   process.env = { ...original };
+});
+
+test('evaluation stream guard rejects wrong model/provider/endpoint before SDK provider invocation', () => {
+  let providerInvocations = 0;
+  const invokeProvider = () => {
+    providerInvocations++;
+    throw new Error('provider invoked');
+  };
+  const runtime: Pick<ModelRuntime, 'stream' | 'streamSimple'> = {
+    stream: invokeProvider,
+    streamSimple: invokeProvider,
+  };
+  const endpoint = 'http://127.0.0.1:11434';
+  const model: Model<'openai-completions'> = {
+    id: 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest',
+    name: 'Evaluation fixture',
+    api: 'openai-completions',
+    provider: 'ollama',
+    baseUrl: `${endpoint}/v1`,
+    input: ['text'],
+    reasoning: false,
+    contextWindow: 8192,
+    maxTokens: 2048,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  const context = { messages: [] };
+  expect(() => guardEvaluationModelRuntime(runtime, undefined)).toThrow('endpoint is missing');
+  guardEvaluationModelRuntime(runtime, endpoint);
+  for (const mismatch of [
+    { id: 'another-model' },
+    { provider: 'another-provider' },
+    { baseUrl: 'http://127.0.0.1:1/v1' },
+  ]) {
+    const selected = { ...model, ...mismatch };
+    expect(() => runtime.stream(selected, context)).toThrow('Evaluation model pin violation');
+    expect(() => runtime.streamSimple(selected, context)).toThrow('Evaluation model pin violation');
+    expect(() =>
+      ModelRuntime.prototype.complete.call(runtime as ModelRuntime, selected, context),
+    ).toThrow('Evaluation model pin violation');
+    expect(() =>
+      ModelRuntime.prototype.completeSimple.call(runtime as ModelRuntime, selected, context),
+    ).toThrow('Evaluation model pin violation');
+  }
+  expect(providerInvocations).toBe(0);
+  expect(() => runtime.stream(model, context)).toThrow('provider invoked');
+  expect(() => runtime.streamSimple(model, context)).toThrow('provider invoked');
+  expect(() =>
+    ModelRuntime.prototype.completeSimple.call(runtime as ModelRuntime, model, context),
+  ).toThrow('provider invoked');
+  expect(providerInvocations).toBe(3);
 });
 test('every native call requires runtime authorization and runtime failures block calls', async () => {
   const requests: string[] = [];

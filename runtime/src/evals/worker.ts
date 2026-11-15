@@ -10,7 +10,7 @@ import { createPaseoAgentBackend, startPaseoHost } from '../integrations/paseo.j
 import { selectedTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import type { GuidanceInspection } from '../guidance-api/index.js';
-import { EVAL_MODEL, hash, resourceIdentity } from './setup.js';
+import { EVAL_MODEL, EVAL_COMPACTION, hash, resourceIdentity } from './setup.js';
 import { EVALUATION_STOP_FILE, type EvaluationJob } from './runner.js';
 import {
   EvaluationDiagnosticCollector,
@@ -54,6 +54,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   let writeCalls = 0;
   let verificationCalls = 0;
   let inferenceFailed = false;
+  let inferenceFailedAt = 0;
   let toolErrors = 0;
   let failureCategory = 'runtime';
   const checkStopRequest = async () => {
@@ -129,7 +130,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     JSON.stringify({
       defaultProvider: 'ollama',
       defaultModel: EVAL_MODEL,
-      compaction: { enabled: false },
+      compaction: EVAL_COMPACTION,
       retry: { enabled: false },
     }),
   );
@@ -149,7 +150,13 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     } catch {
       capture = diagnostics.snapshot();
     }
-    capture.configuredModel = { id: EVAL_MODEL, contextWindow, maxTokens, thinking: job.thinking };
+    capture.configuredModel = {
+      id: EVAL_MODEL,
+      contextWindow,
+      maxTokens,
+      thinking: job.thinking,
+      compaction: EVAL_COMPACTION,
+    };
     return capture;
   };
   const checkpointDiagnostics = () => {
@@ -261,10 +268,32 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       }
       if (value.kind === 'prompt' && typeof value.prompt === 'string')
         prompts.set(agentId, value.prompt);
-      if (value.kind === 'model.start')
+      if (value.kind === 'compaction.start') {
+        inferenceFailed = false;
+        operationSpans.set(
+          `compaction:${agentId}`,
+          telemetry.begin('model.compaction', randomUUID(), agentId),
+        );
+      }
+      if (value.kind === 'compaction.end' || value.kind === 'compaction.failed') {
+        operationSpans.get(`compaction:${agentId}`)?.end();
+        operationSpans.delete(`compaction:${agentId}`);
+        if (value.kind === 'compaction.failed') {
+          inferenceFailed = true;
+          inferenceFailedAt = performance.now();
+        }
+        const usage = evaluationTokenUsage(value.usage);
+        if (usage) tokenUsage.push(usage);
+      }
+      if (value.kind === 'model.start') {
+        inferenceFailed = false;
         modelSpans.set(agentId, telemetry.begin(`model.${agentId}`, randomUUID(), agentId));
+      }
       if (value.kind === 'model.end') {
-        if (evaluationModelFailed(value.stopReason)) inferenceFailed = true;
+        if (evaluationModelFailed(value.stopReason)) {
+          inferenceFailed = true;
+          inferenceFailedAt = performance.now();
+        }
         modelSpans.get(agentId)?.end();
         modelSpans.delete(agentId);
         const usage = evaluationTokenUsage(value.usage);
@@ -308,7 +337,8 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       await checkStopRequest();
       const snapshot = runtime.snapshot(sessionId);
       if (snapshot.passes[0]?.status === 'completed') break;
-      if (inferenceFailed) {
+      // > Let Pi announce its existing overflow/compaction recovery before ending the case.
+      if (inferenceFailed && performance.now() - inferenceFailedAt >= 250) {
         failureCategory = 'inference';
         const failure = diagnostics.snapshot().modelFailures.at(-1);
         throw new Error(

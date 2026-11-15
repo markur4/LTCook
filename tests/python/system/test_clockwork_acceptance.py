@@ -35,6 +35,8 @@ def test_real_pi_paseo_clockwork(tmp_path: Path) -> None:
         "repeated",
         "full",
         "audit-error",
+        "compaction",
+        "compaction-cancel",
     ],
 )
 def test_agent_evaluation_runtime(tmp_path: Path, mode: str) -> None:

@@ -223,6 +223,66 @@ test('diagnostics retain failure causes and live work without copying prompts or
   expect(collector.snapshot().activeTools).toEqual([]);
 });
 
+test('compaction diagnostics retain lifecycle reasons and usage without summary text', () => {
+  const collector = new EvaluationDiagnosticCollector();
+  collector.observe('agent', {
+    kind: 'compaction.start',
+    phase: 'compaction',
+    reason: 'overflow',
+    willRetry: true,
+    tokensBefore: 8071,
+    summary: 'private summary',
+    messagesToSummarize: ['private prompt'],
+  });
+  expect(collector.snapshot().activeModels).toEqual(['agent']);
+  collector.observe('agent', {
+    kind: 'compaction.end',
+    phase: 'compaction',
+    reason: 'overflow',
+    willRetry: true,
+    fromExtension: false,
+    tokensBefore: 8071,
+    usage: { input: 2000, output: 200, totalTokens: 2200 },
+    summary: 'private summary',
+  });
+  expect(collector.snapshot().activeModels).toEqual([]);
+  expect(collector.snapshot().recentEvents.at(-1)).toMatchObject({
+    event: 'compaction.end',
+    phase: 'compaction',
+    reason: 'overflow',
+    willRetry: true,
+    usage: { input: 2000, output: 200, totalTokens: 2200 },
+  });
+  collector.observe('agent', {
+    kind: 'compaction.start',
+    phase: 'compaction',
+    reason: 'threshold',
+    willRetry: false,
+  });
+  collector.observe('agent', {
+    kind: 'compaction.failed',
+    phase: 'compaction',
+    reason: 'threshold',
+    willRetry: false,
+    fromExtension: false,
+    aborted: false,
+    error: 'Compaction failed token=fixture-secret',
+    summary: 'private summary',
+  });
+  const state = collector.snapshot();
+  expect(state.activeModels).toEqual([]);
+  expect(state.modelFailures.at(-1)).toMatchObject({
+    event: 'compaction.failed',
+    phase: 'compaction',
+    reason: 'threshold',
+    aborted: false,
+    error: 'Compaction failed token=<redacted>',
+  });
+  expect(state.modelFailures.at(-1)?.rawStopReason).toBeUndefined();
+  expect(state.modelFailures.at(-1)?.stopReason).toBeUndefined();
+  expect(JSON.stringify(state)).not.toContain('private');
+});
+
 test('diagnostic histories remain bounded and retain the latest failures', () => {
   const collector = new EvaluationDiagnosticCollector();
   for (let index = 0; index < 100; index++) {
@@ -354,6 +414,7 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
       LTCOOK_TEAM: 'default-minimal',
       LTCOOK_BROWSER_ENABLED: 'false',
       LTCOOK_EVAL_ARM: 'complete',
+      LTCOOK_EVAL_ENDPOINT: `http://127.0.0.1:${server.port}`,
     });
     const handlers = new Map<string, (event: unknown, context?: unknown) => Promise<unknown>>();
     const tools = new Map<string, Parameters<ExtensionAPI['registerTool']>[0]>();
@@ -445,6 +506,90 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
     expect(JSON.stringify(observed.filter(({ kind }) => kind !== 'prompt'))).not.toContain(
       'private',
     );
+    const compactionOffset = observed.length;
+    const pinned = {
+      model: {
+        id: 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest',
+        provider: 'ollama',
+        baseUrl: `${process.env.LTCOOK_EVAL_ENDPOINT}/v1`,
+      },
+    };
+    await handlers.get('before_provider_request')!({}, pinned);
+    await handlers.get('session_before_compact')!({
+      reason: 'overflow',
+      willRetry: true,
+      preparation: {
+        tokensBefore: 8071,
+        messagesToSummarize: ['private prompt'],
+        previousSummary: 'private old summary',
+      },
+      branchEntries: ['private entries'],
+      customInstructions: 'private instructions',
+    });
+    await handlers.get('before_provider_request')!({}, pinned);
+    await expect(
+      handlers.get('before_provider_request')!(
+        {},
+        { model: { ...pinned.model, id: 'another-model' } },
+      ),
+    ).rejects.toThrow('Evaluation model pin violation');
+    const headers: Record<string, string> = {};
+    await handlers.get('before_provider_headers')!({ headers });
+    expect(headers['x-ltcook-member']).toBe('main');
+    await handlers.get('session_compact')!({
+      reason: 'overflow',
+      willRetry: true,
+      fromExtension: false,
+      compactionEntry: {
+        tokensBefore: 8071,
+        summary: 'private summary',
+        systemMessage: 'private system message',
+        details: { secret: 'private detail' },
+        usage: { input: 2000, output: 200, totalTokens: 2200 },
+      },
+    });
+    await handlers.get('before_provider_request')!({}, pinned);
+    await handlers.get('session_before_compact')!({
+      reason: 'threshold',
+      willRetry: false,
+      preparation: { tokensBefore: 7000 },
+    });
+    await handlers.get('session_compact_failed')!({
+      reason: 'threshold',
+      willRetry: false,
+      fromExtension: false,
+      aborted: false,
+      errorMessage: 'Summary request failed token=fixture-secret',
+    });
+    const lifecycle = observed.slice(compactionOffset);
+    expect(lifecycle.filter(({ kind }) => kind === 'model.start')).toHaveLength(2);
+    expect(
+      lifecycle.filter(({ kind }) => typeof kind === 'string' && kind.startsWith('compaction.')),
+    ).toMatchObject([
+      {
+        kind: 'compaction.start',
+        phase: 'compaction',
+        reason: 'overflow',
+        willRetry: true,
+        tokensBefore: 8071,
+      },
+      {
+        kind: 'compaction.end',
+        phase: 'compaction',
+        reason: 'overflow',
+        willRetry: true,
+        usage: { input: 2000, output: 200, totalTokens: 2200 },
+      },
+      { kind: 'compaction.start', phase: 'compaction', reason: 'threshold', willRetry: false },
+      {
+        kind: 'compaction.failed',
+        phase: 'compaction',
+        reason: 'threshold',
+        aborted: false,
+        error: 'Summary request failed token=<redacted>',
+      },
+    ]);
+    expect(JSON.stringify(lifecycle)).not.toContain('private');
   } finally {
     server.stop(true);
   }

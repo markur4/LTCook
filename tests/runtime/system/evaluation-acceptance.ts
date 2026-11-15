@@ -15,9 +15,12 @@ const verificationCalls = new Set<string>();
 const verifiedCalls = new Set<string>();
 const verificationMarker = 'LTCook fixture verified';
 let requests = 0;
+let compactions = 0;
+const assignmentText = new Map<string, string>();
 let semanticRequests = 0;
 let failure: unknown;
 const scenario = process.argv[2] ?? 'behavior';
+const compactionScenario = scenario === 'compaction' || scenario === 'compaction-cancel';
 const controller = new AbortController();
 const server = createServer(async (request, response) => {
   try {
@@ -32,6 +35,7 @@ const server = createServer(async (request, response) => {
     const input = JSON.parse(body) as {
       model: string;
       think?: boolean;
+      tools?: unknown[];
       messages: Array<{ role: string; content: unknown; tool_call_id?: string }>;
     };
     assert.equal(input.model, EVAL_MODEL);
@@ -53,6 +57,26 @@ const server = createServer(async (request, response) => {
       )
         verifiedCalls.add(message.tool_call_id);
     requests++;
+    if (compactionScenario && !input.tools?.length) {
+      compactions++;
+      if (scenario === 'compaction-cancel') {
+        controller.abort();
+        response.destroy();
+        return;
+      }
+      const summary = assignmentText.get(String(request.headers['x-ltcook-member']));
+      assert(summary, 'Compaction must use the same pinned provider/member context');
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      for (const [delta, finish_reason] of [
+        [{ role: 'assistant', content: summary }, null],
+        [{}, 'stop'],
+      ] as const)
+        response.write(
+          `data: ${JSON.stringify({ id: `summary-${requests}`, object: 'chat.completion.chunk', model: EVAL_MODEL, choices: [{ index: 0, delta, finish_reason }] })}\n\n`,
+        );
+      response.end('data: [DONE]\n\n');
+      return;
+    }
     if (scenario === 'cancel' && requests === 5) {
       controller.abort();
       response.destroy();
@@ -60,6 +84,7 @@ const server = createServer(async (request, response) => {
     }
     const latest = [...input.messages].reverse().find((message) => message.role === 'user');
     const text = JSON.stringify(latest?.content);
+    assignmentText.set(String(request.headers['x-ltcook-member']), text);
     const assignmentId = /Assignment ID: ([a-f0-9-]+)/.exec(text)?.[1];
     const taskId = /Task ID: ([a-f0-9-]+)/.exec(text)?.[1];
     assert(assignmentId && taskId, text);
@@ -142,6 +167,11 @@ const server = createServer(async (request, response) => {
       response.write(
         `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: 1, model: EVAL_MODEL, choices: [{ index: 0, delta, finish_reason: reason }] })}\n\n`,
       );
+    if (compactionScenario && requests === 1)
+      send({
+        role: 'assistant',
+        content: 'Discardable context for the maintained compaction boundary. '.repeat(200),
+      });
     if (name) {
       calls.push(name);
       if (name === 'bash' && scenario !== 'bad-verification') verificationCalls.add(id);
@@ -156,6 +186,10 @@ const server = createServer(async (request, response) => {
       send({ role: 'assistant', content: 'Done.' });
       send({}, 'stop');
     }
+    if (compactionScenario && requests === 1)
+      response.write(
+        `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', model: EVAL_MODEL, choices: [], usage: { prompt_tokens: 7000, completion_tokens: 1, total_tokens: 7001 } })}\n\n`,
+      );
     response.end('data: [DONE]\n\n');
   } catch (error) {
     failure = error;
@@ -196,7 +230,14 @@ try {
         ? 'full'
         : scenario === 'audit-error'
           ? 'audit'
-          : ['quick', 'current', 'bad-verification', 'no-delegation'].includes(scenario)
+          : [
+                'quick',
+                'current',
+                'bad-verification',
+                'no-delegation',
+                'compaction',
+                'compaction-cancel',
+              ].includes(scenario)
             ? 'quick'
             : 'behavior',
     setup: scenario === 'current' ? 'current' : 'synthetic',
@@ -243,9 +284,16 @@ try {
       ),
     );
     console.log(JSON.stringify({ result: 'passed', semanticRequests, failureCapture: true }));
-  } else if (scenario === 'cancel') {
+  } else if (scenario === 'cancel' || scenario === 'compaction-cancel') {
     await assert.rejects(engine(input), /abort/i);
-    assert(requests >= 5);
+    if (scenario === 'compaction-cancel') {
+      assert(compactions > 0);
+      assert(checkpoint, 'Cancellation during compaction must preserve partial evidence');
+      const events = (checkpoint.trace as { traceEvents: Array<{ name: string; ph: string }> })
+        .traceEvents;
+      assert(events.some((event) => event.name === 'model.compaction' && event.ph === 'B'));
+      assert(events.some((event) => event.name === 'model.compaction' && event.ph === 'E'));
+    } else assert(requests >= 5);
     console.log(
       JSON.stringify({ result: 'passed', cancellation: 'native model request', requests }),
     );
@@ -285,6 +333,16 @@ try {
         tasks.length * 2,
         'Full execution must reuse a behavior prompt instead of launching another task for capture',
       );
+    }
+    if (scenario === 'compaction') {
+      assert(
+        compactions > 0,
+        'Production Pi must summarize context through the pinned local endpoint',
+      );
+      const events = (result.trace as { traceEvents: Array<{ name: string; ph: string }> })
+        .traceEvents;
+      assert(events.some((event) => event.name === 'model.compaction' && event.ph === 'B'));
+      assert(events.some((event) => event.name === 'model.compaction' && event.ph === 'E'));
     }
     assert(tasks.every((task) => (task as { arm?: string }).arm === 'complete'));
     assert(
