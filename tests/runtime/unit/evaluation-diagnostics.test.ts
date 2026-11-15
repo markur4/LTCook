@@ -18,6 +18,11 @@ import {
 const environment = { ...process.env };
 test('provider JSON errors preserve only the sanitized error reason', () => {
   expect(
+    sanitizeEvaluationText(
+      '500: {"message":"tool parser failed", "type":"server_error", "request":"private"}',
+    ),
+  ).toBe('500: tool parser failed');
+  expect(
     sanitizeEvaluationText('500: {"error":"model stream failed", "request":{"prompt":"private"}}'),
   ).toBe('500: model stream failed');
   expect(

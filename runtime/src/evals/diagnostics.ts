@@ -6,8 +6,8 @@ export function sanitizeEvaluationText(value: string): string {
   if (response) {
     try {
       const parsed: unknown = JSON.parse(response[2]!);
-      if (parsed && typeof parsed === 'object' && 'error' in parsed) {
-        const error = parsed.error;
+      if (parsed && typeof parsed === 'object') {
+        const error = 'error' in parsed ? parsed.error : parsed;
         const reason =
           typeof error === 'string'
             ? error
