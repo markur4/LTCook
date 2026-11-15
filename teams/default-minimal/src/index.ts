@@ -2,15 +2,15 @@ import type { TeamDefinition, TeamMember, TeamPackage } from '@ltcook/runtime/te
 
 const members: readonly TeamMember[] = [
   {
-    key: 'main',
-    name: 'Main',
+    key: 'leader',
+    name: 'Leader',
     lifetime: 'persistent',
     modelAlias: 'smart',
     thinking: 'high',
     readOnly: false,
-    roles: ['coordinator'],
+    roles: ['leader'],
     workTypes: ['design', 'plan.finalize', 'task.execute'],
-    rules: ['rules/main.md'],
+    rules: ['rules/leader.md'],
     skills: [],
   },
   {
@@ -26,16 +26,16 @@ const members: readonly TeamMember[] = [
     skills: [],
   },
 ];
-const resources = ['rules/main.md', 'rules/adjutant.md'] as const;
+const resources = ['rules/leader.md', 'rules/adjutant.md'] as const;
 export const definition: TeamDefinition = {
   id: '@ltcook/team-default-minimal',
   name: 'Default Minimal',
-  coordinatorKey: 'main',
+  leaderKey: 'leader',
   routing: {
-    design: 'main',
+    design: 'leader',
     'plan.prefill': 'adjutant',
-    'plan.finalize': 'main',
-    'task.execute': 'main',
+    'plan.finalize': 'leader',
+    'task.execute': 'leader',
   },
   members,
   resources: resources.map((path) => ({
@@ -47,5 +47,5 @@ export const definition: TeamDefinition = {
   })),
   reviewPolicy: { mode: 'self', reviewerKeys: [], required: false },
 };
-const team: TeamPackage = { apiVersion: 2, definition };
+const team: TeamPackage = { apiVersion: 3, definition };
 export default team;

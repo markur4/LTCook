@@ -1,3 +1,4 @@
+import { TeamRegistry } from '../../../runtime/src/integrations/team-loader.js';
 import { createServer } from 'node:net';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -595,13 +596,13 @@ describe('RuntimeController coordination', () => {
     const agents = new FakeAgents();
     const runtime = createRuntime({ databasePath: ':memory:', team, agents });
     const snapshot = await runtime.openSession({ workspaceRoot: '/workspace' });
-    const mainId = snapshot.members.find((member) => member.member.key === 'main')?.binding
+    const mainId = snapshot.members.find((member) => member.member.key === 'leader')?.binding
       ?.nativeAgentId;
     const adjutantId = snapshot.members.find((member) => member.member.key === 'adjutant')?.binding
       ?.nativeAgentId;
     if (mainId === undefined || mainId === null || adjutantId === undefined || adjutantId === null)
       throw new Error('Expected both bound minimal-team members');
-    const message = { type: 'team.message', memberKey: 'main', message: 'status?' } as const;
+    const message = { type: 'team.message', memberKey: 'leader', message: 'status?' } as const;
     await runtime.execute(
       snapshot.session.id,
       { kind: 'agent', nativeAgentId: adjutantId },
@@ -619,7 +620,7 @@ describe('RuntimeController coordination', () => {
         { kind: 'agent', nativeAgentId: adjutantId },
         { ...message, memberKey: 'adjutant' },
       ),
-    ).rejects.toThrow(/only to the coordinator/);
+    ).rejects.toThrow(/only to the leader/);
     expect(agents.sends).toHaveLength(1);
     await runtime.execute(
       snapshot.session.id,
@@ -632,7 +633,7 @@ describe('RuntimeController coordination', () => {
       { ...message, memberKey: 'adjutant' },
     );
     expect(agents.sends).toHaveLength(3);
-    expect(agents.sends[2]?.message).toBe(`From main (${mainId}): status?`);
+    expect(agents.sends[2]?.message).toBe(`From leader (${mainId}): status?`);
     agents.failSends = true;
     await expect(
       runtime.execute(snapshot.session.id, { kind: 'agent', nativeAgentId: adjutantId }, message),
@@ -688,7 +689,7 @@ describe('RuntimeController coordination', () => {
         { kind: 'agent', nativeAgentId: adjutantId },
         { type: 'team.close', memberKey: 'reviewer-tmp' },
       ),
-    ).rejects.toThrow(/coordinator/);
+    ).rejects.toThrow(/leader/);
     await expect(
       runtime.execute(
         snapshot.session.id,
@@ -908,7 +909,7 @@ describe('authoritative planning workflow', () => {
         runtime.execute(
           id,
           { kind: 'user' },
-          { type: 'assignment.create', taskId: task.id, memberKey: 'main', message: 'Execute' },
+          { type: 'assignment.create', taskId: task.id, memberKey: 'leader', message: 'Execute' },
         ),
       ).rejects.toThrow(/approved Pass/);
       await expect(
@@ -966,7 +967,7 @@ describe('authoritative planning workflow', () => {
     const f = await fixture();
     const id = f.snapshot.session.id;
     try {
-      const main = f.snapshot.members.find((item) => item.member.key === 'main')!.binding!
+      const main = f.snapshot.members.find((item) => item.member.key === 'leader')!.binding!
         .nativeAgentId!;
       const adjutant = f.snapshot.members.find((item) => item.member.key === 'adjutant')!.binding!
         .nativeAgentId!;
@@ -1160,7 +1161,7 @@ describe('authoritative planning workflow', () => {
     }
   });
   test.each([false, true])(
-    'CLI approval persists one Main handoff without replay (uncertain=%s)',
+    'CLI approval persists one Leader handoff without replay (uncertain=%s)',
     async (uncertain) => {
       const f = await fixture();
       await finishStages(f);
@@ -1205,7 +1206,7 @@ describe('authoritative planning workflow', () => {
           (task) => task.requestId === `${record.id}:execution-handoff`,
         )!;
         const assignment = snapshot.assignments.find((item) => item.taskId === scheduling.id)!;
-        const main = f.snapshot.members.find((member) => member.member.key === 'main')!.binding!
+        const main = f.snapshot.members.find((member) => member.member.key === 'leader')!.binding!
           .nativeAgentId!;
         expect(assignment.nativeAgentId).toBe(main);
         expect(assignment.status).toBe(uncertain ? 'uncertain' : 'sent');
@@ -1494,7 +1495,7 @@ describe('authoritative planning workflow', () => {
         { kind: 'user' },
         { type: 'assignment.create', taskId: task.id, message: 'Design' },
       )) as { memberKey: string };
-      expect(assignment.memberKey).toBe('main');
+      expect(assignment.memberKey).toBe('leader');
     } finally {
       await runtime.close();
     }
@@ -1656,6 +1657,42 @@ describe('approved Pass scheduling', () => {
     };
     return { runtime, id, pass, agents, create, release, report, databasePath, directory };
   }
+
+  test('Leader readiness publication completes inside its own scheduled native send', async () => {
+    const f = await fixture(team);
+    try {
+      const task = await f.create('leader-self-assignment', { assigneeKey: 'leader' });
+      let readinessPublications = 0;
+      const originalSend = f.agents.send.bind(f.agents);
+      spyOn(f.agents, 'send').mockImplementation(async (id, message) => {
+        if (message.includes(`Scheduled Task ${task.id}`)) {
+          await f.runtime.execute(
+            f.id,
+            { kind: 'agent', nativeAgentId: id },
+            {
+              type: 'guidance.loaded',
+              inspection: { resources: [], diagnostics: [] },
+              waitUntilReady: true,
+            },
+          );
+          readinessPublications += 1;
+        }
+        await originalSend(id, message);
+      });
+      await f.release();
+      expect(readinessPublications).toBe(1);
+      expect(
+        f.runtime.snapshot(f.id).assignments.find((assignment) => assignment.taskId === task.id)
+          ?.status,
+      ).toBe('sent');
+      await f.report(task.id);
+      expect(f.runtime.snapshot(f.id).tasks.find((entry) => entry.id === task.id)?.status).toBe(
+        'completed',
+      );
+    } finally {
+      await f.runtime.close();
+    }
+  });
 
   test('registration barrier, stable parallel dispatch, same-member serialization and dependencies', async () => {
     const f = await fixture();
@@ -2097,4 +2134,352 @@ describe('approved Pass scheduling', () => {
       await minimal.runtime.close();
     }
   });
+});
+
+test('one runtime isolates multiple Teams and Sessions while adopting native Leaders idempotently', async () => {
+  const agents = new FakeAgents();
+  const runtime = createRuntime({
+    databasePath: ':memory:',
+    team,
+    teams: new TeamRegistry([team, defaultTeam]),
+    agents,
+  });
+  try {
+    const first = await runtime.openSession({
+      id: 'first',
+      workspaceRoot: '/workspace',
+      teamSelection: team.definition.id,
+      leaderAgentId: 'first',
+    });
+    const second = await runtime.openSession({
+      id: 'second',
+      workspaceRoot: '/workspace',
+      teamSelection: defaultTeam.definition.id,
+      leaderAgentId: 'second',
+    });
+    const third = await runtime.openSession({
+      id: 'third',
+      workspaceRoot: '/workspace',
+      teamSelection: team.definition.id,
+      leaderAgentId: 'third',
+    });
+    expect(first.session.teamInstanceId).toBe(third.session.teamInstanceId);
+    expect(first.session.teamInstanceId).not.toBe(second.session.teamInstanceId);
+    expect(first.definition.id).toBe(team.definition.id);
+    expect(second.definition.id).toBe(defaultTeam.definition.id);
+    expect(agents.creates).toBe(0);
+    expect(runtime.listSessions('/workspace')).toHaveLength(3);
+    expect(runtime.listSessions('/workspace', team.definition.id)).toHaveLength(2);
+    await runtime.openSession({
+      id: 'first',
+      workspaceRoot: '/workspace',
+      teamSelection: team.definition.id,
+      leaderAgentId: 'first',
+    });
+    await expect(
+      runtime.openSession({
+        id: 'first',
+        workspaceRoot: '/workspace',
+        teamSelection: defaultTeam.definition.id,
+        leaderAgentId: 'first',
+      }),
+    ).rejects.toThrow('immutable');
+    await expect(
+      runtime.openSession({ id: 'first', workspaceRoot: '/elsewhere', leaderAgentId: 'first' }),
+    ).rejects.toThrow('workspace');
+    await expect(
+      runtime.openSession({
+        id: 'bad',
+        workspaceRoot: '/workspace',
+        teamSelection: team.definition.id,
+        leaderAgentId: 'other',
+      }),
+    ).rejects.toThrow('Leader ID');
+    expect(runtime.listSessions('/workspace')).toHaveLength(3);
+    await expect(
+      runtime.execute(
+        'first',
+        { kind: 'agent', nativeAgentId: 'second' },
+        { type: 'guidance.loaded', inspection: { resources: [], diagnostics: [] } },
+      ),
+    ).rejects.toThrow();
+    expect(agents.creates).toBe(0);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('adoption returns before startup, then reconciles one child and resumes without duplicate creation', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ltcook-adoption-'));
+  temporaryDirectories.push(directory);
+  const databasePath = join(directory, 'coordination.sqlite');
+  const agents = new FakeAgents();
+  agents.agents.set('native-leader', { id: 'native-leader', status: 'idle' });
+  agents.createGate = new Gate();
+  let runtime = createRuntime({ databasePath, team, agents });
+  const open = {
+    id: 'native-leader',
+    workspaceRoot: '/workspace',
+    teamSelection: team.definition.id,
+    leaderAgentId: 'native-leader',
+  };
+  try {
+    await runtime.openSession(open);
+    expect(agents.creates).toBe(0);
+    await runtime.execute(
+      open.id,
+      { kind: 'agent', nativeAgentId: open.id },
+      { type: 'guidance.loaded', inspection: { resources: [], diagnostics: [] } },
+    );
+    await agents.createStarted.wait();
+    expect(agents.creates).toBe(1);
+    agents.createGate.resolve();
+    await runtime.openSession({ id: open.id, workspaceRoot: open.workspaceRoot });
+    expect(
+      runtime.snapshot(open.id).members.every((member) => member.binding?.state === 'bound'),
+    ).toBe(true);
+    await runtime.close();
+    runtime = createRuntime({ databasePath, team, agents });
+    const resumed = await runtime.openSession(open);
+    expect(
+      resumed.members.find((member) => member.member.key === 'leader')?.binding?.nativeAgentId,
+    ).toBe(open.id);
+    await runtime.openSession({ id: open.id, workspaceRoot: open.workspaceRoot });
+    expect(agents.creates).toBe(1);
+  } finally {
+    agents.createGate.resolve();
+    await runtime.close();
+  }
+});
+
+test('catalog, list, adoption and preparation APIs enforce explicit authenticated Session identity', async () => {
+  const agents = new FakeAgents();
+  const directory = mkdtempSync(join(tmpdir(), 'ltcook-history-'));
+  temporaryDirectories.push(directory);
+  const options = {
+    databasePath: join(directory, 'coordination.sqlite'),
+    team,
+    teams: new TeamRegistry([team, defaultTeam]),
+    agents,
+  };
+  let runtime = createRuntime(options);
+  const socket = createServer();
+  await new Promise<void>((resolve) => socket.listen(0, '127.0.0.1', resolve));
+  const address = socket.address();
+  if (!address || typeof address === 'string') throw new Error('Missing fixture address');
+  await new Promise<void>((resolve, reject) =>
+    socket.close((error) => (error ? reject(error) : resolve())),
+  );
+  let api = new RuntimeApi(runtime, 'local-user-secret', `127.0.0.1:${address.port}`);
+  api.setOpenWorkspaceHandler((request) =>
+    runtime.openSession({
+      id: request.sessionId,
+      workspaceRoot: request.workspaceRoot,
+      teamSelection: request.teamSelection,
+      leaderAgentId: request.leaderAgentId,
+    }),
+  );
+  let preparations = 0;
+  api.setPrepareSessionHandler(async () => {
+    preparations++;
+    return { env: { LTCOOK_AGENT_API_TOKEN: 'scoped-agent-secret' } };
+  });
+  const endpoint = await api.listen();
+  const post = (route: string, input: unknown, token = 'local-user-secret') =>
+    fetch(`${endpoint}/v1/${route}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+  const identity = {
+    sessionId: 'api-leader',
+    leaderAgentId: 'api-leader',
+    workspaceRoot: '/workspace',
+    teamSelection: team.definition.id,
+  };
+  try {
+    expect((await post('team/catalog', {}, 'wrong-token')).status).toBe(401);
+    expect(
+      ((await (await post('team/catalog', {})).json()) as { teams: unknown[] }).teams,
+    ).toHaveLength(2);
+    const opened = await post('session/open', identity);
+    expect(opened.status).toBe(200);
+    const safe = await opened.text();
+    expect(safe).not.toContain('secret');
+    expect(JSON.parse(safe).leaderAgentId).toBe(identity.leaderAgentId);
+    expect(
+      (await post('session/open', { ...identity, teamSelection: defaultTeam.definition.id }))
+        .status,
+    ).toBe(400);
+    expect((await post('session/prepare', { ...identity, workspaceRoot: '/other' })).status).toBe(
+      400,
+    );
+    expect(preparations).toBe(0);
+    expect((await post('session/prepare', identity)).status).toBe(200);
+    expect(preparations).toBe(1);
+    expect(
+      (
+        (await (await post('session/list', { workspaceRoot: '/workspace' })).json()) as {
+          sessions: unknown[];
+        }
+      ).sessions,
+    ).toHaveLength(1);
+    expect((await post('snapshot', { workspaceRoot: '/workspace' })).status).toBe(404);
+    expect(
+      (await post('snapshot', { sessionId: identity.sessionId, workspaceRoot: '/other' })).status,
+    ).toBe(400);
+    expect(
+      (await post('snapshot', { sessionId: identity.sessionId, workspaceRoot: '/workspace' }))
+        .status,
+    ).toBe(200);
+    const sessionOnly = await post('snapshot', { sessionId: identity.sessionId });
+    expect(sessionOnly.status).toBe(200);
+    expect(((await sessionOnly.json()) as { session: { id: string } }).session.id).toBe(
+      identity.sessionId,
+    );
+    expect((await post('snapshot', { sessionId: 'unknown-session' })).status).toBe(400);
+    agents.failNextCreateAfterSideEffect = true;
+    const unresolved = await runtime.openSession({ workspaceRoot: '/workspace' });
+    const listed = (await (await post('session/list', { workspaceRoot: '/workspace' })).json()) as {
+      sessions: Array<{ sessionId: string; leaderAgentId: string | null; blocker?: string }>;
+    };
+    expect(
+      listed.sessions.find((session) => session.sessionId === unresolved.session.id),
+    ).toMatchObject({
+      leaderAgentId: null,
+      blocker: expect.stringContaining('Native create may have succeeded'),
+    });
+    const cli = await runtime.openSession({ workspaceRoot: '/cli-workspace' });
+    const cliLeader = cli.members.find((member) => member.member.key === 'leader')?.binding
+      ?.nativeAgentId;
+    expect(cliLeader).toBeDefined();
+    const removedTeam = await runtime.openSession({
+      id: 'removed-team-leader',
+      leaderAgentId: 'removed-team-leader',
+      workspaceRoot: '/workspace',
+      teamSelection: defaultTeam.definition.id,
+    });
+    const creationsBeforeRecovery = agents.creates;
+    await api.close();
+    const saved = runtime.snapshot(identity.sessionId);
+    await runtime.close();
+    runtime = createRuntime({ ...options, teams: new TeamRegistry([team]) });
+    api = new RuntimeApi(runtime, 'local-user-secret', `127.0.0.1:${address.port}`);
+    await api.listen();
+    expect((await post('snapshot', { sessionId: identity.sessionId })).status).toBe(400);
+    expect((await post('snapshot', identity, 'wrong-token')).status).toBe(401);
+    for (const changed of [
+      { workspaceRoot: '/other' },
+      { teamSelection: defaultTeam.definition.id },
+      { leaderAgentId: 'other-leader' },
+      { sessionId: 'unknown-session', leaderAgentId: 'unknown-session' },
+    ])
+      expect((await post('snapshot', { ...identity, ...changed })).status).toBe(400);
+    const recovered = await post('snapshot', identity);
+    expect(recovered.status).toBe(200);
+    const recoveredSnapshot = (await recovered.json()) as typeof saved & {
+      session: { _metadata?: { duration?: number } };
+    };
+    // > AppRC read timing is incidental; retain exact equality for all saved coordination data.
+    if (recoveredSnapshot.session._metadata?.duration !== undefined) {
+      delete recoveredSnapshot.session._metadata.duration;
+      if (Object.keys(recoveredSnapshot.session._metadata).length === 0)
+        delete recoveredSnapshot.session._metadata;
+    }
+    expect(recoveredSnapshot).toEqual(JSON.parse(JSON.stringify(saved)));
+    const mixedList = await post('session/list', { workspaceRoot: '/workspace' });
+    expect(mixedList.status).toBe(200);
+    const mixed = (await mixedList.json()) as {
+      sessions: Array<{
+        sessionId: string;
+        teamId: string;
+        leaderAgentId: string | null;
+        blocker?: string;
+      }>;
+    };
+    expect(
+      mixed.sessions.find((session) => session.sessionId === identity.sessionId),
+    ).toMatchObject({
+      teamId: identity.teamSelection,
+      leaderAgentId: identity.leaderAgentId,
+    });
+    expect(
+      mixed.sessions.find((session) => session.sessionId === removedTeam.session.id),
+    ).toMatchObject({
+      teamId: defaultTeam.definition.id,
+      leaderAgentId: null,
+      blocker: expect.stringContaining(
+        `Saved Team ${defaultTeam.definition.id} is unavailable or invalid`,
+      ),
+    });
+    expect(() => runtime.snapshot(removedTeam.session.id)).toThrow('unavailable or invalid');
+    expect(
+      runtime.listSessions('/workspace').find((session) => session.id === removedTeam.session.id)
+        ?.teamId,
+    ).toBe(defaultTeam.definition.id);
+    const cliHistory = await post('snapshot', {
+      sessionId: cli.session.id,
+      leaderAgentId: cliLeader,
+      workspaceRoot: cli.session.workspaceRoot,
+      teamSelection: cli.session.teamId,
+    });
+    expect(cliHistory.status).toBe(200);
+    expect(((await cliHistory.json()) as { session: { id: string } }).session.id).toBe(
+      cli.session.id,
+    );
+    // > Read-only history recovery must not grant active Session command access.
+    expect((await post('snapshot', { sessionId: identity.sessionId })).status).toBe(400);
+    expect(
+      (
+        await post('command', {
+          sessionId: identity.sessionId,
+          command: { type: 'pass.create', title: 'must stay inactive' },
+        })
+      ).status,
+    ).toBe(403);
+    expect(runtime.snapshot(identity.sessionId).passes).toHaveLength(0);
+    api.setSession(identity.workspaceRoot, identity.sessionId);
+    expect((await post('snapshot', { sessionId: identity.sessionId })).status).toBe(200);
+    expect(
+      (await post('snapshot', { sessionId: identity.sessionId, workspaceRoot: '/other' })).status,
+    ).toBe(400);
+    expect(agents.creates).toBe(creationsBeforeRecovery);
+  } finally {
+    await api.close();
+    await runtime.close();
+  }
+});
+
+test('registry loads only known local Teams and validates nested contracts before starting agents', async () => {
+  const registry = await TeamRegistry.load();
+  expect(registry.resolve('default').definition.id).toBe(defaultTeam.definition.id);
+  expect(registry.resolve('default-minimal').definition.id).toBe(team.definition.id);
+  expect(registry.catalog().every((entry) => entry.status === 'installed')).toBe(true);
+  expect(() => registry.resolve('arbitrary-browser-package')).toThrow('unavailable');
+  expect(
+    () =>
+      new TeamRegistry([
+        {
+          ...team,
+          definition: {
+            ...team.definition,
+            members: team.definition.members.map((member) => ({ ...member, readOnly: 'false' })),
+          },
+        } as unknown as typeof team,
+      ]),
+  ).toThrow();
+  const runtime = createRuntime({
+    databasePath: ':memory:',
+    teams: new TeamRegistry(),
+    agents: new FakeAgents(),
+  });
+  try {
+    expect(runtime.teamCatalog()).toEqual([]);
+    await expect(runtime.openSession({ workspaceRoot: '/workspace' })).rejects.toThrow(
+      'unavailable',
+    );
+    expect(runtime.listSessions('/workspace')).toEqual([]);
+  } finally {
+    await runtime.close();
+  }
 });

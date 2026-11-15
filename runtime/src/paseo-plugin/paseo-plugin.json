@@ -1,1 +1,1 @@
-{"id":"ltcook-team","name":"LTCook team status","description":"Selected team coordination snapshot","requirements":{"paseo":">=0.15.4"}}
+{"id":"ltcook-team","name":"LTCook team status","description":"Selected team coordination snapshot","requirements":{"paseo":">=0.16.0-beta.2"}}

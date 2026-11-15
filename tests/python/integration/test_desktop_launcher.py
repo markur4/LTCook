@@ -198,7 +198,6 @@ def test_concurrent_cli_attach_detach_incremental_logs_and_explicit_stop(tmp_pat
         assert browser_urls == [f"http://{status.paseo_listen}/"] * 2
         for key, value in (
             ("LTCOOK_API_TOKEN", "wrong-token"),
-            ("LTCOOK_TEAM", "different-team"),
             ("LTCOOK_DATABASE", str(tmp_path / "other.sqlite")),
             ("LTCOOK_DEPLOYMENT_DIR", str(tmp_path / "other-deployment")),
         ):

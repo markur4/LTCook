@@ -4,20 +4,38 @@ import { panelSnapshot } from '../../../runtime/src/paseo-plugin/shared/panel-sn
 describe('Paseo panel snapshot', () => {
   test('projects readable work titles and ordered Steps without private work content', () => {
     const input = {
-      session: { teamId: 'team' },
-      definition: { name: 'Test team' },
+      session: {
+        id: 'native-leader',
+        teamId: 'team',
+        teamInstanceId: 'team-instance-id',
+        workspaceRoot: '/project',
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+      definition: { name: 'Test team', leaderKey: 'leader' },
       members: [
         {
           member: {
-            key: 'main',
-            name: 'Main',
+            key: 'leader',
+            name: 'Leader',
             modelAlias: 'smart',
             thinking: 'high',
             readOnly: false,
             lifetime: 'persistent' as const,
           },
-          binding: { nativeAgentId: 'native-main' },
+          binding: { nativeAgentId: 'native-leader', state: 'bound' as const },
           nativeStatus: 'idle',
+        },
+        {
+          member: {
+            key: 'adjutant',
+            name: 'Adjutant',
+            modelAlias: 'smol',
+            thinking: 'medium',
+            readOnly: true,
+            lifetime: 'temporary' as const,
+          },
+          binding: { nativeAgentId: 'native-adjutant', state: 'closed' as const },
+          nativeStatus: 'closed',
         },
       ],
       passes: [
@@ -69,7 +87,7 @@ describe('Paseo panel snapshot', () => {
         {
           id: 'assignment-1',
           taskId: 'task-1',
-          memberKey: 'main',
+          memberKey: 'leader',
           status: 'sent' as const,
           handoff: 'PRIVATE_HANDOFF',
         },
@@ -78,14 +96,22 @@ describe('Paseo panel snapshot', () => {
     };
     const snapshot = panelSnapshot(input);
 
-    expect(snapshot.members[0]?.name).toBe('Main');
+    expect(snapshot.sessionId).toBe('native-leader');
+    expect(snapshot.leaderKey).toBe('leader');
+    expect(snapshot.members[0]?.name).toBe('Leader');
+    expect(snapshot.members[0]?.nativeAgentId).toBe('native-leader');
+    expect(snapshot.members[1]).toMatchObject({
+      memberKey: 'adjutant',
+      nativeAgentId: null,
+      status: 'closed',
+    });
     expect(snapshot.assignments).toEqual([
       {
         assignmentId: 'assignment-1',
         taskId: 'task-1',
         taskTitle: 'Integrate runtime',
-        memberName: 'Main',
-        memberKey: 'main',
+        memberName: 'Leader',
+        memberKey: 'leader',
         status: 'sent',
       },
     ]);
@@ -135,5 +161,6 @@ describe('Paseo panel snapshot', () => {
       expect(projected).not.toContain(privateValue);
     }
     expect(snapshot.issues).toContain('Coordination blockers: 1');
+    expect(snapshot.issues).not.toContain('Members without a native agent: 1');
   });
 });

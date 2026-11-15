@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { NativeGuidance, NativeGuidanceError, coreGuidanceDirectory } from './native-guidance.js';
-import { selectedTeam } from './team-loader.js';
+import { loadTeam } from './team-loader.js';
 import { Console } from 'node:console';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -158,7 +158,7 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
   }) => {
     const guidance = managed
       ? new NativeGuidance(
-          await selectedTeam(process.env.LTCOOK_TEAM ?? ''),
+          await loadTeam(process.env.LTCOOK_TEAM ?? ''),
           process.env.LTCOOK_MEMBER_KEY ?? '',
           process.env.LTCOOK_GUIDANCE_DIR ??
             (() => {

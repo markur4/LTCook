@@ -40,24 +40,10 @@ export function currentAssignments(snapshot: TeamStatusSnapshot, memberKey?: str
   );
 }
 export function acceptPanelResponse(
-  currentRoot: string,
+  currentSessionId: string,
   currentVersion: number,
-  responseRoot: string,
+  responseSessionId: string,
   responseVersion: number,
 ): boolean {
-  return currentRoot === responseRoot && currentVersion === responseVersion;
-}
-export function completeSessionOpen(
-  pendingRoots: ReadonlySet<string>,
-  openedRoot: string,
-  selectedRoot: string | undefined,
-  mounted: boolean,
-  succeeded: boolean,
-): { pendingRoots: ReadonlySet<string>; refreshRoot: string | null } {
-  const pending = new Set(pendingRoots);
-  pending.delete(openedRoot);
-  return {
-    pendingRoots: pending,
-    refreshRoot: succeeded && mounted && selectedRoot === openedRoot ? openedRoot : null,
-  };
+  return currentSessionId === responseSessionId && currentVersion === responseVersion;
 }

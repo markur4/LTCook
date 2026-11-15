@@ -209,9 +209,10 @@ The TypeScript host connects native agent operations to the
 resolution separate from scheduling and coordination.
 
 Starting the server without a project opens only Paseo and the local runtime
-API. A user explicitly opens a project from the terminal or **Start session** in
-the Paseo panel. Selecting a directory or viewing the panel alone does not
-initialize a Session or create agents.
+API. A user explicitly opens a project from the terminal or submits the native
+**+ → LTCook → Team** composer. The Paseo-created agent is adopted as the
+Leader, and supporting Pi agents use its native parent relationship. Selecting
+a directory or viewing the Team panel alone does not create agents.
 
 ## Pi authentication
 
@@ -266,16 +267,16 @@ running system. These classifications do not grant approval or bypass review.
 
 ## Interchangeable teams
 
-Each team exports `apiVersion: 2`, `definition` and optionally `selectAssignee`
+Each team exports `apiVersion: 3`, `definition` and optionally `selectAssignee`
 through the [public Team API](../runtime/src/team-api/index.ts).
 The host loads the selected package and uses its definition, not fixed role
 names or a fixed member count.
 
 The [default team](../teams/default) declares six persistent members and four
 explicitly temporary specialist variants. The
-[minimal team](../teams/default-minimal) declares exactly Main and Adjutant.
-Main performs absent specialists' work in the minimal team; self-inspection is
-not labelled an independent review. Team selection stays fixed for a runtime.
+[minimal team](../teams/default-minimal) declares exactly Leader and Adjutant.
+Leader performs absent specialists' work in the minimal team; self-inspection is
+not labelled an independent review. Team selection stays fixed for each Session; multiple Teams can share one runtime.
 
 ## Guidance and planning
 
@@ -287,11 +288,11 @@ Core guidance and execution guards cannot be disabled by optional resource flags
 The [guidance inspector](References.md#guidance-api) reports sources, applicability,
 conflicts and actual loading rather than assuming that discovered means loaded.
 
-Core owns the planning sequence: Adjutant prefills, Main investigates and finalizes,
+Core owns the planning sequence: Adjutant prefills, Leader investigates and finalizes,
 then the user approves. Teams declare eligible members, default routes and an
 optional selection hook. The hook receives work context and eligible members; it
 cannot answer user questions, approve execution or operate a second scheduler.
-Main registers execution Tasks; the runtime schedules eligible work after Main
+Leader registers execution Tasks; the runtime schedules eligible work after Leader
 completes the post-approval registration handoff. Both bundled Teams preserve their
 existing member models, lifetimes, read-only settings and review policy.
 
@@ -351,13 +352,13 @@ change only while pending and unassigned. Self, cyclic, and cross-Pass edges are
 rejected. The scheduler serializes dispatch decisions per Session and permits
 parallel work across members, with one active assignment per member. Routing
 choices and assignments persist before native sends; temporary members still
-require Main's explicit spawn.
+require Leader's explicit spawn.
 
 A successful result completes a Task only when dependencies, required passed
 verification entries with evidence, and exact user approvals hold. The runtime
 validates the recorded structure and declared outcomes; it does not establish
 whether an agent's technical conclusion is true. Failed prerequisites block
-dependents. A linked correction followed by Main's explicit retry creates a new
+dependents. A linked correction followed by Leader's explicit retry creates a new
 attempt at the original Task. Identical duplicate requests, results, retries, and
 review responses are idempotent; conflicting repeats fail.
 
@@ -373,7 +374,7 @@ Recovery reconciles saved bindings with native agents before dispatching work.
 An uncertain external outcome is a blocker, not permission to resend an action.
 A restart does not mint approvals or silently replace the selected team.
 
-Coordination schema version 3 is a prototype breaking replacement. The runtime
+Coordination schema version 4 is a prototype breaking replacement. The runtime
 creates its schema only in a new empty store and rejects incompatible
 databases before modifying them. Preserve an old database and explicitly select a
 fresh `runtime.database` under AppRC state. No conversion, compatibility layer or
