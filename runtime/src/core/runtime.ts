@@ -25,7 +25,7 @@ import { RiedService, type RiedRequest } from '../ried.js';
 
 type RuntimeOptions = {
   databasePath: string;
-  team: TeamPackage;
+  team?: TeamPackage;
   teams?: TeamRegistry;
   agents: AgentBackend;
   stateDirectory?: string;
@@ -45,7 +45,7 @@ export class RuntimeController implements RuntimeControllerContract {
   private readonly evaluationSessionId: string | undefined;
   private readonly evaluationToolBudget: number;
   private evaluationToolCalls = 0;
-  private readonly defaultTeam: TeamPackage;
+  private readonly defaultTeam: TeamPackage | undefined;
   private readonly teams: TeamRegistry;
   private readonly agents: AgentBackend;
   private readonly onEvent: (event: RuntimeEvent) => void;
@@ -58,23 +58,12 @@ export class RuntimeController implements RuntimeControllerContract {
   private readonly initializingSessions = new Map<string, Promise<void>>();
   private readonly scheduling = new Map<string, Promise<void>>();
   constructor(options: RuntimeOptions) {
-    if (options.team.apiVersion !== 3)
-      throw new Error(`Unsupported team API version ${String(options.team.apiVersion)}`);
     this.defaultTeam = options.team;
-    this.teams = options.teams ?? new TeamRegistry([options.team]);
+    this.teams = options.teams ?? new TeamRegistry(options.team ? [options.team] : []);
     this.evaluationSessionId = options.evaluation?.sessionId;
     this.evaluationToolBudget = options.evaluation?.toolBudget ?? 64;
     this.agents = options.agents;
     this.onEvent = options.onEvent ?? (() => undefined);
-    for (const type of ['design', 'plan.prefill', 'plan.finalize', 'task.execute'] as const) {
-      const key = this.defaultTeam.definition.routing[type];
-      if (
-        !this.defaultTeam.definition.members.some(
-          (member) => member.key === key && member.workTypes.includes(type),
-        )
-      )
-        throw new Error(`Invalid routing for ${type}`);
-    }
     this.store = new CoordinationStore(options.databasePath);
     this.riedService = options.ried;
     this.planning = new PlanningWorkflow(this.store, {
@@ -148,7 +137,9 @@ export class RuntimeController implements RuntimeControllerContract {
       throw new Error('Evaluation controllers accept only their disposable Session');
     if (input.leaderAgentId && input.id !== input.leaderAgentId)
       throw new Error('Session ID must equal its adopted Leader ID');
-    const selected = this.teams.resolve(input.teamSelection ?? this.defaultTeam.definition.id);
+    const selected = this.teams.resolve(
+      input.teamSelection ?? this.defaultTeam?.definition.id ?? '',
+    );
     const session =
       input.id === undefined
         ? this.store.createSession({

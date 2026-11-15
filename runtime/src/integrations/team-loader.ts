@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 import type { TeamPackage } from '../team-api/index.js';
 
 export interface TeamCatalogEntry {
@@ -16,21 +17,58 @@ export interface TeamCatalogEntry {
   temporaryMembers: number;
 }
 
+const strings = z.array(z.string().min(1));
+const workType = z.enum(['design', 'plan.prefill', 'plan.finalize', 'task.execute']);
+const packageSchema = z.object({
+  apiVersion: z.literal(3),
+  definition: z.object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    leaderKey: z.literal('leader'),
+    members: z.array(
+      z.object({
+        key: z.string().min(1),
+        name: z.string().min(1),
+        lifetime: z.enum(['persistent', 'temporary']),
+        modelAlias: z.enum(['smart', 'smol', 'plan']),
+        thinking: z.string(),
+        readOnly: z.boolean(),
+        roles: strings,
+        workTypes: z.array(workType),
+        rules: strings,
+        skills: strings,
+      }),
+    ),
+    resources: z.array(
+      z.object({
+        path: z.string().min(1),
+        url: z.string().min(1),
+        kind: z.enum(['rule', 'skill']),
+        required: z.boolean().optional(),
+        scope: z.enum(['core', 'team', 'project', 'user']).optional(),
+      }),
+    ),
+    routing: z.object({
+      design: z.string(),
+      'plan.prefill': z.string(),
+      'plan.finalize': z.string(),
+      'task.execute': z.string(),
+    }),
+    reviewPolicy: z.object({
+      mode: z.enum(['independent', 'self']),
+      reviewerKeys: strings,
+      required: z.boolean(),
+    }),
+  }),
+  selectAssignee: z
+    .custom<NonNullable<TeamPackage['selectAssignee']>>((value) => typeof value === 'function')
+    .optional(),
+});
+
 /** Validate managed application modules before admitting them to the runtime. */
 export function validateTeam(value: unknown): TeamPackage {
-  if (!value || typeof value !== 'object' || !('apiVersion' in value) || value.apiVersion !== 3)
-    throw new Error('Team package must export apiVersion 3; rebuild or reinstall the Team');
-  const team = value as TeamPackage;
+  const team: TeamPackage = packageSchema.parse(value);
   const definition = team.definition;
-  if (
-    !definition ||
-    typeof definition.id !== 'string' ||
-    !definition.id ||
-    typeof definition.name !== 'string' ||
-    !Array.isArray(definition.members) ||
-    definition.leaderKey !== 'leader'
-  )
-    throw new Error('Invalid Team definition or Leader identity');
   const keys = new Set(definition.members.map((member) => member.key));
   const leader = definition.members.find((member) => member.key === definition.leaderKey);
   if (
@@ -63,9 +101,7 @@ export class TeamRegistry {
   private register(selection: string, value: unknown, description = ''): void {
     const team = validateTeam(value);
     if (
-      [...this.packages.values()].some(
-        (existing) => existing.definition.id === team.definition.id && existing !== team,
-      )
+      [...this.packages.values()].some((existing) => existing.definition.id === team.definition.id)
     )
       throw new Error(`Duplicate Team identity: ${team.definition.id}`);
     this.packages.set(selection, team);
@@ -115,7 +151,10 @@ export class TeamRegistry {
             ? manifest.description
             : '';
         const loaded = (await import(teamId)) as { default?: unknown };
-        registry.register(selection, loaded.default, description);
+        const team = validateTeam(loaded.default);
+        if (team.definition.id !== teamId)
+          throw new Error('Team identity does not match its local package name');
+        registry.register(selection, team, description);
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'Team package could not be loaded';
         const missing =
