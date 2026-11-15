@@ -34,14 +34,9 @@ export const PanelSnapshotSourceSchema = z.object({
 });
 export type PanelSnapshotSource = z.infer<typeof PanelSnapshotSourceSchema>;
 
-export const TeamSnapshotRequestSchema = z.object({ workspaceRoot: z.string().min(1) });
-export const SessionOpenRequestSchema = z.object({ workspaceRoot: z.string().min(1) });
-export const SessionOpenResponseSchema = z.object({
-  sessionId: z.string().min(1),
-  workspaceRoot: z.string().min(1),
-});
-
-export type SessionOpenRequest = z.infer<typeof SessionOpenRequestSchema>;
+export const TeamSnapshotRequestSchema = z.object({ sessionId: z.string().min(1) });
+export { SessionOpenRequestSchema, SessionOpenResponseSchema } from './team-catalog';
+export type { SessionOpenRequest } from './team-catalog';
 
 const nativeStatuses = [
   'initializing',
