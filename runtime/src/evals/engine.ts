@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
-import { selectedTeam } from '../integrations/team-loader.js';
+import { loadTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import { NativeGuidance } from '../integrations/native-guidance.js';
 import type { EvalEngine } from './service.js';
@@ -49,7 +49,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         workspaceRoot,
         teamSelection: options.teamSelection ?? process.env.LTCOOK_TEAM ?? 'default-minimal',
       });
-    const team = await selectedTeam(context.teamSelection);
+    const team = await loadTeam(context.teamSelection);
     const appRoot = options.appRoot ?? path.resolve(options.resources, '../..');
     const endpoint = options.endpoint ?? ENDPOINT;
     const metadata = {
@@ -350,7 +350,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
 
 /** Native resource parsing and guidance composition without a model or executable extensions. */
 async function staticAudit(input: {
-  team: Awaited<ReturnType<typeof selectedTeam>>;
+  team: Awaited<ReturnType<typeof loadTeam>>;
   workspace: string;
   guidance: string;
   resources: string;

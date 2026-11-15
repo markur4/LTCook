@@ -15,8 +15,7 @@ Examples describe declared interfaces; they have not been run as part of this do
 
 # Choose a bundled team and workspace
 
-From an installed environment, select a team for this process and launch it in
-a workspace directory:
+From an installed environment, open Paseo, then choose a Team for a Session:
 
 To open the UI before choosing a project:
 
@@ -24,19 +23,20 @@ To open the UI before choosing a project:
 ltcook launch runtime
 ```
 
-Select a project directory in Paseo and use **Start session** in the LTCook panel,
-or open the existing directory explicitly from the terminal:
+Use **+ → LTCook → Team** and send a message to open the Leader chat.
+Alternatively, choose the CLI creation default and open an existing directory:
 
 ```shell
 LTCOOK_TEAM=default-minimal ltcook launch runtime --workspace /path/to/project
 ```
 
-`default-minimal` is the default and contains only Main and Adjutant. Select the
+`default-minimal` is the CLI creation default and contains only Leader and Adjutant.
+The GUI composer defaults to installed `default`. Select the
 full bundled team with `LTCOOK_TEAM=default`. The full team includes six persistent
 members and four explicitly temporary variants; a temporary member must be
 spawned explicitly before assignment. Team aliases resolve to the bundled modules.
-An installed third-party module can also be selected by its resolvable module
-specifier, provided it exports the fresh public `apiVersion: 2` contract.
+Additional Teams belong in managed `teams/` workspaces with locked dependencies,
+built assets, and a valid public `apiVersion: 3` export.
 
 The shell override applies only to this command. Save a user selection through
 AppRC instead:
@@ -89,13 +89,14 @@ conversations and agent bindings.
 
 Only one TypeScript runtime owns a coordination database. A later launch command
 contacts the running runtime to open the workspace session instead of starting a
-second owner. If no owner is running, it starts a runtime for the selected team.
+second owner. If no owner is running, it starts the shared runtime. Team selection belongs to
+the requested Session, not the daemon.
 
 <br>
 
 # Select an assignee through Team API
 
-A separately installed Team package can reuse the minimal definition and provide
+A managed local Team package can reuse the minimal definition and provide
 one selection hook. This illustrative module changes Team identity and chooses
 from the members Core declares eligible for the requested work:
 
@@ -104,10 +105,10 @@ import base from '@ltcook/team-default-minimal';
 import type { TeamPackage } from '@ltcook/runtime/team-api';
 
 const team: TeamPackage = {
-  apiVersion: 2,
+  apiVersion: 3,
   definition: { ...base.definition, id: 'my-team', name: 'My team' },
   selectAssignee(context, eligible) {
-    const preferred = context.workType === 'plan.prefill' ? 'adjutant' : 'main';
+    const preferred = context.workType === 'plan.prefill' ? 'adjutant' : 'leader';
     const selected = eligible.find((member) => member.key === preferred);
     if (!selected) throw new Error(`No eligible member for ${context.workType}`);
     return selected.key;
@@ -118,7 +119,7 @@ export default team;
 
 Core validates the returned member key and persists the assignment before dispatch.
 The hook has no runtime handle or approval authority. Omitting the hook uses the
-Team's declared `routing`. Main still schedules execution Tasks through workflow
+Team's declared `routing`. Leader still schedules execution Tasks through workflow
 commands after Plan approval. See [Team API](References.md#team-api).
 
 <br>

@@ -17,7 +17,8 @@ LTCook connects Pi agents and interchangeable teams to Paseo. Install from a
 checkout using the [installation guide](How-To-User-Guides.md#install-from-a-checkout),
 then run `ltcook launch runtime` to open the idle server/UI. Before starting
 agents, choose models in AppRC and [authenticate through Pi](How-To-User-Guides.md#authenticate-with-pi).
-The application defaults to the two-member `default-minimal` team. The
+CLI Session creation defaults to the two-member `default-minimal` Team; the
+Paseo composer defaults to installed `default`. The
 [team-selection guide](How-To-User-Guides.md#select-a-team-and-resume-a-session)
 shows how to choose a team and open an existing project directory; registration
 and workspace markers are optional.
