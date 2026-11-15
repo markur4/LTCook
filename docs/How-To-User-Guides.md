@@ -440,18 +440,18 @@ ltcook guidance inspect --session SESSION
 ltcook guidance inspect --session SESSION --agent NATIVE_AGENT_ID
 ```
 
+Personal writing, language/frontend guidance and detailed Modes planning preferences are supplied by the User, not bundled by Core. For example, register native skills named `typescript-best-practices`, `vercel-react-best-practices`, and `principle-minimize-reader-load` in the user skills directory. Existing `ltcook-typescript`, `ltcook-react-vite` and `ltcook-reader-load` invocations are removed.
+
 Rules are Markdown standing instructions. Skills use native `SKILL.md` directories
-with names and descriptions. Their bodies and references load on demand; the
-bundled reader-load skill remains explicit-only. The inspector reports scope,
+with names and descriptions. Their bodies and references load on demand; explicit-only skills remain available only on request. The inspector reports scope,
 kind, applicability, diagnostics and actual native loading. Distinct resources
 with conflicting names fail activation; repeated discovery of the same physical
 resource is deduplicated. Required Core resources must be present.
 
 Project `AGENTS.md`, `.pi/skills` and `.agents/skills` keep native trust behavior.
 Global roots resolve before native agents change `HOME`; project settings cannot
-redirect shared state, User guidance or the shared auth home. Core planning and
-Clear Writing rules apply to every Team. Optional integrations do not disable
-them or the execution guards.
+redirect shared state, User guidance or the shared auth home. Core planning guidance applies to every Team. Optional integrations do not disable
+it or the execution guards.
 
 ## Configure research tools
 

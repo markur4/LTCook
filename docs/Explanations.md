@@ -279,7 +279,7 @@ not labelled an independent review. Team selection stays fixed for a runtime.
 
 ## Guidance and planning
 
-Core supplies required common rules and methods. Teams add member responsibilities
+Core supplies required functional planning guidance and research methods. Personal writing, coding preferences and detailed Modes strategy come from User guidance. Teams add member responsibilities
 and methods; Projects retain native repository instructions and skills; Users add
 global personal guidance. Rules enter applicable standing context. Native Pi
 advertises skill descriptions and reads bodies/references when needed. Required
