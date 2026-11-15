@@ -10,6 +10,9 @@ const directory = await mkdtemp(path.join(os.tmpdir(), 'ltcook-evaluation-system
 const root = path.resolve(import.meta.dir, '../../..');
 const steps = new Map<string, number>();
 const calls: string[] = [];
+const verificationCalls = new Set<string>();
+const verifiedCalls = new Set<string>();
+const verificationMarker = 'LTCook fixture verified';
 let requests = 0;
 let failure: unknown;
 const scenario = process.argv[2] ?? 'behavior';
@@ -26,9 +29,17 @@ const server = createServer(async (request, response) => {
     for await (const chunk of request) body += chunk;
     const input = JSON.parse(body) as {
       model: string;
-      messages: Array<{ role: string; content: unknown }>;
+      messages: Array<{ role: string; content: unknown; tool_call_id?: string }>;
     };
     assert.equal(input.model, EVAL_MODEL);
+    for (const message of input.messages)
+      if (
+        message.role === 'tool' &&
+        message.tool_call_id &&
+        verificationCalls.has(message.tool_call_id) &&
+        JSON.stringify(message.content).includes(verificationMarker)
+      )
+        verifiedCalls.add(message.tool_call_id);
     requests++;
     if (scenario === 'cancel' && requests === 5) {
       controller.abort();
@@ -88,7 +99,7 @@ const server = createServer(async (request, response) => {
           command:
             scenario === 'bad-verification'
               ? 'true'
-              : 'test -z "$OPENAI_API_KEY" && test -z "$ANTHROPIC_API_KEY" && ! touch /usr/ltcook-evaluation-write-denied 2>/dev/null && node .ltcook-evals/verify.cjs',
+              : 'test -z "$OPENAI_API_KEY" && test -z "$ANTHROPIC_API_KEY" && ! touch /usr/ltcook-evaluation-write-denied 2>/dev/null && node .ltcook-evals/verify.cjs && printf \'LTCook fixture verified\'',
         };
       }
       if (index === 3)
@@ -121,6 +132,7 @@ const server = createServer(async (request, response) => {
       );
     if (name) {
       calls.push(name);
+      if (name === 'bash' && scenario !== 'bad-verification') verificationCalls.add(id);
       send({
         role: 'assistant',
         tool_calls: [
@@ -191,7 +203,12 @@ try {
           behavior: {
             tasks: Array<{
               success: boolean;
-              attempts: Array<{ failure?: string; delegations?: number }>;
+              attempts: Array<{
+                failure?: string;
+                failureCategory?: string;
+                delegations?: number;
+                toolCalls: number;
+              }>;
             }>;
           };
         };
@@ -202,8 +219,40 @@ try {
       tasks.every(
         (task) => task.success === !['bad-verification', 'no-delegation'].includes(scenario),
       ),
-      JSON.stringify(tasks.map((task) => task.attempts)),
+      JSON.stringify(
+        tasks.map((task) =>
+          task.attempts.map(({ failureCategory, failure, toolCalls, delegations }) => ({
+            failureCategory,
+            failure,
+            toolCalls,
+            delegations,
+          })),
+        ),
+      ),
     );
+    if (scenario === 'no-delegation' || scenario === 'bad-verification')
+      assert(
+        tasks.every((task) =>
+          task.attempts.every((attempt) => attempt.failureCategory === 'criteria'),
+        ),
+        JSON.stringify(
+          tasks.map((task) =>
+            task.attempts.map(({ failureCategory, failure, toolCalls }) => ({
+              failureCategory,
+              failure,
+              toolCalls,
+            })),
+          ),
+        ),
+      );
+    if (scenario === 'no-delegation') {
+      assert(tasks.every((task) => task.attempts.every((attempt) => attempt.delegations === 0)));
+      assert.equal(
+        verifiedCalls.size,
+        tasks.reduce((count, task) => count + task.attempts.length, 0),
+        'Every non-delegating attempt must successfully verify the corrected fixture',
+      );
+    }
     if (scenario !== 'no-delegation')
       assert(tasks.some((task) => task.attempts.some((attempt) => (attempt.delegations ?? 0) > 0)));
     assert(calls.includes('ltcook_team'));
