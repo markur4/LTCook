@@ -25,7 +25,15 @@ def test_real_pi_paseo_clockwork(tmp_path: Path) -> None:
 )
 @pytest.mark.parametrize(
     "mode",
-    ["quick", "behavior", "current", "cancel", "bad-verification", "no-delegation"],
+    [
+        "quick",
+        "behavior",
+        "current",
+        "cancel",
+        "bad-verification",
+        "no-delegation",
+        "repeated",
+    ],
 )
 def test_agent_evaluation_runtime(tmp_path: Path, mode: str) -> None:
     """Exercise the sandboxed evaluation path with real native tools and local scripts."""
