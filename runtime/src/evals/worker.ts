@@ -6,7 +6,7 @@ import { RiedService } from '../ried.js';
 import { createRuntime } from '../core/runtime.js';
 import { RuntimeApi, agentBearer } from '../integrations/runtime-api.js';
 import { createPaseoAgentBackend, startPaseoHost } from '../integrations/paseo.js';
-import { selectedTeam } from '../integrations/team-loader.js';
+import { loadTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import type { GuidanceInspection } from '../guidance-api/index.js';
 import { EVAL_MODEL, hash, resourceIdentity } from './setup.js';
@@ -32,7 +32,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   const state = path.join(deployment, 'state');
   const sessionId = randomUUID();
   const secret = randomUUID();
-  const team = await selectedTeam(job.teamSelection);
+  const team = await loadTeam(job.teamSelection);
   const telemetry = new Telemetry(path.join(state, 'events.jsonl'), path.join(state, 'trace.json'));
   const span = telemetry.begin(`scenario.${job.scenario}.${job.arm}`);
   const modelSpans = new Map<string, ReturnType<Telemetry['begin']>>();
@@ -221,7 +221,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     });
     const delegate = team.definition.members.some(
       (member) =>
-        member.key !== team.definition.coordinatorKey && member.workTypes.includes('task.execute'),
+        member.key !== team.definition.leaderKey && member.workTypes.includes('task.execute'),
     );
     const descriptions = {
       'read-only':
@@ -290,7 +290,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
             (verificationCalls > 0 &&
               (!delegate ||
                 snapshot.assignments.some(
-                  (assignment) => assignment.memberKey !== team.definition.coordinatorKey,
+                  (assignment) => assignment.memberKey !== team.definition.leaderKey,
                 )))));
     const inspections = (await runtime.execute(
       sessionId,
@@ -315,7 +315,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       ...(tokenUsage.length ? { providerReportedUsage: tokenUsage } : {}),
       toolCalls,
       delegations: snapshot.assignments.filter(
-        (assignment) => assignment.memberKey !== team.definition.coordinatorKey,
+        (assignment) => assignment.memberKey !== team.definition.leaderKey,
       ).length,
       instructions: {
         resources,

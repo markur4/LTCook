@@ -46,6 +46,12 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 💥 Breaking changes
 
+- Breaking: Team API v3 uses `leaderKey` and the canonical `leader` member.
+  Custom Teams must replace coordinator/Main identities and declare API v3.
+  Coordination schema 4 rejects older stores unchanged: stop the runtime,
+  preserve the old database, and select a new empty `runtime.database`. No
+  migration or automatic deletion is provided. See PR #5.
+
 - Breaking: Agent Evals uses a new run-record format and requires Bubblewrap for Linux/WSL execution. Existing evaluation histories are unsupported and left unchanged. Users can preserve old results, stop the runtime, remove its `evals/runs` directory, and restart to reset history. See PR #2.
 
 <br>
@@ -59,7 +65,7 @@ All notable changes to `ltcook` will be documented in this file.
   `eval_model` receipt field. No aliases, readers, or automatic data migration
   are provided.
 
-- Breaking: Coordination schema 3 adds scheduled Task graphs, gates and assignment
+- Breaking: Coordination schema 4 adds scheduled Task graphs, gates and assignment
   attempts. Affected: users with older prototype coordination stores and custom
   command consumers. Migration: preserve the old store, select a new empty
   `runtime.database`, and adopt the extended Task/result/retry contracts. No
@@ -69,7 +75,7 @@ All notable changes to `ltcook` will be documented in this file.
   and Team API v2 `WorkContext.projectContext`. Migration: use the authenticated
   `ltcook_ried` tool or `/v1/ried` API and discard old cache files; no reader or
   conversion is provided.
-- Breaking: Team packages require API v2 and the purpose-named `team-api`,
+- Breaking: Team packages require API v3 and the purpose-named `team-api`,
   `guidance-api` and `workflow-api` imports. The generic `api` export and activation
   hooks are removed. Custom Teams must implement the new declarations; no adapter
   or automatic rewrite is supplied.
@@ -113,6 +119,11 @@ All notable changes to `ltcook` will be documented in this file.
   and authentication checks remain read-only.
 
 ### ➕ Added
+
+- Added a native LTCook Paseo provider with per-Session Team selection, direct
+  Leader chat, a local Teams browser, native child conversations, and contextual
+  Team/Tasks panels. Multiple Teams share one runtime, including Sessions in the
+  same Workspace. Paseo packages use the matching composer-capable published beta.
 
 - Symbolic Python tests use pytest-xdist with six workers by default. Complete test-suite timing includes symbolic tests and live agent evaluations, reported separately and together.
 

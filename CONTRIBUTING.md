@@ -114,7 +114,7 @@ reset or reinstall guidance.
   `src/ltcook_dev`. The wheel's `BuildPy` step copies only a validated canonical
   `src/ltcook_distr/bundle.zip`.
 - Runtime and team packages are Bun workspaces. Teams implement the current
-  public `apiVersion: 2` interface in `runtime/src/team-api/index.ts`. Guidance
+  public `apiVersion: 3` interface in `runtime/src/team-api/index.ts`. Guidance
   and workflow contracts have separate purpose-named public entry points. Teams
   declare routing and optional assignee selection; Core owns consent and dispatch.
   Shared commands are defined once in `runtime/src/workflow-api/commands.ts`

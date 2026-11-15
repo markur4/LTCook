@@ -4,7 +4,7 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { selectedTeam } from '../../runtime/src/integrations/team-loader.js';
+import { loadTeam } from '../../runtime/src/integrations/team-loader.js';
 
 test('scripted local Pi usage produces comparable reports in both guidance arms', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'ltcook-benchmark-test-'));
@@ -108,7 +108,7 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
       authPath: join(directory, 'auth.json'),
       allowModelNetwork: false,
     });
-    const team = await selectedTeam('default-minimal');
+    const team = await loadTeam('default-minimal');
     const tasks = [];
     for (const arm of ['minimal', 'complete'] as const) {
       const task = await runTask({
