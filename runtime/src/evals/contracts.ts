@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+export const EvalSetupSchema = z.enum(['current', 'synthetic']);
+export type EvalSetup = z.infer<typeof EvalSetupSchema>;
+
 export const EvalPresetSchema = z.enum(['quick', 'audit', 'behavior', 'bottlenecks', 'full']);
 export type EvalPreset = z.infer<typeof EvalPresetSchema>;
 
@@ -15,11 +18,14 @@ export type EvalStatus = z.infer<typeof EvalStatusSchema>;
 export const EvalStartRequestSchema = z
   .object({
     preset: EvalPresetSchema,
+    setup: EvalSetupSchema.default('current'),
+    workspaceRoot: z.string().min(1).optional(),
     staticOnly: z.boolean().optional(),
   })
   .refine((input) => !input.staticOnly || input.preset === 'audit', {
     message: 'staticOnly requires the audit preset',
   });
+export type EvalStartRequest = z.infer<typeof EvalStartRequestSchema>;
 export const EvalRunIdSchema = z.object({ runId: z.string().uuid() });
 export const EvalStatusRequestSchema = EvalRunIdSchema.extend({
   after: z.number().int().nonnegative().optional(),
@@ -52,9 +58,16 @@ export const EvalEventSchema = z.object({
 export type EvalEvent = z.infer<typeof EvalEventSchema>;
 
 export const EvalSummarySchema = z.object({
-  schema: z.literal(1),
+  schema: z.literal(2),
   runId: z.string().uuid(),
   preset: EvalPresetSchema,
+  setup: EvalSetupSchema,
+  staticOnly: z.boolean(),
+  teamSelection: z.string().optional(),
+  model: z.string().optional(),
+  fixtureRevision: z.string().optional(),
+  provenance: z.unknown().optional(),
+  limitations: z.array(z.string()).default([]),
   status: EvalStatusSchema,
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),

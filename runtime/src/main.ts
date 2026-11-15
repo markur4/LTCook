@@ -206,7 +206,13 @@ async function run(): Promise<void> {
     }
     evals = new EvalRunService(
       stateDirectory,
-      createEvalEngine({ piHome, resources: path.join(appRoot, 'runtime', 'resources') }),
+      createEvalEngine({
+        resources: path.join(appRoot, 'runtime', 'resources'),
+        appRoot,
+        nodeExecutable: node,
+        python,
+        teamSelection,
+      }),
     );
     await evals.initialize();
     api = new RuntimeApi(undefined, apiToken, apiListen);
