@@ -33,7 +33,14 @@ function resultSummary(report: any): string[] {
   });
 }
 
-function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
+function Diagnostics({
+  theme,
+  workspaceRoot,
+}: {
+  theme: PluginWorkspacePanelProps['theme'];
+  workspaceRoot?: string;
+}) {
+  const [setup, setSetup] = useState<'current' | 'synthetic'>('current');
   const call = useRpc(evalsRpc);
   const [runs, setRuns] = useState<any[]>([]);
   const [selected, setSelected] = useState<string>();
@@ -66,7 +73,12 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
   }, [refresh]);
   const start = async (preset: 'quick' | 'full') => {
     try {
-      const value = (await call({ action: 'start', preset })) as { runId: string };
+      const value = (await call({
+        action: 'start',
+        preset,
+        setup,
+        ...(setup === 'current' && workspaceRoot ? { workspaceRoot } : {}),
+      })) as { runId: string };
       setSelected(value.runId);
       setReport(undefined);
       setShowDetails(false);
@@ -82,10 +94,18 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
         Agent Evals
       </Label>
       <Label theme={theme} muted>
-        Local Spark checks. A semantic audit inspects the isolated Pi prompt; Paseo and live runtime
-        instructions are outside its coverage.
+        Local Spark evaluations. Interactive Plan approval is outside evaluation coverage.
       </Label>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        {(['current', 'synthetic'] as const).map((value) => (
+          <Action
+            key={value}
+            theme={theme}
+            title={value === 'current' ? 'Current Setup' : 'Synthetic Setup'}
+            selected={setup === value}
+            onPress={() => setSetup(value)}
+          />
+        ))}
         <Action theme={theme} title="Run quick check" onPress={() => void start('quick')} />
         <Action theme={theme} title="Run full Agent Evals" onPress={() => void start('full')} />
         <Action theme={theme} title="Refresh history" onPress={() => void refresh()} />
@@ -99,7 +119,7 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
         <Card theme={theme}>
           <Label
             theme={theme}
-          >{`${status.preset} · ${status.status} · ${status.completed}/${status.total}`}</Label>
+          >{`${status.setup} · ${status.teamSelection ?? 'Preparing team'} · ${status.preset} · ${status.status} · ${status.completed}/${status.total}`}</Label>
           <Label
             theme={theme}
             muted
@@ -121,7 +141,7 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
         <View key={item.runId} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           <Action
             theme={theme}
-            title={`${item.preset} · ${item.status} · ${item.completed}/${item.total} · ${item.createdAt}`}
+            title={`${item.setup} · ${item.teamSelection ?? 'Preparing team'} · ${item.preset} · ${item.status} · ${item.completed}/${item.total} · ${item.createdAt}`}
             selected={item.runId === selectedRun}
             onPress={() => {
               setSelected(item.runId);
@@ -171,8 +191,8 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
                   {{
                     static: 'Instruction Audit · static',
                     semantic: 'Instruction Audit · semantic',
-                    behavior: 'Behavioral Evals',
-                    bottlenecks: 'Bottleneck Analysis',
+                    behavior: 'Behavior Evaluation',
+                    bottlenecks: 'Bottleneck Attribution',
                   }[name] ?? name.replaceAll('-', ' ')}
                 </Label>
                 <Label theme={theme} muted>
@@ -314,7 +334,7 @@ function TeamStatus(props: PluginWorkspacePanelProps) {
           />
         </View>
       )}
-      {view === 'diagnostics' && <Diagnostics theme={theme} />}
+      {view === 'diagnostics' && <Diagnostics theme={theme} workspaceRoot={root ?? undefined} />}
       {snapshot && view !== 'diagnostics' && (
         <>
           {panel.detail?.status === 'loading' && (

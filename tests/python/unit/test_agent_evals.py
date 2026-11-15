@@ -54,6 +54,47 @@ def test_cli_report_summarizes_behavioral_evals(monkeypatch):
 
     rendered = output.getvalue()
     assert "Agent Evals · COMPLETED" in rendered
-    assert "Behavioral Evals" in rendered
+    assert "Behavior Evaluation" in rendered
     assert "1/2 passed" in rendered
     assert "1 retried" in rendered
+
+
+def test_cli_selects_synthetic_behavior_without_workspace_resolution(monkeypatch):
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    calls = []
+    monkeypatch.setattr(cli, "_runtime", lambda: ({}, None))
+    monkeypatch.setattr(
+        cli,
+        "_call",
+        lambda environment, route, payload: (
+            calls.append((route, payload)) or {"runId": "fixture"}
+        ),
+    )
+    monkeypatch.setattr(cli, "_follow", lambda environment, run_id: None)
+    result = CliRunner().invoke(
+        cli.eval_cli, ["run", "--behavior-only", "--setup", "synthetic"]
+    )
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        (
+            "/v1/evals/start",
+            {"preset": "behavior", "setup": "synthetic", "staticOnly": False},
+        )
+    ]
+
+
+def test_cli_rejects_quick_behavior_combination_before_start(monkeypatch):
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    def unexpected_start():
+        raise AssertionError("invalid options started a runtime")
+
+    monkeypatch.setattr(cli, "_runtime", unexpected_start)
+    result = CliRunner().invoke(cli.eval_cli, ["run", "--quick", "--behavior-only"])
+    assert result.exit_code == 2
+    assert "cannot be combined" in result.output

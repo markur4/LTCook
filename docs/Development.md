@@ -184,49 +184,32 @@ handoff. Model storage stays under Ollama's own platform-specific location. This
 checkout's live verification used Fedora 44 on WSL2 only; Windows and macOS
 installation behavior remains documented, not natively validated.
 
-Agent Evals commands require a prepared local model and do not install Ollama or pull
-weights:
+Agent Evals uses the shared installed CLI and Paseo run service. Static audit
+needs no model; LLM-dependent runs require the prepared local Spark tag
+`ltcook-spark-x2.6-4b-q8_0-ctx8192:latest` and do not install or pull models.
 
 ```shell
-ltcook eval audit
-ltcook eval run
-ltcook eval run --quick
-ltcook eval analyze
-just eval probe
-just eval audit-static
-just eval audit
-just eval behavior
-just eval bottlenecks
+ltcook eval audit --static-only
+ltcook eval run --setup current
+ltcook eval run --quick --setup synthetic
+ltcook eval run --behavior-only --setup synthetic
+ltcook eval analyze --setup synthetic
 ```
 
-Reports and Perfetto-compatible Chrome trace files are written privately under
-`~/.cache/ltcook/evals` by default. Open a `.trace.json` artifact in
-[Perfetto UI](https://ui.perfetto.dev/) to inspect task, Pi prompt, and fixture
-tool timing without prompt or transcript content. Live runs use Pi and the local
-Ollama endpoint. Small samples are smoke measurements, not broad performance
-claims. The static audit is model-free; the semantic audit sends the captured
-Pi prompt and one loaded source at a time to Ollama's structured-output API to
-fit the 8,192-token context. Live evaluation is opt-in and must not run in
-ordinary CI. Use `ltcook app doctor` and the existing repair flow to diagnose
-installed prerequisites.
+The `just eval` recipes are shortcuts to these commands. Current Setup resolves
+installed guidance and relevant workspace state; Synthetic Setup uses packaged
+fixtures. Linux/WSL execution requires working Bubblewrap. Preserve network
+configuration while confining filesystem writes to disposable workspace and run
+state. Native Windows/macOS behavioral execution is unsupported until an
+appropriate sandbox is implemented; do not launch Windows executables from WSL.
 
-Behavioral Evals use fixture tools and no longer require synthetic delegation for
-trivial tasks. Isolated Pi comparisons do not establish production Paseo
-scheduling behavior.
-
-Behavior runs include read-only, no-op, and targeted-fix cases. Failed
-off-thinking cases retry once with low thinking; paired timing runs disable
-retries. Pydantic Evals grades the fixture oracles. The JSON report records each
-task's initial and final success, total wall-clock completion time across
-attempts, and each attempt's thinking level, success, elapsed time,
-provider-reported input, output/cache tokens, tool calls, delegations, and
-rule-based unnecessary-action candidates. Aggregates include initial and
-post-retry success and mean total task time. Repeated reads, verification calls,
-and answer writes are candidates for inspection; a necessary correction may
-trigger them. Aggregates compare the two arms, whose order alternates each
-repetition. Zero usage may mean the provider did not report tokens; it is not an
-estimate. Model scores never gate CI or Pass completion. A live local model run
-is explicitly initiated by this command; normal checks use no model service.
+Reports, progress events and Perfetto traces live in runtime state under
+`evals/runs`, with prompts, transcripts, and credentials excluded. Instruction
+Audit records production loader provenance; semantic findings require review.
+Behavior Evaluation uses read-only, no-op and targeted-fix tasks. Bottleneck
+Attribution repeats paired guidance variants with counterbalanced order and
+reports observed variation. Local model smoke results are evidence, not CI gates;
+normal tests use scripted responses without Ollama or user login.
 
 ## Asset packaging
 

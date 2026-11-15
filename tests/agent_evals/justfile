@@ -2,24 +2,24 @@ set working-directory := "../.."
 
 [group('Agent Evals')]
 probe:
-    uv run --locked python -m ltcook_dev.agent_evals probe
+    uv run --locked ltcook eval run --quick
 
 [group('Agent Evals')]
 audit-static:
-    uv run --locked python -m ltcook_dev.agent_evals audit --static
+    uv run --locked ltcook eval audit --static-only
 
 [group('Agent Evals')]
 audit:
-    uv run --locked python -m ltcook_dev.agent_evals audit
+    uv run --locked ltcook eval audit
 
 [group('Agent Evals')]
 behavior:
-    uv run --locked python -m ltcook_dev.agent_evals behavior
+    uv run --locked ltcook eval run --behavior-only
 
 [group('Agent Evals')]
 bottlenecks:
-    uv run --locked python -m ltcook_dev.agent_evals bottlenecks
+    uv run --locked ltcook eval analyze
 
 [group('Agent Evals')]
 all:
-    uv run --locked python -m ltcook_dev.agent_evals all
+    uv run --locked ltcook eval run

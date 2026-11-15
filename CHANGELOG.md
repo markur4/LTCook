@@ -110,6 +110,8 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ➕ Added
 
+- Agent Evals supports Current Setup and Synthetic Setup selection in the CLI and Paseo panel, a model-free `eval audit --static-only`, and `eval run --behavior-only`.
+
 <br>
 - Added normal-install Ollama/Spark provisioning and opt-in local IBB instruction,
   behavior, semantic-audit, and paired timing diagnostics, with Pydantic Evals

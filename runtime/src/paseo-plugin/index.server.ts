@@ -90,6 +90,9 @@ export default function contribute(server: PluginServerContext) {
       delete: '/v1/evals/delete',
     };
     const { response, detail } = await runtimeRequest(endpoint, headers, routes[input.action], {
+      ...(input.setup ? { setup: input.setup } : {}),
+      ...(input.staticOnly !== undefined ? { staticOnly: input.staticOnly } : {}),
+      ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
       ...(input.preset ? { preset: input.preset } : {}),
       ...(input.runId ? { runId: input.runId } : {}),
       ...(input.after !== undefined ? { after: input.after } : {}),

@@ -85,7 +85,7 @@ commands provide launch operations and diagnostics:
 | `ltcook app doctor --json`, `ltcook app paths` | Inspect installation health and recorded resource placement. |
 | `ltcook eval audit` | Run the static and semantic Instruction Audit. |
 | `ltcook eval run [--quick]` | Run all Agent Evals categories by default, or the fast check with `--quick`. |
-| `ltcook eval analyze` | Run three-repetition Bottleneck Analysis. |
+| `ltcook eval analyze` | Run three-repetition Bottleneck Attribution. |
 | `ltcook eval report RUN_ID` | Show a persisted evaluation report. |
 | `ltcook eval list`, `watch`, `status`, `cancel`, `delete` | Manage shared Agent Evals runs and history. |
 | `python -m ltcook.launch runtime [--workspace ROOT]` | Internal module entry point for the same global or project launch. |
@@ -431,7 +431,7 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just eval probe` | Run the opt-in local Spark/Pi probe; requires normal app setup and the exact local model. |
 | `just eval audit-static` | Run model-free instruction inventory checks. |
 | `just eval audit` | Run the local Spark semantic Instruction Audit. |
-| `just eval behavior` | Run read-only, no-op, and targeted-fix Behavioral Evals in both guidance arms; retry failures once at low thinking. |
+| `just eval behavior` | Run read-only, no-op, and targeted-fix Behavior Evaluation in both guidance arms; retry failures once at low thinking. |
 | `just eval bottlenecks` | Run all three paired scenarios for three repetitions with retries disabled and Perfetto-compatible traces. |
 | `ltcook app doctor --verbose --json` | Inspect AppRC paths and local Ollama/Spark readiness. |
 | `just check` | Enforce Prettier/Ruff formatting, TypeScript types, Python lint, and Pyright. |
