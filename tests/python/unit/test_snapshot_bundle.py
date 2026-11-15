@@ -101,6 +101,7 @@ from apprc.definition.installation import InstallationPlacement, OperationContex
 from apprc.definition.paths import Layout
 from ltcook_distr.payload.app_lifecycle import actions
 runtime = importlib.import_module('ltcook_distr.payload.app_lifecycle.prepare_runtime')
+ollama = importlib.import_module('ltcook_distr.payload.app_lifecycle.prepare_ollama')
 assert actions.__file__.startswith(str(wheel)), actions.__file__
 
 def download_node(url, destination, digest=None):
@@ -130,7 +131,12 @@ context = OperationContext(
     InstallationPlacement(Layout(), appdata_dir=appdata, capabilities=frozenset({'appdata'})),
 )
 with patch.dict(os.environ, {'LTCOOK_BROWSER_ENABLED': 'false', 'LTCOOK_SERVICE_CONNECTION': 'direct'}):
-    with patch.object(runtime, 'download', download_node), patch.object(runtime, 'run', install_dependencies):
+    with (
+        patch.object(runtime, 'download', download_node),
+        patch.object(runtime, 'run', install_dependencies),
+        patch.object(ollama, 'prepare_ollama'),
+        patch('socket.create_connection', side_effect=AssertionError('Unexpected network in package fixture')),
+    ):
         actions.initialize(context)
         actions.initialize(context)
 """
