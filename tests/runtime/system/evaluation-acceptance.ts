@@ -40,7 +40,7 @@ const server = createServer(async (request, response) => {
     const input = JSON.parse(body) as {
       model: string;
       think?: boolean;
-      tools?: unknown[];
+      tools?: Array<{ function?: { name?: string } }>;
       messages: Array<{ role: string; content: unknown; tool_call_id?: string }>;
     };
     assert.equal(input.model, EVAL_MODEL);
@@ -200,6 +200,10 @@ const server = createServer(async (request, response) => {
         content: 'Discardable context for the maintained compaction boundary. '.repeat(200),
       });
     if (name) {
+      assert(
+        input.tools?.some((tool) => tool.function?.name === name),
+        `Scripted tool ${name} must be declared in the actual model request`,
+      );
       calls.push(name);
       if (name === 'bash' && scenario !== 'bad-verification') verificationCalls.add(id);
       send({
