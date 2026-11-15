@@ -110,10 +110,29 @@ async function tapNativeChoice(name: string): Promise<void> {
       const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
       return hit === node || node.contains(hit);
     });
-    if (!node) return false;
+    if (!node || node.getAttribute('aria-disabled') === 'true') return false;
+    const rect = node.getBoundingClientRect();
+    const bounds = [rect.x, rect.y, rect.width, rect.height].map(value => Math.round(value * 10)).join(',');
+    const previous = window.__ltcookTouchTarget;
+    if (!previous || previous.id !== ${JSON.stringify(target)} || previous.bounds !== bounds) {
+      window.__ltcookTouchTarget = { id: ${JSON.stringify(target)}, bounds, since: performance.now() };
+      return false;
+    }
+    if (performance.now() - previous.since < 300) return false;
     node.setAttribute('data-ltcook-acceptance-touch', ${JSON.stringify(target)});
     return true;
   })()`,
+  );
+  await browser(
+    'eval',
+    `(() => {
+      window.__ltcookTouchEvents ??= [];
+      for (const type of ['touchstart', 'touchend', 'touchcancel', 'click']) {
+        document.querySelector('[data-ltcook-acceptance-touch="${target}"]').addEventListener(type, event => {
+          window.__ltcookTouchEvents.push({ type, name: ${JSON.stringify(name)}, trusted: event.isTrusted });
+        }, { once: true });
+      }
+    })()`,
   );
   await browser('tap', `[data-ltcook-acceptance-touch="${target}"]`);
 }
@@ -543,6 +562,9 @@ try {
       snapshot: await browser('snapshot').catch(() => 'Browser unavailable'),
       console: await browser('console').catch(() => 'Console unavailable'),
       pageErrors: await browser('errors').catch(() => 'Page errors unavailable'),
+      touchEvents: await browser('eval', 'window.__ltcookTouchEvents ?? []').catch(
+        () => 'Touch events unavailable',
+      ),
     }),
   );
   throw error;

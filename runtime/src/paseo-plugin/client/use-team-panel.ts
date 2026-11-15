@@ -34,7 +34,11 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 const isAppVisible = () =>
   AppState.currentState !== 'background' && AppState.currentState !== 'inactive';
 
-export function useTeamPanel(sessionId: string | undefined, target: TeamDetailTarget | null) {
+export function useTeamPanel(
+  sessionId: string | undefined,
+  target: TeamDetailTarget | null,
+  leaderAgentId?: string,
+) {
   const callSnapshot = useRpc(snapshotRpc);
   const callDetail = useRpc(detailRpc);
   const [state, setState] = useState<Load<TeamStatusSnapshot | null>>();
@@ -54,7 +58,7 @@ export function useTeamPanel(sessionId: string | undefined, target: TeamDetailTa
     const version = ++snapshotVersion.current;
     setState({ sessionId, status: 'loading' });
     try {
-      const value = await callSnapshot({ sessionId });
+      const value = await callSnapshot({ sessionId, leaderAgentId });
       if (
         mounted.current &&
         acceptPanelResponse(
@@ -77,7 +81,7 @@ export function useTeamPanel(sessionId: string | undefined, target: TeamDetailTa
       )
         setState({ sessionId, status: 'error', message: message(error) });
     }
-  }, [sessionId, callSnapshot]);
+  }, [sessionId, leaderAgentId, callSnapshot]);
 
   const latestRefresh = useRef(refresh);
   useLayoutEffect(() => {
@@ -121,7 +125,7 @@ export function useTeamPanel(sessionId: string | undefined, target: TeamDetailTa
         version,
       );
     setDetail({ sessionId, key, status: 'loading' });
-    void callDetail({ sessionId, target })
+    void callDetail({ sessionId, leaderAgentId, target })
       .then((value) => {
         if (accepts()) setDetail({ sessionId, key, status: 'ready', value });
       })
@@ -131,7 +135,7 @@ export function useTeamPanel(sessionId: string | undefined, target: TeamDetailTa
     return () => {
       detailVersion.current++;
     };
-  }, [sessionId, key, target, callDetail, state]);
+  }, [sessionId, leaderAgentId, key, target, callDetail, state]);
 
   return {
     state: state?.sessionId === sessionId ? state : undefined,

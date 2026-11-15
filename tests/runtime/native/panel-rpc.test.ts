@@ -278,8 +278,9 @@ describe('Paseo Team RPC', () => {
 
     const { handlers, dispose } = await registerHandlers();
     try {
-      const snapshot = handlers.get('ltcook.team.snapshot')!;
-      const detail = handlers.get('ltcook.team.detail')!;
+      const context = { paseo: {} } as never;
+      const snapshot = (input: never) => handlers.get('ltcook.team.snapshot')!(input, context);
+      const detail = (input: never) => handlers.get('ltcook.team.detail')!(input, context);
       expect(await snapshot({ sessionId: 'leader-id' } as never)).toBeNull();
       expect(requests.at(-1)).toEqual({
         url: 'http://runtime.invalid/v1/snapshot',
@@ -327,6 +328,188 @@ describe('Paseo Team RPC', () => {
           .filter(({ url }) => url.endsWith('/v1/snapshot'))
           .every(({ body }) => JSON.stringify(body) === '{"sessionId":"leader-id"}'),
       ).toBe(true);
+    } finally {
+      dispose();
+      globalThis.fetch = originalFetch;
+      restoreEnvironment();
+    }
+  });
+
+  test('recovers history panels from a refreshed native Leader without activating its Session', async () => {
+    const restoreEnvironment = runtimeEnvironment();
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const identity = {
+      sessionId: 'saved-leader',
+      leaderAgentId: 'saved-leader',
+      workspaceRoot: '/project',
+      teamSelection: 'default',
+    };
+    const nativeAgent = (overrides: Record<string, unknown> = {}) => ({
+      agent: {
+        id: identity.leaderAgentId,
+        provider: 'ltcook',
+        cwd: '/project',
+        metadata: { 'ltcook.team': 'default' },
+        labels: {},
+        ...overrides,
+      },
+    });
+    let native: unknown = nativeAgent();
+    let refreshes = 0;
+    const paseo = {
+      agents: {
+        ref(id: string) {
+          expect(id).toBe(identity.leaderAgentId);
+          return {
+            async refresh() {
+              refreshes++;
+              return native;
+            },
+          };
+        },
+      },
+    };
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requests.push({ url: String(input), body });
+      if (!body.leaderAgentId)
+        return Response.json({ error: 'Session is not active in this runtime' }, { status: 400 });
+      expect(body).toEqual(identity);
+      return Response.json({
+        session: { id: identity.sessionId, teamId: 'team-id' },
+        definition: { name: 'Test team', leaderKey: 'leader' },
+        members: [],
+        passes: [],
+        tasks: [],
+        steps: [],
+        assignments: [],
+        reports: [],
+        blockers: [],
+      });
+    }) as typeof fetch;
+    const { handlers, dispose } = await registerHandlers();
+    const context = { paseo } as never;
+    try {
+      const snapshot = handlers.get('ltcook.team.snapshot')!;
+      expect(await snapshot({ sessionId: identity.sessionId } as never, context)).toMatchObject({
+        sessionId: identity.sessionId,
+      });
+      expect(
+        await handlers.get('ltcook.team.detail')!(
+          { sessionId: identity.sessionId, target: { kind: 'issues' } } as never,
+          context,
+        ),
+      ).toEqual({ kind: 'issues', blockers: [], taskIssues: [] });
+      expect(refreshes).toBe(2);
+      expect(requests).toHaveLength(4);
+      expect(requests.every((request) => request.url.endsWith('/v1/snapshot'))).toBe(true);
+      for (const invalid of [
+        null,
+        nativeAgent({ provider: 'pi' }),
+        nativeAgent({ id: 'other' }),
+        nativeAgent({ cwd: '' }),
+        nativeAgent({ metadata: {} }),
+      ]) {
+        native = invalid;
+        const count = requests.length;
+        await expect(snapshot({ sessionId: identity.sessionId } as never, context)).rejects.toThrow(
+          'Saved LTCook Leader identity is unavailable',
+        );
+        expect(requests).toHaveLength(count + 1);
+      }
+      identity.sessionId = 'cli-session';
+      identity.leaderAgentId = 'cli-native-leader';
+      native = nativeAgent({
+        provider: 'pi',
+        metadata: {},
+        labels: {
+          'ltcook.member': 'leader',
+          'ltcook.session': identity.sessionId,
+          'ltcook.team': identity.teamSelection,
+        },
+      });
+      expect(
+        await snapshot(
+          { sessionId: identity.sessionId, leaderAgentId: identity.leaderAgentId } as never,
+          context,
+        ),
+      ).toMatchObject({ sessionId: identity.sessionId });
+    } finally {
+      dispose();
+      globalThis.fetch = originalFetch;
+      restoreEnvironment();
+    }
+  });
+
+  test('unresolved Leaders preserve blockers while healthy Sessions remain reusable', async () => {
+    const restoreEnvironment = runtimeEnvironment();
+    const originalFetch = globalThis.fetch;
+    let includeHealthy = true;
+    const sessions = ['healthy', 'missing', 'unbound', 'archived'].map((id) => ({
+      sessionId: id,
+      teamId: 'team-id',
+      workspaceRoot: '/project',
+      leaderAgentId: id === 'unbound' ? null : id,
+      createdAt: '2026-02-01T00:00:00Z',
+      ...(id === 'unbound'
+        ? { blocker: 'Native creation is uncertain; inspect this Session.' }
+        : {}),
+    }));
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      expect(String(input).endsWith('/v1/session/list')).toBe(true);
+      return Response.json({
+        sessions: sessions.filter((session) => includeHealthy || session.sessionId !== 'healthy'),
+      });
+    }) as typeof fetch;
+    const paseo = {
+      agents: {
+        ref(id: string) {
+          expect(id).not.toBe('unbound');
+          return {
+            async refresh() {
+              return id === 'missing'
+                ? null
+                : {
+                    agent: {
+                      id,
+                      title: 'Saved Leader',
+                      status: 'idle',
+                      updatedAt: '2026-02-02T00:00:00Z',
+                      archivedAt: id === 'archived' ? '2026-02-02T00:00:00Z' : null,
+                    },
+                  };
+            },
+          };
+        },
+        async create() {
+          throw new Error('Unresolved Sessions must never create an automatic replacement');
+        },
+      },
+    };
+    const { handlers, dispose } = await registerHandlers();
+    const context = { paseo } as never;
+    const input = { workspaceRoot: '/project', teamSelection: 'default' } as never;
+    try {
+      const result = (await handlers.get('ltcook.session.list')!(input, context)) as {
+        sessions: Array<{ sessionId: string; status: string; blocker?: string }>;
+      };
+      expect(result.sessions).toHaveLength(3);
+      expect(result.sessions.find((session) => session.sessionId === 'missing')).toMatchObject({
+        status: 'unavailable',
+        blocker: expect.stringContaining('native Leader is missing'),
+      });
+      expect(result.sessions.find((session) => session.sessionId === 'unbound')).toMatchObject({
+        status: 'unavailable',
+        blocker: expect.stringContaining('creation is uncertain'),
+      });
+      expect(await handlers.get('ltcook.session.open')!(input, context)).toMatchObject({
+        leaderAgentId: 'healthy',
+      });
+      includeHealthy = false;
+      await expect(handlers.get('ltcook.session.open')!(input, context)).rejects.toThrow(
+        'New Session',
+      );
     } finally {
       dispose();
       globalThis.fetch = originalFetch;

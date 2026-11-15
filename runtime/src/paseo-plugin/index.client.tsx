@@ -307,7 +307,7 @@ function TeamStatus(props: PluginAgentPanelProps) {
             : null,
     [view, memberKey, taskId, issuesOpen],
   );
-  const panel = useTeamPanel(sessionId, target);
+  const panel = useTeamPanel(sessionId, target, props.params.agentId);
   const previousLeaderActivity = useRef({
     sessionId,
     status: agent?.status,

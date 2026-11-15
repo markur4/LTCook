@@ -120,12 +120,65 @@ async function runtimeJson(path: string, body: unknown) {
   return response.json();
 }
 
+async function runtimeSnapshot(sessionId: string, paseo: PaseoApi, leaderAgentId = sessionId) {
+  const { endpoint, headers } = runtimeConfig();
+  const result = await runtimeRequest(endpoint, headers, '/v1/snapshot', { sessionId });
+  if (
+    result.response.status !== 400 ||
+    !result.payload ||
+    typeof result.payload !== 'object' ||
+    !('error' in result.payload) ||
+    result.payload.error !== 'Session is not active in this runtime'
+  )
+    return result;
+  const native = await paseo.agents.ref(leaderAgentId).refresh();
+  const profileLeader = native?.agent.provider === 'ltcook' && native.agent.id === sessionId;
+  const managedLeader =
+    native?.agent.provider === 'pi' &&
+    native.agent.labels['ltcook.member'] === 'leader' &&
+    native.agent.labels['ltcook.session'] === sessionId;
+  const teamSelection = profileLeader
+    ? native.agent.metadata?.['ltcook.team']
+    : managedLeader
+      ? native.agent.labels['ltcook.team']
+      : undefined;
+  if (
+    !native ||
+    native.agent.id !== leaderAgentId ||
+    !native.agent.cwd ||
+    typeof teamSelection !== 'string' ||
+    !teamSelection
+  )
+    throw new Error(
+      'Saved LTCook Leader identity is unavailable. Open a supported Leader conversation.',
+    );
+  return runtimeRequest(endpoint, headers, '/v1/snapshot', {
+    sessionId,
+    leaderAgentId: native.agent.id,
+    workspaceRoot: native.agent.cwd,
+    teamSelection,
+  });
+}
+
 async function listSessions(input: z.infer<typeof SessionListRequestSchema>, paseo: PaseoApi) {
   const response = SessionListResponseSchema.parse(await runtimeJson('/v1/session/list', input));
   const sessions = await Promise.all(
     response.sessions.map(async (session) => {
+      if (!session.leaderAgentId || session.blocker)
+        return {
+          ...session,
+          status: 'unavailable',
+          blocker: session.blocker ?? 'Leader binding is unavailable; inspect this Session.',
+        };
       const native = await paseo.agents.ref(session.leaderAgentId).refresh();
-      if (!native || native.agent.archivedAt) return null;
+      if (!native)
+        return {
+          ...session,
+          status: 'unavailable',
+          blocker:
+            'Saved native Leader is missing; inspect this Session before starting a replacement.',
+        };
+      if (native.agent.archivedAt) return null;
       return {
         ...session,
         title: native.agent.title,
@@ -207,11 +260,12 @@ export default function contribute(server: PluginServerContext) {
       throw new Error(`Agent Evals diagnostics unavailable (${response.status})${detail}`);
     return response.json();
   });
-  server.handle(teamDetail, async (input) => {
-    const { endpoint, headers } = runtimeConfig();
-    const { response, detail, payload } = await runtimeRequest(endpoint, headers, '/v1/snapshot', {
-      sessionId: input.sessionId,
-    });
+  server.handle(teamDetail, async (input, { paseo }) => {
+    const { response, detail, payload } = await runtimeSnapshot(
+      input.sessionId,
+      paseo,
+      input.leaderAgentId,
+    );
     if (
       response.status === 404 &&
       payload &&
@@ -226,13 +280,11 @@ export default function contribute(server: PluginServerContext) {
       throw new Error(`LTCook team detail unavailable (${response.status})${detail}`);
     return panelDetail(PanelDetailSourceSchema.parse(await response.json()), input.target);
   });
-  server.handle(teamSnapshot, async (input) => {
-    const { endpoint, headers } = runtimeConfig();
-    const { response, detail, payload } = await runtimeRequest(
-      endpoint,
-      headers,
-      '/v1/snapshot',
-      input,
+  server.handle(teamSnapshot, async (input, { paseo }) => {
+    const { response, detail, payload } = await runtimeSnapshot(
+      input.sessionId,
+      paseo,
+      input.leaderAgentId,
     );
     if (
       response.status === 404 &&
@@ -258,13 +310,18 @@ export default function contribute(server: PluginServerContext) {
       );
       const selected = input.leaderAgentId
         ? existing.sessions.find((session) => session.leaderAgentId === input.leaderAgentId)
-        : existing.sessions[0];
-      if (selected)
+        : existing.sessions.find((session) => session.leaderAgentId && !session.blocker);
+      if (selected?.leaderAgentId && !selected.blocker)
         return {
           sessionId: selected.sessionId,
           workspaceRoot: selected.workspaceRoot,
           leaderAgentId: selected.leaderAgentId,
         };
+      const blocked = selected ?? existing.sessions.find((session) => session.blocker);
+      if (blocked)
+        throw new Error(
+          `${blocked.blocker ?? 'Requested Leader is unavailable.'} Use New Session only to start a separate conversation.`,
+        );
       if (input.leaderAgentId)
         throw new Error('Requested Leader is unavailable in this Workspace and Team.');
     }

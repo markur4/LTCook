@@ -32,7 +32,9 @@ function latestActiveSession(sessions: SessionListEntry[], teamId: string) {
   return sessions.find(
     (session) =>
       session.teamId === teamId &&
-      session.status?.toLocaleLowerCase() !== 'closed' &&
+      session.leaderAgentId !== null &&
+      !session.blocker &&
+      session.status?.toLocaleLowerCase() !== 'unavailable' &&
       session.status?.toLocaleLowerCase() !== 'archived',
   );
 }
@@ -212,6 +214,9 @@ export function TeamsBrowser(props: PluginScreenProps) {
       {catalog.status === 'ready' &&
         catalog.teams.map((team) => {
           const active = latestActiveSession(sessions, team.teamId);
+          const blocked = sessions.find(
+            (session) => session.teamId === team.teamId && session.blocker,
+          );
           const opening = openingSelection === team.selection;
           return (
             <Card key={team.selection} theme={theme}>
@@ -238,7 +243,12 @@ export function TeamsBrowser(props: PluginScreenProps) {
                   {active.status ?? 'status unavailable'}
                 </Label>
               )}
-              {!active && sessionsState === 'ready' && workspace && (
+              {!active && blocked && (
+                <Label theme={theme} muted>
+                  {blocked.blocker} New Session starts a separate conversation.
+                </Label>
+              )}
+              {!active && !blocked && sessionsState === 'ready' && workspace && (
                 <Label theme={theme} muted>
                   No active Leader; opening will start a Session.
                 </Label>
@@ -248,7 +258,11 @@ export function TeamsBrowser(props: PluginScreenProps) {
                   <Action
                     theme={theme}
                     title={opening ? 'Opening…' : 'Open Leader chat'}
-                    disabled={Boolean(openingSelection) || sessionsState === 'loading'}
+                    disabled={
+                      Boolean(openingSelection) ||
+                      sessionsState === 'loading' ||
+                      (!active && Boolean(blocked))
+                    }
                     onPress={() => void openTeam(team.selection, false)}
                   />
                   <Action

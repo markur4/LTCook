@@ -547,18 +547,37 @@ export class RuntimeApi {
           response.writeHead(200).end(JSON.stringify({ teams: runtime.teamCatalog() }));
         } else {
           if (!input.workspaceRoot) throw new Error('workspaceRoot is required');
+          const catalog = runtime.teamCatalog();
           const sessions = runtime
             .listSessions(input.workspaceRoot, input.teamSelection)
             .map((session) => {
+              const selected = catalog.find((team) => team.teamId === session.teamId);
+              if (selected?.status !== 'installed')
+                return {
+                  sessionId: session.id,
+                  teamId: session.teamId,
+                  workspaceRoot: session.workspaceRoot,
+                  createdAt: session.createdAt,
+                  leaderAgentId: null,
+                  blocker: `Saved Team ${session.teamId} is unavailable or invalid; rebuild or reinstall its local package before resuming this Session.`,
+                };
               const snapshot = runtime.snapshot(session.id);
+              const leader = snapshot.members.find(
+                (item) => item.member.key === snapshot.definition.leaderKey,
+              )?.binding;
               return {
                 sessionId: session.id,
                 teamId: session.teamId,
                 workspaceRoot: session.workspaceRoot,
                 createdAt: session.createdAt,
-                leaderAgentId:
-                  snapshot.members.find((item) => item.member.key === snapshot.definition.leaderKey)
-                    ?.binding?.nativeAgentId ?? null,
+                leaderAgentId: leader?.nativeAgentId ?? null,
+                ...(leader?.state !== 'bound' || !leader.nativeAgentId
+                  ? {
+                      blocker:
+                        leader?.blocker ??
+                        'Leader binding is unavailable; inspect this Session before starting a replacement.',
+                    }
+                  : {}),
               };
             });
           response.writeHead(200).end(JSON.stringify({ sessions }));
@@ -616,7 +635,37 @@ export class RuntimeApi {
             return;
           }
           const registeredWorkspace = this.sessions.get(sessionId);
-          if (!registeredWorkspace) throw new Error('Session is not active in this runtime');
+          if (!registeredWorkspace) {
+            if (
+              !requestedWorkspace ||
+              typeof input.teamSelection !== 'string' ||
+              !input.teamSelection ||
+              typeof input.leaderAgentId !== 'string' ||
+              !input.leaderAgentId
+            )
+              throw new Error('Session is not active in this runtime');
+            const snapshot = runtime.snapshot(sessionId);
+            const selected = runtime
+              .teamCatalog()
+              .find(
+                (team) =>
+                  team.status === 'installed' &&
+                  (team.selection === input.teamSelection || team.teamId === input.teamSelection),
+              );
+            const leader = snapshot.members.find(
+              (member) => member.member.key === snapshot.definition.leaderKey,
+            );
+            if (
+              selected?.teamId !== snapshot.session.teamId ||
+              requestedWorkspace !== canonicalWorkspace(snapshot.session.workspaceRoot) ||
+              leader?.binding?.state !== 'bound' ||
+              leader.binding.nativeAgentId !== input.leaderAgentId
+            )
+              throw new Error('Saved Session identity does not match its native Leader');
+            // > History reads retain metadata without activating or reconciling native agents.
+            response.writeHead(200).end(JSON.stringify(snapshot));
+            return;
+          }
           if (requestedWorkspace && registeredWorkspace !== requestedWorkspace)
             throw new Error('Session does not belong to the requested workspace');
           const snapshot = runtime.snapshot(sessionId);

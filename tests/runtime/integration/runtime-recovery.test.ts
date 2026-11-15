@@ -2254,12 +2254,15 @@ test('adoption returns before startup, then reconciles one child and resumes wit
 
 test('catalog, list, adoption and preparation APIs enforce explicit authenticated Session identity', async () => {
   const agents = new FakeAgents();
-  const runtime = createRuntime({
-    databasePath: ':memory:',
+  const directory = mkdtempSync(join(tmpdir(), 'ltcook-history-'));
+  temporaryDirectories.push(directory);
+  const options = {
+    databasePath: join(directory, 'coordination.sqlite'),
     team,
     teams: new TeamRegistry([team, defaultTeam]),
     agents,
-  });
+  };
+  let runtime = createRuntime(options);
   const socket = createServer();
   await new Promise<void>((resolve) => socket.listen(0, '127.0.0.1', resolve));
   const address = socket.address();
@@ -2335,16 +2338,112 @@ test('catalog, list, adoption and preparation APIs enforce explicit authenticate
       identity.sessionId,
     );
     expect((await post('snapshot', { sessionId: 'unknown-session' })).status).toBe(400);
+    agents.failNextCreateAfterSideEffect = true;
+    const unresolved = await runtime.openSession({ workspaceRoot: '/workspace' });
+    const listed = (await (await post('session/list', { workspaceRoot: '/workspace' })).json()) as {
+      sessions: Array<{ sessionId: string; leaderAgentId: string | null; blocker?: string }>;
+    };
+    expect(
+      listed.sessions.find((session) => session.sessionId === unresolved.session.id),
+    ).toMatchObject({
+      leaderAgentId: null,
+      blocker: expect.stringContaining('Native create may have succeeded'),
+    });
+    const cli = await runtime.openSession({ workspaceRoot: '/cli-workspace' });
+    const cliLeader = cli.members.find((member) => member.member.key === 'leader')?.binding
+      ?.nativeAgentId;
+    expect(cliLeader).toBeDefined();
+    const removedTeam = await runtime.openSession({
+      id: 'removed-team-leader',
+      leaderAgentId: 'removed-team-leader',
+      workspaceRoot: '/workspace',
+      teamSelection: defaultTeam.definition.id,
+    });
+    const creationsBeforeRecovery = agents.creates;
     await api.close();
+    const saved = runtime.snapshot(identity.sessionId);
+    await runtime.close();
+    runtime = createRuntime({ ...options, teams: new TeamRegistry([team]) });
     api = new RuntimeApi(runtime, 'local-user-secret', `127.0.0.1:${address.port}`);
     await api.listen();
     expect((await post('snapshot', { sessionId: identity.sessionId })).status).toBe(400);
+    expect((await post('snapshot', identity, 'wrong-token')).status).toBe(401);
+    for (const changed of [
+      { workspaceRoot: '/other' },
+      { teamSelection: defaultTeam.definition.id },
+      { leaderAgentId: 'other-leader' },
+      { sessionId: 'unknown-session', leaderAgentId: 'unknown-session' },
+    ])
+      expect((await post('snapshot', { ...identity, ...changed })).status).toBe(400);
+    const recovered = await post('snapshot', identity);
+    expect(recovered.status).toBe(200);
+    const recoveredSnapshot = (await recovered.json()) as typeof saved & {
+      session: { _metadata?: { duration?: number } };
+    };
+    // > AppRC read timing is incidental; retain exact equality for all saved coordination data.
+    if (recoveredSnapshot.session._metadata?.duration !== undefined) {
+      delete recoveredSnapshot.session._metadata.duration;
+      if (Object.keys(recoveredSnapshot.session._metadata).length === 0)
+        delete recoveredSnapshot.session._metadata;
+    }
+    expect(recoveredSnapshot).toEqual(JSON.parse(JSON.stringify(saved)));
+    const mixedList = await post('session/list', { workspaceRoot: '/workspace' });
+    expect(mixedList.status).toBe(200);
+    const mixed = (await mixedList.json()) as {
+      sessions: Array<{
+        sessionId: string;
+        teamId: string;
+        leaderAgentId: string | null;
+        blocker?: string;
+      }>;
+    };
+    expect(
+      mixed.sessions.find((session) => session.sessionId === identity.sessionId),
+    ).toMatchObject({
+      teamId: identity.teamSelection,
+      leaderAgentId: identity.leaderAgentId,
+    });
+    expect(
+      mixed.sessions.find((session) => session.sessionId === removedTeam.session.id),
+    ).toMatchObject({
+      teamId: defaultTeam.definition.id,
+      leaderAgentId: null,
+      blocker: expect.stringContaining(
+        `Saved Team ${defaultTeam.definition.id} is unavailable or invalid`,
+      ),
+    });
+    expect(() => runtime.snapshot(removedTeam.session.id)).toThrow('unavailable or invalid');
+    expect(
+      runtime.listSessions('/workspace').find((session) => session.id === removedTeam.session.id)
+        ?.teamId,
+    ).toBe(defaultTeam.definition.id);
+    const cliHistory = await post('snapshot', {
+      sessionId: cli.session.id,
+      leaderAgentId: cliLeader,
+      workspaceRoot: cli.session.workspaceRoot,
+      teamSelection: cli.session.teamId,
+    });
+    expect(cliHistory.status).toBe(200);
+    expect(((await cliHistory.json()) as { session: { id: string } }).session.id).toBe(
+      cli.session.id,
+    );
+    // > Read-only history recovery must not grant active Session command access.
+    expect((await post('snapshot', { sessionId: identity.sessionId })).status).toBe(400);
+    expect(
+      (
+        await post('command', {
+          sessionId: identity.sessionId,
+          command: { type: 'pass.create', title: 'must stay inactive' },
+        })
+      ).status,
+    ).toBe(403);
+    expect(runtime.snapshot(identity.sessionId).passes).toHaveLength(0);
     api.setSession(identity.workspaceRoot, identity.sessionId);
     expect((await post('snapshot', { sessionId: identity.sessionId })).status).toBe(200);
     expect(
       (await post('snapshot', { sessionId: identity.sessionId, workspaceRoot: '/other' })).status,
     ).toBe(400);
-    expect(agents.creates).toBe(0);
+    expect(agents.creates).toBe(creationsBeforeRecovery);
   } finally {
     await api.close();
     await runtime.close();

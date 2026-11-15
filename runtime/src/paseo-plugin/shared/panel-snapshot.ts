@@ -42,7 +42,10 @@ export const PanelSnapshotSourceSchema = z.object({
 });
 export type PanelSnapshotSource = z.infer<typeof PanelSnapshotSourceSchema>;
 
-export const TeamSnapshotRequestSchema = z.object({ sessionId: z.string().min(1) });
+export const TeamSnapshotRequestSchema = z.object({
+  sessionId: z.string().min(1),
+  leaderAgentId: z.string().min(1).optional(),
+});
 export { SessionOpenRequestSchema, SessionOpenResponseSchema } from './team-catalog';
 export type { SessionOpenRequest } from './team-catalog';
 
