@@ -169,7 +169,9 @@ ltcook eval audit --static-only
 ltcook eval audit --setup current
 ltcook eval run --setup current
 ltcook eval run --quick --setup synthetic
-ltcook eval run --behavior-only --setup synthetic
+ltcook eval run --setup synthetic --case read-only
+ltcook eval run --setup synthetic --repetitions 2
+ltcook eval run --all --setup synthetic
 ltcook eval analyze --setup synthetic
 ltcook eval list
 ltcook eval watch RUN_ID
@@ -181,9 +183,23 @@ ltcook eval delete RUN_ID
 
 Static Instruction Audit works without Ollama. LLM-dependent evaluations require
 local Ollama and the prepared Spark model; they never select another model when
-it is unavailable. Behavioral cases start with thinking off and may retry once
-with low thinking. Bottleneck Attribution compares guidance variants with three
-repetitions and no retry.
+it is unavailable. Behavior Evaluation uses full instructions in the selected setup. It runs the
+read-only, no-op and targeted-fix cases once each unless `--case` selects one or
+`--repetitions N` requests more executions. Cases start with reasoning off and
+may fall back once to low reasoning on the same Spark model. If the fallback
+also fails, the run stops and preserves the evidence.
+
+Bottleneck Attribution uses the timings and traces from the same executions;
+it does not repeat the agent's work just to measure time. Instruction Audit is
+requested separately with `eval audit`, or together with the cases using
+`eval run --all`. Semantic findings are suggestions requiring review.
+
+Reports show actual elapsed time, the case safeguard and the successful runs
+used to calculate it. The safeguard is three times the slowest of the five most
+recent comparable successful attempts, with separate reasoning-mode histories.
+Without a compatible baseline, the report identifies its 120-second bootstrap
+safeguard. Failed attempts do not increase it. Partial results and sanitized
+diagnostics remain available after a failure or cancellation.
 
 Evaluation execution uses disposable state and workspace snapshots. Reports list
 included and excluded resources, configuration provenance, unsupported tools, and

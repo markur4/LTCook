@@ -6,11 +6,10 @@ import { DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-codin
 import { selectedTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import { NativeGuidance } from '../integrations/native-guidance.js';
-import type { EvalEngine } from './service.js';
+import type { EvalBudget, EvalEngine } from './service.js';
 import { evaluationCaseCount } from './contracts.js';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import {
-  aggregate,
   assertEvaluationSandbox,
   runTask,
   type Scenario,
@@ -37,6 +36,12 @@ type EngineOptions = {
   teamSelection?: string;
   context?: EvaluationContext;
   endpoint?: string;
+};
+
+type EvaluationAttempt = Omit<EvaluationResult, 'trace'> & {
+  failureCategory?: string;
+  thinking: 'off' | 'low';
+  budget: EvalBudget;
 };
 
 /** One engine shared by CLI and Paseo; setup preparation never selects a separate execution path. */
@@ -202,12 +207,8 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
       const run = async (
         scenario: Scenario,
         thinking: 'off' | 'low',
-      ): Promise<
-        Omit<EvaluationResult, 'trace'> & {
-          thinking: 'off' | 'low';
-          budget: { timeoutMs: number; referenceRuns: string[]; expectedMs: number | null };
-        }
-      > => {
+        onMeasured: (attempt: EvaluationAttempt) => Promise<void>,
+      ): Promise<EvaluationAttempt> => {
         signal.throwIfAborted();
         const identity = { scenario, thinking, provenanceKey };
         const allowance = budget?.(identity) ?? {
@@ -284,18 +285,33 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
             instructions: { resources: [] },
             trace: { traceEvents: [] },
           };
+        }
+        traceEvents.push(...value.trace.traceEvents);
+        const { trace: _trace, ...measured } = value;
+        const attempt = {
+          ...measured,
+          elapsedMs: performance.now() - started,
+          thinking,
+          budget: allowance,
+        };
+        try {
+          await onMeasured(attempt);
         } finally {
           await rm(directory, { recursive: true, force: true });
         }
-        traceEvents.push(...value.trace.traceEvents);
-        const { trace: _trace, ...attempt } = value;
-        const elapsedMs = performance.now() - started;
-        await learned?.(identity, { elapsedMs, success: value.success });
-        return { ...attempt, elapsedMs, thinking, budget: allowance };
+        attempt.elapsedMs = performance.now() - started;
+        if (attemptSignal.aborted) {
+          attempt.success = false;
+          attempt.failureCategory = signal.aborted ? 'cancelled' : 'limits';
+          attempt.failure = signal.aborted
+            ? 'Evaluation cancelled'
+            : 'Case exceeded its history-based safeguard';
+        }
+        await learned?.(identity, { elapsedMs: attempt.elapsedMs, success: attempt.success });
+        return attempt;
       };
-      if (preset === 'audit' || preset === 'full') {
+      const auditPrompt = async (sample: Awaited<ReturnType<typeof run>>) => {
         progress({ event: 'suite.started', suite: 'instruction-semantic', completed, total });
-        const sample = await run('read-only', 'off');
         results.semantic = {
           capture: sample,
           findings: [],
@@ -313,14 +329,44 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
           path.join(temporary, 'semantic.jsonl'),
           semanticTrace,
         );
+        const attempts: Array<{
+          chunk: number;
+          thinking: 'off';
+          elapsedMs: number;
+          success: boolean;
+          failure?: string;
+          budget: { timeoutMs: number; referenceRuns: string[]; expectedMs: number | null };
+        }> = [];
+        let exportedEvents = 0;
         for (const [index, chunk] of chunks.entries()) {
+          signal.throwIfAborted();
+          const identity = {
+            scenario: `instruction-semantic:${index + 1}`,
+            thinking: 'off' as const,
+            provenanceKey,
+          };
+          const allowance = budget?.(identity) ?? {
+            timeoutMs: 120000,
+            referenceRuns: [],
+            expectedMs: null,
+          };
+          const attempt: (typeof attempts)[number] = {
+            chunk: index + 1,
+            thinking: 'off',
+            elapsedMs: 0,
+            success: false,
+            budget: allowance,
+          };
+          attempts.push(attempt);
+          const started = performance.now();
           const span = semanticTelemetry.begin('model.semantic-audit');
           try {
             const response = await fetch(`${endpoint}/api/chat`, {
               method: 'POST',
-              signal: AbortSignal.any([signal, AbortSignal.timeout(120000)]) as NonNullable<
-                Parameters<typeof fetch>[1]
-              >['signal'],
+              signal: AbortSignal.any([
+                signal,
+                AbortSignal.timeout(Math.ceil(allowance.timeoutMs)),
+              ]) as NonNullable<Parameters<typeof fetch>[1]>['signal'],
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
                 model: EVAL_MODEL,
@@ -336,10 +382,17 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
                 ],
               }),
             });
-            if (!response.ok)
-              throw new Error(
-                `Local semantic audit failed (${response.status}); no fallback was attempted.`,
-              );
+            if (!response.ok) {
+              const payload: unknown = await response.json().catch(() => null);
+              const detail =
+                payload &&
+                typeof payload === 'object' &&
+                'error' in payload &&
+                typeof payload.error === 'string'
+                  ? payload.error.slice(0, 500)
+                  : response.statusText;
+              throw new Error(`Local semantic audit failed (${response.status}): ${detail}`);
+            }
             const content = (await response.json()) as { message?: { content?: string } };
             const generated = JSON.parse(content.message?.content ?? '{}') as {
               findings?: unknown[];
@@ -349,17 +402,34 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
             findings.push(
               ...generated.findings.map((finding) => ({ suggestion: finding, chunk: index + 1 })),
             );
+            attempt.success = true;
+          } catch (error) {
+            attempt.failure = error instanceof Error ? error.message : 'Semantic audit failed';
+            throw error;
           } finally {
             span.end();
+            attempt.elapsedMs = performance.now() - started;
+            await learned?.(identity, { elapsedMs: attempt.elapsedMs, success: attempt.success });
+            await semanticTelemetry.exportTrace();
+            const events = (
+              JSON.parse(await readFile(semanticTrace, 'utf8')) as { traceEvents: unknown[] }
+            ).traceEvents;
+            traceEvents.push(...events.slice(exportedEvents));
+            exportedEvents = events.length;
+            results.semantic = {
+              capture: sample,
+              attempts,
+              findings,
+              chunkCount: chunks.length,
+              classification: 'suggestions-requiring-review',
+              promptSha256: hash(effectivePrompt),
+            };
+            await flush();
           }
         }
-        await semanticTelemetry.exportTrace();
-        traceEvents.push(
-          ...(JSON.parse(await readFile(semanticTrace, 'utf8')) as { traceEvents: unknown[] })
-            .traceEvents,
-        );
         results.semantic = {
           capture: sample,
+          attempts,
           findings,
           chunkCount: chunks.length,
           classification: 'suggestions-requiring-review',
@@ -376,6 +446,17 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
           completed,
           total,
         });
+      };
+      if (preset === 'audit') {
+        const sample = await run('read-only', 'off', async (capture) => {
+          results.semantic = {
+            capture,
+            findings: [],
+            classification: 'suggestions-requiring-review',
+          };
+          await flush();
+        });
+        await auditPrompt(sample);
       }
       const tasks: Array<{
         arm: 'complete';
@@ -388,7 +469,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         pending: boolean;
       }> = [];
       const refreshResults = () => {
-        results.behavior = { tasks, aggregates: aggregate(tasks.filter((task) => !task.pending)) };
+        results.behavior = { tasks };
         results.bottlenecks = {
           source: 'behavior',
           totalElapsedMs: tasks.reduce((sum, task) => sum + task.elapsedMs, 0),
@@ -429,15 +510,40 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
             };
             tasks.push(task);
             for (const thinking of ['off', 'low'] as const) {
-              const attempt = await run(scenario, thinking);
-              task.attempts.push(attempt);
-              task.elapsedMs += attempt.elapsedMs;
+              const attempt = await run(scenario, thinking, async (partial) => {
+                task.attempts.push(partial);
+                task.elapsedMs = task.attempts.reduce((sum, value) => sum + value.elapsedMs, 0);
+                task.success = partial.success;
+                if (thinking === 'off') task.initialSuccess = partial.success;
+                refreshResults();
+                await flush();
+              });
+              task.elapsedMs = task.attempts.reduce((sum, value) => sum + value.elapsedMs, 0);
               task.success = attempt.success;
               if (thinking === 'off') task.initialSuccess = attempt.success;
-              task.pending = !attempt.success && thinking === 'off' && !signal.aborted;
+              task.pending =
+                !attempt.success &&
+                thinking === 'off' &&
+                !signal.aborted &&
+                attempt.failureCategory !== 'runtime';
               refreshResults();
               await flush();
               signal.throwIfAborted();
+              if (attempt.failureCategory === 'runtime') {
+                completed++;
+                progress({
+                  event: 'case.failed',
+                  suite: 'behavior',
+                  case: scenario,
+                  completed,
+                  total,
+                  message: attempt.failure,
+                });
+                await flush();
+                throw new Error(
+                  `${scenario} execution failed: ${attempt.failure ?? 'Runtime prerequisite failed'}`,
+                );
+              }
               if (attempt.success) break;
             }
             task.pending = false;
@@ -458,6 +564,14 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
               );
           }
         }
+      }
+      if (preset === 'full') {
+        const sample = tasks[0]?.attempts.at(-1);
+        if (!sample)
+          throw new Error(
+            'Behavior Evaluation did not capture an effective prompt for Instruction Audit',
+          );
+        await auditPrompt(sample);
       }
       await flush();
       return {
@@ -583,16 +697,16 @@ export function attributeEvaluationTrace(events: unknown[]) {
   return Object.fromEntries(
     [...intervals].map(([category, values]) => {
       values.sort((a, b) => a[0] - b[0]);
-      let elapsed = 0,
-        start = 0,
-        end = 0;
+      let elapsed = 0;
+      let active: [number, number] | undefined;
       for (const interval of values) {
-        if (interval[0] > end) {
-          elapsed += end - start;
-          [start, end] = interval;
-        } else end = Math.max(end, interval[1]);
+        if (!active) active = [...interval];
+        else if (interval[0] > active[1]) {
+          elapsed += active[1] - active[0];
+          active = [...interval];
+        } else active[1] = Math.max(active[1], interval[1]);
       }
-      return [category, (elapsed + end - start) / 1000];
+      return [category, (elapsed + (active ? active[1] - active[0] : 0)) / 1000];
     }),
   );
 }

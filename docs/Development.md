@@ -160,8 +160,8 @@ workers.
 A complete test-suite measurement includes symbolic tests and live agent
 evaluations. Report elapsed time and outcomes for each category and their
 combined total. For complete live coverage, use the full evaluation preset in
-both Current and Synthetic setups. Run live comparisons sequentially so local
-model contention does not distort paired timings. Ordinary CI runs symbolic
+both Current and Synthetic setups. Run live agent evaluations sequentially so local
+model contention does not distort elapsed-time estimates. Ordinary CI runs symbolic
 tests, including scripted checks of the evaluation machinery; live agent
 evaluations remain separately invoked.
 
@@ -207,7 +207,9 @@ needs no model; LLM-dependent runs require the prepared local Spark tag
 ltcook eval audit --static-only
 ltcook eval run --setup current
 ltcook eval run --quick --setup synthetic
-ltcook eval run --behavior-only --setup synthetic
+ltcook eval run --setup synthetic --case read-only
+ltcook eval run --setup synthetic --repetitions 2
+ltcook eval run --all --setup synthetic
 ltcook eval analyze --setup synthetic
 ```
 
@@ -221,17 +223,40 @@ appropriate sandbox is implemented; do not launch Windows executables from WSL.
 Reports, progress events and Perfetto traces live in runtime state under
 `evals/runs`, with prompts, transcripts, and credentials excluded. Instruction
 Audit records production loader provenance; semantic findings require review.
-Behavior Evaluation uses read-only, no-op and targeted-fix tasks. Bottleneck
-Attribution repeats paired guidance variants with counterbalanced order and
-reports observed variation. Local model smoke results are evidence, not CI gates;
-normal tests use scripted responses without Ollama or user login.
+Routine `eval run` performs Behavior Evaluation with full instructions in the
+selected setup. It runs the read-only, no-op and targeted-fix cases once each.
+`--case` selects one case, and `--repetitions N` explicitly repeats the selected
+cases. The default is one repetition. `eval run --all` adds Instruction Audit;
+when the categories run together, semantic audit uses the prompt already
+captured during Behavior Evaluation rather than launching another agent task.
 
-Keep live verification focused: `eval run --quick` checks one targeted-fix case
-and retries once with low thinking if it fails. Use `eval analyze` when repeated
-timing evidence is needed: it runs 18 cases (three scenarios, two instruction
-variants, three repetitions) serially to avoid model contention. Each attempt
-uses an independent workspace, requests copy-on-write copies where supported,
-and releases its workspace before the next attempt.
+Bottleneck Attribution reports timings from those same executions and their
+Perfetto traces. `eval analyze` starts one set of full-instruction cases by
+default, or uses its explicit `--case` and `--repetitions` selections. It does
+not run reduced-instruction variants. One execution is enough for an elapsed-time
+estimate; overlapping trace categories must not be added into another total.
+
+Keep diagnosis focused: start Synthetic Setup with `--case read-only`, then
+verify no-op and targeted-fix individually. Each case starts with reasoning off
+and may fall back once to low reasoning on the same pinned Spark model. A case
+that fails its fallback stops the run before later cases or repetitions. Each
+attempt uses an independent workspace, requests copy-on-write copies where
+supported, and releases disposable state after its diagnostics are preserved.
+
+Agent evaluation safeguards use three times the slowest of the five most recent
+comparable successful attempts. Reasoning modes have separate histories, and
+model, fixture, setup, instruction/tool configuration and verified inference
+hardware must match. Failed or cancelled attempts do not increase the safeguard.
+With no compatible successful history, the report identifies the 120-second
+bootstrap safeguard. Reports show the reference runs, expected duration,
+calculated safeguard, actual duration, and saved failure diagnostics. Timing
+history and partial results belong to runtime state, not a separate database.
+
+Run records use schema 3. Unsupported older histories remain unchanged and are
+not read as current results. Preserve them if needed, stop the runtime, remove
+its `evals/runs` directory, and restart to reset history. Symbolic tests use
+scripted responses without Ollama or user login; live agent evaluations remain
+explicitly invoked outside ordinary CI.
 
 ## Asset packaging
 

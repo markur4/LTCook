@@ -15,6 +15,7 @@ const verificationCalls = new Set<string>();
 const verifiedCalls = new Set<string>();
 const verificationMarker = 'LTCook fixture verified';
 let requests = 0;
+let semanticRequests = 0;
 let failure: unknown;
 const scenario = process.argv[2] ?? 'behavior';
 const controller = new AbortController();
@@ -25,14 +26,24 @@ const server = createServer(async (request, response) => {
       response.end(JSON.stringify({ models: [{ name: EVAL_MODEL }] }));
       return;
     }
-    assert.equal(request.url, '/v1/chat/completions');
+    assert(['/v1/chat/completions', '/api/chat'].includes(request.url ?? ''));
     let body = '';
     for await (const chunk of request) body += chunk;
     const input = JSON.parse(body) as {
       model: string;
+      think?: boolean;
       messages: Array<{ role: string; content: unknown; tool_call_id?: string }>;
     };
     assert.equal(input.model, EVAL_MODEL);
+    if (request.url === '/api/chat') {
+      semanticRequests++;
+      assert.equal(input.think, false);
+      response.setHeader('content-type', 'application/json');
+      if (scenario === 'audit-error')
+        response.writeHead(500).end(JSON.stringify({ error: 'semantic fixture error' }));
+      else response.end(JSON.stringify({ message: { content: '{"findings":[]}' } }));
+      return;
+    }
     for (const message of input.messages)
       if (
         message.role === 'tool' &&
@@ -180,9 +191,14 @@ try {
   });
   let checkpoint: Awaited<ReturnType<typeof engine>> | undefined;
   const input = {
-    preset: ['quick', 'current', 'bad-verification', 'no-delegation'].includes(scenario)
-      ? 'quick'
-      : 'behavior',
+    preset:
+      scenario === 'full'
+        ? 'full'
+        : scenario === 'audit-error'
+          ? 'audit'
+          : ['quick', 'current', 'bad-verification', 'no-delegation'].includes(scenario)
+            ? 'quick'
+            : 'behavior',
     setup: scenario === 'current' ? 'current' : 'synthetic',
     ...(scenario === 'current' ? { workspaceRoot: workspace } : {}),
     staticOnly: false,
@@ -206,7 +222,28 @@ try {
           );
     },
   } as const;
-  if (scenario === 'cancel') {
+  if (scenario === 'audit-error') {
+    await assert.rejects(engine(input), /semantic fixture error/);
+    assert(checkpoint);
+    assert(semanticRequests > 0);
+    const saved = checkpoint as {
+      result: {
+        results: { semantic: { attempts: Array<{ success: boolean; failure?: string }> } };
+      };
+      trace: { traceEvents: Array<{ name: string; ph: string }> };
+    };
+    assert.equal(saved.result.results.semantic.attempts[0]?.success, false);
+    assert.match(
+      saved.result.results.semantic.attempts[0]?.failure ?? '',
+      /semantic fixture error/,
+    );
+    assert(
+      saved.trace.traceEvents.some(
+        (event) => event.name === 'model.semantic-audit' && event.ph === 'E',
+      ),
+    );
+    console.log(JSON.stringify({ result: 'passed', semanticRequests, failureCapture: true }));
+  } else if (scenario === 'cancel') {
     await assert.rejects(engine(input), /abort/i);
     assert(requests >= 5);
     console.log(
@@ -237,7 +274,18 @@ try {
         };
       }
     ).results.behavior.tasks;
-    assert.equal(tasks.length, scenario === 'behavior' ? 3 : scenario === 'repeated' ? 2 : 1);
+    assert.equal(
+      tasks.length,
+      ['behavior', 'full'].includes(scenario) ? 3 : scenario === 'repeated' ? 2 : 1,
+    );
+    if (scenario === 'full') {
+      assert(semanticRequests > 0);
+      assert.equal(
+        steps.size,
+        tasks.length * 2,
+        'Full execution must reuse a behavior prompt instead of launching another task for capture',
+      );
+    }
     assert(tasks.every((task) => (task as { arm?: string }).arm === 'complete'));
     assert(
       tasks.every(
