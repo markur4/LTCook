@@ -35,7 +35,6 @@ async function run(): Promise<void> {
     : null;
   const token = required('LTCOOK_API_TOKEN');
   const apiListen = required('LTCOOK_API_LISTEN');
-  const teamSelection = process.env.LTCOOK_TEAM ?? 'default-minimal';
   const instanceId = randomUUID();
   const api = new RuntimeApi(undefined, token, apiListen);
   const endpoint = await api.listen();
@@ -97,7 +96,7 @@ async function run(): Promise<void> {
     })();
     return shutdown;
   };
-  api.setOpenWorkspaceHandler(teamSelection, async () => {
+  api.setOpenWorkspaceHandler(async () => {
     await record('session-open', instanceId);
     throw new Error('The owner fixture does not open project Sessions');
   });

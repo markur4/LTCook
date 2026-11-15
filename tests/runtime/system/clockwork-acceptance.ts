@@ -121,7 +121,7 @@ function script(
   if (!pass) return;
   const original = snapshot.tasks.find((entry) => entry.requestId === 'system-original');
   const correction = snapshot.tasks.find((entry) => entry.requestId === 'system-correction');
-  if (memberKey === 'main' && text.includes('FIXTURE_CORRECTION') && original && !correction) {
+  if (memberKey === 'leader' && text.includes('FIXTURE_CORRECTION') && original && !correction) {
     return command({
       type: 'task.create',
       passId: pass.id,
@@ -135,7 +135,7 @@ function script(
     });
   }
   if (
-    memberKey === 'main' &&
+    memberKey === 'leader' &&
     text.includes('FIXTURE_RETRY') &&
     original?.status === 'failed' &&
     correction?.status === 'completed'
@@ -536,7 +536,7 @@ try {
             ?.id,
       ),
   );
-  await backend.send(nativeIds.get('main')!, 'FIXTURE_CORRECTION');
+  await backend.send(nativeIds.get('leader')!, 'FIXTURE_CORRECTION');
   await waitFor('completed correction', () =>
     runtime
       .snapshot(sessionId)
@@ -561,7 +561,7 @@ try {
   }
   assert.equal(runtime.snapshot(sessionId).session.id, before.session.id);
   assert.equal(runtime.snapshot(sessionId).assignments.length, before.assignments.length);
-  await backend.send(nativeIds.get('main')!, 'FIXTURE_RETRY');
+  await backend.send(nativeIds.get('leader')!, 'FIXTURE_RETRY');
   await waitFor('Pass completion after independent review', () =>
     runtime.snapshot(sessionId).passes.some((entry) => entry.status === 'completed'),
   );

@@ -1,3 +1,6 @@
+import path from 'node:path';
+import type { PaseoApi } from '@getpaseo/client';
+import { z } from 'zod';
 import { defineRpc } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
@@ -20,11 +23,28 @@ const evalsDiagnostics = defineRpc({
 import {
   panelSnapshot,
   PanelSnapshotSourceSchema,
-  SessionOpenRequestSchema,
-  SessionOpenResponseSchema,
   TeamSnapshotRequestSchema,
   TeamSnapshotResponseSchema,
 } from './shared/panel-snapshot';
+
+import {
+  TeamCatalogRequestSchema,
+  TeamCatalogResponseSchema,
+  SessionListRequestSchema,
+  SessionListResponseSchema,
+  SessionOpenRequestSchema,
+  SessionOpenResponseSchema,
+} from './shared/team-catalog';
+const teamCatalog = defineRpc({
+  name: 'ltcook.team.catalog',
+  input: TeamCatalogRequestSchema,
+  output: TeamCatalogResponseSchema,
+});
+const sessionList = defineRpc({
+  name: 'ltcook.session.list',
+  input: SessionListRequestSchema,
+  output: SessionListResponseSchema,
+});
 
 const teamSnapshot = defineRpc({
   name: 'ltcook.team.snapshot',
@@ -55,6 +75,7 @@ async function runtimeRequest(
 ) {
   const response = await fetch(`${endpoint}${path}`, {
     method: 'POST',
+    signal: AbortSignal.timeout(5000) as NonNullable<Parameters<typeof fetch>[1]>['signal'],
     headers,
     body: JSON.stringify(body),
   });
@@ -78,7 +99,92 @@ async function runtimeRequest(
   return { response, detail, payload };
 }
 
+const preparedSession = z.object({
+  env: z.record(z.string(), z.string()),
+  mcpServers: z
+    .record(
+      z.string(),
+      z.object({
+        type: z.literal('http'),
+        url: z.string().url(),
+        headers: z.record(z.string(), z.string()).optional(),
+      }),
+    )
+    .optional(),
+});
+
+async function runtimeJson(path: string, body: unknown) {
+  const { endpoint, headers } = runtimeConfig();
+  const { response, detail } = await runtimeRequest(endpoint, headers, path, body);
+  if (!response.ok) throw new Error(`LTCook request failed (${response.status})${detail}`);
+  return response.json();
+}
+
+async function listSessions(input: z.infer<typeof SessionListRequestSchema>, paseo: PaseoApi) {
+  const response = SessionListResponseSchema.parse(await runtimeJson('/v1/session/list', input));
+  const sessions = await Promise.all(
+    response.sessions.map(async (session) => {
+      const native = await paseo.agents.ref(session.leaderAgentId).refresh();
+      if (!native || native.agent.archivedAt) return null;
+      return {
+        ...session,
+        title: native.agent.title,
+        status: native.agent.status ?? 'unknown',
+        lastActivityAt: native.agent.updatedAt,
+      };
+    }),
+  );
+  return {
+    sessions: sessions
+      .filter((session) => session !== null)
+      .sort((a, b) =>
+        (b.lastActivityAt ?? b.createdAt).localeCompare(a.lastActivityAt ?? a.createdAt),
+      ),
+  };
+}
+
 export default function contribute(server: PluginServerContext) {
+  const cleanup = [
+    server.addHook('agent.create.before', async ({ request }) => {
+      if (request.config.provider.split('/')[0] !== 'ltcook') return;
+      const selection = request.metadata?.['ltcook.team'];
+      if (typeof selection !== 'string' || !selection)
+        throw new Error('Choose an installed Team before starting LTCook.');
+      const catalog = z
+        .object({ teams: z.array(z.object({ selection: z.string(), status: z.string() })) })
+        .parse(await runtimeJson('/v1/team/catalog', {}));
+      if (
+        !catalog.teams.some((team) => team.selection === selection && team.status === 'installed')
+      )
+        throw new Error('Selected Team is unavailable. Choose an installed Team.');
+      return request;
+    }),
+    server.addHook('agent.open.before', async ({ request }) => {
+      if (request.provider !== 'ltcook' || request.purpose === 'history') return;
+      const teamSelection = request.metadata['ltcook.team'];
+      if (typeof teamSelection !== 'string' || !teamSelection)
+        throw new Error(
+          'This LTCook conversation has no supported Team identity. Start a new Session.',
+        );
+      const identity = {
+        sessionId: request.agentId,
+        leaderAgentId: request.agentId,
+        workspaceRoot: request.cwd,
+        teamSelection,
+      };
+      await runtimeJson('/v1/session/open', identity);
+      const prepared = preparedSession.parse(await runtimeJson('/v1/session/prepare', identity));
+      return {
+        ...request,
+        env: { ...request.env, ...prepared.env },
+        mcpServers: { ...request.mcpServers, ...prepared.mcpServers },
+      };
+    }),
+  ];
+  server.handle(teamCatalog, async () =>
+    TeamCatalogResponseSchema.parse(await runtimeJson('/v1/team/catalog', {})),
+  );
+  server.handle(sessionList, async (input, { paseo }) => listSessions(input, paseo));
   server.handle(evalsDiagnostics, async (input) => {
     const { endpoint, headers } = runtimeConfig();
     const routes = {
@@ -104,7 +210,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(teamDetail, async (input) => {
     const { endpoint, headers } = runtimeConfig();
     const { response, detail, payload } = await runtimeRequest(endpoint, headers, '/v1/snapshot', {
-      workspaceRoot: input.workspaceRoot,
+      sessionId: input.sessionId,
     });
     if (
       response.status === 404 &&
@@ -144,19 +250,39 @@ export default function contribute(server: PluginServerContext) {
     const snapshot = PanelSnapshotSourceSchema.parse(await response.json());
     return panelSnapshot(snapshot);
   });
-  server.handle(openSession, async (input) => {
-    const { endpoint, headers } = runtimeConfig();
-    const teamSelection = process.env.LTCOOK_TEAM;
-    if (!teamSelection) throw new Error('LTCook team selection is not available');
-    const { response, detail } = await runtimeRequest(endpoint, headers, '/v1/session/open', {
-      workspaceRoot: input.workspaceRoot,
-      sessionId: crypto.randomUUID(),
-      teamSelection,
-    });
-    if (!response.ok) {
-      throw new Error(`LTCook session could not be started (${response.status})${detail}`);
+  server.handle(openSession, async (input, { paseo }) => {
+    if (!input.newSession) {
+      const existing = await listSessions(
+        { workspaceRoot: input.workspaceRoot, teamSelection: input.teamSelection },
+        paseo,
+      );
+      const selected = input.leaderAgentId
+        ? existing.sessions.find((session) => session.leaderAgentId === input.leaderAgentId)
+        : existing.sessions[0];
+      if (selected)
+        return {
+          sessionId: selected.sessionId,
+          workspaceRoot: selected.workspaceRoot,
+          leaderAgentId: selected.leaderAgentId,
+        };
+      if (input.leaderAgentId)
+        throw new Error('Requested Leader is unavailable in this Workspace and Team.');
     }
-    return SessionOpenResponseSchema.parse(await response.json());
+    const catalog = TeamCatalogResponseSchema.parse(await runtimeJson('/v1/team/catalog', {}));
+    const team = catalog.teams.find(
+      (team) => team.selection === input.teamSelection && team.status === 'installed',
+    );
+    if (!team) throw new Error('Choose an installed Team.');
+    const agentId = crypto.randomUUID();
+    const leader = await paseo.agents.create({
+      agentId,
+      idempotencyKey: agentId,
+      cwd: input.workspaceRoot,
+      config: { provider: 'ltcook' },
+      title: `${path.basename(input.workspaceRoot)} · ${team.name}`,
+      metadata: { 'ltcook.team': team.selection },
+    });
+    return { sessionId: leader.id, leaderAgentId: leader.id, workspaceRoot: input.workspaceRoot };
   });
-  return () => undefined;
+  return () => cleanup.forEach((dispose) => dispose());
 }

@@ -75,7 +75,7 @@ const server = createServer(async (request, response) => {
               ? 'Inspect the already correct answer and report 20 without changes.'
               : 'Read the input and report 20 without changes.',
           acceptance: 'Fixture correct',
-          assigneeKey: scenario === 'no-delegation' ? 'main' : 'adjutant',
+          assigneeKey: scenario === 'no-delegation' ? 'leader' : 'adjutant',
         });
       if (index === 1)
         command({

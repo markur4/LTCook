@@ -62,12 +62,12 @@ function snapshotFor(
     definition: {
       id: 'team-1',
       name: 'Team',
-      coordinatorKey: 'lead',
+      leaderKey: 'worker',
       routing: {
-        design: 'lead',
-        'plan.prefill': 'lead',
-        'plan.finalize': 'lead',
-        'task.execute': 'lead',
+        design: 'leader',
+        'plan.prefill': 'leader',
+        'plan.finalize': 'leader',
+        'task.execute': 'leader',
       },
       members: [],
       resources: [],
@@ -408,26 +408,26 @@ describe('native runtime boundary', () => {
     };
     const reviewPolicy = { mode: 'self' as const, reviewerKeys: [] as string[], required: false };
     const team: TeamPackage = {
-      apiVersion: 2,
+      apiVersion: 3,
       definition: {
         id: 'native-api-test-team',
         name: 'Native API test team',
-        coordinatorKey: 'lead',
+        leaderKey: 'leader',
         routing: {
-          design: 'lead',
-          'plan.prefill': 'lead',
-          'plan.finalize': 'lead',
-          'task.execute': 'lead',
+          design: 'leader',
+          'plan.prefill': 'leader',
+          'plan.finalize': 'leader',
+          'task.execute': 'leader',
         },
         members: [
           {
-            key: 'lead',
-            name: 'Lead',
+            key: 'leader',
+            name: 'Leader',
             lifetime: 'persistent',
             modelAlias: 'smart',
             thinking: '',
             readOnly: false,
-            roles: ['member'],
+            roles: ['leader'],
             workTypes: ['design', 'plan.prefill', 'plan.finalize', 'task.execute'],
             rules: [],
             skills: [],
@@ -609,7 +609,7 @@ describe('native runtime boundary', () => {
       });
       expect(stopBeforeHandler.status).toBe(503);
       expect(readyBeforeHandler.status).toBe(503);
-      api.setOpenWorkspaceHandler('default-minimal', async () => {
+      api.setOpenWorkspaceHandler(async () => {
         throw new Error('status does not open a session');
       });
       const ready = await fetch(`${endpoint}/v1/status`, {
@@ -617,7 +617,6 @@ describe('native runtime boundary', () => {
       });
       expect(ready.status).toBe(200);
       expect(await ready.json()).toEqual({
-        teamSelection: 'default-minimal',
         instanceId: 'runtime-1',
         deploymentRoot: '/deployment',
         databasePath: '/deployment/runtime.db',
@@ -698,6 +697,9 @@ describe('native runtime boundary', () => {
     }> = [];
     const snapshots = new Map<string, SessionSnapshot>();
     const controller = {
+      teamCatalog() {
+        return [{ selection: 'default-minimal', teamId: 'team-1', status: 'installed' }];
+      },
       snapshot(sessionId: string) {
         const snapshot = snapshots.get(sessionId);
         if (!snapshot) throw new Error('unknown session');
@@ -713,21 +715,17 @@ describe('native runtime boundary', () => {
       }),
       LTCOOK_TEAM: 'merged-project-team',
     });
-    api.setOpenWorkspaceHandler(
-      'default-minimal',
-      async (request) => {
-        opened.push(request);
-        const snapshot = snapshotFor(
-          `native-${request.sessionId}`,
-          true,
-          request.sessionId,
-          request.workspaceRoot,
-        );
-        snapshots.set(request.sessionId, snapshot);
-        return snapshot;
-      },
-      'team-1',
-    );
+    api.setOpenWorkspaceHandler(async (request) => {
+      opened.push(request);
+      const snapshot = snapshotFor(
+        `native-${request.sessionId}`,
+        true,
+        request.sessionId,
+        request.workspaceRoot,
+      );
+      snapshots.set(request.sessionId, snapshot);
+      return snapshot;
+    });
     const endpoint = await api.listen();
     const post = (token: string, body: unknown) =>
       fetch(`${endpoint}/v1/session/open`, {
@@ -750,8 +748,20 @@ describe('native runtime boundary', () => {
       const firstResponses = await Promise.all([post(master, first), post(master, first)]);
       expect(firstResponses.map((response) => response.status)).toEqual([200, 200]);
       expect(await Promise.all(firstResponses.map((response) => response.json()))).toEqual([
-        { sessionId: first.sessionId, workspaceRoot: first.workspaceRoot },
-        { sessionId: first.sessionId, workspaceRoot: first.workspaceRoot },
+        {
+          sessionId: first.sessionId,
+          workspaceRoot: first.workspaceRoot,
+          teamId: 'team-1',
+          teamInstanceId: 'instance-1',
+          leaderAgentId: `native-${first.sessionId}`,
+        },
+        {
+          sessionId: first.sessionId,
+          workspaceRoot: first.workspaceRoot,
+          teamId: 'team-1',
+          teamInstanceId: 'instance-1',
+          leaderAgentId: `native-${first.sessionId}`,
+        },
       ]);
       expect(opened).toHaveLength(1);
       expect(opened[0]?.shellEnvironment).toEqual({
@@ -811,7 +821,7 @@ describe('native runtime boundary', () => {
         }),
       });
       expect(crossSessionAgentSnapshot.status).toBe(400);
-      expect((await post(master, { ...first, teamSelection: 'different-team' })).status).toBe(409);
+      expect((await post(master, { ...first, teamSelection: 'different-team' })).status).toBe(400);
       expect(
         (
           await post(agentBearer(master, 'native-agent'), {
@@ -830,22 +840,21 @@ describe('native runtime boundary', () => {
     let attempts = 0;
     let snapshot: SessionSnapshot | undefined;
     const controller = {
+      teamCatalog() {
+        return [{ selection: 'default-minimal', teamId: 'team-1', status: 'installed' }];
+      },
       snapshot(sessionId: string) {
         if (!snapshot || snapshot.session.id !== sessionId) throw new Error('unknown session');
         return snapshot;
       },
     } as unknown as RuntimeController;
     const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
-    api.setOpenWorkspaceHandler(
-      'default-minimal',
-      async (request) => {
-        attempts += 1;
-        if (attempts === 1) throw new Error('temporary activation failure');
-        snapshot = snapshotFor('native-agent', true, request.sessionId, request.workspaceRoot);
-        return snapshot;
-      },
-      'team-1',
-    );
+    api.setOpenWorkspaceHandler(async (request) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('temporary activation failure');
+      snapshot = snapshotFor('native-agent', true, request.sessionId, request.workspaceRoot);
+      return snapshot;
+    });
     const endpoint = await api.listen();
     const request = {
       workspaceRoot: '/retry-workspace',

@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { Type } from 'typebox';
 import { RiedService, type RiedRequest } from '../ried.js';
-import { selectedTeam } from './team-loader.js';
+import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
 const require = createRequire(import.meta.url);
@@ -56,7 +56,7 @@ export default async function activate(
     return;
   }
 
-  const team = await selectedTeam(teamSelection);
+  const team = await loadTeam(teamSelection);
   if (team.definition.id !== teamId)
     throw new Error('Selected native team does not match the active session');
   const rpc = async (pathname: string, payload: Record<string, unknown>): Promise<Response> =>

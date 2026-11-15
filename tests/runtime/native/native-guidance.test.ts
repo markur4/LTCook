@@ -47,7 +47,7 @@ function fixture() {
       members: minimal.definition.members.map((member) => ({ ...member, rules: [], skills: [] })),
     },
   };
-  const guidance = () => new NativeGuidance(team, 'main', user, core);
+  const guidance = () => new NativeGuidance(team, 'leader', user, core);
   async function load(managed: NativeGuidance, projectTrusted = true) {
     const settingsManager = SettingsManager.create(project, agentDir, { projectTrusted });
     const loader = new DefaultResourceLoader({
