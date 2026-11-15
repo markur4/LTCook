@@ -53,6 +53,7 @@ type TimingSample = EvalTimingIdentity & { elapsedMs: number; recordedAt: number
 const checkpointSchema = z.object({
   result: z.unknown(),
   trace: z.unknown(),
+  completed: z.number().int().nonnegative(),
   timingSamples: z.array(
     z.object({
       scenario: z.string(),
@@ -170,7 +171,7 @@ export class EvalRunService {
           await this.emit(summary, 'run.interrupted', { message: summary.error });
         }
         this.summaries.set(summary.runId, summary);
-        await this.loadArtifacts(summary.runId, directory);
+        await this.loadArtifacts(summary, directory);
       } catch {
         // A malformed history entry remains isolated and is never executed on startup.
       }
@@ -351,6 +352,7 @@ export class EvalRunService {
     await this.saveArtifact(summary.runId, 'checkpoint.json', {
       result,
       trace,
+      completed: summary.completed,
       timingSamples: this.timingSamples.get(summary.runId) ?? [],
     });
     this.results.set(summary.runId, result);
@@ -430,13 +432,18 @@ export class EvalRunService {
       return [];
     }
   }
-  private async loadArtifacts(runId: string, directory: string): Promise<void> {
+  private async loadArtifacts(summary: EvalSummary, directory: string): Promise<void> {
+    const runId = summary.runId;
     try {
       const checkpoint = checkpointSchema.parse(
         JSON.parse(await readFile(path.join(directory, 'checkpoint.json'), 'utf8')),
       );
       this.results.set(runId, checkpoint.result);
       this.traces.set(runId, checkpoint.trace);
+      if (summary.status === 'interrupted') {
+        summary.completed = Math.min(summary.completed, checkpoint.completed);
+        await this.saveSummary(summary);
+      }
       this.timingSamples.set(
         runId,
         checkpoint.timingSamples.filter((sample) => sample.runId === runId),

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -61,6 +61,29 @@ test.each(['failure', 'cancellation'] as const)(
     expect(restarted.report(id)).toEqual(report);
   },
 );
+
+test('restart does not count progress newer than the last complete evidence checkpoint', async () => {
+  const { root, instance } = await service(async ({ progress, checkpoint }) => {
+    progress({ event: 'case.completed', suite: 'behavior', completed: 1, total: 3 });
+    await checkpoint!({ result: { cases: [1] }, trace: { traceEvents: [1] } });
+    progress({ event: 'case.completed', suite: 'behavior', completed: 2, total: 3 });
+    throw new Error('Simulated interruption after progress but before evidence checkpoint');
+  });
+  const id = await instance.start({ preset: 'behavior', setup: 'synthetic' });
+  await finished(instance, id);
+  const summaryFile = path.join(root, 'evals/runs', id, 'run.json');
+  const summary = JSON.parse(await readFile(summaryFile, 'utf8'));
+  await writeFile(summaryFile, JSON.stringify({ ...summary, status: 'running' }));
+  const restarted = new EvalRunService(root, async () => {
+    throw new Error('Must not replay');
+  });
+  await restarted.initialize();
+  expect(restarted.report(id)).toMatchObject({
+    summary: { status: 'interrupted', completed: 1 },
+    result: { cases: [1] },
+    trace: { traceEvents: [1] },
+  });
+});
 
 test('uses last five comparable successes and separates failed, reasoning, and unverified samples', async () => {
   const identity = {
