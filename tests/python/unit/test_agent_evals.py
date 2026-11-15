@@ -58,7 +58,12 @@ def test_cli_selects_synthetic_behavior_without_workspace_resolution(monkeypatch
     assert calls == [
         (
             "/v1/evals/start",
-            {"preset": "behavior", "setup": "synthetic", "staticOnly": False},
+            {
+                "preset": "behavior",
+                "setup": "synthetic",
+                "staticOnly": False,
+                "repetitions": 1,
+            },
         )
     ]
 
@@ -107,6 +112,7 @@ def test_cli_current_setup_passes_registered_workspace(monkeypatch):
             "preset": "audit",
             "setup": "current",
             "staticOnly": True,
+            "repetitions": 1,
             "workspaceRoot": "/registered-project",
         }
     ]
@@ -157,3 +163,46 @@ def test_cli_quick_report_skips_empty_comparison_arm(monkeypatch):
     )
     assert "mean 1.20s" in output.getvalue()
     assert "minimal" not in output.getvalue()
+
+
+def test_cli_default_run_selects_case_and_repetitions(monkeypatch):
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    requests = []
+    monkeypatch.setattr(cli, "_runtime", lambda: ({}, None))
+    monkeypatch.setattr(
+        cli,
+        "_call",
+        lambda environment, route, payload: (
+            requests.append(payload) or {"runId": "fixture"}
+        ),
+    )
+    monkeypatch.setattr(cli, "_follow", lambda environment, run_id: None)
+    result = CliRunner().invoke(
+        cli.eval_cli,
+        ["run", "--setup", "synthetic", "--case", "read-only", "--repetitions", "2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert requests == [
+        {
+            "preset": "behavior",
+            "setup": "synthetic",
+            "staticOnly": False,
+            "repetitions": 2,
+            "scenario": "read-only",
+        }
+    ]
+
+
+def test_cli_rejects_zero_repetitions_before_runtime_start(monkeypatch):
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    monkeypatch.setattr(
+        cli, "_runtime", lambda: (_ for _ in ()).throw(AssertionError("must not start"))
+    )
+    result = CliRunner().invoke(cli.eval_cli, ["run", "--repetitions", "0"])
+    assert result.exit_code == 2
