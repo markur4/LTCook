@@ -23,7 +23,10 @@ def test_real_pi_paseo_clockwork(tmp_path: Path) -> None:
 @pytest.mark.skipif(
     sys.platform != "linux", reason="Linux Bubblewrap process acceptance"
 )
-@pytest.mark.parametrize("mode", ["quick", "behavior", "current", "cancel"])
+@pytest.mark.parametrize(
+    "mode",
+    ["quick", "behavior", "current", "cancel", "bad-verification", "no-delegation"],
+)
 def test_agent_evaluation_runtime(tmp_path: Path, mode: str) -> None:
     """Exercise the sandboxed evaluation path with real native tools and local scripts."""
     assert shutil.which("bwrap"), (

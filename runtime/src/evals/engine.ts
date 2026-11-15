@@ -21,6 +21,7 @@ import {
   hash,
   resolveEvaluationContext,
   snapshotWorkspace,
+  resourceIdentity,
   type EvaluationContext,
 } from './setup.js';
 
@@ -385,11 +386,21 @@ async function staticAudit(input: {
       });
     }
     for (const resource of guidance.inspection.resources) {
+      if (resource.loaded) {
+        const words = (await readFile(resource.path, 'utf8')).split(/\s+/).length;
+        if (words > 3000)
+          findings.push({
+            kind: 'large_resource',
+            member: member.key,
+            source: resourceIdentity(resource, input.workspace, input.guidance),
+            words,
+          });
+      }
       resources.push({
         member: member.key,
         ...resource,
         name: path.isAbsolute(resource.name) ? path.basename(resource.name) : resource.name,
-        path: `${resource.scope}/${path.basename(resource.name)}`,
+        path: resourceIdentity(resource, input.workspace, input.guidance),
         ...(resource.loaded ? { sha256: hash(await readFile(resource.path)) } : {}),
       });
     }

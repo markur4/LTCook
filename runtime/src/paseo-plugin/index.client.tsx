@@ -212,13 +212,15 @@ function Diagnostics({
                     muted
                   >{`${(tasks.reduce((total: number, task: any) => total + (task.elapsedMs ?? 0), 0) / 1000).toFixed(2)}s total task time`}</Label>
                 )}
-                {(value?.aggregates ?? []).map((arm: any) => (
-                  <Label
-                    key={arm.arm}
-                    theme={theme}
-                    muted
-                  >{`${arm.arm}: mean ${(arm.meanTotalElapsedMs / 1000).toFixed(2)}s; observed ${(arm.minElapsedMs / 1000).toFixed(2)}–${(arm.maxElapsedMs / 1000).toFixed(2)}s`}</Label>
-                ))}
+                {(value?.aggregates ?? [])
+                  .filter((arm: any) => arm.tasks > 0)
+                  .map((arm: any) => (
+                    <Label
+                      key={arm.arm}
+                      theme={theme}
+                      muted
+                    >{`${arm.arm}: mean ${(arm.meanTotalElapsedMs / 1000).toFixed(2)}s; observed ${(arm.minElapsedMs / 1000).toFixed(2)}–${(arm.maxElapsedMs / 1000).toFixed(2)}s`}</Label>
+                  ))}
               </View>
             );
           })}

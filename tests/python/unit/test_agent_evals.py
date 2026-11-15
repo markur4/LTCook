@@ -110,3 +110,50 @@ def test_cli_current_setup_passes_registered_workspace(monkeypatch):
             "workspaceRoot": "/registered-project",
         }
     ]
+
+
+def test_cli_quick_report_skips_empty_comparison_arm(monkeypatch):
+    from io import StringIO
+
+    from rich.console import Console
+
+    import ltcook.cli.eval as cli
+
+    output = StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output, force_terminal=False))
+    cli._print_report(
+        {
+            "summary": {
+                "status": "completed",
+                "completed": 2,
+                "total": 2,
+                "preset": "quick",
+                "runId": "fixture",
+            },
+            "result": {
+                "results": {
+                    "behavior": {
+                        "tasks": [{"success": True, "elapsedMs": 1200}],
+                        "aggregates": [
+                            {
+                                "arm": "minimal",
+                                "tasks": 0,
+                                "meanTotalElapsedMs": None,
+                                "minElapsedMs": None,
+                                "maxElapsedMs": None,
+                            },
+                            {
+                                "arm": "complete",
+                                "tasks": 1,
+                                "meanTotalElapsedMs": 1200,
+                                "minElapsedMs": 1200,
+                                "maxElapsedMs": 1200,
+                            },
+                        ],
+                    }
+                }
+            },
+        }
+    )
+    assert "mean 1.20s" in output.getvalue()
+    assert "minimal" not in output.getvalue()

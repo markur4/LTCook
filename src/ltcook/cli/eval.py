@@ -160,6 +160,8 @@ def _print_report(report: dict) -> None:
         if not isinstance(value, dict):
             continue
         for arm in value.get("aggregates", []):
+            if not arm["tasks"]:
+                continue
             console.print(
                 f"{labels.get(name, name)} · {arm['arm']}: "
                 f"mean {arm['meanTotalElapsedMs'] / 1000:.2f}s; "

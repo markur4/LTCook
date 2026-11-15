@@ -9,7 +9,7 @@ import { createPaseoAgentBackend, startPaseoHost } from '../integrations/paseo.j
 import { selectedTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import type { GuidanceInspection } from '../guidance-api/index.js';
-import { EVAL_MODEL, hash } from './setup.js';
+import { EVAL_MODEL, hash, resourceIdentity } from './setup.js';
 import type { EvaluationJob } from './runner.js';
 
 async function freePort(): Promise<number> {
@@ -150,6 +150,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       LTCOOK_CODESEARCH_ENABLED: 'false',
       LTCOOK_CONTEXT7_ENABLED: 'false',
       LTCOOK_EVAL_ARM: job.arm,
+      LTCOOK_EVAL_ENDPOINT: job.endpoint,
       PI_OFFLINE: '1',
       DO_NOT_TRACK: '1',
     };
@@ -215,7 +216,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         if (value.isError === true) toolErrors++;
         if (typeof value.durationMs === 'number')
           telemetry.duration(`tool.${String(value.tool)}`, value.durationMs, agentId);
-        if (value.tool === 'bash' && value.isError === false) verificationCalls++;
+        if (value.fixtureVerification === true && value.isError === false) verificationCalls++;
       }
     });
     const delegate = team.definition.members.some(
@@ -284,7 +285,12 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         ? writeCalls === 0 && reportsAnswer
         : (finalAnswer as { total?: number })?.total === expectedTotal &&
           (job.scenario !== 'no-op' || writeCalls === 0) &&
-          (job.scenario !== 'targeted-fix' || verificationCalls > 0));
+          (job.scenario !== 'targeted-fix' ||
+            (verificationCalls > 0 &&
+              (!delegate ||
+                snapshot.assignments.some(
+                  (assignment) => assignment.memberKey !== team.definition.coordinatorKey,
+                )))));
     const inspections = (await runtime.execute(
       sessionId,
       { kind: 'user' },
@@ -296,7 +302,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         .map(async (resource) => ({
           ...resource,
           name: path.isAbsolute(resource.name) ? path.basename(resource.name) : resource.name,
-          path: `${resource.scope}/${path.basename(resource.name)}`,
+          path: resourceIdentity(resource, workspace, path.join(job.directory, 'guidance')),
           ...(resource.loaded ? { sha256: hash(await readFile(resource.path)) } : {}),
         })),
     );
