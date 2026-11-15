@@ -7,11 +7,12 @@ import { selectedTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import { NativeGuidance } from '../integrations/native-guidance.js';
 import type { EvalEngine } from './service.js';
+import { evaluationCaseCount } from './contracts.js';
+import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import {
   aggregate,
   assertEvaluationSandbox,
   runTask,
-  type Arm,
   type Scenario,
   type EvaluationResult,
 } from './runner.js';
@@ -40,7 +41,21 @@ type EngineOptions = {
 
 /** One engine shared by CLI and Paseo; setup preparation never selects a separate execution path. */
 export function createEvalEngine(options: EngineOptions): EvalEngine {
-  return async ({ preset, setup, staticOnly, workspaceRoot, runDirectory, signal, progress }) => {
+  return async ({
+    preset,
+    setup,
+    staticOnly,
+    workspaceRoot,
+    runDirectory,
+    signal,
+    progress,
+    repetitions = 1,
+    scenario: selectedScenario,
+    checkpoint,
+    budget,
+    learned,
+    timingHardware,
+  }) => {
     const context =
       options.context ??
       resolveEvaluationContext({
@@ -75,17 +90,19 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
     const results: Record<string, unknown> = {};
     const traceEvents: unknown[] = [];
     let completed = 0;
-    const total = staticOnly
-      ? 1
-      : preset === 'quick'
-        ? 2
-        : preset === 'audit'
-          ? 2
-          : preset === 'behavior'
-            ? 6
-            : preset === 'bottlenecks'
-              ? 18
-              : 26;
+    const total = evaluationCaseCount({
+      preset,
+      setup,
+      staticOnly,
+      repetitions,
+      scenario: selectedScenario,
+    });
+    const flush = async () =>
+      checkpoint?.({
+        result: { preset, setup, repetitions, results },
+        trace: { traceEvents },
+        metadata,
+      });
     try {
       signal.throwIfAborted();
       const files = await snapshotWorkspace(
@@ -116,14 +133,15 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         fixtureRevision: FIXTURE_REVISION,
       };
       progress({ event: 'suite.started', suite: 'preparation', completed, total, metadata });
+      const inventory = await staticAudit({
+        team,
+        workspace: source,
+        guidance,
+        resources: options.resources,
+      });
       if (['audit', 'full', 'quick'].includes(preset)) {
         progress({ event: 'suite.started', suite: 'instruction-static', completed, total });
-        results.static = await staticAudit({
-          team,
-          workspace: source,
-          guidance,
-          resources: options.resources,
-        });
+        results.static = inventory;
         completed++;
         progress({
           event: 'case.completed',
@@ -133,6 +151,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
           total,
         });
       }
+      await flush();
       if (staticOnly) return { result: { preset, setup, results }, trace: null, metadata };
       const health = await fetch(`${endpoint}/api/tags`, {
         signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) as NonNullable<
@@ -141,7 +160,9 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
       });
       if (!health.ok)
         throw new Error('Local Ollama is unavailable; start the configured local service.');
-      const catalog = (await health.json()) as { models?: Array<{ name?: string }> };
+      const catalog = (await health.json()) as {
+        models?: Array<{ name?: string; digest?: string }>;
+      };
       if (!catalog.models?.some(({ name }) => name === EVAL_MODEL))
         throw new Error(
           `Local Spark model ${EVAL_MODEL} is not installed; no fallback was attempted.`,
@@ -157,23 +178,60 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         }).stdout?.trim();
       if (!nodeExecutable)
         throw new Error('The native Node executable is unavailable for evaluation.');
+      const modelDigest = catalog.models?.find(({ name }) => name === EVAL_MODEL)?.digest;
+      const provenanceKey = `${timingHardware && modelDigest ? '' : 'unverified:'}${hash(
+        JSON.stringify({
+          setup,
+          team: team.definition,
+          configuration: metadata.provenance,
+          resources: inventory.resources,
+          modelDigest: modelDigest ?? null,
+          toolSchema: AgentRuntimeCommandInputSchema,
+          hardware: timingHardware ?? null,
+        }),
+      )}`;
+      Object.assign(metadata.provenance, {
+        modelDigest: modelDigest ?? null,
+        timingHardware: timingHardware ?? 'unverified',
+        timingProvenanceKey: provenanceKey,
+      });
+      if (!timingHardware)
+        metadata.limitations.push(
+          'Inference hardware is unverified; successful history from another run is not reused.',
+        );
       const run = async (
         scenario: Scenario,
-        arm: Arm,
-        repetition: number,
         thinking: 'off' | 'low',
-      ): Promise<Omit<EvaluationResult, 'trace'>> => {
+      ): Promise<
+        Omit<EvaluationResult, 'trace'> & {
+          thinking: 'off' | 'low';
+          budget: { timeoutMs: number; referenceRuns: string[]; expectedMs: number | null };
+        }
+      > => {
         signal.throwIfAborted();
+        const identity = { scenario, thinking, provenanceKey };
+        const allowance = budget?.(identity) ?? {
+          timeoutMs: 120000,
+          referenceRuns: [],
+          expectedMs: null,
+        };
+        const attemptSignal = AbortSignal.any([
+          signal,
+          AbortSignal.timeout(Math.ceil(allowance.timeoutMs)),
+        ]);
         const started = performance.now();
         const directory = await mkdtemp(path.join(temporary, 'case-'));
+        let value: EvaluationResult & { failureCategory?: string };
         try {
           // > Reflinks preserve independent writes and fall back to copying when unsupported.
           const copyOptions = { recursive: true, mode: constants.COPYFILE_FICLONE };
           await cp(source, path.join(directory, 'workspace'), copyOptions);
           await cp(guidance, path.join(directory, 'guidance'), copyOptions);
+          attemptSignal.throwIfAborted();
           const git = (args: string[]) =>
             spawnSync('git', ['-C', path.join(directory, 'workspace'), ...args], {
               encoding: 'utf8',
+              timeout: Math.max(1, Math.ceil(allowance.timeoutMs - (performance.now() - started))),
               env: {
                 PATH: process.env.PATH,
                 HOME: directory,
@@ -181,33 +239,70 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
                 GIT_CONFIG_GLOBAL: '/dev/null',
               },
             });
-          git(['init', '-q']);
-          git(['add', '.']);
-          const value = await runTask(
+          for (const args of [
+            ['init', '-q'],
+            ['add', '.'],
+          ]) {
+            const result = git(args);
+            if (result.status !== 0) throw new Error('Evaluation workspace Git preparation failed');
+          }
+          attemptSignal.throwIfAborted();
+          value = await runTask(
             {
               directory,
               appRoot,
               nodeExecutable,
               teamSelection: context.teamSelection,
-              arm,
+              arm: 'complete',
               scenario,
               thinking,
               endpoint,
-              timeoutMs: 120000,
+              timeoutMs: Math.max(1, allowance.timeoutMs - (performance.now() - started)),
               webConfiguration: context.webConfiguration,
             },
-            signal,
+            attemptSignal,
           );
-          traceEvents.push(...value.trace.traceEvents);
-          const { trace: _trace, ...attempt } = value;
-          return { ...attempt, elapsedMs: performance.now() - started };
+          if (attemptSignal.aborted && !signal.aborted) {
+            value = {
+              ...value,
+              success: false,
+              failureCategory: 'limits',
+              failure: 'Case exceeded its history-based safeguard',
+            };
+          }
+        } catch (error) {
+          value = {
+            success: false,
+            failureCategory: signal.aborted
+              ? 'cancelled'
+              : attemptSignal.aborted
+                ? 'limits'
+                : 'runtime',
+            failure: error instanceof Error ? error.message : 'Evaluation execution failed',
+            elapsedMs: 0,
+            toolCalls: 0,
+            instructions: { resources: [] },
+            trace: { traceEvents: [] },
+          };
         } finally {
           await rm(directory, { recursive: true, force: true });
         }
+        traceEvents.push(...value.trace.traceEvents);
+        const { trace: _trace, ...attempt } = value;
+        const elapsedMs = performance.now() - started;
+        await learned?.(identity, { elapsedMs, success: value.success });
+        return { ...attempt, elapsedMs, thinking, budget: allowance };
       };
       if (preset === 'audit' || preset === 'full') {
         progress({ event: 'suite.started', suite: 'instruction-semantic', completed, total });
-        const sample = await run('read-only', 'complete', 0, 'off');
+        const sample = await run('read-only', 'off');
+        results.semantic = {
+          capture: sample,
+          findings: [],
+          classification: 'suggestions-requiring-review',
+        };
+        await flush();
+        signal.throwIfAborted();
         const effectivePrompt = sample.instructions.effectivePrompt;
         if (!effectivePrompt)
           throw new Error('Native Pi did not expose an effective prompt for semantic audit.');
@@ -264,6 +359,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
             .traceEvents,
         );
         results.semantic = {
+          capture: sample,
           findings,
           chunkCount: chunks.length,
           classification: 'suggestions-requiring-review',
@@ -281,64 +377,91 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
           total,
         });
       }
-      const runSuite = async (
-        suite: string,
-        scenarios: Scenario[],
-        repetitions: number,
-        arms: Arm[],
-        retryFailed: boolean,
-      ) => {
-        const tasks = [];
-        for (const scenario of scenarios)
-          for (let repetition = 0; repetition < repetitions; repetition++) {
-            for (const arm of repetition % 2 ? [...arms].reverse() : arms) {
-              progress({
-                event: 'case.started',
-                suite,
-                case: `${scenario} · ${arm} · ${repetition + 1}/${repetitions}`,
-                completed,
-                total,
-              });
-              const attempts = [await run(scenario, arm, repetition, 'off')];
-              if (!attempts[0]!.success && retryFailed)
-                attempts.push(await run(scenario, arm, repetition, 'low'));
-              const latest = attempts.at(-1)!;
-              tasks.push({
-                arm,
-                scenario,
-                repetition,
-                attempts,
-                success: latest.success,
-                initialSuccess: attempts[0]!.success,
-                elapsedMs: attempts.reduce((sum, attempt) => sum + attempt.elapsedMs, 0),
-              });
-              completed++;
-              progress({
-                event: latest.success ? 'case.completed' : 'case.failed',
-                suite,
-                case: `${scenario} · ${arm}`,
-                completed,
-                total,
-                message: latest.failure,
-              });
-            }
-          }
-        return { tasks, aggregates: aggregate(tasks) };
+      const tasks: Array<{
+        arm: 'complete';
+        scenario: Scenario;
+        repetition: number;
+        attempts: Array<Awaited<ReturnType<typeof run>>>;
+        success: boolean;
+        initialSuccess: boolean;
+        elapsedMs: number;
+        pending: boolean;
+      }> = [];
+      const refreshResults = () => {
+        results.behavior = { tasks, aggregates: aggregate(tasks.filter((task) => !task.pending)) };
+        results.bottlenecks = {
+          source: 'behavior',
+          totalElapsedMs: tasks.reduce((sum, task) => sum + task.elapsedMs, 0),
+          cases: tasks.map(({ scenario, repetition, elapsedMs, pending }) => ({
+            scenario,
+            repetition,
+            elapsedMs,
+            pending,
+          })),
+          timings: attributeEvaluationTrace(traceEvents),
+          note: 'Timings use the same executions as Behavior Evaluation. Trace categories can overlap; do not sum them as independent task time.',
+        };
       };
-      if (preset === 'quick')
-        results.behavior = await runSuite('behavior', ['targeted-fix'], 1, ['complete'], true);
-      if (preset === 'behavior' || preset === 'full')
-        results.behavior = await runSuite('behavior', SCENARIOS, 1, ['minimal', 'complete'], true);
-      if (preset === 'bottlenecks' || preset === 'full')
-        results.bottlenecks = await runSuite(
-          'bottlenecks',
-          SCENARIOS,
-          3,
-          ['minimal', 'complete'],
-          false,
-        );
+      if (preset !== 'audit') {
+        const scenarios = selectedScenario
+          ? [selectedScenario]
+          : preset === 'quick'
+            ? ['targeted-fix' as const]
+            : SCENARIOS;
+        for (let repetition = 0; repetition < repetitions; repetition++) {
+          for (const scenario of scenarios) {
+            progress({
+              event: 'case.started',
+              suite: 'behavior',
+              case: `${scenario} · ${repetition + 1}/${repetitions}`,
+              completed,
+              total,
+            });
+            const task = {
+              arm: 'complete' as const,
+              scenario,
+              repetition,
+              attempts: [] as Array<Awaited<ReturnType<typeof run>>>,
+              success: false,
+              initialSuccess: false,
+              elapsedMs: 0,
+              pending: true,
+            };
+            tasks.push(task);
+            for (const thinking of ['off', 'low'] as const) {
+              const attempt = await run(scenario, thinking);
+              task.attempts.push(attempt);
+              task.elapsedMs += attempt.elapsedMs;
+              task.success = attempt.success;
+              if (thinking === 'off') task.initialSuccess = attempt.success;
+              task.pending = !attempt.success && thinking === 'off' && !signal.aborted;
+              refreshResults();
+              await flush();
+              signal.throwIfAborted();
+              if (attempt.success) break;
+            }
+            task.pending = false;
+            completed++;
+            progress({
+              event: task.success ? 'case.completed' : 'case.failed',
+              suite: 'behavior',
+              case: scenario,
+              completed,
+              total,
+              message: task.attempts.at(-1)?.failure,
+            });
+            refreshResults();
+            await flush();
+            if (!task.success)
+              throw new Error(
+                `${scenario} failed after its low-reasoning fallback: ${task.attempts.at(-1)?.failure ?? 'Objective checks failed'}`,
+              );
+          }
+        }
+      }
+      await flush();
       return {
-        result: { preset, setup, model: EVAL_MODEL, results },
+        result: { preset, setup, repetitions, model: EVAL_MODEL, results },
         trace: { traceEvents },
         metadata,
       };
@@ -430,4 +553,46 @@ async function staticAudit(input: {
     coverageNote:
       'Production guidance and Pi resource loaders; executable extension-generated instructions require semantic runtime capture.',
   };
+}
+
+/** Union intervals within each category; separate categories can overlap. */
+export function attributeEvaluationTrace(events: unknown[]) {
+  const categories = ['model', 'tool', 'scheduler', 'wait', 'delegation'] as const;
+  const intervals = new Map<string, Array<[number, number]>>(categories.map((name) => [name, []]));
+  const starts = new Map<string, { category: string; start: number }>();
+  for (const raw of events) {
+    if (!raw || typeof raw !== 'object') continue;
+    const event = raw as Record<string, unknown>;
+    if (typeof event.name !== 'string' || typeof event.ts !== 'number') continue;
+    const category = categories.find(
+      (name) => event.name === name || (event.name as string).startsWith(`${name}.`),
+    );
+    if (!category) continue;
+    const args =
+      event.args && typeof event.args === 'object' ? (event.args as Record<string, unknown>) : {};
+    const key = JSON.stringify([event.pid, args.correlationId, event.name, event.tid]);
+    if (event.ph === 'B') starts.set(key, { category, start: event.ts });
+    if (event.ph === 'E') {
+      const start = starts.get(key);
+      if (start && event.ts >= start.start) intervals.get(category)!.push([start.start, event.ts]);
+      starts.delete(key);
+    }
+    if (event.ph === 'X' && typeof event.dur === 'number' && event.dur >= 0)
+      intervals.get(category)!.push([event.ts, event.ts + event.dur]);
+  }
+  return Object.fromEntries(
+    [...intervals].map(([category, values]) => {
+      values.sort((a, b) => a[0] - b[0]);
+      let elapsed = 0,
+        start = 0,
+        end = 0;
+      for (const interval of values) {
+        if (interval[0] > end) {
+          elapsed += end - start;
+          [start, end] = interval;
+        } else end = Math.max(end, interval[1]);
+      }
+      return [category, (elapsed + end - start) / 1000];
+    }),
+  );
 }

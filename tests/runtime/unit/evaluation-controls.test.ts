@@ -4,6 +4,8 @@ import {
   evaluationCaseCount,
 } from '../../../runtime/src/evals/contracts.js';
 
+import { attributeEvaluationTrace } from '../../../runtime/src/evals/engine.js';
+
 describe('evaluation execution controls', () => {
   test('defaults to one repetition and counts shared execution only once', () => {
     const request = EvalStartRequestSchema.parse({ preset: 'behavior', setup: 'synthetic' });
@@ -38,4 +40,28 @@ describe('evaluation execution controls', () => {
       EvalStartRequestSchema.parse({ preset: 'audit', scenario: 'read-only' }),
     ).toThrow();
   });
+});
+
+test('Bottleneck Attribution unions overlapping spans within a category', () => {
+  const event = (name: string, ph: string, ts: number, correlationId: string, extras = {}) => ({
+    name,
+    ph,
+    ts,
+    pid: 1,
+    args: { correlationId },
+    ...extras,
+  });
+  const timing = attributeEvaluationTrace([
+    event('model.main', 'B', 1000, 'main'),
+    event('model.adjutant', 'B', 2000, 'adjutant'),
+    event('model.main', 'E', 5000, 'main'),
+    event('model.adjutant', 'E', 6000, 'adjutant'),
+    event('tool.read', 'X', 2000, 'read', { dur: 1000 }),
+    event('wait.pass-completion', 'B', 0, 'wait'),
+    event('wait.pass-completion', 'E', 8000, 'wait'),
+  ]);
+  expect(timing.model).toBe(5);
+  expect(timing.tool).toBe(1);
+  expect(timing.wait).toBe(8);
+  expect(timing.scheduler).toBe(0);
 });

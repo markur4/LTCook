@@ -178,6 +178,7 @@ try {
     },
     endpoint: `http://127.0.0.1:${address.port}`,
   });
+  let checkpoint: Awaited<ReturnType<typeof engine>> | undefined;
   const input = {
     preset: ['quick', 'current', 'bad-verification', 'no-delegation'].includes(scenario)
       ? 'quick'
@@ -185,6 +186,11 @@ try {
     setup: scenario === 'current' ? 'current' : 'synthetic',
     ...(scenario === 'current' ? { workspaceRoot: workspace } : {}),
     staticOnly: false,
+    repetitions: scenario === 'repeated' ? 2 : 1,
+    ...(scenario === 'repeated' ? { scenario: 'targeted-fix' as const } : {}),
+    checkpoint: async (value: Awaited<ReturnType<typeof engine>>) => {
+      checkpoint = value;
+    },
     runDirectory: directory,
     signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]),
     progress: ({ event }) => {
@@ -207,7 +213,12 @@ try {
       JSON.stringify({ result: 'passed', cancellation: 'native model request', requests }),
     );
   } else {
-    const result = await engine(input);
+    let result: Awaited<ReturnType<typeof engine>>;
+    if (scenario === 'bad-verification' || scenario === 'no-delegation') {
+      await assert.rejects(engine(input), /failed after its low-reasoning fallback/);
+      assert(checkpoint, 'Failed attempts must be checkpointed before the run rejects');
+      result = checkpoint;
+    } else result = await engine(input);
     if (failure) throw failure;
     const tasks = (
       result.result as {
@@ -226,7 +237,8 @@ try {
         };
       }
     ).results.behavior.tasks;
-    assert(tasks.length > 0);
+    assert.equal(tasks.length, scenario === 'behavior' ? 3 : scenario === 'repeated' ? 2 : 1);
+    assert(tasks.every((task) => (task as { arm?: string }).arm === 'complete'));
     assert(
       tasks.every(
         (task) => task.success === !['bad-verification', 'no-delegation'].includes(scenario),

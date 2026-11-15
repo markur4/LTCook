@@ -34,6 +34,12 @@ eval_cli = typer.Typer(help="Run and inspect Agent Evals.", no_args_is_help=True
 console = Console()
 
 
+class EvalCase(StrEnum):
+    read_only = "read-only"
+    no_op = "no-op"
+    targeted_fix = "targeted-fix"
+
+
 class EvalSetup(StrEnum):
     current = "current"
     synthetic = "synthetic"
@@ -135,6 +141,13 @@ def _print_report(report: dict) -> None:
     for name, raw_value in result.get("results", {}).items():
         value = raw_value if isinstance(raw_value, dict) else {}
         tasks = raw_value if isinstance(raw_value, list) else value.get("tasks", [])
+        if name == "bottlenecks":
+            table.add_row(
+                labels[name],
+                "Same executions",
+                f"{value.get('totalElapsedMs', 0) / 1000:.2f}s total task time",
+            )
+            continue
         if isinstance(tasks, list):
             passed = sum(task.get("success") is True for task in tasks)
             retries = sum(len(task.get("attempts", [])) > 1 for task in tasks)
@@ -156,6 +169,33 @@ def _print_report(report: dict) -> None:
             table.add_row(labels.get(name, name.replace("-", " ")), "Completed", "")
     if table.row_count:
         console.print(table)
+    for task in result.get("results", {}).get("behavior", {}).get("tasks", []):
+        for attempt in task.get("attempts", []):
+            budget = attempt.get("budget") or {}
+            console.print(
+                f"{task.get('scenario', 'Case')} · {attempt.get('thinking', 'off')} · {attempt.get('elapsedMs', 0) / 1000:.2f}s"
+            )
+            if budget:
+                expected = budget.get("expectedMs")
+                source = (
+                    ", ".join(budget.get("referenceRuns", []))
+                    or "no successful baseline yet"
+                )
+                console.print(
+                    f"Safeguard: {budget['timeoutMs'] / 1000:.2f}s; expected {'unknown' if expected is None else f'{expected / 1000:.2f}s'}; history: {source}"
+                )
+            if attempt.get("failure"):
+                console.print(attempt["failure"], style="red")
+            if attempt.get("diagnostics"):
+                console.print(json.dumps(attempt["diagnostics"], indent=2))
+    timings = result.get("results", {}).get("bottlenecks", {}).get("timings", {})
+    if timings:
+        console.print(
+            "Bottleneck Attribution · overlapping trace durations: "
+            + "; ".join(
+                f"{name}: {elapsed / 1000:.2f}s" for name, elapsed in timings.items()
+            )
+        )
     for name, value in result.get("results", {}).items():
         if not isinstance(value, dict):
             continue
@@ -170,7 +210,12 @@ def _print_report(report: dict) -> None:
 
 
 def _start_and_follow(
-    preset: str, *, setup: EvalSetup = EvalSetup.current, static_only: bool = False
+    preset: str,
+    *,
+    setup: EvalSetup = EvalSetup.current,
+    static_only: bool = False,
+    repetitions: int = 1,
+    scenario: EvalCase | None = None,
 ) -> None:
     try:
         environment, _ = _runtime()
@@ -179,7 +224,14 @@ def _start_and_follow(
             if setup == EvalSetup.current
             else None
         )
-        request = {"preset": preset, "setup": setup.value, "staticOnly": static_only}
+        request = {
+            "preset": preset,
+            "setup": setup.value,
+            "staticOnly": static_only,
+            "repetitions": repetitions,
+        }
+        if scenario is not None:
+            request["scenario"] = scenario.value
         if workspace is not None:
             request["workspaceRoot"] = str(workspace.root)
         run_id = _call(
@@ -208,12 +260,23 @@ def run(
     quick: bool = typer.Option(
         False, "--quick", help="Run the fast instruction and targeted-fix check."
     ),
+    repetitions: Annotated[
+        int, typer.Option("--repetitions", min=1, help="Number of executions per case.")
+    ] = 1,
+    case: Annotated[
+        EvalCase | None, typer.Option("--case", help="Run one selected case.")
+    ] = None,
 ):
-    """Run every Agent Evals category, or the quick check with --quick."""
+    """Run Behavior Evaluation with full instructions and report Bottleneck Attribution."""
     if quick and behavior_only:
         raise typer.BadParameter("--quick and --behavior-only cannot be combined.")
+    if quick and case is not None:
+        raise typer.BadParameter("--quick and --case cannot be combined.")
     _start_and_follow(
-        "behavior" if behavior_only else "quick" if quick else "full", setup=setup
+        "quick" if quick else "behavior",
+        setup=setup,
+        repetitions=repetitions,
+        scenario=case,
     )
 
 
@@ -235,9 +298,17 @@ def analyze(
     setup: Annotated[
         EvalSetup, typer.Option("--setup", help="Evaluation setup.")
     ] = EvalSetup.current,
+    repetitions: Annotated[
+        int, typer.Option("--repetitions", min=1, help="Number of executions per case.")
+    ] = 1,
+    case: Annotated[
+        EvalCase | None, typer.Option("--case", help="Run one selected case.")
+    ] = None,
 ):
-    """Run three-repetition Bottleneck Attribution."""
-    _start_and_follow("bottlenecks", setup=setup)
+    """Report Bottleneck Attribution from the same full-instruction case executions."""
+    _start_and_follow(
+        "bottlenecks", setup=setup, repetitions=repetitions, scenario=case
+    )
 
 
 @eval_cli.command("watch")
