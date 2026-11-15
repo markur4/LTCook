@@ -311,7 +311,7 @@ Plan execution approval is a separate gate. A completed Pass remains final.
 resources and inspection. Sources use Core, Team, Project and User scopes. Rules
 enter applicable standing context; skills use Pi's native parser and discovery.
 Descriptions are advertised; bodies and references remain on demand. Bundled
-skill names use the `ltcook-` prefix; reader-load is explicit-only.
+functional skill names use the `ltcook-` prefix. Personal skill names and invocation settings come from User guidance.
 
 `ltcook guidance inspect` reports each resource's name, path, scope, kind,
 applicability, native loaded state and explicit-only setting, plus source-specific
