@@ -2,6 +2,27 @@ import type { Assignment, NativeBinding, Pass, Task, TeamMember } from '../workf
 
 /** Keep error reasons useful without persisting request bodies, credentials, or private paths. */
 export function sanitizeEvaluationText(value: string): string {
+  const response = /^(\d{3}):?\s*(\{[\s\S]*\})\s*$/.exec(value.trim());
+  if (response) {
+    try {
+      const parsed: unknown = JSON.parse(response[2]!);
+      if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+        const error = parsed.error;
+        const reason =
+          typeof error === 'string'
+            ? error
+            : error &&
+                typeof error === 'object' &&
+                'message' in error &&
+                typeof error.message === 'string'
+              ? error.message
+              : undefined;
+        if (reason) value = `${response[1]}: ${reason}`;
+      }
+    } catch {
+      // > Invalid response bodies remain omitted by the structured-data filter below.
+    }
+  }
   let text = value.split(/\r?\n/, 1)[0] ?? '';
   for (const [key, secret] of Object.entries(process.env))
     if (

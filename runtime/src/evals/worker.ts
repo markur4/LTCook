@@ -360,20 +360,11 @@ export async function executeEvaluationJob(job: EvaluationJob) {
                 snapshot.assignments.some(
                   (assignment) => assignment.memberKey !== team.definition.coordinatorKey,
                 )))));
-    const inspections = (await runtime.execute(
+    const resources = await loadedResourceEvidence(
+      runtime,
       sessionId,
-      { kind: 'user' },
-      { type: 'guidance.inspect' },
-    )) as Array<{ id: string; inspection: GuidanceInspection }>;
-    const resources = await Promise.all(
-      inspections
-        .flatMap(({ inspection }) => inspection.resources)
-        .map(async (resource) => ({
-          ...resource,
-          name: path.isAbsolute(resource.name) ? path.basename(resource.name) : resource.name,
-          path: resourceIdentity(resource, workspace, path.join(job.directory, 'guidance')),
-          ...(resource.loaded ? { sha256: hash(await readFile(resource.path)) } : {}),
-        })),
+      workspace,
+      path.join(job.directory, 'guidance'),
     );
     result = {
       success,
@@ -392,6 +383,20 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       limitations: delegate ? [] : ['Selected team cannot delegate to another eligible member.'],
     };
   } catch (error) {
+    let resources: Awaited<ReturnType<typeof loadedResourceEvidence>> = [];
+    let resourceFailure = false;
+    try {
+      if (runtime)
+        resources = await loadedResourceEvidence(
+          runtime,
+          sessionId,
+          workspace,
+          path.join(job.directory, 'guidance'),
+        );
+    } catch {
+      resourceFailure = true;
+    }
+    const effectivePrompt = [...prompts.values()].join('\n\n');
     result = {
       success: false,
       failureCategory,
@@ -399,7 +404,14 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         error instanceof Error ? error.message : 'Evaluation runtime failed',
       ),
       toolCalls,
-      instructions: { effectivePrompt: [...prompts.values()].join('\n\n'), resources: [] },
+      instructions: {
+        effectivePrompt,
+        ...(prompts.size ? { promptSha256: hash(effectivePrompt) } : {}),
+        resources,
+      },
+      ...(resourceFailure
+        ? { limitations: ['Loaded-resource capture was incomplete during failure.'] }
+        : {}),
     };
   } finally {
     diagnosticSnapshot = captureDiagnostics();
@@ -441,6 +453,29 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     elapsedMs: performance.now() - started,
     trace: JSON.parse(await readFile(path.join(state, 'trace.json'), 'utf8')),
   };
+}
+
+async function loadedResourceEvidence(
+  runtime: ReturnType<typeof createRuntime>,
+  sessionId: string,
+  workspace: string,
+  guidance: string,
+) {
+  const inspections = (await runtime.execute(
+    sessionId,
+    { kind: 'user' },
+    { type: 'guidance.inspect' },
+  )) as Array<{ id: string; inspection: GuidanceInspection }>;
+  return Promise.all(
+    inspections
+      .flatMap(({ inspection }) => inspection.resources)
+      .map(async (resource) => ({
+        ...resource,
+        name: path.isAbsolute(resource.name) ? path.basename(resource.name) : resource.name,
+        path: resourceIdentity(resource, workspace, guidance),
+        ...(resource.loaded ? { sha256: hash(await readFile(resource.path)) } : {}),
+      })),
+  );
 }
 
 if (process.argv[2]) {

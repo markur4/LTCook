@@ -16,6 +16,17 @@ import {
 } from '../../../runtime/src/evals/diagnostics.js';
 
 const environment = { ...process.env };
+test('provider JSON errors preserve only the sanitized error reason', () => {
+  expect(
+    sanitizeEvaluationText('500: {"error":"model stream failed", "request":{"prompt":"private"}}'),
+  ).toBe('500: model stream failed');
+  expect(
+    sanitizeEvaluationText(
+      '500 {"error":{"message":"invalid tool call arguments: private", "body":"private"}}',
+    ),
+  ).toBe('500: invalid tool call arguments=<omitted>');
+  expect(sanitizeEvaluationText('500: {not valid JSON')).toBe('500: <structured-data omitted>');
+});
 afterEach(() => {
   process.env = { ...environment };
 });
