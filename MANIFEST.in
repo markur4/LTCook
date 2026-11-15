@@ -19,4 +19,5 @@ prune __pycache__
 recursive-exclude * *.py[cod]
 recursive-exclude * *.log
 recursive-exclude tests *
+recursive-exclude evals *
 recursive-exclude assets *

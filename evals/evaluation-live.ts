@@ -4,9 +4,9 @@ import {
   EvalPresetSchema,
   EvalSetupSchema,
   EvalScenarioSchema,
-} from '../../../runtime/src/evals/contracts.js';
-import { createEvalEngine } from '../../../runtime/src/evals/engine.js';
-import { EvalRunService } from '../../../runtime/src/evals/service.js';
+} from '../runtime/src/evals/contracts.js';
+import { createEvalEngine } from '../runtime/src/evals/engine.js';
+import { EvalRunService } from '../runtime/src/evals/service.js';
 
 const [setupInput, presetInput, stateInput, ...argumentsInput] = process.argv.slice(2);
 let workspaceRoot: string | undefined;
@@ -25,11 +25,11 @@ for (let index = 0; index < argumentsInput.length; index++) {
 }
 if (!setupInput || !presetInput || !stateInput)
   throw new Error(
-    'Usage: bun tests/runtime/system/evaluation-live.ts current|synthetic quick|audit|behavior|bottlenecks|full PRIVATE_STATE_DIRECTORY [REGISTERED_WORKSPACE] [--case read-only|no-op|targeted-fix] [--repetitions N]',
+    'Usage: bun evals/evaluation-live.ts current|synthetic quick|audit|behavior|bottlenecks|full PRIVATE_STATE_DIRECTORY [REGISTERED_WORKSPACE] [--case read-only|no-op|targeted-fix] [--repetitions N]',
   );
 const setup = EvalSetupSchema.parse(setupInput);
 const preset = EvalPresetSchema.parse(presetInput);
-const root = path.resolve(import.meta.dir, '../../..');
+const root = path.resolve(import.meta.dir, '..');
 const state = path.resolve(stateInput);
 const service = new EvalRunService(
   state,

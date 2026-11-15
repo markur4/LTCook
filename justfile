@@ -28,7 +28,7 @@ export UV_PROJECT_ENVIRONMENT := env_var_or_default("UV_PROJECT_ENVIRONMENT", ju
 mod runtime 'runtime/justfile'
 
 [group('Agent Evals')]
-mod eval 'tests/agent_evals/justfile'
+mod eval 'evals/justfile'
 
 # Run `just` with no recipe to list tasks
 default:
