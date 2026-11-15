@@ -180,6 +180,8 @@ export class EvalRunService {
   async start(input: EvalStartRequest): Promise<string> {
     const request = EvalStartRequestSchema.parse(input);
     const { preset, setup, staticOnly = false } = request;
+    if (this.active && this.requireRun(this.active.runId).status !== 'running')
+      await this.active.task;
     if (this.active || this.starting) throw new Error('An Agent Evals run is already active.');
     this.starting = true;
     const now = new Date().toISOString();
