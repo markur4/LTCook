@@ -355,16 +355,43 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
       LTCOOK_BROWSER_ENABLED: 'false',
       LTCOOK_EVAL_ARM: 'complete',
     });
-    const handlers = new Map<string, (event: unknown, context?: unknown) => Promise<void>>();
+    const handlers = new Map<string, (event: unknown, context?: unknown) => Promise<unknown>>();
     const tools = new Map<string, Parameters<ExtensionAPI['registerTool']>[0]>();
     await activate({
       on(name: string, handler: unknown) {
-        handlers.set(name, handler as (event: unknown, context?: unknown) => Promise<void>);
+        handlers.set(name, handler as (event: unknown, context?: unknown) => Promise<unknown>);
       },
       registerTool(tool: Parameters<ExtensionAPI['registerTool']>[0]) {
         tools.set(tool.name, tool);
       },
     } as unknown as ExtensionAPI);
+    const successful = {
+      role: 'toolResult',
+      isError: false,
+      content: [{ type: 'text', text: 'Successful output' }],
+    };
+    const messages = (await handlers.get('context')!({
+      messages: [
+        {
+          role: 'toolResult',
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text:
+                'Validation failed for tool "ltcook_team":\n - command.passId: missing\nReceived arguments: ' +
+                'private'.repeat(2000),
+            },
+          ],
+        },
+        successful,
+      ],
+    })) as { messages: Array<{ isError: boolean; content: Array<{ text: string }> }> };
+    expect(messages.messages[0]!.isError).toBe(true);
+    expect(messages.messages[0]!.content[0]!.text).toContain('[command.passId] missing');
+    expect(messages.messages[0]!.content[0]!.text).not.toContain('private');
+    expect(messages.messages[0]!.content[0]!.text.length).toBeLessThan(1025);
+    expect(messages.messages[1]).toBe(successful);
     await handlers.get('agent_start')!({}, { getSystemPrompt: () => 'private prompt' });
     await handlers.get('message_end')!({
       message: {

@@ -75,6 +75,15 @@ export default async function activate(
     if (!response.ok) throw new Error('Evaluation observation unavailable');
   };
   if (evaluation) {
+    // > Validation rejects before tool_result hooks; bound their feedback before the next request.
+    pi.on('context', async (event) => ({
+      messages: event.messages.map((message) => {
+        if (message.role !== 'toolResult' || !message.isError) return message;
+        const reason = evaluationToolError(message);
+        if (!reason?.startsWith('Validation failed for tool ')) return message;
+        return { ...message, content: [{ type: 'text' as const, text: reason }] };
+      }),
+    }));
     pi.on('agent_start', async (_event, context) => {
       await observe({ kind: 'agent.start' });
       await observe({ kind: 'prompt', prompt: context.getSystemPrompt() });
