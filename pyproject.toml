@@ -89,7 +89,7 @@ line-length = 88
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# User policy: preserve six symbolic-test workers unless the user explicitly changes it.
+# User policy: preserve six Python test workers unless the user explicitly changes it.
 addopts = "-ra -n 6 --maxschedchunk=1"
 markers = [
     "integration: requires an explicitly prepared local integration environment",

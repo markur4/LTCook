@@ -25,7 +25,7 @@ async function finished(instance: EvalRunService, id: string) {
     if ((await instance.status(id)).summary.status !== 'running') return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error('Symbolic checkpoint test did not complete');
+  throw new Error('Checkpoint test did not complete');
 }
 
 test.each(['failure', 'cancellation'] as const)(
