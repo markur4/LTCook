@@ -36,7 +36,15 @@ test.each(['failure', 'cancellation'] as const)(
     });
     const { root, instance } = await service(async ({ checkpoint, signal }) => {
       await checkpoint!({
-        result: { attempts: [{ success: false, effectivePrompt: 'private prompt' }] },
+        result: {
+          attempts: [
+            {
+              success: false,
+              effectivePrompt: 'private prompt',
+              failure: 'Provider rejected Bearer fixture-credential',
+            },
+          ],
+        },
         trace: { traceEvents: [{ name: 'model' }] },
       });
       ready();
@@ -52,7 +60,9 @@ test.each(['failure', 'cancellation'] as const)(
     await finished(instance, id);
     const report = instance.report(id);
     expect(report.summary.status).toBe(mode === 'failure' ? 'failed' : 'cancelled');
-    expect(report.result).toEqual({ attempts: [{ success: false }] });
+    expect(report.result).toEqual({
+      attempts: [{ success: false, failure: 'Provider rejected Bearer <redacted>' }],
+    });
     expect(report.trace).toEqual({ traceEvents: [{ name: 'model' }] });
     const restarted = new EvalRunService(root, async () => {
       throw new Error('Must not rerun');

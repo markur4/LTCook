@@ -13,6 +13,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
+import { sanitizeEvaluationText } from './diagnostics.js';
 import {
   EvalStartRequestSchema,
   EvalSummarySchema,
@@ -105,10 +106,7 @@ export type EvalEngine = (input: {
 
 function safeError(error: unknown): string {
   const value = error instanceof Error ? error.message : 'Agent Evals run failed';
-  return value
-    .replace(/(token|password|api.?key)=?[^\s]*/gi, '$1=<redacted>')
-    .replace(/(?:\/home\/[^\s/]+|[A-Z]:\\Users\\[^\\\s]+)/g, '<user-home>')
-    .slice(0, 500);
+  return sanitizeEvaluationText(value).slice(0, 500);
 }
 
 function sanitize(value: unknown, key = ''): unknown {
@@ -124,7 +122,9 @@ function sanitize(value: unknown, key = ''): unknown {
     );
   }
   if (typeof value === 'string')
-    return value.replace(/(?:\/home\/[^\s/]+|[A-Z]:\\Users\\[^\\\s]+)/g, '<user-home>');
+    return /failure|reason|error|message/i.test(key)
+      ? sanitizeEvaluationText(value)
+      : value.replace(/(?:\/home\/[^\s/]+|[A-Z]:\\Users\\[^\\\s]+)/g, '<user-home>');
   return value;
 }
 
