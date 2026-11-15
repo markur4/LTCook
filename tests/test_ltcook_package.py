@@ -31,6 +31,14 @@ def _asset_source(root: Path) -> Path:
     (root / "runtime/dist/integrations").mkdir(parents=True)
     (root / "runtime/dist/main.js").write_text("runtime", encoding="utf-8")
     (root / "runtime/dist/integrations/pi-rpc.js").write_text("rpc", encoding="utf-8")
+    for entry in (
+        "dist/evals/worker.js",
+        "resources/evals/manifest.json",
+        "resources/evals/verify.cjs",
+    ):
+        asset = root / "runtime" / entry
+        asset.parent.mkdir(parents=True, exist_ok=True)
+        asset.write_text("evaluation asset", encoding="utf-8")
     for boundary in ("team-api", "guidance-api", "workflow-api"):
         path = root / "runtime/dist" / boundary / "index.js"
         path.parent.mkdir()
@@ -420,3 +428,20 @@ def test_stage_assets_refuses_linked_bundle_and_staging_paths(tmp_path: Path) ->
     with pytest.raises(ValueError):
         archive_assets(root, tmp_path / "result.zip", staging_parent=external_link)
     assert (target / "sentinel").read_text() == "unchanged"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "dist/evals/worker.js",
+        "resources/evals/manifest.json",
+        "resources/evals/verify.cjs",
+    ],
+)
+def test_bundle_rejects_missing_evaluation_assets(tmp_path: Path, entry: str) -> None:
+    from ltcook_dev.packaging.package_assets import archive_assets
+
+    source = _asset_source(tmp_path / "source")
+    (source / "runtime" / entry).unlink()
+    with pytest.raises(FileNotFoundError, match="required before staging"):
+        archive_assets(source, tmp_path / "bundle.zip")

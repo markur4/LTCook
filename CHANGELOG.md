@@ -46,6 +46,8 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 💥 Breaking changes
 
+- Breaking: Agent Evals uses a new run-record format and requires Bubblewrap for Linux/WSL execution. Existing evaluation histories are unsupported and left unchanged. Users can preserve old results, stop the runtime, remove its `evals/runs` directory, and restart to reset history. See PR #2.
+
 <br>
 - Breaking: IBB is renamed to Agent Evals. Affected: CLI users and developers
   using `ltcook ibb`, `just ibb`, `LTCOOK_IBB_RESULTS`, or IBB runtime/cache paths.
