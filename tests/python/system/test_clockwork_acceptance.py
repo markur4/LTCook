@@ -20,6 +20,13 @@ def test_real_pi_paseo_clockwork(tmp_path: Path) -> None:
 
 
 @pytest.mark.system
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process acceptance")
+def test_native_paseo_leader_adoption(tmp_path: Path) -> None:
+    """Adopt one native Leader and preserve parent bindings through recovery."""
+    _run_native_acceptance(tmp_path, "paseo-leader-acceptance.ts")
+
+
+@pytest.mark.system
 @pytest.mark.skipif(
     sys.platform != "linux", reason="Linux Bubblewrap process acceptance"
 )
