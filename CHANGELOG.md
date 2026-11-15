@@ -114,6 +114,8 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ➕ Added
 
+- Symbolic Python tests use pytest-xdist with six workers by default. Complete test-suite timing includes symbolic tests and live agent evaluations, reported separately and together.
+
 - Agent Evals supports Current Setup and Synthetic Setup selection in the CLI and Paseo panel, a model-free `eval audit --static-only`, and `eval run --behavior-only`.
   Evaluation attempts use independent copy-on-write workspace copies where supported, release disposable state between attempts, and avoid duplicate runtime-state polling.
 

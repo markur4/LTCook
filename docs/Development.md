@@ -150,6 +150,21 @@ runtime/native/team contracts and Python tests excluding `integration` and
 `system`. `just runtime test` is the focused runtime/native/team contract subset.
 `just build` is a packaging action, not a routine test.
 
+Symbolic Python tests use pytest-xdist with six workers by default. This is
+repository policy: retain the dependency and six-worker default unless the user
+explicitly approves changing them. An explicit `-n 0` can isolate a failing test
+for diagnosis; it does not change the default. Small scheduling batches
+(`--maxschedchunk=1`) keep the slow process-based checks distributed across
+workers.
+
+A complete test-suite measurement includes symbolic tests and live agent
+evaluations. Report elapsed time and outcomes for each category and their
+combined total. For complete live coverage, use the full evaluation preset in
+both Current and Synthetic setups. Run live comparisons sequentially so local
+model contention does not distort paired timings. Ordinary CI runs symbolic
+tests, including scripted checks of the evaluation machinery; live agent
+evaluations remain separately invoked.
+
 Prettier is pinned as a development-only JavaScript dependency. Its commands cover
 authored runtime, team, and test TypeScript, excluding generated distributions.
 Python formatting uses the existing Ruff configuration and generated-path

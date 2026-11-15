@@ -28,6 +28,7 @@ dev = [
     "pytest>=8.2",
     "ruff>=0.4",
     "pyright>=1.1",
+    "pytest-xdist>=3.8",
 ]
 
 [tool.setuptools]
@@ -88,7 +89,8 @@ line-length = 88
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+# User policy: preserve six symbolic-test workers unless the user explicitly changes it.
+addopts = "-ra -n 6 --maxschedchunk=1"
 markers = [
     "integration: requires an explicitly prepared local integration environment",
     "system: slow end-to-end or installer checks with native prerequisites",

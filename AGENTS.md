@@ -31,6 +31,7 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
 
 ## Verification
 - Review the diff for duplicate helpers, naming drift, unnecessary abstractions, and regressions.
+- Repository policy: keep pytest-xdist in the development dependency group and run symbolic Python tests with six workers by default. Do not remove the dependency or reduce this default without explicit user approval. A complete test-suite measurement includes both symbolic tests and live agent evaluations; report their times and outcomes separately and together.
 - Run the project’s relevant lint, type-check, and test commands before considering the task done.
 - Before native installer work, follow the
   [integration and system procedures](docs/Development.md#integration-and-system-procedures).

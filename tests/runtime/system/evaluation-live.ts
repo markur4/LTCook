@@ -7,7 +7,7 @@ import { EvalRunService } from '../../../runtime/src/evals/service.js';
 const [setupInput, presetInput, stateInput, workspaceRoot] = process.argv.slice(2);
 if (!setupInput || !presetInput || !stateInput)
   throw new Error(
-    'Usage: bun tests/runtime/system/evaluation-live.ts current|synthetic quick|bottlenecks PRIVATE_STATE_DIRECTORY [REGISTERED_WORKSPACE]',
+    'Usage: bun tests/runtime/system/evaluation-live.ts current|synthetic quick|audit|behavior|bottlenecks|full PRIVATE_STATE_DIRECTORY [REGISTERED_WORKSPACE]',
   );
 const setup = EvalSetupSchema.parse(setupInput);
 const preset = EvalPresetSchema.parse(presetInput);
