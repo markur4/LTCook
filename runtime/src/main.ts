@@ -216,7 +216,7 @@ async function run(): Promise<void> {
       }),
     );
     await evals.initialize();
-    api = new RuntimeApi(undefined, apiToken, apiListen);
+    api = new RuntimeApi(undefined, apiToken, apiListen, process.env, telemetry);
     api.setEval(evals);
     const apiUrl = await api.listen();
     apiListening = true;
@@ -269,6 +269,7 @@ async function run(): Promise<void> {
     ) as { browser_available?: boolean; browser_executable?: string };
     if (stopping) return;
     const backend = await createPaseoAgentBackend({
+      telemetry,
       api: host.api,
       python,
       runtimeApiUrl: apiUrl,

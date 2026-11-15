@@ -19,7 +19,12 @@ async function stateRoot() {
 async function finish(service: EvalRunService, runId: string) {
   for (let count = 0; count < 100; count++) {
     const value = await service.status(runId);
-    if (value.summary.status !== 'running') return value;
+    // > Terminal summaries precede the final persisted event; wait for both before asserting it.
+    if (
+      value.summary.status !== 'running' &&
+      value.events.some((event) => event.event === `run.${value.summary.status}`)
+    )
+      return value;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error('Agent Evals fake run did not finish');

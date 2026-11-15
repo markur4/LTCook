@@ -1,3 +1,4 @@
+import type { Telemetry } from '../diagnostics/telemetry.js';
 import process from 'node:process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
@@ -105,6 +106,7 @@ export class RuntimeApi {
     private readonly secret: string,
     private readonly listenAddress: string,
     startupEnvironment: NodeJS.ProcessEnv = process.env,
+    private readonly telemetry?: Telemetry,
   ) {
     this.runtime = runtime;
     this.startupShellEnvironment = captureShellEnvironment(startupEnvironment);
@@ -167,6 +169,30 @@ export class RuntimeApi {
     request: IncomingMessage,
     response: import('node:http').ServerResponse,
   ): Promise<void> {
+    const operation = (
+      {
+        '/v1/team/catalog': 'team.catalog',
+        '/v1/session/open': 'session.open',
+        '/v1/session/prepare': 'leader.adopt',
+        '/v1/snapshot': 'panel.refresh',
+      } as Record<string, string>
+    )[request.url ?? ''];
+    const telemetry = this.telemetry;
+    if (operation && telemetry) {
+      const started = process.hrtime.bigint();
+      let recorded = false;
+      const finish = () => {
+        if (recorded) return;
+        recorded = true;
+        telemetry.duration(
+          operation,
+          Number(process.hrtime.bigint() - started) / 1e6,
+          'runtime-api',
+        );
+      };
+      response.once('finish', finish);
+      response.once('close', finish);
+    }
     response.setHeader('content-type', 'application/json');
     if (!(
       (request.method === 'POST' &&

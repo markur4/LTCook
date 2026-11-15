@@ -1,3 +1,4 @@
+import type { Telemetry } from '../diagnostics/telemetry.js';
 import type { PlanningDialogEvent } from './planning-dialogs.js';
 import { createHostClient } from '@getpaseo/client/node';
 import { createPaseoApi, type PaseoApi } from '@getpaseo/client';
@@ -261,6 +262,7 @@ export async function createPaseoAgentBackend(input: {
   ): Record<string, string> | undefined;
   preparedEnvironment?: Record<string, string>;
   thinking?: string;
+  telemetry?: Telemetry;
   identity(agentId: string): AgentRpcIdentity;
 }): Promise<
   AgentBackend & {
@@ -398,33 +400,42 @@ export async function createPaseoAgentBackend(input: {
       return result.entries.map((entry) => state(entry.agent));
     },
     async create(options: CreateAgentOptions) {
-      const nativeAgentId = randomUUID();
-      const { env: agentEnv, model, mcpServers } = await prepare(options, nativeAgentId);
-      const handle = await input.api.agents.create({
-        agentId: nativeAgentId,
-        idempotencyKey: nativeAgentId,
-        cwd: options.workspaceRoot,
-        title:
-          options.member.key === 'leader'
-            ? `${path.basename(options.workspaceRoot)} · ${options.teamId}`
-            : options.member.name,
-        ...(options.member.key !== 'leader' && options.leaderAgentId
-          ? { parent: options.leaderAgentId }
-          : {}),
-        config: {
-          provider: `pi/${model}`,
-          thinkingOptionId: input.thinking ?? options.member.thinking,
-          ...(mcpServers ? { mcpServers } : {}),
-        },
-        env: agentEnv,
-        labels: {
-          'ltcook.session': options.sessionId,
-          'ltcook.team-instance': options.teamInstanceId,
-          'ltcook.team': options.teamId,
-          'ltcook.member': options.member.key,
-        },
-      });
-      return state(handle);
+      const span = input.telemetry?.begin(
+        'member.create',
+        undefined,
+        `${options.sessionId}:${options.member.key}`,
+      );
+      try {
+        const nativeAgentId = randomUUID();
+        const { env: agentEnv, model, mcpServers } = await prepare(options, nativeAgentId);
+        const handle = await input.api.agents.create({
+          agentId: nativeAgentId,
+          idempotencyKey: nativeAgentId,
+          cwd: options.workspaceRoot,
+          title:
+            options.member.key === 'leader'
+              ? `${path.basename(options.workspaceRoot)} · ${options.teamId}`
+              : options.member.name,
+          ...(options.member.key !== 'leader' && options.leaderAgentId
+            ? { parent: options.leaderAgentId }
+            : {}),
+          config: {
+            provider: `pi/${model}`,
+            thinkingOptionId: input.thinking ?? options.member.thinking,
+            ...(mcpServers ? { mcpServers } : {}),
+          },
+          env: agentEnv,
+          labels: {
+            'ltcook.session': options.sessionId,
+            'ltcook.team-instance': options.teamInstanceId,
+            'ltcook.team': options.teamId,
+            'ltcook.member': options.member.key,
+          },
+        });
+        return state(handle);
+      } finally {
+        span?.end();
+      }
     },
     async inspect(id: string) {
       const result = await input.api.agents.ref(id).refresh();

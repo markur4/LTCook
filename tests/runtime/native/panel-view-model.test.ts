@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
   acceptPanelResponse,
-  completeSessionOpen,
   progress,
   currentAssignments,
   taskGroups,
@@ -11,19 +10,10 @@ import {
   type PanelDetailSource,
 } from '../../../runtime/src/paseo-plugin/shared/panel-details';
 
-test('a completed open refreshes returned-to workspace without clearing another pending open', () => {
+test('ignores late responses from another Session or an older request', () => {
   expect(acceptPanelResponse('B', 2, 'A', 1)).toBe(false);
   expect(acceptPanelResponse('A', 3, 'A', 1)).toBe(false);
-  const pending = new Set(['A', 'B']);
-  expect(completeSessionOpen(pending, 'A', 'A', true, true)).toEqual({
-    pendingRoots: new Set(['B']),
-    refreshRoot: 'A',
-  });
-  expect(pending).toEqual(new Set(['A', 'B']));
-  expect(completeSessionOpen(pending, 'A', 'B', true, true).refreshRoot).toBeNull();
-  expect(completeSessionOpen(pending, 'A', 'A', false, true).refreshRoot).toBeNull();
-  expect(completeSessionOpen(pending, 'A', 'A', true, false).refreshRoot).toBeNull();
-  expect(progress([])).toEqual({ completed: 0, total: 0 });
+  expect(acceptPanelResponse('A', 3, 'A', 3)).toBe(true);
 });
 
 test('details are selected by identity and reports follow owned assignments across native handles', () => {
@@ -39,10 +29,10 @@ test('details are selected by identity and reports follow owned assignments acro
       },
     ],
     members: [
-      { member: { key: 'main' }, binding: { nativeAgentId: null, blocker: 'model unavailable' } },
+      { member: { key: 'leader' }, binding: { nativeAgentId: null, blocker: 'model unavailable' } },
     ],
     assignments: [
-      { id: 'old', memberKey: 'main', taskId: 't', status: 'reported', handoff: 'owned handoff' },
+      { id: 'old', memberKey: 'leader', taskId: 't', status: 'reported', handoff: 'owned handoff' },
       { id: 'other', memberKey: 'other', taskId: 't', status: 'sent', handoff: 'PRIVATE_OTHER' },
     ],
     reports: [
@@ -51,7 +41,7 @@ test('details are selected by identity and reports follow owned assignments acro
     ],
     blockers: ['coordination'],
   };
-  const member = panelDetail(source, { kind: 'member', memberKey: 'main' });
+  const member = panelDetail(source, { kind: 'member', memberKey: 'leader' });
   expect(member).toMatchObject({
     latestHandoff: { handoff: 'owned handoff' },
     latestReport: { summary: 'owned report' },
@@ -92,7 +82,7 @@ test('board preserves unknown states and current assignments use identity and no
         taskId: '0',
         taskTitle: 'Same title',
         memberName: 'Same name',
-        memberKey: 'main',
+        memberKey: 'leader',
         status: 'reported',
       },
       {
@@ -100,7 +90,7 @@ test('board preserves unknown states and current assignments use identity and no
         taskId: '1',
         taskTitle: 'Same title',
         memberName: 'Same name',
-        memberKey: 'main',
+        memberKey: 'leader',
         status: 'sent',
       },
       {
@@ -116,7 +106,7 @@ test('board preserves unknown states and current assignments use identity and no
         taskId: '3',
         taskTitle: 'Same title',
         memberName: 'Same name',
-        memberKey: 'main',
+        memberKey: 'leader',
         status: 'pending',
       },
       {
@@ -124,12 +114,14 @@ test('board preserves unknown states and current assignments use identity and no
         taskId: '0',
         taskTitle: 'Same title',
         memberName: 'Same name',
-        memberKey: 'main',
+        memberKey: 'leader',
         status: 'sent',
       },
     ],
   };
-  expect(currentAssignments(snapshot, 'main').map((item) => item.assignmentId)).toEqual(['active']);
+  expect(currentAssignments(snapshot, 'leader').map((item) => item.assignmentId)).toEqual([
+    'active',
+  ]);
   expect(currentAssignments(snapshot, 'worker').map((item) => item.assignmentId)).toEqual([
     'uncertain',
   ]);

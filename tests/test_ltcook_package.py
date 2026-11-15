@@ -65,6 +65,7 @@ def _asset_source(root: Path) -> Path:
         "shared/panel-details.ts",
         "shared/view-model.ts",
         "client/use-team-panel.ts",
+        "client/use-team-catalog.ts",
         "client/components/PanelChrome.tsx",
         "client/components/StatusBadge.tsx",
         "client/screens/TeamOverview.tsx",

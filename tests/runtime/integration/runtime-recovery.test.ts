@@ -1658,6 +1658,42 @@ describe('approved Pass scheduling', () => {
     return { runtime, id, pass, agents, create, release, report, databasePath, directory };
   }
 
+  test('Leader readiness publication completes inside its own scheduled native send', async () => {
+    const f = await fixture(team);
+    try {
+      const task = await f.create('leader-self-assignment', { assigneeKey: 'leader' });
+      let readinessPublications = 0;
+      const originalSend = f.agents.send.bind(f.agents);
+      spyOn(f.agents, 'send').mockImplementation(async (id, message) => {
+        if (message.includes(`Scheduled Task ${task.id}`)) {
+          await f.runtime.execute(
+            f.id,
+            { kind: 'agent', nativeAgentId: id },
+            {
+              type: 'guidance.loaded',
+              inspection: { resources: [], diagnostics: [] },
+              waitUntilReady: true,
+            },
+          );
+          readinessPublications += 1;
+        }
+        await originalSend(id, message);
+      });
+      await f.release();
+      expect(readinessPublications).toBe(1);
+      expect(
+        f.runtime.snapshot(f.id).assignments.find((assignment) => assignment.taskId === task.id)
+          ?.status,
+      ).toBe('sent');
+      await f.report(task.id);
+      expect(f.runtime.snapshot(f.id).tasks.find((entry) => entry.id === task.id)?.status).toBe(
+        'completed',
+      );
+    } finally {
+      await f.runtime.close();
+    }
+  });
+
   test('registration barrier, stable parallel dispatch, same-member serialization and dependencies', async () => {
     const f = await fixture();
     try {

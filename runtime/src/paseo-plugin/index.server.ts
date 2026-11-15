@@ -273,12 +273,16 @@ export default function contribute(server: PluginServerContext) {
       (team) => team.selection === input.teamSelection && team.status === 'installed',
     );
     if (!team) throw new Error('Choose an installed Team.');
+    const available = await paseo.providers.listModels('ltcook');
+    const model = available.models?.find((model) => model.isDefault) ?? available.models?.[0];
+    if (available.error || !model)
+      throw new Error('Configure an available LTCook model in Paseo before starting a Session.');
     const agentId = crypto.randomUUID();
     const leader = await paseo.agents.create({
       agentId,
       idempotencyKey: agentId,
       cwd: input.workspaceRoot,
-      config: { provider: 'ltcook' },
+      config: { provider: `ltcook/${model.id}` },
       title: `${path.basename(input.workspaceRoot)} · ${team.name}`,
       metadata: { 'ltcook.team': team.selection },
     });

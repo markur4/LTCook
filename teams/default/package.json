@@ -1,5 +1,6 @@
 {
   "name": "@ltcook/team-default",
+  "description": "Leader, Adjutant, and persistent specialists with optional temporary members.",
   "version": "0.1.0",
   "private": true,
   "type": "module",

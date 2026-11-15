@@ -142,7 +142,9 @@ logs. WSL host navigation requires working interop and localhost forwarding.
 
 Opening the UI does not create a Session or start agents. In Paseo, use
 **+ → LTCook**, choose an installed **Team**, and send a message. The native
-agent is the Leader; its chat opens directly. Before starting agents,
+agent is the Leader; its chat opens directly. On desktop, use the Team dropdown.
+On narrow screens, open the composer controls and select a Team from the native
+sheet before sending. Before starting agents,
 [choose their models](#initialize-saved-preferences) and
 [authenticate with Pi](#authenticate-with-pi).
 
