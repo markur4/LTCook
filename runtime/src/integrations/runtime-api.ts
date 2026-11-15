@@ -582,12 +582,6 @@ export class RuntimeApi {
           const requestedWorkspace = input.workspaceRoot
             ? canonicalWorkspace(input.workspaceRoot)
             : undefined;
-          if (
-            input.sessionId &&
-            (!requestedWorkspace || this.sessions.get(input.sessionId) !== requestedWorkspace)
-          ) {
-            throw new Error('Session does not belong to the requested workspace');
-          }
           const sessionId = input.sessionId;
           if (!sessionId) {
             response
@@ -595,13 +589,13 @@ export class RuntimeApi {
               .end('{"error":"No session found for workspace","code":"SESSION_NOT_FOUND"}');
             return;
           }
-          const snapshot = runtime.snapshot(sessionId);
-          if (
-            requestedWorkspace &&
-            canonicalWorkspace(snapshot.session.workspaceRoot) !== requestedWorkspace
-          ) {
+          const registeredWorkspace = this.sessions.get(sessionId);
+          if (!registeredWorkspace) throw new Error('Session is not active in this runtime');
+          if (requestedWorkspace && registeredWorkspace !== requestedWorkspace)
             throw new Error('Session does not belong to the requested workspace');
-          }
+          const snapshot = runtime.snapshot(sessionId);
+          if (canonicalWorkspace(snapshot.session.workspaceRoot) !== registeredWorkspace)
+            throw new Error('Session does not belong to its registered workspace');
           response.writeHead(200).end(JSON.stringify(snapshot));
           return;
         }

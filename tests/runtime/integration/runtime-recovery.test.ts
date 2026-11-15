@@ -2231,7 +2231,7 @@ test('catalog, list, adoption and preparation APIs enforce explicit authenticate
   await new Promise<void>((resolve, reject) =>
     socket.close((error) => (error ? reject(error) : resolve())),
   );
-  const api = new RuntimeApi(runtime, 'local-user-secret', `127.0.0.1:${address.port}`);
+  let api = new RuntimeApi(runtime, 'local-user-secret', `127.0.0.1:${address.port}`);
   api.setOpenWorkspaceHandler((request) =>
     runtime.openSession({
       id: request.sessionId,
@@ -2293,6 +2293,21 @@ test('catalog, list, adoption and preparation APIs enforce explicit authenticate
       (await post('snapshot', { sessionId: identity.sessionId, workspaceRoot: '/workspace' }))
         .status,
     ).toBe(200);
+    const sessionOnly = await post('snapshot', { sessionId: identity.sessionId });
+    expect(sessionOnly.status).toBe(200);
+    expect(((await sessionOnly.json()) as { session: { id: string } }).session.id).toBe(
+      identity.sessionId,
+    );
+    expect((await post('snapshot', { sessionId: 'unknown-session' })).status).toBe(400);
+    await api.close();
+    api = new RuntimeApi(runtime, 'local-user-secret', `127.0.0.1:${address.port}`);
+    await api.listen();
+    expect((await post('snapshot', { sessionId: identity.sessionId })).status).toBe(400);
+    api.setSession(identity.workspaceRoot, identity.sessionId);
+    expect((await post('snapshot', { sessionId: identity.sessionId })).status).toBe(200);
+    expect(
+      (await post('snapshot', { sessionId: identity.sessionId, workspaceRoot: '/other' })).status,
+    ).toBe(400);
     expect(agents.creates).toBe(0);
   } finally {
     await api.close();
