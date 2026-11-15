@@ -79,7 +79,8 @@ export default async function activate(
     pi.on('before_provider_request', async (_event, context) => {
       if (
         context.model?.id !== 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest' ||
-        context.model.provider !== 'ollama'
+        context.model.provider !== 'ollama' ||
+        context.model.baseUrl !== `${process.env.LTCOOK_EVAL_ENDPOINT}/v1`
       )
         throw new Error('Evaluation model pin violation');
       await observe({ kind: 'model.start' });
@@ -95,7 +96,14 @@ export default async function activate(
           stopReason: event.message.stopReason,
         });
     });
+    const fixtureVerifications = new Set<string>();
     pi.on('tool_execution_start', async (event) => {
+      if (
+        event.toolName === 'bash' &&
+        typeof event.args?.command === 'string' &&
+        /(?:^|&&|;)\s*node\s+\.ltcook-evals\/verify\.cjs(?:\s|$)/.test(event.args.command)
+      )
+        fixtureVerifications.add(event.toolCallId);
       await observe({ kind: 'tool.start', tool: event.toolName, callId: event.toolCallId });
     });
     pi.on('tool_execution_end', async (event) => {
@@ -104,6 +112,7 @@ export default async function activate(
         tool: event.toolName,
         callId: event.toolCallId,
         durationMs: event.durationMs,
+        fixtureVerification: fixtureVerifications.delete(event.toolCallId),
         isError: event.isError,
       });
     });

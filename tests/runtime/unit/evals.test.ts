@@ -28,7 +28,7 @@ async function finish(service: EvalRunService, runId: string) {
 describe('Agent Evals run service', () => {
   test('runs static audit without accessing Ollama', async () => {
     const root = await stateRoot();
-    await writeFile(path.join(root, 'guide.md'), 'Example guidance');
+    await writeFile(path.join(root, 'guide.md'), 'guidance '.repeat(3001));
     await writeFile(
       path.join(root, 'catalog.json'),
       JSON.stringify([{ path: 'guide.md', kind: 'rule', required: true }]),
@@ -57,6 +57,9 @@ describe('Agent Evals run service', () => {
       expect(service.report(runId).result).toMatchObject({
         results: {
           static: {
+            findings: expect.arrayContaining([
+              expect.objectContaining({ kind: 'large_resource', source: 'core/guide.md' }),
+            ]),
             resources: expect.arrayContaining([
               expect.objectContaining({ name: 'guide.md', loaded: true }),
             ]),

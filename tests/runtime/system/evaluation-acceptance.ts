@@ -63,7 +63,7 @@ const server = createServer(async (request, response) => {
               ? 'Inspect the already correct answer and report 20 without changes.'
               : 'Read the input and report 20 without changes.',
           acceptance: 'Fixture correct',
-          assigneeKey: 'adjutant',
+          assigneeKey: scenario === 'no-delegation' ? 'main' : 'adjutant',
         });
       if (index === 1)
         command({
@@ -86,7 +86,9 @@ const server = createServer(async (request, response) => {
         name = 'bash';
         args = {
           command:
-            'test -z "$OPENAI_API_KEY" && test -z "$ANTHROPIC_API_KEY" && ! touch /usr/ltcook-evaluation-write-denied 2>/dev/null && node .ltcook-evals/verify.cjs',
+            scenario === 'bad-verification'
+              ? 'true'
+              : 'test -z "$OPENAI_API_KEY" && test -z "$ANTHROPIC_API_KEY" && ! touch /usr/ltcook-evaluation-write-denied 2>/dev/null && node .ltcook-evals/verify.cjs',
         };
       }
       if (index === 3)
@@ -164,7 +166,9 @@ try {
     endpoint: `http://127.0.0.1:${address.port}`,
   });
   const input = {
-    preset: scenario === 'quick' || scenario === 'current' ? 'quick' : 'behavior',
+    preset: ['quick', 'current', 'bad-verification', 'no-delegation'].includes(scenario)
+      ? 'quick'
+      : 'behavior',
     setup: scenario === 'current' ? 'current' : 'synthetic',
     ...(scenario === 'current' ? { workspaceRoot: workspace } : {}),
     staticOnly: false,
@@ -195,10 +199,13 @@ try {
     ).results.behavior.tasks;
     assert(tasks.length > 0);
     assert(
-      tasks.every((task) => task.success),
+      tasks.every(
+        (task) => task.success === !['bad-verification', 'no-delegation'].includes(scenario),
+      ),
       JSON.stringify(tasks.map((task) => task.attempts)),
     );
-    assert(tasks.some((task) => task.attempts.some((attempt) => (attempt.delegations ?? 0) > 0)));
+    if (scenario !== 'no-delegation')
+      assert(tasks.some((task) => task.attempts.some((attempt) => (attempt.delegations ?? 0) > 0)));
     assert(calls.includes('ltcook_team'));
     assert(calls.includes('read'));
     assert(calls.includes('write'));

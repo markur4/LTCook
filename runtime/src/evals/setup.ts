@@ -172,3 +172,19 @@ export function resolveEvaluationContext(input: {
     );
   return { ...context, teamSelection: input.teamSelection };
 }
+
+/** Preserve the loader-relative resource identity without publishing host paths. */
+export function resourceIdentity(
+  resource: { scope: string; path: string; name: string },
+  workspace: string,
+  guidance: string,
+): string {
+  const root =
+    resource.scope === 'project' ? workspace : resource.scope === 'user' ? guidance : undefined;
+  const relative = root ? path.relative(root, resource.path) : resource.name;
+  const safe =
+    !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`)
+      ? relative
+      : path.basename(resource.path);
+  return `${resource.scope}/${safe.split(path.sep).join('/')}`;
+}
