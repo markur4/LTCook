@@ -99,3 +99,43 @@ test('an unknown native coordination command identifies the allowed command type
   expect(reason).not.toContain('command.title');
   expect(reason).not.toContain('private argument');
 });
+
+test('evaluation feedback identifies a rejected command without exposing its arguments', () => {
+  let message = '';
+  try {
+    validateToolArguments(
+      {
+        name: 'ltcook_team',
+        description: 'Coordination',
+        parameters: AgentRuntimeCommandInputSchema,
+      },
+      {
+        type: 'toolCall',
+        id: 'bad-task',
+        name: 'ltcook_team',
+        arguments: {
+          command: { type: 'task.create', taskId: 'private-task-id', status: 'completed' },
+        },
+      },
+    );
+  } catch (error) {
+    message = error instanceof Error ? error.message : '';
+  }
+  const feedback = evaluationToolError({ content: [{ type: 'text', text: message }] });
+  expect(feedback).toContain('Command type: task.create.');
+  expect(feedback).toContain('Present fields: taskId, status.');
+  expect(feedback).toContain('Status: completed.');
+  expect(feedback).not.toContain('private-task-id');
+  const unsafe = evaluationToolError({
+    content: [
+      {
+        type: 'text',
+        text:
+          'Validation failed for tool "ltcook_team":\n  - command.status: unknown field\n\nReceived arguments:\n' +
+          JSON.stringify({ command: { type: 'task.create', status: 'private-payload' } }),
+      },
+    ],
+  });
+  expect(unsafe).toContain('Status value type: string.');
+  expect(unsafe).not.toContain('private-payload');
+});
