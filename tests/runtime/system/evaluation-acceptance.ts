@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { readdirSync } from 'node:fs';
 import { mkdtemp, rm, mkdir, writeFile, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -186,7 +187,18 @@ try {
     staticOnly: false,
     runDirectory: directory,
     signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]),
-    progress: () => {},
+    progress: ({ event }) => {
+      if (['case.started', 'case.completed', 'case.failed'].includes(event))
+        for (const execution of readdirSync(directory).filter((entry) =>
+          entry.startsWith('.execution-'),
+        ))
+          assert(
+            !readdirSync(path.join(directory, execution)).some((entry) =>
+              entry.startsWith('case-'),
+            ),
+            'Release each attempt workspace before reporting completion or starting another case',
+          );
+    },
   } as const;
   if (scenario === 'cancel') {
     await assert.rejects(engine(input), /abort/i);
@@ -263,6 +275,7 @@ try {
       JSON.stringify({ result: 'passed', requests, tasks: tasks.length, toolCalls: calls.length }),
     );
   }
+  assert.deepEqual((await readdir(workspace)).sort(), ['.env', 'AGENTS.md']);
   assert(!(await readdir(directory)).some((entry) => entry.startsWith('.execution-')));
 } finally {
   if (previousOpenAI === undefined) delete process.env.OPENAI_API_KEY;

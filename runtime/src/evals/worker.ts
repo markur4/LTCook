@@ -240,7 +240,9 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     api.setSession(workspace, sessionId);
     const deadline = performance.now() + job.timeoutMs;
     const waiting = telemetry.begin('wait.pass-completion', randomUUID(), 'wait');
-    while (runtime.snapshot(sessionId).passes[0]?.status !== 'completed') {
+    while (true) {
+      const snapshot = runtime.snapshot(sessionId);
+      if (snapshot.passes[0]?.status === 'completed') break;
       if (inferenceFailed) {
         failureCategory = 'inference';
         throw new Error('Local model request failed or was aborted');
@@ -253,7 +255,6 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         failureCategory = 'limits';
         throw new Error('Scenario exceeded its tool budget');
       }
-      const snapshot = runtime.snapshot(sessionId);
       if (snapshot.tasks.some((task) => task.status === 'failed')) {
         failureCategory = toolErrors ? 'tool' : 'criteria';
         throw new Error('Scheduled scenario Task failed');

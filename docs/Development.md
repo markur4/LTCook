@@ -211,6 +211,13 @@ Attribution repeats paired guidance variants with counterbalanced order and
 reports observed variation. Local model smoke results are evidence, not CI gates;
 normal tests use scripted responses without Ollama or user login.
 
+Keep live verification focused: `eval run --quick` checks one targeted-fix case
+and retries once with low thinking if it fails. Use `eval analyze` when repeated
+timing evidence is needed: it runs 18 cases (three scenarios, two instruction
+variants, three repetitions) serially to avoid model contention. Each attempt
+uses an independent workspace, requests copy-on-write copies where supported,
+and releases its workspace before the next attempt.
+
 ## Asset packaging
 
 `src/ltcook_dev/packaging/package_assets.py` builds the canonical

@@ -1,4 +1,5 @@
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
@@ -165,38 +166,44 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         signal.throwIfAborted();
         const started = performance.now();
         const directory = await mkdtemp(path.join(temporary, 'case-'));
-        await cp(source, path.join(directory, 'workspace'), { recursive: true });
-        await cp(guidance, path.join(directory, 'guidance'), { recursive: true });
-        const git = (args: string[]) =>
-          spawnSync('git', ['-C', path.join(directory, 'workspace'), ...args], {
-            encoding: 'utf8',
-            env: {
-              PATH: process.env.PATH,
-              HOME: directory,
-              GIT_CONFIG_NOSYSTEM: '1',
-              GIT_CONFIG_GLOBAL: '/dev/null',
+        try {
+          // > Reflinks preserve independent writes and fall back to copying when unsupported.
+          const copyOptions = { recursive: true, mode: constants.COPYFILE_FICLONE };
+          await cp(source, path.join(directory, 'workspace'), copyOptions);
+          await cp(guidance, path.join(directory, 'guidance'), copyOptions);
+          const git = (args: string[]) =>
+            spawnSync('git', ['-C', path.join(directory, 'workspace'), ...args], {
+              encoding: 'utf8',
+              env: {
+                PATH: process.env.PATH,
+                HOME: directory,
+                GIT_CONFIG_NOSYSTEM: '1',
+                GIT_CONFIG_GLOBAL: '/dev/null',
+              },
+            });
+          git(['init', '-q']);
+          git(['add', '.']);
+          const value = await runTask(
+            {
+              directory,
+              appRoot,
+              nodeExecutable,
+              teamSelection: context.teamSelection,
+              arm,
+              scenario,
+              thinking,
+              endpoint,
+              timeoutMs: 120000,
+              webConfiguration: context.webConfiguration,
             },
-          });
-        git(['init', '-q']);
-        git(['add', '.']);
-        const value = await runTask(
-          {
-            directory,
-            appRoot,
-            nodeExecutable,
-            teamSelection: context.teamSelection,
-            arm,
-            scenario,
-            thinking,
-            endpoint,
-            timeoutMs: 120000,
-            webConfiguration: context.webConfiguration,
-          },
-          signal,
-        );
-        traceEvents.push(...value.trace.traceEvents);
-        const { trace: _trace, ...attempt } = value;
-        return { ...attempt, elapsedMs: performance.now() - started };
+            signal,
+          );
+          traceEvents.push(...value.trace.traceEvents);
+          const { trace: _trace, ...attempt } = value;
+          return { ...attempt, elapsedMs: performance.now() - started };
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
       };
       if (preset === 'audit' || preset === 'full') {
         progress({ event: 'suite.started', suite: 'instruction-semantic', completed, total });
