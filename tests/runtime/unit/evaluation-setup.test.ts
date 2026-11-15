@@ -41,17 +41,20 @@ test('snapshots uncommitted inputs and selected ignored guidance, excluding cred
   expect(await readdir(source)).toContain('outside');
 });
 
-test('unsupported saved records remain unchanged and are never restarted', async () => {
-  const root = await temporary();
-  const id = 'b9c2c440-a86a-43c2-9672-2030cf391de4';
-  const folder = path.join(root, 'evals/runs', id);
-  await mkdir(folder, { recursive: true });
-  const record = JSON.stringify({ schema: 1, runId: id, status: 'running', preset: 'quick' });
-  await writeFile(path.join(folder, 'run.json'), record);
-  const service = new EvalRunService(root, async () => {
-    throw new Error('Old record must not execute');
-  });
-  await service.initialize();
-  expect(service.list()).toEqual([]);
-  expect(await readFile(path.join(folder, 'run.json'), 'utf8')).toBe(record);
-});
+test.each([1, 2])(
+  'unsupported schema %s saved records remain unchanged and are never restarted',
+  async (schema) => {
+    const root = await temporary();
+    const id = 'b9c2c440-a86a-43c2-9672-2030cf391de4';
+    const folder = path.join(root, 'evals/runs', id);
+    await mkdir(folder, { recursive: true });
+    const record = JSON.stringify({ schema, runId: id, status: 'running', preset: 'quick' });
+    await writeFile(path.join(folder, 'run.json'), record);
+    const service = new EvalRunService(root, async () => {
+      throw new Error('Old record must not execute');
+    });
+    await service.initialize();
+    expect(service.list()).toEqual([]);
+    expect(await readFile(path.join(folder, 'run.json'), 'utf8')).toBe(record);
+  },
+);

@@ -80,9 +80,9 @@ describe('Agent Evals run service', () => {
     for (const [preset, total] of [
       ['quick', 2],
       ['audit', 2],
-      ['behavior', 6],
-      ['bottlenecks', 18],
-      ['full', 26],
+      ['behavior', 3],
+      ['bottlenecks', 3],
+      ['full', 5],
     ] as const) {
       const runId = await service.start({ preset, setup: 'current' });
       expect((await service.status(runId)).summary.total).toBe(total);

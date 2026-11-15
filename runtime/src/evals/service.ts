@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import {
   chmod,
   mkdir,
@@ -11,12 +12,15 @@ import {
   appendFile,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { z } from 'zod';
 import {
   EvalStartRequestSchema,
   EvalSummarySchema,
+  evaluationCaseCount,
   type EvalStartRequest,
   type EvalEvent,
   type EvalPreset,
+  type EvalSetup,
   type EvalReportResponse,
   type EvalSummary,
 } from './contracts.js';
@@ -32,21 +36,71 @@ export type EvalProgress = {
     Pick<EvalSummary, 'teamSelection' | 'model' | 'fixtureRevision' | 'provenance' | 'limitations'>
   >;
 };
-export type EvalEngine = (input: {
-  preset: EvalPreset;
-  setup: EvalStartRequest['setup'];
-  workspaceRoot?: string;
-  staticOnly: boolean;
-  runDirectory: string;
-  signal: AbortSignal;
-  progress(event: EvalProgress): void;
-}) => Promise<{
+export type EvalOutput = {
   result: unknown;
   trace: unknown;
   metadata?: Partial<
     Pick<EvalSummary, 'teamSelection' | 'model' | 'fixtureRevision' | 'provenance' | 'limitations'>
   >;
-}>;
+};
+export type EvalTimingIdentity = {
+  scenario: string;
+  thinking: 'off' | 'low';
+  provenanceKey: string;
+};
+export type EvalBudget = { timeoutMs: number; referenceRuns: string[]; expectedMs: number | null };
+type TimingSample = EvalTimingIdentity & { elapsedMs: number; recordedAt: number; runId: string };
+const checkpointSchema = z.object({
+  result: z.unknown(),
+  trace: z.unknown(),
+  timingSamples: z.array(
+    z.object({
+      scenario: z.string(),
+      thinking: z.enum(['off', 'low']),
+      provenanceKey: z.string(),
+      elapsedMs: z.number().positive().finite(),
+      recordedAt: z.number().finite(),
+      runId: z.string().uuid(),
+    }),
+  ),
+});
+function observedHardware(): string | undefined {
+  const result = spawnSync(
+    'nvidia-smi',
+    ['--query-compute-apps=gpu_uuid,process_name', '--format=csv,noheader,nounits'],
+    { encoding: 'utf8', timeout: 1000, env: { PATH: process.env.PATH } },
+  );
+  if (result.status !== 0) return undefined;
+  const devices = new Set(
+    result.stdout
+      .split('\n')
+      .filter((line) => /ollama|llama-server/i.test(line))
+      .map((line) => line.split(',')[0]?.trim())
+      .filter(Boolean),
+  );
+  if (devices.size !== 1) return undefined;
+  return `gpu:${createHash('sha256')
+    .update([...devices].join(','))
+    .digest('hex')}`;
+}
+export type EvalEngine = (input: {
+  preset: EvalPreset;
+  setup: EvalSetup;
+  workspaceRoot?: string;
+  staticOnly: boolean;
+  runDirectory: string;
+  signal: AbortSignal;
+  progress(event: EvalProgress): void;
+  checkpoint?(output: EvalOutput): Promise<void>;
+  repetitions?: number;
+  scenario?: 'read-only' | 'no-op' | 'targeted-fix';
+  timingHardware?: string;
+  budget?(identity: EvalTimingIdentity): EvalBudget;
+  learned?(
+    identity: EvalTimingIdentity,
+    sample: { elapsedMs: number; success: boolean },
+  ): Promise<void>;
+}) => Promise<EvalOutput>;
 
 function safeError(error: unknown): string {
   const value = error instanceof Error ? error.message : 'Agent Evals run failed';
@@ -80,6 +134,7 @@ export class EvalRunService {
   private readonly summaries = new Map<string, EvalSummary>();
   private readonly results = new Map<string, unknown>();
   private readonly traces = new Map<string, unknown>();
+  private readonly timingSamples = new Map<string, TimingSample[]>();
   private writes: Promise<void> = Promise.resolve();
   private readonly sequences = new Map<string, number>();
   private starting = false;
@@ -87,6 +142,7 @@ export class EvalRunService {
   constructor(
     stateDirectory: string,
     private readonly engine: EvalEngine,
+    private readonly timingHardware: () => string | undefined = observedHardware,
   ) {
     this.root = path.join(stateDirectory, 'evals', 'runs');
   }
@@ -129,17 +185,19 @@ export class EvalRunService {
     const now = new Date().toISOString();
     const runId = randomUUID();
     const summary: EvalSummary = {
-      schema: 2,
+      schema: 3,
       runId,
       preset,
       setup,
       staticOnly,
+      repetitions: request.repetitions,
+      ...(request.scenario ? { scenario: request.scenario } : {}),
       limitations: [],
       status: 'running',
       createdAt: now,
       updatedAt: now,
       completed: 0,
-      total: staticOnly ? 1 : this.caseCount(preset),
+      total: evaluationCaseCount(request),
     };
     this.summaries.set(runId, summary);
     try {
@@ -192,6 +250,7 @@ export class EvalRunService {
     this.summaries.delete(runId);
     this.results.delete(runId);
     this.traces.delete(runId);
+    this.timingSamples.delete(runId);
   }
 
   async close(): Promise<void> {
@@ -200,32 +259,47 @@ export class EvalRunService {
     await this.active.task;
   }
 
-  private caseCount(preset: EvalPreset): number {
-    return preset === 'quick'
-      ? 2
-      : preset === 'audit'
-        ? 2
-        : preset === 'behavior'
-          ? 6
-          : preset === 'bottlenecks'
-            ? 18
-            : 26;
-  }
-
   private async execute(
     summary: EvalSummary,
     controller: AbortController,
     request: EvalStartRequest,
   ): Promise<void> {
     const started = Date.now();
+    const hardware = this.timingHardware();
     try {
       const output = await this.engine({
         preset: summary.preset,
         setup: summary.setup,
         staticOnly: summary.staticOnly,
+        repetitions: request.repetitions,
+        scenario: request.scenario,
+        timingHardware: hardware,
+        budget: (identity) => this.budget(identity),
+        learned: async (identity, sample) => {
+          if (
+            !sample.success ||
+            controller.signal.aborted ||
+            !Number.isFinite(sample.elapsedMs) ||
+            sample.elapsedMs <= 0 ||
+            this.timingHardware() !== hardware
+          )
+            return;
+          const samples = this.timingSamples.get(summary.runId) ?? [];
+          samples.push({
+            ...identity,
+            elapsedMs: sample.elapsedMs,
+            recordedAt: Date.now(),
+            runId: summary.runId,
+          });
+          this.timingSamples.set(summary.runId, samples);
+        },
         ...(request.workspaceRoot ? { workspaceRoot: request.workspaceRoot } : {}),
         runDirectory: this.runDirectory(summary.runId),
         signal: controller.signal,
+        checkpoint: async (output) => {
+          await this.writes;
+          await this.saveOutput(summary, output);
+        },
         progress: (event) => {
           if (event.metadata) Object.assign(summary, sanitize(event.metadata));
           summary.currentSuite = event.suite;
@@ -240,11 +314,7 @@ export class EvalRunService {
         },
       });
       await this.writes;
-      Object.assign(summary, sanitize(output.metadata ?? {}));
-      this.results.set(summary.runId, sanitize(output.result));
-      this.traces.set(summary.runId, sanitize(output.trace));
-      await this.saveArtifact(summary.runId, 'result.json', this.results.get(summary.runId));
-      await this.saveArtifact(summary.runId, 'trace.json', this.traces.get(summary.runId));
+      await this.saveOutput(summary, output);
       summary.status = controller.signal.aborted ? 'cancelled' : 'completed';
       summary.completed = summary.total;
       summary.updatedAt = new Date().toISOString();
@@ -271,6 +341,40 @@ export class EvalRunService {
     const summary = this.summaries.get(runId);
     if (!summary) throw new Error('Agent Evals run was not found.');
     return summary;
+  }
+  private async saveOutput(summary: EvalSummary, output: EvalOutput): Promise<void> {
+    Object.assign(summary, sanitize(output.metadata ?? {}));
+    const result = sanitize(output.result);
+    const trace = sanitize(output.trace);
+    await this.saveArtifact(summary.runId, 'checkpoint.json', {
+      result,
+      trace,
+      timingSamples: this.timingSamples.get(summary.runId) ?? [],
+    });
+    this.results.set(summary.runId, result);
+    this.traces.set(summary.runId, trace);
+  }
+  private budget(identity: EvalTimingIdentity): EvalBudget {
+    const samples = identity.provenanceKey.startsWith('unverified:')
+      ? []
+      : [...this.timingSamples.values()]
+          .flat()
+          .filter(
+            (sample) =>
+              sample.scenario === identity.scenario &&
+              sample.thinking === identity.thinking &&
+              sample.provenanceKey === identity.provenanceKey,
+          )
+          .sort((a, b) => b.recordedAt - a.recordedAt)
+          .slice(0, 5);
+    const expectedMs = samples.length
+      ? Math.max(...samples.map((sample) => sample.elapsedMs))
+      : null;
+    return {
+      timeoutMs: expectedMs === null ? 120000 : Math.ceil(expectedMs * 3),
+      expectedMs,
+      referenceRuns: samples.map((sample) => sample.runId),
+    };
   }
   private runDirectory(runId: string): string {
     if (!/^[0-9a-f-]{36}$/.test(runId)) throw new Error('Invalid Agent Evals run ID.');
@@ -325,15 +429,18 @@ export class EvalRunService {
     }
   }
   private async loadArtifacts(runId: string, directory: string): Promise<void> {
-    for (const [name, target] of [
-      ['result.json', this.results],
-      ['trace.json', this.traces],
-    ] as const) {
-      try {
-        target.set(runId, JSON.parse(await readFile(path.join(directory, name), 'utf8')));
-      } catch {
-        /* partial run */
-      }
+    try {
+      const checkpoint = checkpointSchema.parse(
+        JSON.parse(await readFile(path.join(directory, 'checkpoint.json'), 'utf8')),
+      );
+      this.results.set(runId, checkpoint.result);
+      this.traces.set(runId, checkpoint.trace);
+      this.timingSamples.set(
+        runId,
+        checkpoint.timingSamples.filter((sample) => sample.runId === runId),
+      );
+    } catch {
+      /* No complete checkpoint was saved. Unsupported artifacts are left unchanged. */
     }
   }
 }
