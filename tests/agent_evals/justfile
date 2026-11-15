@@ -22,4 +22,4 @@ bottlenecks:
 
 [group('Agent Evals')]
 all:
-    uv run --locked ltcook eval run
+    uv run --locked ltcook eval run --all

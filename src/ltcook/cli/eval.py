@@ -34,6 +34,21 @@ eval_cli = typer.Typer(help="Run and inspect Agent Evals.", no_args_is_help=True
 console = Console()
 
 
+EVAL_LABELS = {
+    "static": "Instruction Audit · static",
+    "semantic": "Instruction Audit · semantic",
+    "behavior": "Behavior Evaluation",
+    "bottlenecks": "Bottleneck Attribution",
+}
+EVAL_LABELS.update(
+    {
+        "instruction-static": "Instruction Audit · static",
+        "instruction-semantic": "Instruction Audit · semantic",
+        "preparation": "Preparing",
+    }
+)
+
+
 class EvalCase(StrEnum):
     read_only = "read-only"
     no_op = "no-op"
@@ -104,7 +119,7 @@ def _follow(environment, run_id: str) -> None:
             summary = status["summary"]
             progress.update(
                 task,
-                description=f"{summary.get('currentSuite', 'Preparing')} · {summary.get('currentCase', summary['status'])}",
+                description=f"{EVAL_LABELS.get(summary.get('currentSuite'), 'Preparing')} · {summary.get('currentCase', summary['status'])}",
                 total=max(1, summary["total"]),
                 completed=summary["completed"],
             )
@@ -132,12 +147,7 @@ def _print_report(report: dict) -> None:
     for limitation in summary.get("limitations", []):
         console.print(f"Limitation: {limitation}")
     table = Table("Component", "Outcome", "Details")
-    labels = {
-        "static": "Instruction Audit · static",
-        "semantic": "Instruction Audit · semantic",
-        "behavior": "Behavior Evaluation",
-        "bottlenecks": "Bottleneck Attribution",
-    }
+    labels = EVAL_LABELS
     for name, raw_value in result.get("results", {}).items():
         value = raw_value if isinstance(raw_value, dict) else {}
         tasks = raw_value if isinstance(raw_value, list) else value.get("tasks", [])
@@ -185,7 +195,7 @@ def _print_report(report: dict) -> None:
                     f"Safeguard: {budget['timeoutMs'] / 1000:.2f}s; expected {'unknown' if expected is None else f'{expected / 1000:.2f}s'}; history: {source}"
                 )
             if attempt.get("failure"):
-                console.print(attempt["failure"], style="red")
+                console.print(attempt["failure"], style="red", markup=False)
             if attempt.get("diagnostics"):
                 console.print(json.dumps(attempt["diagnostics"], indent=2))
     timings = result.get("results", {}).get("bottlenecks", {}).get("timings", {})
@@ -196,17 +206,6 @@ def _print_report(report: dict) -> None:
                 f"{name}: {elapsed / 1000:.2f}s" for name, elapsed in timings.items()
             )
         )
-    for name, value in result.get("results", {}).items():
-        if not isinstance(value, dict):
-            continue
-        for arm in value.get("aggregates", []):
-            if not arm["tasks"]:
-                continue
-            console.print(
-                f"{labels.get(name, name)} · {arm['arm']}: "
-                f"mean {arm['meanTotalElapsedMs'] / 1000:.2f}s; "
-                f"observed {arm['minElapsedMs'] / 1000:.2f}–{arm['maxElapsedMs'] / 1000:.2f}s"
-            )
 
 
 def _start_and_follow(
@@ -254,6 +253,11 @@ def run(
     setup: Annotated[
         EvalSetup, typer.Option("--setup", help="Evaluation setup.")
     ] = EvalSetup.current,
+    all_categories: bool = typer.Option(
+        False,
+        "--all",
+        help="Run Instruction Audit and all three behavior cases, sharing their timing evidence.",
+    ),
     behavior_only: bool = typer.Option(
         False, "--behavior-only", help="Run only Behavior Evaluation."
     ),
@@ -268,12 +272,16 @@ def run(
     ] = None,
 ):
     """Run Behavior Evaluation with full instructions and report Bottleneck Attribution."""
+    if all_categories and (quick or behavior_only):
+        raise typer.BadParameter(
+            "--all cannot be combined with --quick or --behavior-only."
+        )
     if quick and behavior_only:
         raise typer.BadParameter("--quick and --behavior-only cannot be combined.")
     if quick and case is not None:
         raise typer.BadParameter("--quick and --case cannot be combined.")
     _start_and_follow(
-        "quick" if quick else "behavior",
+        "full" if all_categories else "quick" if quick else "behavior",
         setup=setup,
         repetitions=repetitions,
         scenario=case,

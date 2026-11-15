@@ -39,6 +39,7 @@ describe('evaluation execution controls', () => {
     expect(() =>
       EvalStartRequestSchema.parse({ preset: 'audit', scenario: 'read-only' }),
     ).toThrow();
+    expect(() => EvalStartRequestSchema.parse({ preset: 'audit', repetitions: 2 })).toThrow();
   });
 });
 
@@ -57,11 +58,12 @@ test('Bottleneck Attribution unions overlapping spans within a category', () => 
     event('model.main', 'E', 5000, 'main'),
     event('model.adjutant', 'E', 6000, 'adjutant'),
     event('tool.read', 'X', 2000, 'read', { dur: 1000 }),
+    event('tool.read', 'X', -2000, 'prior-read', { dur: 1000 }),
     event('wait.pass-completion', 'B', 0, 'wait'),
     event('wait.pass-completion', 'E', 8000, 'wait'),
   ]);
   expect(timing.model).toBe(5);
-  expect(timing.tool).toBe(1);
+  expect(timing.tool).toBe(2);
   expect(timing.wait).toBe(8);
   expect(timing.scheduler).toBe(0);
 });

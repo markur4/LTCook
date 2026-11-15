@@ -46,7 +46,7 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 💥 Breaking changes
 
-- Breaking: Agent Evals uses a new run-record format and requires Bubblewrap for Linux/WSL execution. Existing evaluation histories are unsupported and left unchanged. Users can preserve old results, stop the runtime, remove its `evals/runs` directory, and restart to reset history. See PR #2.
+- Breaking: Agent Evals uses run-record schema 3 with saved repetitions, timing history and partial diagnostics, and requires Bubblewrap for Linux/WSL execution. Existing evaluation histories are unsupported and left unchanged. Users can preserve old results, stop the runtime, remove its `evals/runs` directory, and restart to reset history. See PR #2.
 
 <br>
 - Breaking: personal clear-writing, TypeScript, React/Vite, reader-load and Modes planning guidance are no longer bundled by Core. Affected: installations relying on those defaults or the `ltcook-typescript`, `ltcook-react-vite` and `ltcook-reader-load` names. Migration: supply personal rules and native skill directories under the configured User guidance root; use the shared OMP skill names when using the chezmoi configuration. Core planning operations, approval gates, lookup and explore remain available without personal guidance.
@@ -116,13 +116,11 @@ All notable changes to `ltcook` will be documented in this file.
 
 - Symbolic Python tests use pytest-xdist with six workers by default. Complete test-suite timing includes symbolic tests and live agent evaluations, reported separately and together.
 
-- Agent Evals supports Current Setup and Synthetic Setup selection in the CLI and Paseo panel, a model-free `eval audit --static-only`, and `eval run --behavior-only`.
+- Agent Evals supports Current Setup and Synthetic Setup selection in the CLI and Paseo panel, a model-free `eval audit --static-only`, full-instruction Behavior Evaluation by default, `--case` selection, and `--repetitions` defaulting to one. Bottleneck Attribution uses the same executions and traces; `eval run --all` also performs Instruction Audit. Failed cases stop after their low-reasoning fallback, with saved partial results and safeguard history.
   Evaluation attempts use independent copy-on-write workspace copies where supported, release disposable state between attempts, and avoid duplicate runtime-state polling.
 
 <br>
-- Added normal-install Ollama/Spark provisioning and opt-in local IBB instruction,
-  behavior, semantic-audit, and paired timing diagnostics, with Pydantic Evals
-  oracles and private Perfetto-compatible traces.
+- Added normal-install Ollama/Spark provisioning and opt-in local Agent Evals with private Perfetto-compatible traces and safeguards derived from comparable successful runs.
 - Added runtime dispatch of eligible approved Pass Tasks, persisted dependencies,
   verification and user approval gates, same-member serialization, correction and
   explicit retry, restart delivery handling, and one current-revision Pass review.

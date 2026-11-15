@@ -29,6 +29,9 @@ export const EvalStartRequestSchema = z
   .refine((input) => !input.staticOnly || input.preset === 'audit', {
     message: 'staticOnly requires the audit preset',
   })
+  .refine((input) => input.preset !== 'audit' || input.repetitions === 1, {
+    message: 'Instruction Audit does not repeat behavioral cases',
+  })
   .refine((input) => !input.scenario || !['audit', 'quick'].includes(input.preset), {
     message: 'A selected case requires Behavior Evaluation or Bottleneck Attribution',
   });

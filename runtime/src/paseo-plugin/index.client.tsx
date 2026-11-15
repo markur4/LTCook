@@ -21,6 +21,9 @@ const evalsRpc = defineRpc({
   output: EvalResponseSchema,
 });
 const evalLabels: Record<string, string> = {
+  preparation: 'Preparing',
+  'instruction-static': 'Instruction Audit · static',
+  'instruction-semantic': 'Instruction Audit · semantic',
   static: 'Instruction Audit · static',
   semantic: 'Instruction Audit · semantic',
   behavior: 'Behavior Evaluation',
@@ -168,7 +171,7 @@ function Diagnostics({
           <Label
             theme={theme}
             muted
-          >{`${status.currentSuite ?? 'Preparing'}${status.currentCase ? ` · ${status.currentCase}` : ''}`}</Label>
+          >{`${evalLabels[status.currentSuite] ?? 'Preparing'}${status.currentCase ? ` · ${status.currentCase}` : ''}`}</Label>
           {status.error && <Label theme={theme}>{status.error}</Label>}
           {status.status === 'running' && (
             <Action
@@ -298,15 +301,6 @@ function Diagnostics({
                     ))}
                   </View>
                 ))}
-                {(value?.aggregates ?? [])
-                  .filter((arm: any) => arm.tasks > 0)
-                  .map((arm: any) => (
-                    <Label
-                      key={arm.arm}
-                      theme={theme}
-                      muted
-                    >{`${arm.arm}: mean ${(arm.meanTotalElapsedMs / 1000).toFixed(2)}s; observed ${(arm.minElapsedMs / 1000).toFixed(2)}–${(arm.maxElapsedMs / 1000).toFixed(2)}s`}</Label>
-                  ))}
               </View>
             );
           })}
