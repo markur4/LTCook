@@ -171,7 +171,7 @@ test('Core SKILL.md files pass the native Pi parser', () => {
   ]);
 });
 
-test('Team API v2 preserves both review policies', () => {
+test('Team API v3 preserves both review policies', () => {
   expect(defaultTeam.definition.reviewPolicy).toEqual({
     mode: 'independent',
     reviewerKeys: ['reviewer', 'reviewer-tmp'],

@@ -1161,7 +1161,7 @@ describe('authoritative planning workflow', () => {
     }
   });
   test.each([false, true])(
-    'CLI approval persists one Main handoff without replay (uncertain=%s)',
+    'CLI approval persists one Leader handoff without replay (uncertain=%s)',
     async (uncertain) => {
       const f = await fixture();
       await finishStages(f);
