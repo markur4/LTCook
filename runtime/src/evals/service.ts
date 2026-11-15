@@ -23,6 +23,7 @@ export type EvalProgress = {
 };
 export type EvalEngine = (input: {
   preset: EvalPreset;
+  staticOnly: boolean;
   signal: AbortSignal;
   progress(event: EvalProgress): void;
 }) => Promise<{ result: unknown; trace: unknown }>;
@@ -100,7 +101,8 @@ export class EvalRunService {
     }
   }
 
-  async start(preset: EvalPreset): Promise<string> {
+  async start(preset: EvalPreset, staticOnly = false): Promise<string> {
+    if (staticOnly && preset !== 'audit') throw new Error('staticOnly requires the audit preset');
     if (this.active || this.starting) throw new Error('An Agent Evals run is already active.');
     this.starting = true;
     const now = new Date().toISOString();
@@ -113,14 +115,14 @@ export class EvalRunService {
       createdAt: now,
       updatedAt: now,
       completed: 0,
-      total: this.caseCount(preset),
+      total: staticOnly ? 1 : this.caseCount(preset),
     };
     this.summaries.set(runId, summary);
     try {
       await this.saveSummary(summary);
       await this.emit(summary, 'run.started');
       const controller = new AbortController();
-      const task = this.execute(summary, controller);
+      const task = this.execute(summary, controller, staticOnly);
       this.active = { runId, controller, task };
       return runId;
     } finally {
@@ -186,11 +188,16 @@ export class EvalRunService {
             : 26;
   }
 
-  private async execute(summary: EvalSummary, controller: AbortController): Promise<void> {
+  private async execute(
+    summary: EvalSummary,
+    controller: AbortController,
+    staticOnly: boolean,
+  ): Promise<void> {
     const started = Date.now();
     try {
       const output = await this.engine({
         preset: summary.preset,
+        staticOnly,
         signal: controller.signal,
         progress: (event) => {
           summary.currentSuite = event.suite;

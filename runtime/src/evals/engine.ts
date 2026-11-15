@@ -9,12 +9,24 @@ import { Telemetry } from '../diagnostics/telemetry.js';
 import type { EvalEngine } from './service.js';
 
 const MODEL = 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest';
-const BASE_MODEL = 'SparkLLM/Spark-X2.6-4B:q8_0';
 const ENDPOINT = 'http://127.0.0.1:11434';
 const SCENARIOS: Scenario[] = ['read-only', 'no-op', 'targeted-fix'];
 
 export function createEvalEngine(input: { piHome: string; resources: string }): EvalEngine {
-  return async ({ preset, signal, progress }) => {
+  return async ({ preset, staticOnly, signal, progress }) => {
+    if (staticOnly) {
+      signal.throwIfAborted();
+      progress({ event: 'suite.started', suite: 'instruction-static', completed: 0, total: 1 });
+      const result = staticAudit(input.resources);
+      progress({
+        event: 'case.completed',
+        suite: 'instruction-static',
+        case: 'resource inventory',
+        completed: 1,
+        total: 1,
+      });
+      return { result: { preset, results: { static: result } }, trace: null };
+    }
     const health = await fetch(`${ENDPOINT}/api/tags`);
     if (!health.ok)
       throw new Error('Local Ollama is unavailable; start it with `ltcook services start`.');
@@ -232,7 +244,7 @@ async function semanticAudit(input: {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: BASE_MODEL,
+        model: MODEL,
         stream: false,
         think: false,
         options: { num_ctx: 8192 },

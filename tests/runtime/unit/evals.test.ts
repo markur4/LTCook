@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
+import { createEvalEngine } from '../../../runtime/src/evals/engine.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 
 const roots: string[] = [];
@@ -25,6 +26,30 @@ async function finish(service: EvalRunService, runId: string) {
 }
 
 describe('Agent Evals run service', () => {
+  test('runs static audit without accessing Ollama', async () => {
+    const root = await stateRoot();
+    await writeFile(path.join(root, 'guide.md'), 'Example guidance');
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(() =>
+      Promise.reject(new Error('unexpected network')),
+    );
+    try {
+      const service = new EvalRunService(root, createEvalEngine({ piHome: root, resources: root }));
+      await service.initialize();
+      const runId = await service.start('audit', true);
+      const completed = await finish(service, runId);
+      expect(completed.summary.status).toBe('completed');
+      expect(completed.summary.total).toBe(1);
+      expect(service.report(runId).result).toMatchObject({
+        results: { static: { resourceCount: 1 } },
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      await expect(service.start('quick', true)).rejects.toThrow(
+        'staticOnly requires the audit preset',
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
   test('reports the number of checks in each preset', async () => {
     const service = new EvalRunService(await stateRoot(), async () => ({ result: {}, trace: {} }));
     await service.initialize();

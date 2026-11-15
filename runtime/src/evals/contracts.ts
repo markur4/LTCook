@@ -12,7 +12,14 @@ export const EvalStatusSchema = z.enum([
 ]);
 export type EvalStatus = z.infer<typeof EvalStatusSchema>;
 
-export const EvalStartRequestSchema = z.object({ preset: EvalPresetSchema });
+export const EvalStartRequestSchema = z
+  .object({
+    preset: EvalPresetSchema,
+    staticOnly: z.boolean().optional(),
+  })
+  .refine((input) => !input.staticOnly || input.preset === 'audit', {
+    message: 'staticOnly requires the audit preset',
+  });
 export const EvalRunIdSchema = z.object({ runId: z.string().uuid() });
 export const EvalStatusRequestSchema = EvalRunIdSchema.extend({
   after: z.number().int().nonnegative().optional(),

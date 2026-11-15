@@ -148,10 +148,14 @@ def _print_report(report: dict) -> None:
         console.print(table)
 
 
-def _start_and_follow(preset: str) -> None:
+def _start_and_follow(preset: str, *, static_only: bool = False) -> None:
     try:
         environment, _ = _runtime()
-        run_id = _call(environment, "/v1/evals/start", {"preset": preset})["runId"]
+        run_id = _call(
+            environment,
+            "/v1/evals/start",
+            {"preset": preset, "staticOnly": static_only},
+        )["runId"]
         console.print(f"Agent Evals run [bold]{run_id}[/bold] · {preset}")
         _follow(environment, run_id)
     except KeyboardInterrupt:
@@ -173,9 +177,13 @@ def run(
 
 
 @eval_cli.command("audit")
-def audit():
+def audit(
+    static_only: bool = typer.Option(
+        False, "--static-only", help="Run the static audit without Ollama."
+    ),
+):
     """Run the static and semantic Instruction Audit."""
-    _start_and_follow("audit")
+    _start_and_follow("audit", static_only=static_only)
 
 
 @eval_cli.command("analyze")

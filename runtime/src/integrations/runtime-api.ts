@@ -290,8 +290,8 @@ export class RuntimeApi {
         let value: unknown;
         switch (request.url) {
           case '/v1/evals/start': {
-            const { preset } = EvalStartRequestSchema.parse(parsed);
-            value = { runId: await this.evals.start(preset) };
+            const { preset, staticOnly } = EvalStartRequestSchema.parse(parsed);
+            value = { runId: await this.evals.start(preset, staticOnly) };
             break;
           }
           case '/v1/evals/status': {
