@@ -249,6 +249,26 @@ the same isolated model and provider state. Diagnostics record compaction timing
 reported usage and failures, while excluding summary text.
 Pi sends the full instructions using the `system` message role supported by the
 Spark template, with `supportsDeveloperRole: false` in its isolated model state.
+Execution and compaction requests explicitly send `max_tokens: 2048`, the field
+accepted by Ollama. Pi's generic 4,096-token safety margin would otherwise reduce
+this 8,192-token model's requested output to one token; the isolated model's
+sampling override restores the intended output cap while Pi retains its existing
+compaction and overflow handling. This does not guarantee that every input fits.
+A failed summary aborts that disposable agent turn and ends its attempt. A later
+model request cannot clear the failure and repeat compaction until the safeguard;
+the run still permits only its single configured low-reasoning fallback.
+
+The coordinator scheduling handoff names the native `ltcook_team` operations and
+required fields. Scheduled execution reports use `report.create` with an explicit
+success or failure outcome; the runtime owns scheduled Task status. Command
+validation selects errors by command type, so unrelated Task fields do not hide
+invalid report fields.
+Tool counts and the existing tool budget include rejected validation attempts,
+counted once per attempt even when a provider reuses call IDs. Provider diagnostics retain HTTP status,
+reported stop reasons, usage and sanitized stream errors; ordinary content chunks
+are ignored. Stream text and response headers are not saved.
+The OpenAI client can intercept errors before Pi's stream hook receives them;
+these metadata hooks do not establish that every provider error was observed.
 
 Evaluation agents retain full standing guidance and receive an appended execution
 scope only after the authenticated runtime confirms their disposable Session and

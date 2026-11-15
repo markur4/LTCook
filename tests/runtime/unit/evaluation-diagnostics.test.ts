@@ -390,6 +390,7 @@ test('forced termination recovery keeps available active-attempt evidence explic
 
 test('Pi evaluation observations publish actual sanitized errors and agent lifecycle', async () => {
   const observed: Array<Record<string, unknown>> = [];
+  let rejectObservation = false;
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -398,6 +399,7 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
           { error: 'Task has unmet dependencies token=fixture-secret' },
           { status: 400 },
         );
+      if (rejectObservation) return new Response('Unavailable', { status: 503 });
       observed.push((await request.json()) as Record<string, unknown>);
       return Response.json({});
     },
@@ -554,13 +556,22 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
       willRetry: false,
       preparation: { tokensBefore: 7000 },
     });
-    await handlers.get('session_compact_failed')!({
-      reason: 'threshold',
-      willRetry: false,
-      fromExtension: false,
-      aborted: false,
-      errorMessage: 'Summary request failed token=fixture-secret',
-    });
+    let aborted = false;
+    await handlers.get('session_compact_failed')!(
+      {
+        reason: 'threshold',
+        willRetry: false,
+        fromExtension: false,
+        aborted: false,
+        errorMessage: 'Summary request failed token=fixture-secret',
+      },
+      {
+        abort() {
+          aborted = true;
+        },
+      },
+    );
+    expect(aborted).toBe(true);
     const lifecycle = observed.slice(compactionOffset);
     expect(lifecycle.filter(({ kind }) => kind === 'model.start')).toHaveLength(2);
     expect(
@@ -590,6 +601,68 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
       },
     ]);
     expect(JSON.stringify(lifecycle)).not.toContain('private');
+    const providerOffset = observed.length;
+    await handlers.get('after_provider_response')!({
+      status: 200,
+      headers: { authorization: 'private credential' },
+    });
+    await handlers.get('provider_stream_event')!({
+      data: { choices: [{ delta: { content: 'private stream text' }, finish_reason: null }] },
+    });
+    expect(observed).toHaveLength(providerOffset + 1);
+    await handlers.get('provider_stream_event')!({
+      data: {
+        choices: [{ delta: { content: 'private stream text' }, finish_reason: 'length' }],
+        usage: { prompt_tokens: 100, completion_tokens: 2048, total_tokens: 2148 },
+      },
+    });
+    await handlers.get('provider_stream_event')!({
+      data: { error: { message: 'Provider stopped token=fixture-secret', body: 'private body' } },
+    });
+    await handlers.get('message_end')!({
+      message: {
+        role: 'assistant',
+        stopReason: 'error',
+        errorMessage: 'Stream ended without finish_reason',
+      },
+    });
+    const providerEvents = observed.slice(providerOffset);
+    expect(providerEvents).toMatchObject([
+      { kind: 'model.response', status: 200 },
+      {
+        kind: 'model.stream',
+        rawStopReason: 'length',
+        usage: { input: 100, output: 2048, totalTokens: 2148 },
+      },
+      { kind: 'model.stream', error: 'Provider stopped token=<redacted>' },
+      {
+        kind: 'model.end',
+        error:
+          'Stream ended without finish_reason; provider stream: Provider stopped token=<redacted>',
+      },
+    ]);
+    expect(JSON.stringify(providerEvents)).not.toContain('private');
+    const collector = new EvaluationDiagnosticCollector();
+    for (const event of providerEvents) collector.observe('agent', event);
+    expect(collector.snapshot().recentEvents).toHaveLength(4);
+    await handlers.get('before_provider_headers')!({ headers: {} });
+    await handlers.get('message_end')!({
+      message: { role: 'assistant', stopReason: 'error', errorMessage: 'Next request error' },
+    });
+    expect(observed.at(-1)?.error).toBe('Next request error');
+    rejectObservation = true;
+    aborted = false;
+    await expect(
+      handlers.get('session_compact_failed')!(
+        { reason: 'threshold', willRetry: false, errorMessage: 'Summary failed' },
+        {
+          abort() {
+            aborted = true;
+          },
+        },
+      ),
+    ).rejects.toThrow('Evaluation observation unavailable');
+    expect(aborted).toBe(true);
   } finally {
     server.stop(true);
   }

@@ -10,7 +10,14 @@ import { createPaseoAgentBackend, startPaseoHost } from '../integrations/paseo.j
 import { selectedTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import type { GuidanceInspection } from '../guidance-api/index.js';
-import { EVAL_MODEL, EVAL_COMPACTION, EVAL_MODEL_COMPAT, hash, resourceIdentity } from './setup.js';
+import {
+  EVAL_MODEL,
+  EVAL_COMPACTION,
+  EVAL_MAX_OUTPUT_TOKENS,
+  EVAL_MODEL_COMPAT,
+  hash,
+  resourceIdentity,
+} from './setup.js';
 import { EVALUATION_STOP_FILE, type EvaluationJob } from './runner.js';
 import {
   EvaluationDiagnosticCollector,
@@ -41,7 +48,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   const secret = randomUUID();
   const team = await selectedTeam(job.teamSelection);
   const contextWindow = 8192;
-  const maxTokens = 2048;
+  const maxTokens = EVAL_MAX_OUTPUT_TOKENS;
   const telemetry = new Telemetry(path.join(state, 'events.jsonl'), path.join(state, 'trace.json'));
   const diagnostics = new EvaluationDiagnosticCollector();
   let diagnosticWrites = Promise.resolve();
@@ -51,10 +58,12 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   const prompts = new Map<string, string>();
   const operationSpans = new Map<string, ReturnType<Telemetry['begin']>>();
   let toolCalls = 0;
+  const pendingToolAttempts = new Map<string, number>();
   let writeCalls = 0;
   let verificationCalls = 0;
   let inferenceFailed = false;
   let inferenceFailedAt = 0;
+  let compactionFailure: string | undefined;
   let scopeFailed = false;
   let toolErrors = 0;
   let failureCategory = 'runtime';
@@ -119,6 +128,9 @@ export async function executeEvaluationJob(job: EvaluationJob) {
               contextWindow,
               maxTokens,
               compat: EVAL_MODEL_COMPAT,
+              // > Pi's generic 4K reserve collapses this 8K model to one token. Use its explicit
+              // > request override with the 2K reserve maintained by evaluation compaction.
+              samplingParams: { max_tokens: maxTokens },
               reasoning: true,
               thinkingLevelMap: { off: 'none', low: 'low' },
             },
@@ -290,8 +302,9 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         operationSpans.get(`compaction:${agentId}`)?.end();
         operationSpans.delete(`compaction:${agentId}`);
         if (value.kind === 'compaction.failed') {
-          inferenceFailed = true;
-          inferenceFailedAt = performance.now();
+          // > A later SDK request must not erase a failed summary and repeat it until timeout.
+          compactionFailure =
+            typeof value.error === 'string' ? value.error : 'Summary request failed';
         }
         const usage = evaluationTokenUsage(value.usage);
         if (usage) tokenUsage.push(usage);
@@ -310,8 +323,22 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         const usage = evaluationTokenUsage(value.usage);
         if (usage) tokenUsage.push(usage);
       }
+      if (
+        (value.kind === 'tool.start' || value.kind === 'tool.end') &&
+        typeof value.callId === 'string'
+      ) {
+        // > Validation can emit end without start; providers may reuse IDs in later requests.
+        const key = `${agentId}:${value.callId}`;
+        const pending = pendingToolAttempts.get(key) ?? 0;
+        if (value.kind === 'tool.start') {
+          toolCalls++;
+          pendingToolAttempts.set(key, pending + 1);
+        } else if (pending > 0) {
+          if (pending === 1) pendingToolAttempts.delete(key);
+          else pendingToolAttempts.set(key, pending - 1);
+        } else toolCalls++;
+      }
       if (value.kind === 'tool.start') {
-        toolCalls++;
         if (value.tool === 'write' || value.tool === 'edit') writeCalls++;
       }
       if (value.kind === 'tool.end') {
@@ -350,6 +377,10 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       if (scopeFailed) {
         failureCategory = 'runtime';
         throw new Error('Authenticated evaluation execution scope could not be confirmed');
+      }
+      if (compactionFailure) {
+        failureCategory = 'inference';
+        throw new Error(`Local model context compaction failed: ${compactionFailure}`);
       }
       if (snapshot.passes[0]?.status === 'completed') break;
       // > Let Pi announce its existing overflow/compaction recovery before ending the case.

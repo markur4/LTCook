@@ -77,6 +77,7 @@ export default async function activate(
   };
   if (evaluation) {
     let compacting = false;
+    let providerStreamError: string | undefined;
     pi.on('session_before_compact', async (event) => {
       compacting = true;
       await observe({
@@ -99,19 +100,23 @@ export default async function activate(
         usage: event.compactionEntry.usage,
       });
     });
-    pi.on('session_compact_failed', async (event) => {
+    pi.on('session_compact_failed', async (event, context) => {
       compacting = false;
-      await observe({
-        kind: 'compaction.failed',
-        phase: 'compaction',
-        reason: event.reason,
-        willRetry: event.willRetry,
-        fromExtension: event.fromExtension,
-        aborted: event.aborted,
-        error: sanitizeEvaluationText(
-          event.errorMessage ?? (event.aborted ? 'Compaction aborted' : 'Compaction failed'),
-        ),
-      });
+      try {
+        await observe({
+          kind: 'compaction.failed',
+          phase: 'compaction',
+          reason: event.reason,
+          willRetry: event.willRetry,
+          fromExtension: event.fromExtension,
+          aborted: event.aborted,
+          error: sanitizeEvaluationText(
+            event.errorMessage ?? (event.aborted ? 'Compaction aborted' : 'Compaction failed'),
+          ),
+        });
+      } finally {
+        context.abort();
+      }
     });
     // > Validation rejects before tool_result hooks; bound their feedback before the next request.
     pi.on('context', async (event) => ({
@@ -139,7 +144,53 @@ export default async function activate(
       if (!compacting) await observe({ kind: 'model.start' });
     });
     pi.on('before_provider_headers', (event) => {
+      providerStreamError = undefined;
       event.headers['x-ltcook-member'] = memberKey;
+    });
+    pi.on('after_provider_response', async (event) => {
+      await observe({ kind: 'model.response', status: event.status });
+    });
+    pi.on('provider_stream_event', async (event) => {
+      if (!event.data || typeof event.data !== 'object') return;
+      const data = event.data as Record<string, unknown>;
+      let streamError: string | undefined;
+      if (data.error) {
+        const error = data.error;
+        streamError = sanitizeEvaluationText(
+          typeof error === 'string'
+            ? error
+            : typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+              ? error.message
+              : 'Provider stream returned an error without a message',
+        );
+        providerStreamError = streamError;
+      }
+      const choice = Array.isArray(data.choices) ? data.choices[0] : undefined;
+      const rawStopReason =
+        choice && typeof choice === 'object' && typeof choice.finish_reason === 'string'
+          ? choice.finish_reason
+          : typeof data.done_reason === 'string'
+            ? data.done_reason
+            : undefined;
+      const usage =
+        data.usage && typeof data.usage === 'object'
+          ? (data.usage as Record<string, unknown>)
+          : undefined;
+      if (!streamError && !rawStopReason && !usage && data.done !== true) return;
+      await observe({
+        kind: 'model.stream',
+        ...(rawStopReason ? { rawStopReason } : {}),
+        ...(streamError ? { error: streamError } : {}),
+        ...(usage
+          ? {
+              usage: {
+                input: usage.prompt_tokens,
+                output: usage.completion_tokens,
+                totalTokens: usage.total_tokens,
+              },
+            }
+          : {}),
+      });
     });
     pi.on('message_end', async (event) => {
       if (event.message.role === 'assistant')
@@ -149,7 +200,11 @@ export default async function activate(
           stopReason: event.message.stopReason,
           rawStopReason: event.message.rawStopReason,
           ...(event.message.errorMessage
-            ? { error: sanitizeEvaluationText(event.message.errorMessage) }
+            ? {
+                error: sanitizeEvaluationText(
+                  `${event.message.errorMessage}${providerStreamError ? `; provider stream: ${providerStreamError}` : ''}`,
+                ),
+              }
             : {}),
         });
     });
@@ -270,7 +325,8 @@ export default async function activate(
   pi.registerTool({
     name: 'ltcook_team',
     label: 'Team coordination',
-    description: 'Submit a coordination command.',
+    description:
+      'Coordinate LTCook work through the runtime. Call this native tool directly with one command object; command.type selects the operation. task.create registers work and requires title, description, acceptance and the active passId for execution. For scheduled work, submit report.create with assignmentId, summary, evidence and outcome="success" or "failure"; the runtime owns its Task status. task.update can complete the unscheduled coordinator handoff using taskId and status="completed". guidance.inspect reads loaded guidance. Shell commands do not submit coordination operations. Runtime authorization and member restrictions still apply.',
     parameters: AgentRuntimeCommandInputSchema,
     async execute(_id, input, _signal, _onUpdate, ctx) {
       // > Native Pi validates the narrower projection of the shared command schema.

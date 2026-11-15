@@ -154,7 +154,7 @@ export type EvaluationDiagnostics = {
     maxTokens: number;
     thinking: string;
     compaction?: { enabled: boolean; reserveTokens: number; keepRecentTokens: number };
-    compat?: { supportsDeveloperRole: boolean };
+    compat?: { supportsDeveloperRole: boolean; maxTokensField?: 'max_tokens' };
   };
 };
 export type EvaluationCapture = {
@@ -185,6 +185,8 @@ export class EvaluationDiagnosticCollector {
         'agent.end',
         'model.start',
         'model.end',
+        'model.response',
+        'model.stream',
         'compaction.start',
         'compaction.end',
         'compaction.failed',

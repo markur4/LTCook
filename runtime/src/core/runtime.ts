@@ -123,7 +123,14 @@ export class RuntimeController implements RuntimeControllerContract {
       memberKey: coordinator.memberKey,
       nativeAgentId: coordinator.nativeAgentId,
       message: `Predefined evaluation scope for Pass ${pass.id}. This assignment is ONLY the coordinator scheduling handoff. The runtime has authorized this predefined disposable scenario; interactive Design/Plan approval is outside evaluation coverage.
-First register a scheduled task.execute Task using passId "${pass.id}" and an eligible declared member. Put the scenario below in that Task's description and acceptance. Then submit report.create for the scheduling Assignment ID shown above, and task.update scheduling Task "${task.id}" to completed. The production scheduler dispatches the registered Task. Do not perform the business scenario in this scheduling assignment, create another Pass, or manually complete the scheduled execution Task.
+Use the native ltcook_team tool directly for the following coordination calls. This scheduling handoff needs no shell commands, file reads, Git inspection or source-code investigation.
+1. Call ltcook_team with a command object: command.type="task.create", command.passId="${pass.id}", command.workType="task.execute", plus nonempty command.title, command.description and command.acceptance describing the scenario below. Set command.assigneeKey to an eligible declared member: ${this.team.definition.members
+        .filter((member) => member.workTypes.includes('task.execute'))
+        .map((member) => member.key)
+        .join(', ')}. task.create schedules execution by default; do not set scheduled=false.
+2. Call ltcook_team with command.type="report.create", command.assignmentId equal to the scheduling Assignment ID shown above, and nonempty command.summary and command.evidence describing the scheduling result. Do not use the new Task ID as assignmentId.
+3. Call ltcook_team with command.type="task.update", command.taskId="${task.id}" and command.status="completed".
+The production scheduler dispatches the registered Task. Do not perform the business scenario in this scheduling assignment, create another Pass, or manually complete the scheduled execution Task.
 Task to register: ${input.description}`,
     });
     await this.deliverAssignment(assignment);

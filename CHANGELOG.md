@@ -120,6 +120,9 @@ All notable changes to `ltcook` will be documented in this file.
   Evaluation attempts use independent copy-on-write workspace copies where supported, release disposable state between attempts, and avoid duplicate runtime-state polling.
   Pi context compaction uses the same pinned local model; sanitized diagnostics and traces include summary-call timing, usage and failures.
   Agents receive an authenticated disposable execution-scope clarification alongside full instructions, using the Spark-supported system role. Restart removes temporary execution state for supported run records and reports cleanup failures.
+  Evaluation output caps use Ollama's supported `max_tokens` field, including compaction. Coordinator handoffs explain native scheduling operations, and command validation reports errors for the selected command type.
+  Rejected tool attempts count toward the existing budget; sanitized provider metadata preserves stream failures without saving stream text or headers.
+  Failed context summaries end the attempt instead of repeating compaction until timeout.
 
 <br>
 - Added normal-install Ollama/Spark provisioning and opt-in local Agent Evals with private Perfetto-compatible traces and safeguards derived from comparable successful runs.

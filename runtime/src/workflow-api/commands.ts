@@ -329,25 +329,15 @@ const TaskCreateCommandSchema = Type.Extract(
 );
 // > Agent execution Tasks require the active Pass; user backlog Tasks remain optional.
 export const AgentRuntimeCommandSchema = Type.Union([
-  AgentNonTaskCommandSchema,
-  Type.Object(
-    {
-      ...TaskCreateCommandSchema.properties,
-      passId: Type.String({ minLength: 1 }),
-      workType: Type.Optional(Type.Literal('task.execute')),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      ...TaskCreateCommandSchema.properties,
-      workType: Type.Exclude(
-        Type.Required(TaskCreateCommandSchema).properties.workType,
-        Type.Literal('task.execute'),
-      ),
-    },
-    { additionalProperties: false },
-  ),
+  // > Keep command alternatives at one level so native validation selects the relevant error.
+  ...AgentNonTaskCommandSchema.anyOf,
+  Type.Object(TaskCreateCommandSchema.properties, {
+    additionalProperties: false,
+    // > One branch per command tag lets native Pi select its validation errors by type.
+    // > Missing workType defaults to execution, so it also requires a nonempty Pass.
+    if: { properties: { workType: { const: 'task.execute' } } },
+    then: { required: ['passId'], properties: { passId: { type: 'string', minLength: 1 } } },
+  }),
 ]);
 export const AgentRuntimeCommandInputSchema = Type.Object(
   { command: AgentRuntimeCommandSchema },

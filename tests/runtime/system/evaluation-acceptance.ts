@@ -7,6 +7,7 @@ import path from 'node:path';
 import { createEvalEngine } from '../../../runtime/src/evals/engine.js';
 import {
   EVAL_MODEL,
+  EVAL_MAX_OUTPUT_TOKENS,
   EVALUATION_EXECUTION_CONTEXT,
   hash,
 } from '../../../runtime/src/evals/setup.js';
@@ -20,12 +21,15 @@ const verifiedCalls = new Set<string>();
 const verificationMarker = 'LTCook fixture verified';
 let requests = 0;
 let compactions = 0;
+const requestTokenLimits: number[] = [];
 const assignmentText = new Map<string, string>();
 const effectivePrompts = new Map<string, Map<string, string>>();
 let semanticRequests = 0;
 let failure: unknown;
 const scenario = process.argv[2] ?? 'behavior';
-const compactionScenario = scenario === 'compaction' || scenario === 'compaction-cancel';
+const compactionScenario = ['compaction', 'compaction-cancel', 'compaction-error'].includes(
+  scenario,
+);
 const controller = new AbortController();
 const server = createServer(async (request, response) => {
   try {
@@ -40,11 +44,21 @@ const server = createServer(async (request, response) => {
     const input = JSON.parse(body) as {
       model: string;
       think?: boolean;
+      max_tokens?: number;
+      max_completion_tokens?: number;
       tools?: Array<{ function?: { name?: string } }>;
       messages: Array<{ role: string; content: unknown; tool_call_id?: string }>;
     };
     assert.equal(input.model, EVAL_MODEL);
+    const tokenLimit = input.max_tokens ?? input.max_completion_tokens;
+    if (typeof tokenLimit === 'number') requestTokenLimits.push(tokenLimit);
     if (request.url === '/v1/chat/completions') {
+      assert.equal(
+        input.max_tokens,
+        EVAL_MAX_OUTPUT_TOKENS,
+        'Ollama must receive the usable output cap, including compaction calls',
+      );
+      assert.equal(input.max_completion_tokens, undefined, 'Ollama ignores max_completion_tokens');
       assert(
         input.messages.some((message) => message.role === 'system'),
         'Ollama instructions must use the supported system role',
@@ -84,7 +98,7 @@ const server = createServer(async (request, response) => {
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       for (const [delta, finish_reason] of [
         [{ role: 'assistant', content: summary }, null],
-        [{}, 'stop'],
+        [{}, scenario === 'compaction-error' ? 'length' : 'stop'],
       ] as const)
         response.write(
           `data: ${JSON.stringify({ id: `summary-${requests}`, object: 'chat.completion.chunk', model: EVAL_MODEL, choices: [{ index: 0, delta, finish_reason }] })}\n\n`,
@@ -166,14 +180,26 @@ const server = createServer(async (request, response) => {
               : 'test -z "$OPENAI_API_KEY" && test -z "$ANTHROPIC_API_KEY" && ! touch /usr/ltcook-evaluation-write-denied 2>/dev/null && node .ltcook-evals/verify.cjs && printf \'LTCook fixture verified\'',
         };
       }
-      if (index === 3)
+      if (index === 3 || (scenario === 'validation-recovery' && index === 4))
         command({
           type: 'report.create',
           assignmentId,
           summary: '20',
           evidence: 'Local verification passed',
           outcome: 'success',
+          ...(scenario === 'validation-recovery' && index === 3
+            ? { planId: 'unsupported-field', coverage: [] }
+            : {}),
         });
+      if (scenario === 'validation-recovery' && index === 4) {
+        const feedback = input.messages
+          .filter((message) => message.role === 'tool')
+          .map((message) => JSON.stringify(message.content))
+          .join('\n');
+        assert(feedback.includes('[command.planId] unknown field'));
+        assert(feedback.includes('[command.coverage] unknown field'));
+        assert(!feedback.includes('[command.title] missing'));
+      }
     } else {
       if (index === 0) {
         name = 'read';
@@ -188,17 +214,26 @@ const server = createServer(async (request, response) => {
           outcome: 'success',
         });
     }
-    const id = `fixture-${requests}`;
+    const id =
+      scenario === 'validation-recovery'
+        ? `fixture-${assignmentId}-${!bootstrap && index === 4 ? 3 : index}`
+        : `fixture-${requests}`;
+    const triggerCompaction =
+      compactionScenario &&
+      bootstrap &&
+      index === 0 &&
+      (requests === 1 || scenario === 'compaction-error');
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     const send = (delta: unknown, reason: string | null = null) =>
       response.write(
         `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: 1, model: EVAL_MODEL, choices: [{ index: 0, delta, finish_reason: reason }] })}\n\n`,
       );
-    if (compactionScenario && requests === 1)
+    if (triggerCompaction) {
       send({
         role: 'assistant',
         content: 'Discardable context for the maintained compaction boundary. '.repeat(200),
       });
+    }
     if (name) {
       assert(
         input.tools?.some((tool) => tool.function?.name === name),
@@ -217,7 +252,7 @@ const server = createServer(async (request, response) => {
       send({ role: 'assistant', content: 'Done.' });
       send({}, 'stop');
     }
-    if (compactionScenario && requests === 1)
+    if (triggerCompaction)
       response.write(
         `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', model: EVAL_MODEL, choices: [], usage: { prompt_tokens: 7000, completion_tokens: 1, total_tokens: 7001 } })}\n\n`,
       );
@@ -268,6 +303,8 @@ try {
                 'no-delegation',
                 'compaction',
                 'compaction-cancel',
+                'validation-recovery',
+                'compaction-error',
               ].includes(scenario)
             ? 'quick'
             : 'behavior',
@@ -330,7 +367,11 @@ try {
     );
   } else {
     let result: Awaited<ReturnType<typeof engine>>;
-    if (scenario === 'bad-verification' || scenario === 'no-delegation') {
+    if (
+      scenario === 'bad-verification' ||
+      scenario === 'no-delegation' ||
+      scenario === 'compaction-error'
+    ) {
       await assert.rejects(engine(input), /failed after its low-reasoning fallback/);
       assert(checkpoint, 'Failed attempts must be checkpointed before the run rejects');
       result = checkpoint;
@@ -354,6 +395,19 @@ try {
         };
       }
     ).results.behavior.tasks;
+    if (scenario === 'compaction-error') {
+      assert.equal(
+        compactions,
+        2,
+        'One failed summary per off/low attempt, not a repeated compaction loop',
+      );
+      assert(tasks.every((task) => !task.success && task.attempts.length === 2));
+      assert(
+        tasks.every((task) =>
+          task.attempts.every((attempt) => attempt.failure?.includes('context compaction failed')),
+        ),
+      );
+    }
     const observedPromptHashes = new Set(
       [...effectivePrompts.values()].map((prompts) => hash([...prompts.values()].join('\n\n'))),
     );
@@ -388,9 +442,38 @@ try {
       assert(events.some((event) => event.name === 'model.compaction' && event.ph === 'E'));
     }
     assert(tasks.every((task) => (task as { arm?: string }).arm === 'complete'));
+    if (scenario === 'validation-recovery') {
+      const events = (
+        result.trace as {
+          traceEvents: Array<{ name: string; args?: { status?: number; rawStopReason?: string } }>;
+        }
+      ).traceEvents;
+      assert(
+        events.some(
+          (event) => event.name === 'evaluation.model.response' && event.args?.status === 200,
+        ),
+      );
+      assert(
+        events.some(
+          (event) =>
+            event.name === 'evaluation.model.stream' && event.args?.rawStopReason === 'tool_calls',
+        ),
+      );
+      assert.equal(
+        tasks.reduce(
+          (sum, task) =>
+            sum + task.attempts.reduce((count, attempt) => count + attempt.toolCalls, 0),
+          0,
+        ),
+        calls.length,
+        'Count rejected validation attempts once alongside executed calls',
+      );
+    }
     assert(
       tasks.every(
-        (task) => task.success === !['bad-verification', 'no-delegation'].includes(scenario),
+        (task) =>
+          task.success ===
+          !['bad-verification', 'no-delegation', 'compaction-error'].includes(scenario),
       ),
       JSON.stringify(
         tasks.map((task) =>
@@ -426,14 +509,22 @@ try {
         'Every non-delegating attempt must successfully verify the corrected fixture',
       );
     }
-    if (scenario !== 'no-delegation')
+    if (scenario !== 'no-delegation' && scenario !== 'compaction-error')
       assert(tasks.some((task) => task.attempts.some((attempt) => (attempt.delegations ?? 0) > 0)));
     assert(calls.includes('ltcook_team'));
-    assert(calls.includes('read'));
-    assert(calls.includes('write'));
-    assert(calls.includes('bash'));
+    if (scenario !== 'compaction-error') {
+      assert(calls.includes('read'));
+      assert(calls.includes('write'));
+      assert(calls.includes('bash'));
+    }
     console.log(
-      JSON.stringify({ result: 'passed', requests, tasks: tasks.length, toolCalls: calls.length }),
+      JSON.stringify({
+        result: 'passed',
+        requests,
+        tasks: tasks.length,
+        toolCalls: calls.length,
+        requestTokenLimits,
+      }),
     );
   }
   assert.deepEqual((await readdir(workspace)).sort(), ['.env', 'AGENTS.md']);
