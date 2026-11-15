@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const TeamDetailRequestSchema = z.object({
-  workspaceRoot: z.string().min(1),
+  sessionId: z.string().min(1),
   target: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('task'), taskId: z.string().min(1) }),
     z.object({ kind: z.literal('member'), memberKey: z.string().min(1) }),
