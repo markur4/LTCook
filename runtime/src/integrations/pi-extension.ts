@@ -10,6 +10,8 @@ import { RiedService, type RiedRequest } from '../ried.js';
 import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
+import { evaluationToolError, sanitizeEvaluationText } from '../evals/diagnostics.js';
+import { EVAL_MODEL, EVALUATION_EXECUTION_CONTEXT } from '../evals/setup.js';
 const require = createRequire(import.meta.url);
 async function activateOptionalBrowser(pi: ExtensionAPI): Promise<void> {
   if (process.env.LTCOOK_BROWSER_ENABLED !== 'true') return;
@@ -72,25 +74,127 @@ export default async function activate(
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId, nativeAgentId, ...payload }),
     });
-  if (process.env.LTCOOK_EVAL_ARM) {
-    const observe = async (value: Record<string, unknown>) => {
-      const response = await rpc('/v1/evaluation/observe', value);
-      if (!response.ok) throw new Error('Evaluation observation unavailable');
-    };
+  const evaluation = Boolean(process.env.LTCOOK_EVAL_ARM);
+  const observe = async (value: Record<string, unknown>) => {
+    const response = await rpc('/v1/evaluation/observe', value);
+    if (!response.ok) throw new Error('Evaluation observation unavailable');
+  };
+  if (evaluation) {
+    let compacting = false;
+    let providerStreamError: string | undefined;
+    pi.on('session_before_compact', async (event) => {
+      compacting = true;
+      await observe({
+        kind: 'compaction.start',
+        phase: 'compaction',
+        reason: event.reason,
+        willRetry: event.willRetry,
+        tokensBefore: event.preparation.tokensBefore,
+      });
+    });
+    pi.on('session_compact', async (event) => {
+      compacting = false;
+      await observe({
+        kind: 'compaction.end',
+        phase: 'compaction',
+        reason: event.reason,
+        willRetry: event.willRetry,
+        fromExtension: event.fromExtension,
+        tokensBefore: event.compactionEntry.tokensBefore,
+        usage: event.compactionEntry.usage,
+      });
+    });
+    pi.on('session_compact_failed', async (event, context) => {
+      compacting = false;
+      try {
+        await observe({
+          kind: 'compaction.failed',
+          phase: 'compaction',
+          reason: event.reason,
+          willRetry: event.willRetry,
+          fromExtension: event.fromExtension,
+          aborted: event.aborted,
+          error: sanitizeEvaluationText(
+            event.errorMessage ?? (event.aborted ? 'Compaction aborted' : 'Compaction failed'),
+          ),
+        });
+      } finally {
+        context.abort();
+      }
+    });
+    // > Validation rejects before tool_result hooks; bound their feedback before the next request.
+    pi.on('context', async (event) => ({
+      messages: event.messages.map((message) => {
+        if (message.role !== 'toolResult' || !message.isError) return message;
+        const reason = evaluationToolError(message);
+        if (!reason?.startsWith('Validation failed for tool ')) return message;
+        return { ...message, content: [{ type: 'text' as const, text: reason }] };
+      }),
+    }));
     pi.on('agent_start', async (_event, context) => {
+      await observe({ kind: 'agent.start' });
       await observe({ kind: 'prompt', prompt: context.getSystemPrompt() });
+    });
+    pi.on('agent_end', async () => {
+      await observe({ kind: 'agent.end' });
     });
     pi.on('before_provider_request', async (_event, context) => {
       if (
-        context.model?.id !== 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest' ||
+        context.model?.id !== EVAL_MODEL ||
         context.model.provider !== 'ollama' ||
         context.model.baseUrl !== `${process.env.LTCOOK_EVAL_ENDPOINT}/v1`
       )
         throw new Error('Evaluation model pin violation');
-      await observe({ kind: 'model.start' });
+      if (!compacting) await observe({ kind: 'model.start' });
     });
     pi.on('before_provider_headers', (event) => {
+      providerStreamError = undefined;
       event.headers['x-ltcook-member'] = memberKey;
+    });
+    pi.on('after_provider_response', async (event) => {
+      await observe({ kind: 'model.response', status: event.status });
+    });
+    pi.on('provider_stream_event', async (event) => {
+      if (!event.data || typeof event.data !== 'object') return;
+      const data = event.data as Record<string, unknown>;
+      let streamError: string | undefined;
+      if (data.error) {
+        const error = data.error;
+        streamError = sanitizeEvaluationText(
+          typeof error === 'string'
+            ? error
+            : typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+              ? error.message
+              : 'Provider stream returned an error without a message',
+        );
+        providerStreamError = streamError;
+      }
+      const choice = Array.isArray(data.choices) ? data.choices[0] : undefined;
+      const rawStopReason =
+        choice && typeof choice === 'object' && typeof choice.finish_reason === 'string'
+          ? choice.finish_reason
+          : typeof data.done_reason === 'string'
+            ? data.done_reason
+            : undefined;
+      const usage =
+        data.usage && typeof data.usage === 'object'
+          ? (data.usage as Record<string, unknown>)
+          : undefined;
+      if (!streamError && !rawStopReason && !usage && data.done !== true) return;
+      await observe({
+        kind: 'model.stream',
+        ...(rawStopReason ? { rawStopReason } : {}),
+        ...(streamError ? { error: streamError } : {}),
+        ...(usage
+          ? {
+              usage: {
+                input: usage.prompt_tokens,
+                output: usage.completion_tokens,
+                totalTokens: usage.total_tokens,
+              },
+            }
+          : {}),
+      });
     });
     pi.on('message_end', async (event) => {
       if (event.message.role === 'assistant')
@@ -98,6 +202,14 @@ export default async function activate(
           kind: 'model.end',
           usage: event.message.usage,
           stopReason: event.message.stopReason,
+          rawStopReason: event.message.rawStopReason,
+          ...(event.message.errorMessage
+            ? {
+                error: sanitizeEvaluationText(
+                  `${event.message.errorMessage}${providerStreamError ? `; provider stream: ${providerStreamError}` : ''}`,
+                ),
+              }
+            : {}),
         });
     });
     const fixtureVerifications = new Set<string>();
@@ -118,6 +230,7 @@ export default async function activate(
         durationMs: event.durationMs,
         fixtureVerification: fixtureVerifications.delete(event.toolCallId),
         isError: event.isError,
+        ...(event.isError ? { error: evaluationToolError(event.result) } : {}),
       });
     });
   }
@@ -171,8 +284,39 @@ export default async function activate(
     }
     return undefined;
   });
-  pi.on('before_agent_start', async () => {
+  pi.on('before_agent_start', async (event) => {
     await publishGuidance(true);
+    if (!evaluation) return;
+    try {
+      const response = await rpc('/v1/evaluation/observe', { kind: 'scope.request' });
+      if (!response.ok)
+        throw new Error(`Evaluation scope confirmation failed (${response.status})`);
+      const confirmation: unknown = await response.json();
+      const scope =
+        confirmation && typeof confirmation === 'object' && 'evaluationScope' in confirmation
+          ? confirmation.evaluationScope
+          : undefined;
+      if (
+        !scope ||
+        typeof scope !== 'object' ||
+        !('sessionId' in scope) ||
+        scope.sessionId !== sessionId ||
+        !('passId' in scope) ||
+        typeof scope.passId !== 'string' ||
+        !scope.passId
+      )
+        throw new Error('Evaluation scope confirmation does not match this disposable session');
+      return {
+        systemPrompt: `${event.systemPrompt}\n\n${EVALUATION_EXECUTION_CONTEXT}\nSession: ${sessionId}. Pass: ${scope.passId}.`,
+      };
+    } catch {
+      const reason = 'Authenticated evaluation execution scope confirmation failed';
+      // > Native hooks log exceptions; notify the worker so it can terminate the failed case.
+      await observe({ kind: 'runtime.error', operation: 'evaluation.scope', error: reason }).catch(
+        () => undefined,
+      );
+      throw new Error(reason);
+    }
   });
   pi.on('tool_call', async (event, ctx) => {
     if (!nativeToolAllowed(member.readOnly, event.toolName))
@@ -206,13 +350,40 @@ export default async function activate(
   pi.registerTool({
     name: 'ltcook_team',
     label: 'Team coordination',
-    description: 'Submit a coordination command.',
+    description:
+      'Coordinate LTCook work through the runtime. Call this native tool directly with one command object; command.type selects the operation. task.create registers work and requires title, description, acceptance and the active passId for execution. For scheduled work, submit report.create with assignmentId, summary, evidence and outcome="success" or "failure"; the runtime owns its Task status. task.update can complete the unscheduled leader handoff using taskId and status="completed". guidance.inspect reads loaded guidance. Shell commands do not submit coordination operations. Runtime authorization and member restrictions still apply.',
     parameters: AgentRuntimeCommandInputSchema,
     async execute(_id, input, _signal, _onUpdate, ctx) {
       // > Native Pi validates the narrower projection of the shared command schema.
       const command = input.command;
       const response = await rpc('/v1/command', { command });
-      if (!response.ok) throw new Error(`Coordination request failed (${response.status})`);
+      if (!response.ok) {
+        let reason: string | undefined;
+        if (evaluation) {
+          const error: unknown = await response.json().catch(() => undefined);
+          if (
+            error &&
+            typeof error === 'object' &&
+            'error' in error &&
+            typeof error.error === 'string'
+          )
+            reason = sanitizeEvaluationText(error.error);
+          await observe({
+            kind: 'runtime.error',
+            operation: 'coordination',
+            commandType: command.type,
+            status: response.status,
+            hasPassId:
+              'passId' in command &&
+              typeof command.passId === 'string' &&
+              command.passId.length > 0,
+            ...(reason ? { error: reason } : {}),
+          });
+        }
+        throw new Error(
+          `Coordination request failed (${response.status})${reason ? `: ${reason}` : ''}`,
+        );
+      }
       const result: unknown = await response.json();
       const value = (
         result as {

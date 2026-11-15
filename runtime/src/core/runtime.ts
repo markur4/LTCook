@@ -96,8 +96,9 @@ export class RuntimeController implements RuntimeControllerContract {
     this.store.updatePass(input.sessionId, { passId: pass.id, status: 'running' });
     const task = this.store.createTask(input.sessionId, {
       passId: pass.id,
-      title: input.title,
-      description: input.description,
+      title: `Schedule ${input.title}`,
+      description:
+        'Register the scenario execution Task and finish this scheduling handoff. The scenario itself is performed by the scheduled Task, not this assignment.',
       acceptance:
         'Register the scenario Tasks, report the scheduling result, and complete this scheduling Task.',
       scheduled: false,
@@ -112,7 +113,18 @@ export class RuntimeController implements RuntimeControllerContract {
       taskId: task.id,
       memberKey: leader.memberKey,
       nativeAgentId: leader.nativeAgentId,
-      message: `Predefined evaluation scope for Pass ${pass.id}. Interactive Plan approval is outside this evaluation. ${input.description} Register scheduled task.execute Tasks with this passId, submit report.create for this scheduling assignment, then task.update this scheduling Task to completed. The production scheduler dispatches the Tasks.`,
+      message: `Predefined evaluation scope for Pass ${pass.id}. This assignment is ONLY the leader scheduling handoff. The runtime has authorized this predefined disposable scenario; interactive Design/Plan approval is outside evaluation coverage.
+Use the native ltcook_team tool directly for the following coordination calls. This scheduling handoff needs no shell commands, file reads, Git inspection or source-code investigation.
+1. Call ltcook_team with a command object: command.type="task.create", command.passId="${pass.id}", command.workType="task.execute", plus nonempty command.title, command.description and command.acceptance describing the scenario below. Set command.assigneeKey to an eligible declared member: ${this.teamFor(
+        input.sessionId,
+      )
+        .definition.members.filter((member) => member.workTypes.includes('task.execute'))
+        .map((member) => member.key)
+        .join(', ')}. task.create schedules execution by default; do not set scheduled=false.
+2. Call ltcook_team with command.type="report.create", command.assignmentId equal to the scheduling Assignment ID shown above, and nonempty command.summary and command.evidence describing the scheduling result. Do not use the new Task ID as assignmentId.
+3. Call ltcook_team with command.type="task.update", command.taskId="${task.id}" and command.status="completed".
+The production scheduler dispatches the registered Task. Do not perform the business scenario in this scheduling assignment, create another Pass, or manually complete the scheduled execution Task.
+Task to register: ${input.description}`,
     });
     await this.deliverAssignment(assignment);
     await this.schedule(this.session(input.sessionId));

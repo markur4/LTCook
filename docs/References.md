@@ -84,8 +84,8 @@ commands provide launch operations and diagnostics:
 | `ltcook services logs [--workspace ROOT]` | Show recent local service logs. |
 | `ltcook app doctor --json`, `ltcook app paths` | Inspect installation health and recorded resource placement. |
 | `ltcook eval audit [--static-only] [--setup current|synthetic]` | Run Instruction Audit; static-only needs no Ollama. |
-| `ltcook eval run [--quick|--behavior-only] [--setup current|synthetic]` | Run all categories, a quick check, or Behavior Evaluation. |
-| `ltcook eval analyze [--setup current|synthetic]` | Run three-repetition Bottleneck Attribution. |
+| `ltcook eval run [--quick\|--all] [--setup current\|synthetic] [--case read-only\|no-op\|targeted-fix] [--repetitions N]` | Run full-instruction Behavior Evaluation once by default; `--all` includes Instruction Audit and timings use the same executions. |
+| `ltcook eval analyze [--setup current\|synthetic] [--case read-only\|no-op\|targeted-fix] [--repetitions N]` | Report Bottleneck Attribution from one set of full-instruction case executions by default. |
 | `ltcook eval report RUN_ID` | Show a persisted evaluation report. |
 | `ltcook eval list`, `watch`, `status`, `cancel`, `delete` | Manage shared Agent Evals runs and history. |
 | `python -m ltcook.launch runtime [--workspace ROOT]` | Internal module entry point for the same global or project launch. |
@@ -431,8 +431,8 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just eval probe` | Run the opt-in local Spark/Pi probe; requires normal app setup and the exact local model. |
 | `just eval audit-static` | Run model-free instruction inventory checks. |
 | `just eval audit` | Run the local Spark semantic Instruction Audit. |
-| `just eval behavior` | Run read-only, no-op, and targeted-fix Behavior Evaluation in both guidance arms; retry failures once at low thinking. |
-| `just eval bottlenecks` | Run all three paired scenarios for three repetitions with retries disabled and Perfetto-compatible traces. |
+| `just eval behavior` | Run read-only, no-op and targeted-fix Behavior Evaluation once with full instructions; fall back once to low reasoning on failure. |
+| `just eval bottlenecks` | Run full-instruction cases once by default and report Bottleneck Attribution from their Perfetto-compatible traces. |
 | `ltcook app doctor --verbose --json` | Inspect AppRC paths and local Ollama/Spark readiness. |
 | `just check` | Enforce Prettier/Ruff formatting, TypeScript types, Python lint, and Pyright. |
 | `just test` | Run Bun unit/native/integration and team contract tests, plus Python tests excluding `integration` and `system`. |

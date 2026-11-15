@@ -58,7 +58,12 @@ def test_cli_selects_synthetic_behavior_without_workspace_resolution(monkeypatch
     assert calls == [
         (
             "/v1/evals/start",
-            {"preset": "behavior", "setup": "synthetic", "staticOnly": False},
+            {
+                "preset": "behavior",
+                "setup": "synthetic",
+                "staticOnly": False,
+                "repetitions": 1,
+            },
         )
     ]
 
@@ -107,12 +112,13 @@ def test_cli_current_setup_passes_registered_workspace(monkeypatch):
             "preset": "audit",
             "setup": "current",
             "staticOnly": True,
+            "repetitions": 1,
             "workspaceRoot": "/registered-project",
         }
     ]
 
 
-def test_cli_quick_report_skips_empty_comparison_arm(monkeypatch):
+def test_cli_report_preserves_budget_and_error_evidence(monkeypatch):
     from io import StringIO
 
     from rich.console import Console
@@ -124,36 +130,108 @@ def test_cli_quick_report_skips_empty_comparison_arm(monkeypatch):
     cli._print_report(
         {
             "summary": {
-                "status": "completed",
-                "completed": 2,
-                "total": 2,
-                "preset": "quick",
+                "status": "failed",
+                "completed": 1,
+                "total": 3,
+                "preset": "behavior",
                 "runId": "fixture",
             },
             "result": {
                 "results": {
                     "behavior": {
-                        "tasks": [{"success": True, "elapsedMs": 1200}],
-                        "aggregates": [
+                        "tasks": [
                             {
-                                "arm": "minimal",
-                                "tasks": 0,
-                                "meanTotalElapsedMs": None,
-                                "minElapsedMs": None,
-                                "maxElapsedMs": None,
-                            },
-                            {
-                                "arm": "complete",
-                                "tasks": 1,
-                                "meanTotalElapsedMs": 1200,
-                                "minElapsedMs": 1200,
-                                "maxElapsedMs": 1200,
-                            },
-                        ],
-                    }
+                                "scenario": "read-only",
+                                "success": False,
+                                "elapsedMs": 1200,
+                                "attempts": [
+                                    {
+                                        "thinking": "off",
+                                        "elapsedMs": 1200,
+                                        "failure": "Provider failed (500)",
+                                        "budget": {
+                                            "timeoutMs": 3000,
+                                            "expectedMs": 1000,
+                                            "referenceRuns": ["history-run"],
+                                        },
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "bottlenecks": {"totalElapsedMs": 1200, "timings": {"model": 1000}},
                 }
             },
         }
     )
-    assert "mean 1.20s" in output.getvalue()
-    assert "minimal" not in output.getvalue()
+    rendered = output.getvalue()
+    assert "Provider failed (500)" in rendered
+    assert "3.00s" in rendered
+    assert "history-run" in rendered
+    assert "Bottleneck Attribution" in rendered
+
+
+def test_cli_default_run_selects_case_and_repetitions(monkeypatch):
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    requests = []
+    monkeypatch.setattr(cli, "_runtime", lambda: ({}, None))
+    monkeypatch.setattr(
+        cli,
+        "_call",
+        lambda environment, route, payload: (
+            requests.append(payload) or {"runId": "fixture"}
+        ),
+    )
+    monkeypatch.setattr(cli, "_follow", lambda environment, run_id: None)
+    result = CliRunner().invoke(
+        cli.eval_cli,
+        ["run", "--setup", "synthetic", "--case", "read-only", "--repetitions", "2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert requests == [
+        {
+            "preset": "behavior",
+            "setup": "synthetic",
+            "staticOnly": False,
+            "repetitions": 2,
+            "scenario": "read-only",
+        }
+    ]
+
+
+def test_cli_rejects_zero_repetitions_before_runtime_start(monkeypatch):
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    monkeypatch.setattr(
+        cli, "_runtime", lambda: (_ for _ in ()).throw(AssertionError("must not start"))
+    )
+    result = CliRunner().invoke(cli.eval_cli, ["run", "--repetitions", "0"])
+    assert result.exit_code == 2
+
+
+def test_cli_all_selects_combined_execution(monkeypatch):
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    requests = []
+    monkeypatch.setattr(cli, "_runtime", lambda: ({}, None))
+    monkeypatch.setattr(
+        cli,
+        "_call",
+        lambda environment, route, payload: (
+            requests.append(payload) or {"runId": "fixture"}
+        ),
+    )
+    monkeypatch.setattr(cli, "_follow", lambda environment, run_id: None)
+    result = CliRunner().invoke(
+        cli.eval_cli, ["run", "--all", "--setup", "synthetic", "--case", "no-op"]
+    )
+    assert result.exit_code == 0, result.output
+    assert requests[0]["preset"] == "full"
+    assert requests[0]["scenario"] == "no-op"

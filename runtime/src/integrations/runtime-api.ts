@@ -35,6 +35,11 @@ export interface WorkspaceSessionRequest {
   leaderAgentId?: string;
 }
 
+export interface EvaluationExecutionScope {
+  sessionId: string;
+  passId: string;
+}
+
 /** Captures the shell before AppRC overlays, without retaining nested provenance. */
 export function captureShellEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
   const encoded = source.LTCOOK_SHELL_PROVENANCE;
@@ -97,8 +102,11 @@ export class RuntimeApi {
   private stopping = false;
   private evals: EvalRunService | undefined;
   private evaluationObserver:
-    ((agentId: string, value: Record<string, unknown>) => void) | undefined;
-  setEvaluationObserver(observer: (agentId: string, value: Record<string, unknown>) => void): void {
+    | ((agentId: string, value: Record<string, unknown>) => EvaluationExecutionScope | void)
+    | undefined;
+  setEvaluationObserver(
+    observer: (agentId: string, value: Record<string, unknown>) => EvaluationExecutionScope | void,
+  ): void {
     this.evaluationObserver = observer;
   }
   constructor(
@@ -323,7 +331,24 @@ export class RuntimeApi {
           response.writeHead(403).end('{}');
           return;
         }
-        this.evaluationObserver(actor.nativeAgentId, parsed as Record<string, unknown>);
+        const scope = this.evaluationObserver(
+          actor.nativeAgentId,
+          parsed as Record<string, unknown>,
+        );
+        if ((parsed as Record<string, unknown>).kind === 'scope.request') {
+          if (
+            !scope ||
+            scope.sessionId !== input.sessionId ||
+            !this.runtime
+              .snapshot(input.sessionId)
+              .passes.some((pass) => pass.id === scope.passId && pass.status === 'running')
+          ) {
+            response.writeHead(403).end('{"error":"Evaluation execution scope is unavailable"}');
+            return;
+          }
+          response.writeHead(200).end(JSON.stringify({ evaluationScope: scope }));
+          return;
+        }
         response.writeHead(200).end('{}');
         return;
       }
@@ -340,7 +365,33 @@ export class RuntimeApi {
         switch (request.url) {
           case '/v1/evals/start': {
             const request = EvalStartRequestSchema.parse(parsed);
-            value = { runId: await this.evals.start(request) };
+            let teamSelection: string | undefined;
+            const limitations: string[] = [];
+            if (request.sessionId) {
+              if (request.setup !== 'current' || !request.workspaceRoot || !this.runtime)
+                throw new Error('A Current Setup workspace and active Session are required');
+              const session = this.runtime.snapshot(request.sessionId).session;
+              if (
+                canonicalWorkspace(session.workspaceRoot) !==
+                  canonicalWorkspace(request.workspaceRoot) ||
+                this.sessions.get(request.sessionId) !== canonicalWorkspace(request.workspaceRoot)
+              )
+                throw new Error('Evaluation Session does not match the registered workspace');
+              const team = this.runtime
+                .teamCatalog()
+                .find((entry) => entry.teamId === session.teamId && entry.status === 'installed');
+              if (!team) throw new Error('The Session Team is not installed');
+              teamSelection = team.selection;
+            } else if (request.setup === 'current' && request.workspaceRoot && this.runtime) {
+              const teamIds = new Set(
+                this.runtime.listSessions(request.workspaceRoot).map((session) => session.teamId),
+              );
+              if (teamIds.size > 1)
+                limitations.push(
+                  'Multiple Teams have Sessions in this workspace; using the configured runtime Team.',
+                );
+            }
+            value = { runId: await this.evals.start(request, teamSelection, limitations) };
             break;
           }
           case '/v1/evals/status': {

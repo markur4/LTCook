@@ -251,7 +251,10 @@ export default function contribute(server: PluginServerContext) {
     const { response, detail } = await runtimeRequest(endpoint, headers, routes[input.action], {
       ...(input.setup ? { setup: input.setup } : {}),
       ...(input.staticOnly !== undefined ? { staticOnly: input.staticOnly } : {}),
+      ...(input.repetitions !== undefined ? { repetitions: input.repetitions } : {}),
+      ...(input.scenario ? { scenario: input.scenario } : {}),
       ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.preset ? { preset: input.preset } : {}),
       ...(input.runId ? { runId: input.runId } : {}),
       ...(input.after !== undefined ? { after: input.after } : {}),

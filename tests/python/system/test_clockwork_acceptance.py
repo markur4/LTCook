@@ -32,7 +32,22 @@ def test_native_paseo_leader_adoption(tmp_path: Path) -> None:
 )
 @pytest.mark.parametrize(
     "mode",
-    ["quick", "behavior", "current", "cancel", "bad-verification", "no-delegation"],
+    [
+        "quick",
+        "behavior",
+        "current",
+        "cancel",
+        "bad-verification",
+        "no-delegation",
+        "repeated",
+        "full",
+        "audit-error",
+        "compaction",
+        "compaction-cancel",
+        "validation-recovery",
+        "compaction-error",
+        "fallback-success",
+    ],
 )
 def test_agent_evaluation_runtime(tmp_path: Path, mode: str) -> None:
     """Exercise the sandboxed evaluation path with real native tools and local scripts."""

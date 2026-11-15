@@ -160,8 +160,8 @@ workers.
 A complete test-suite measurement includes symbolic tests and live agent
 evaluations. Report elapsed time and outcomes for each category and their
 combined total. For complete live coverage, use the full evaluation preset in
-both Current and Synthetic setups. Run live comparisons sequentially so local
-model contention does not distort paired timings. Ordinary CI runs symbolic
+both Current and Synthetic setups. Run live agent evaluations sequentially so local
+model contention does not distort elapsed-time estimates. Ordinary CI runs symbolic
 tests, including scripted checks of the evaluation machinery; live agent
 evaluations remain separately invoked.
 
@@ -207,7 +207,9 @@ needs no model; LLM-dependent runs require the prepared local Spark tag
 ltcook eval audit --static-only
 ltcook eval run --setup current
 ltcook eval run --quick --setup synthetic
-ltcook eval run --behavior-only --setup synthetic
+ltcook eval run --setup synthetic --case read-only
+ltcook eval run --setup synthetic --repetitions 2
+ltcook eval run --all --setup synthetic
 ltcook eval analyze --setup synthetic
 ```
 
@@ -218,20 +220,86 @@ configuration while confining filesystem writes to disposable workspace and run
 state. Native Windows/macOS behavioral execution is unsupported until an
 appropriate sandbox is implemented; do not launch Windows executables from WSL.
 
+For Current Setup, the Paseo panel uses the selected Leader's Team. The CLI uses
+the configured runtime Team and reports when the workspace has Sessions from
+multiple Teams.
+
 Reports, progress events and Perfetto traces live in runtime state under
 `evals/runs`, with prompts, transcripts, and credentials excluded. Instruction
 Audit records production loader provenance; semantic findings require review.
-Behavior Evaluation uses read-only, no-op and targeted-fix tasks. Bottleneck
-Attribution repeats paired guidance variants with counterbalanced order and
-reports observed variation. Local model smoke results are evidence, not CI gates;
-normal tests use scripted responses without Ollama or user login.
+Routine `eval run` performs Behavior Evaluation with full instructions in the
+selected setup. It runs the read-only, no-op and targeted-fix cases once each.
+`--case` selects one case, and `--repetitions N` explicitly repeats the selected
+cases. The default is one repetition. `eval run --all` adds Instruction Audit;
+when the categories run together, semantic audit uses the prompt already
+captured during Behavior Evaluation rather than launching another agent task.
 
-Keep live verification focused: `eval run --quick` checks one targeted-fix case
-and retries once with low thinking if it fails. Use `eval analyze` when repeated
-timing evidence is needed: it runs 18 cases (three scenarios, two instruction
-variants, three repetitions) serially to avoid model contention. Each attempt
-uses an independent workspace, requests copy-on-write copies where supported,
-and releases its workspace before the next attempt.
+Bottleneck Attribution reports timings from those same executions and their
+Perfetto traces. `eval analyze` starts one set of full-instruction cases by
+default, or uses its explicit `--case` and `--repetitions` selections. It does
+not run reduced-instruction variants. One execution is enough for an elapsed-time
+estimate; overlapping trace categories must not be added into another total.
+
+Keep diagnosis focused: start Synthetic Setup with `--case read-only`, then
+verify no-op and targeted-fix individually. Each case starts with reasoning off
+and may fall back once to low reasoning on the same pinned Spark model. A case
+that fails its fallback stops the run before later cases or repetitions. Each
+attempt uses an independent workspace, requests copy-on-write copies where
+supported, and releases disposable state after its diagnostics are preserved.
+
+Pi's existing context compaction remains enabled for the pinned 8,192-token
+model, reserving 2,048 tokens and keeping 1,024 recent tokens. Summary calls use
+the same isolated model and provider state. Diagnostics record compaction timing,
+reported usage and failures, while excluding summary text.
+Pi sends the full instructions using the `system` message role supported by the
+Spark template, with `supportsDeveloperRole: false` in its isolated model state.
+Execution and compaction requests explicitly send `max_tokens: 2048`, the field
+accepted by Ollama. Pi's generic 4,096-token safety margin would otherwise reduce
+this 8,192-token model's requested output to one token; the isolated model's
+sampling override restores the intended output cap while Pi retains its existing
+compaction and overflow handling. This does not guarantee that every input fits.
+A failed summary aborts that disposable agent turn and ends its attempt. A later
+model request cannot clear the failure and repeat compaction until the safeguard;
+the run still permits only its single configured low-reasoning fallback.
+
+The Leader scheduling handoff names the native `ltcook_team` operations and
+required fields. Scheduled execution reports use `report.create` with an explicit
+success or failure outcome; the runtime owns scheduled Task status. Command
+validation selects errors by command type, so unrelated Task fields do not hide
+invalid report fields.
+Tool counts and the existing tool budget include rejected validation attempts,
+counted once per attempt even when a provider reuses call IDs. Provider diagnostics retain HTTP status,
+reported stop reasons, usage and sanitized stream errors; ordinary content chunks
+are ignored. Stream text and response headers are not saved.
+The OpenAI client can intercept errors before Pi's stream hook receives them;
+these metadata hooks do not establish that every provider error was observed.
+
+Evaluation agents retain full standing guidance and receive an appended execution
+scope only after the authenticated runtime confirms their disposable Session and
+running Pass. This clarification describes the predefined scenario's existing
+authorization; it does not approve a Plan or change normal sessions. The effective
+prompt hash and timing provenance include this clarification. Failed confirmation
+is reported as a runtime failure. If the runtime API is unreachable, Pi's hook
+error and the existing safeguard provide the remaining diagnostics and limit.
+On restart, supported run records retain sanitized checkpoints while leftover
+temporary execution folders are removed. Cleanup failures remain visible in the
+run's limitations and are retried on the next restart; unsupported histories stay
+unchanged.
+
+Agent evaluation safeguards use three times the slowest of the five most recent
+comparable successful attempts. Reasoning modes have separate histories, and
+model, fixture, setup, instruction/tool configuration and verified inference
+hardware must match. Failed or cancelled attempts do not increase the safeguard.
+With no compatible successful history, the report identifies the 120-second
+bootstrap safeguard. Reports show the reference runs, expected duration,
+calculated safeguard, actual duration, and saved failure diagnostics. Timing
+history and partial results belong to runtime state, not a separate database.
+
+Run records use schema 3. Unsupported older histories remain unchanged and are
+not read as current results. Preserve them if needed, stop the runtime, remove
+its `evals/runs` directory, and restart to reset history. Symbolic tests use
+scripted responses without Ollama or user login; live agent evaluations remain
+explicitly invoked outside ordinary CI.
 
 ## Asset packaging
 

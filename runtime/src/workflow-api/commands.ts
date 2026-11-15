@@ -310,7 +310,7 @@ export function isRuntimeCommand(value: unknown): value is RuntimeCommand {
 }
 
 /** Agent tool schemas are projected from the authoritative command union. */
-export const AgentRuntimeCommandSchema = Type.Exclude(
+const AgentNonTaskCommandSchema = Type.Exclude(
   RuntimeCommandSchema,
   Type.Object({
     type: Type.Union([
@@ -319,9 +319,27 @@ export const AgentRuntimeCommandSchema = Type.Exclude(
       Type.Literal('planning.reject'),
       Type.Literal('decision.answer'),
       Type.Literal('approval.create'),
+      Type.Literal('pass.create'),
+      Type.Literal('task.create'),
     ]),
   }),
 );
+const TaskCreateCommandSchema = Type.Extract(
+  RuntimeCommandSchema,
+  Type.Object({ type: Type.Literal('task.create') }),
+);
+// > Agent execution Tasks require the active Pass; user backlog Tasks remain optional.
+export const AgentRuntimeCommandSchema = Type.Union([
+  // > Keep command alternatives at one level so native validation selects the relevant error.
+  ...AgentNonTaskCommandSchema.anyOf,
+  Type.Object(TaskCreateCommandSchema.properties, {
+    additionalProperties: false,
+    // > One branch per command tag lets native Pi select its validation errors by type.
+    // > Missing workType defaults to execution, so it also requires a nonempty Pass.
+    if: { properties: { workType: { const: 'task.execute' } } },
+    then: { required: ['passId'], properties: { passId: { type: 'string', minLength: 1 } } },
+  }),
+]);
 export const AgentRuntimeCommandInputSchema = Type.Object(
   { command: AgentRuntimeCommandSchema },
   { additionalProperties: false },

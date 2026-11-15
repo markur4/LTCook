@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
-import { mkdir, readFile, writeFile, copyFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, copyFile, readdir, rename } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { RiedService } from '../ried.js';
 import { createRuntime } from '../core/runtime.js';
@@ -9,8 +10,21 @@ import { createPaseoAgentBackend, startPaseoHost } from '../integrations/paseo.j
 import { loadTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import type { GuidanceInspection } from '../guidance-api/index.js';
-import { EVAL_MODEL, hash, resourceIdentity } from './setup.js';
-import type { EvaluationJob } from './runner.js';
+import {
+  EVAL_MODEL,
+  EVAL_COMPACTION,
+  EVAL_MAX_OUTPUT_TOKENS,
+  EVAL_MODEL_COMPAT,
+  hash,
+  resourceIdentity,
+} from './setup.js';
+import { EVALUATION_STOP_FILE, type EvaluationJob } from './runner.js';
+import {
+  EvaluationDiagnosticCollector,
+  evaluationModelFailed,
+  evaluationTokenUsage,
+  sanitizeEvaluationText,
+} from './diagnostics.js';
 
 async function freePort(): Promise<number> {
   const socket = createServer();
@@ -33,17 +47,35 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   const sessionId = randomUUID();
   const secret = randomUUID();
   const team = await loadTeam(job.teamSelection);
+  const contextWindow = 8192;
+  const maxTokens = EVAL_MAX_OUTPUT_TOKENS;
   const telemetry = new Telemetry(path.join(state, 'events.jsonl'), path.join(state, 'trace.json'));
+  const diagnostics = new EvaluationDiagnosticCollector();
+  let diagnosticWrites = Promise.resolve();
+  let waiting: ReturnType<Telemetry['begin']> | undefined;
   const span = telemetry.begin(`scenario.${job.scenario}.${job.arm}`);
   const modelSpans = new Map<string, ReturnType<Telemetry['begin']>>();
   const prompts = new Map<string, string>();
   const operationSpans = new Map<string, ReturnType<Telemetry['begin']>>();
   let toolCalls = 0;
+  const pendingToolAttempts = new Map<string, number>();
   let writeCalls = 0;
   let verificationCalls = 0;
   let inferenceFailed = false;
+  let inferenceFailedAt = 0;
+  let compactionFailure: string | undefined;
+  let scopeFailed = false;
   let toolErrors = 0;
   let failureCategory = 'runtime';
+  const checkStopRequest = async () => {
+    const file = path.join(job.directory, EVALUATION_STOP_FILE);
+    if (!existsSync(file)) return;
+    const reason = (await readFile(file, 'utf8')).trim();
+    failureCategory = reason === 'limits' ? 'limits' : 'cancelled';
+    throw new Error(
+      reason === 'limits' ? 'Evaluation exceeded its sandbox time budget' : 'Evaluation cancelled',
+    );
+  };
   const tokenUsage: Record<string, number>[] = [];
   const workspaceState = async (): Promise<Record<string, string>> => {
     const files: Record<string, string> = {};
@@ -93,8 +125,12 @@ export async function executeEvaluationJob(job: EvaluationJob) {
             {
               id: EVAL_MODEL,
               name: 'Local Spark evaluation',
-              contextWindow: 8192,
-              maxTokens: 2048,
+              contextWindow,
+              maxTokens,
+              compat: EVAL_MODEL_COMPAT,
+              // > Pi's generic 4K reserve collapses this 8K model to one token. Use its explicit
+              // > request override with the 2K reserve maintained by evaluation compaction.
+              samplingParams: { max_tokens: maxTokens },
               reasoning: true,
               thinkingLevelMap: { off: 'none', low: 'low' },
             },
@@ -108,7 +144,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     JSON.stringify({
       defaultProvider: 'ollama',
       defaultModel: EVAL_MODEL,
-      compaction: { enabled: false },
+      compaction: EVAL_COMPACTION,
       retry: { enabled: false },
     }),
   );
@@ -119,7 +155,43 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
   let runtime: ReturnType<typeof createRuntime> | undefined;
   let result: Record<string, unknown>;
+  let cleanupFailed = false;
+  let diagnosticSnapshot: ReturnType<EvaluationDiagnosticCollector['snapshot']>;
+  const captureDiagnostics = () => {
+    let capture: ReturnType<EvaluationDiagnosticCollector['snapshot']>;
+    try {
+      capture = diagnostics.snapshot(runtime?.snapshot(sessionId));
+    } catch {
+      capture = diagnostics.snapshot();
+    }
+    capture.configuredModel = {
+      id: EVAL_MODEL,
+      contextWindow,
+      maxTokens,
+      thinking: job.thinking,
+      compaction: EVAL_COMPACTION,
+      compat: EVAL_MODEL_COMPAT,
+    };
+    return capture;
+  };
+  const checkpointDiagnostics = () => {
+    const capture = {
+      diagnostics: captureDiagnostics(),
+      toolCalls,
+      elapsedMs: performance.now() - started,
+    };
+    diagnosticWrites = diagnosticWrites.then(async () => {
+      const destination = path.join(state, 'diagnostics.json');
+      const temporary = `${destination}.tmp`;
+      await writeFile(temporary, JSON.stringify(capture), { mode: 0o600 });
+      await rename(temporary, destination);
+      await telemetry.exportTrace();
+    });
+    // > Keep a rejected filesystem write handled until final cleanup can report it.
+    void diagnosticWrites.catch(() => undefined);
+  };
   try {
+    await checkStopRequest();
     process.env.LTCOOK_PI_AUTH_DIR = path.join(deployment, 'auth');
     process.env.PI_CODING_AGENT_DIR = piHome;
     process.env.LTCOOK_JS_ROOT = job.appRoot;
@@ -135,6 +207,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       environment: process.env,
       piCommand: path.join(job.appRoot, 'runtime/dist/integrations/pi-rpc.js'),
     });
+    await checkStopRequest();
     const environment: Record<string, string> = {
       PATH: process.env.PATH ?? '/usr/bin:/bin',
       HOME: path.join(deployment, 'home'),
@@ -177,7 +250,9 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       })),
       evaluation: { sessionId },
       onEvent: (event) => {
-        void telemetry.log('info', event.type, event);
+        diagnostics.runtimeEvent(event);
+        telemetry.instant(`runtime.${event.type}`, event, event.assignmentId ?? 0);
+        diagnosticWrites = diagnosticWrites.then(() => telemetry.log('info', event.type, event));
         if (event.type === 'scheduler.start')
           operationSpans.set('scheduler', telemetry.begin('scheduler', randomUUID(), 'scheduler'));
         if (event.type === 'scheduler.end') {
@@ -193,23 +268,77 @@ export async function executeEvaluationJob(job: EvaluationJob) {
           operationSpans.get(event.assignmentId)?.end();
           operationSpans.delete(event.assignmentId);
         }
+        if (['assignment.dispatch', 'assignment.reported', 'scheduler.end'].includes(event.type))
+          checkpointDiagnostics();
       },
     });
     api.setRuntime(runtime);
     api.setEvaluationObserver((agentId, value) => {
+      if (value.kind === 'scope.request') {
+        const pass = runtime?.snapshot(sessionId).passes.find((pass) => pass.status === 'running');
+        if (value.sessionId === sessionId && pass) return { sessionId, passId: pass.id };
+        scopeFailed = true;
+        return;
+      }
+      if (value.kind === 'runtime.error' && value.operation === 'evaluation.scope')
+        scopeFailed = true;
+      const diagnostic = diagnostics.observe(agentId, value);
+      if (diagnostic) {
+        telemetry.instant(`evaluation.${value.kind}`, diagnostic, agentId);
+        diagnosticWrites = diagnosticWrites.then(() =>
+          telemetry.log('info', 'evaluation.observation', diagnostic),
+        );
+      }
       if (value.kind === 'prompt' && typeof value.prompt === 'string')
         prompts.set(agentId, value.prompt);
-      if (value.kind === 'model.start')
+      if (value.kind === 'compaction.start') {
+        inferenceFailed = false;
+        operationSpans.set(
+          `compaction:${agentId}`,
+          telemetry.begin('model.compaction', randomUUID(), agentId),
+        );
+      }
+      if (value.kind === 'compaction.end' || value.kind === 'compaction.failed') {
+        operationSpans.get(`compaction:${agentId}`)?.end();
+        operationSpans.delete(`compaction:${agentId}`);
+        if (value.kind === 'compaction.failed') {
+          // > A later SDK request must not erase a failed summary and repeat it until timeout.
+          compactionFailure =
+            typeof value.error === 'string' ? value.error : 'Summary request failed';
+        }
+        const usage = evaluationTokenUsage(value.usage);
+        if (usage) tokenUsage.push(usage);
+      }
+      if (value.kind === 'model.start') {
+        inferenceFailed = false;
         modelSpans.set(agentId, telemetry.begin(`model.${agentId}`, randomUUID(), agentId));
+      }
       if (value.kind === 'model.end') {
-        if (value.stopReason === 'error' || value.stopReason === 'aborted') inferenceFailed = true;
+        if (evaluationModelFailed(value.stopReason)) {
+          inferenceFailed = true;
+          inferenceFailedAt = performance.now();
+        }
         modelSpans.get(agentId)?.end();
         modelSpans.delete(agentId);
-        if (value.usage && typeof value.usage === 'object')
-          tokenUsage.push(value.usage as Record<string, number>);
+        const usage = evaluationTokenUsage(value.usage);
+        if (usage) tokenUsage.push(usage);
+      }
+      if (
+        (value.kind === 'tool.start' || value.kind === 'tool.end') &&
+        typeof value.callId === 'string'
+      ) {
+        // > Validation can emit end without start; providers may reuse IDs in later requests.
+        const key = `${agentId}:${value.callId}`;
+        const pending = pendingToolAttempts.get(key) ?? 0;
+        if (value.kind === 'tool.start') {
+          toolCalls++;
+          pendingToolAttempts.set(key, pending + 1);
+        } else if (pending > 0) {
+          if (pending === 1) pendingToolAttempts.delete(key);
+          else pendingToolAttempts.set(key, pending - 1);
+        } else toolCalls++;
       }
       if (value.kind === 'tool.start') {
-        toolCalls++;
         if (value.tool === 'write' || value.tool === 'edit') writeCalls++;
       }
       if (value.kind === 'tool.end') {
@@ -218,6 +347,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
           telemetry.duration(`tool.${String(value.tool)}`, value.durationMs, agentId);
         if (value.fixtureVerification === true && value.isError === false) verificationCalls++;
       }
+      if (diagnostic) checkpointDiagnostics();
     });
     const delegate = team.definition.members.some(
       (member) =>
@@ -231,6 +361,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       'targeted-fix':
         'Correct only .ltcook-evals/answer.json using input.json (sum(prices) minus discount), then run node .ltcook-evals/verify.cjs and report verification evidence.',
     };
+    await checkStopRequest();
     await runtime.startEvaluation({
       sessionId,
       workspaceRoot: workspace,
@@ -239,13 +370,26 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     });
     api.setSession(workspace, sessionId);
     const deadline = performance.now() + job.timeoutMs;
-    const waiting = telemetry.begin('wait.pass-completion', randomUUID(), 'wait');
+    waiting = telemetry.begin('wait.pass-completion', randomUUID(), 'wait');
     while (true) {
+      await checkStopRequest();
       const snapshot = runtime.snapshot(sessionId);
-      if (snapshot.passes[0]?.status === 'completed') break;
-      if (inferenceFailed) {
+      if (scopeFailed) {
+        failureCategory = 'runtime';
+        throw new Error('Authenticated evaluation execution scope could not be confirmed');
+      }
+      if (compactionFailure) {
         failureCategory = 'inference';
-        throw new Error('Local model request failed or was aborted');
+        throw new Error(`Local model context compaction failed: ${compactionFailure}`);
+      }
+      if (snapshot.passes[0]?.status === 'completed') break;
+      // > Let Pi announce its existing overflow/compaction recovery before ending the case.
+      if (inferenceFailed && performance.now() - inferenceFailedAt >= 250) {
+        failureCategory = 'inference';
+        const failure = diagnostics.snapshot().modelFailures.at(-1);
+        throw new Error(
+          `Local model ${failure?.stopReason ?? 'request failed'}${failure?.error ? `: ${failure.error}` : ''}`,
+        );
       }
       if (performance.now() >= deadline) {
         failureCategory = 'limits';
@@ -292,27 +436,17 @@ export async function executeEvaluationJob(job: EvaluationJob) {
                 snapshot.assignments.some(
                   (assignment) => assignment.memberKey !== team.definition.leaderKey,
                 )))));
-    const inspections = (await runtime.execute(
+    const resources = await loadedResourceEvidence(
+      runtime,
       sessionId,
-      { kind: 'user' },
-      { type: 'guidance.inspect' },
-    )) as Array<{ id: string; inspection: GuidanceInspection }>;
-    const resources = await Promise.all(
-      inspections
-        .flatMap(({ inspection }) => inspection.resources)
-        .map(async (resource) => ({
-          ...resource,
-          name: path.isAbsolute(resource.name) ? path.basename(resource.name) : resource.name,
-          path: resourceIdentity(resource, workspace, path.join(job.directory, 'guidance')),
-          ...(resource.loaded ? { sha256: hash(await readFile(resource.path)) } : {}),
-        })),
+      workspace,
+      path.join(job.directory, 'guidance'),
     );
     result = {
       success,
       ...(!success
         ? { failureCategory: 'criteria', failure: 'Objective fixture checks did not pass' }
         : {}),
-      ...(tokenUsage.length ? { providerReportedUsage: tokenUsage } : {}),
       toolCalls,
       delegations: snapshot.assignments.filter(
         (assignment) => assignment.memberKey !== team.definition.leaderKey,
@@ -325,27 +459,99 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       limitations: delegate ? [] : ['Selected team cannot delegate to another eligible member.'],
     };
   } catch (error) {
+    let resources: Awaited<ReturnType<typeof loadedResourceEvidence>> = [];
+    let resourceFailure = false;
+    try {
+      if (runtime)
+        resources = await loadedResourceEvidence(
+          runtime,
+          sessionId,
+          workspace,
+          path.join(job.directory, 'guidance'),
+        );
+    } catch {
+      resourceFailure = true;
+    }
+    const effectivePrompt = [...prompts.values()].join('\n\n');
     result = {
       success: false,
       failureCategory,
-      failure: error instanceof Error ? error.message : 'Evaluation runtime failed',
+      failure: sanitizeEvaluationText(
+        error instanceof Error ? error.message : 'Evaluation runtime failed',
+      ),
       toolCalls,
-      instructions: { effectivePrompt: [...prompts.values()].join('\n\n'), resources: [] },
+      instructions: {
+        effectivePrompt,
+        ...(prompts.size ? { promptSha256: hash(effectivePrompt) } : {}),
+        resources,
+      },
+      ...(resourceFailure
+        ? { limitations: ['Loaded-resource capture was incomplete during failure.'] }
+        : {}),
     };
   } finally {
-    if (host) await host.close();
-    if (runtime) await runtime.close();
-    await api.close();
+    diagnosticSnapshot = captureDiagnostics();
+    for (const [operation, cleanup] of [
+      ['paseo.close', () => host?.close()],
+      ['runtime.close', () => runtime?.close()],
+      ['api.close', () => api.close()],
+    ] as const) {
+      try {
+        await cleanup();
+      } catch (error) {
+        const failure = diagnostics.observe('runtime', {
+          kind: 'runtime.error',
+          operation,
+          error: sanitizeEvaluationText(error instanceof Error ? error.message : 'Cleanup failed'),
+        });
+        if (failure) {
+          telemetry.instant('evaluation.cleanup.error', failure);
+          diagnosticSnapshot.runtimeFailures.push(failure);
+          diagnosticSnapshot.recentEvents.push(failure);
+        }
+        cleanupFailed = true;
+      }
+    }
+    waiting?.end();
     span.end();
     for (const current of modelSpans.values()) current.end();
     for (const current of operationSpans.values()) current.end();
+    await diagnosticWrites;
     await telemetry.exportTrace();
   }
   return {
     ...result,
+    ...(tokenUsage.length ? { providerReportedUsage: tokenUsage } : {}),
+    ...(cleanupFailed && result.success === true
+      ? { success: false, failureCategory: 'runtime', failure: 'Evaluation cleanup failed' }
+      : {}),
+    diagnostics: diagnosticSnapshot,
     elapsedMs: performance.now() - started,
     trace: JSON.parse(await readFile(path.join(state, 'trace.json'), 'utf8')),
   };
+}
+
+async function loadedResourceEvidence(
+  runtime: ReturnType<typeof createRuntime>,
+  sessionId: string,
+  workspace: string,
+  guidance: string,
+) {
+  const inspections = (await runtime.execute(
+    sessionId,
+    { kind: 'user' },
+    { type: 'guidance.inspect' },
+  )) as Array<{ id: string; inspection: GuidanceInspection }>;
+  return Promise.all(
+    inspections
+      .flatMap(({ inspection }) => inspection.resources)
+      .map(async (resource) => ({
+        ...resource,
+        name: path.isAbsolute(resource.name) ? path.basename(resource.name) : resource.name,
+        path: resourceIdentity(resource, workspace, guidance),
+        ...(resource.loaded ? { sha256: hash(await readFile(resource.path)) } : {}),
+      })),
+  );
 }
 
 if (process.argv[2]) {

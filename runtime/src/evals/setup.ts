@@ -5,7 +5,16 @@ import path from 'node:path';
 import type { EvalSetup } from './contracts.js';
 
 export const EVAL_MODEL = 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest';
-export const FIXTURE_REVISION = 'agent-evals-v2';
+export const FIXTURE_REVISION = 'agent-evals-v4';
+export const EVAL_COMPACTION = { enabled: true, reserveTokens: 2048, keepRecentTokens: 1024 };
+export const EVAL_MAX_OUTPUT_TOKENS = 2048;
+export const EVAL_MODEL_COMPAT = {
+  supportsDeveloperRole: false,
+  maxTokensField: 'max_tokens' as const,
+};
+export const EVALUATION_EXECUTION_CONTEXT = `# Disposable evaluation execution scope
+The authenticated LTCook runtime has authorized the predefined scenario in the Session and Pass below. Within this disposable scope, scheduling and execution use the existing runtime authorization without interactive Design/Plan approval. Do not request or fabricate user answers or approvals. Interactive Plan approval is outside this evaluation's coverage.
+Keep all full standing instructions and member restrictions. Follow the assigned scheduling handoff and scenario; use the native ltcook_team tool for coordination commands, not shell commands or source-code inspection. Runtime tool authorization remains authoritative. This scope grants no permission in other Sessions or Passes.`;
 export type EvaluationContext = {
   teamSelection: string;
   guidanceDirectory: string;
