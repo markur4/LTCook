@@ -6,6 +6,8 @@ import json
 import time
 import urllib.error
 import urllib.request
+from enum import StrEnum
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -25,10 +27,16 @@ from ltcook._runtime_client import (
     start_runtime,
     wait_for_runtime,
 )
+from ltcook.config.app import APP_RC
 from ltcook.launch import resolve_launch
 
 eval_cli = typer.Typer(help="Run and inspect Agent Evals.", no_args_is_help=True)
 console = Console()
+
+
+class EvalSetup(StrEnum):
+    current = "current"
+    synthetic = "synthetic"
 
 
 def _runtime():
@@ -110,17 +118,19 @@ def _print_report(report: dict) -> None:
     console.print(
         f"[bold]Agent Evals · {summary['status'].upper()}[/bold] · "
         f"{summary['completed']}/{summary['total']} checks · "
-        f"{summary['preset']} · {summary['runId']}"
+        f"{summary.get('setup', 'current')} · {summary.get('teamSelection', 'Preparing team')} · {summary['preset']} · {summary['runId']}"
     )
     if summary.get("error"):
         console.print(summary["error"], style="red")
 
+    for limitation in summary.get("limitations", []):
+        console.print(f"Limitation: {limitation}")
     table = Table("Component", "Outcome", "Details")
     labels = {
         "static": "Instruction Audit · static",
         "semantic": "Instruction Audit · semantic",
-        "behavior": "Behavioral Evals",
-        "bottlenecks": "Bottleneck Analysis",
+        "behavior": "Behavior Evaluation",
+        "bottlenecks": "Bottleneck Attribution",
     }
     for name, raw_value in result.get("results", {}).items():
         value = raw_value if isinstance(raw_value, dict) else {}
@@ -132,7 +142,7 @@ def _print_report(report: dict) -> None:
                 table.add_row(
                     labels.get(name, name.replace("-", " ")),
                     f"{passed}/{len(tasks)} passed",
-                    f"{retries} retried",
+                    f"{retries} retried · {sum(task.get('elapsedMs', 0) for task in tasks) / 1000:.2f}s total task time",
                 )
                 continue
         findings = value.get("findings")
@@ -146,12 +156,37 @@ def _print_report(report: dict) -> None:
             table.add_row(labels.get(name, name.replace("-", " ")), "Completed", "")
     if table.row_count:
         console.print(table)
+    for name, value in result.get("results", {}).items():
+        if not isinstance(value, dict):
+            continue
+        for arm in value.get("aggregates", []):
+            if not arm["tasks"]:
+                continue
+            console.print(
+                f"{labels.get(name, name)} · {arm['arm']}: "
+                f"mean {arm['meanTotalElapsedMs'] / 1000:.2f}s; "
+                f"observed {arm['minElapsedMs'] / 1000:.2f}–{arm['maxElapsedMs'] / 1000:.2f}s"
+            )
 
 
-def _start_and_follow(preset: str) -> None:
+def _start_and_follow(
+    preset: str, *, setup: EvalSetup = EvalSetup.current, static_only: bool = False
+) -> None:
     try:
         environment, _ = _runtime()
-        run_id = _call(environment, "/v1/evals/start", {"preset": preset})["runId"]
+        workspace = (
+            APP_RC.manage().inspect().resolved.workspace
+            if setup == EvalSetup.current
+            else None
+        )
+        request = {"preset": preset, "setup": setup.value, "staticOnly": static_only}
+        if workspace is not None:
+            request["workspaceRoot"] = str(workspace.root)
+        run_id = _call(
+            environment,
+            "/v1/evals/start",
+            request,
+        )["runId"]
         console.print(f"Agent Evals run [bold]{run_id}[/bold] · {preset}")
         _follow(environment, run_id)
     except KeyboardInterrupt:
@@ -164,24 +199,45 @@ def _start_and_follow(preset: str) -> None:
 
 @eval_cli.command("run")
 def run(
+    setup: Annotated[
+        EvalSetup, typer.Option("--setup", help="Evaluation setup.")
+    ] = EvalSetup.current,
+    behavior_only: bool = typer.Option(
+        False, "--behavior-only", help="Run only Behavior Evaluation."
+    ),
     quick: bool = typer.Option(
         False, "--quick", help="Run the fast instruction and targeted-fix check."
     ),
 ):
     """Run every Agent Evals category, or the quick check with --quick."""
-    _start_and_follow("quick" if quick else "full")
+    if quick and behavior_only:
+        raise typer.BadParameter("--quick and --behavior-only cannot be combined.")
+    _start_and_follow(
+        "behavior" if behavior_only else "quick" if quick else "full", setup=setup
+    )
 
 
 @eval_cli.command("audit")
-def audit():
+def audit(
+    setup: Annotated[
+        EvalSetup, typer.Option("--setup", help="Evaluation setup.")
+    ] = EvalSetup.current,
+    static_only: bool = typer.Option(
+        False, "--static-only", help="Run the static audit without Ollama."
+    ),
+):
     """Run the static and semantic Instruction Audit."""
-    _start_and_follow("audit")
+    _start_and_follow("audit", setup=setup, static_only=static_only)
 
 
 @eval_cli.command("analyze")
-def analyze():
-    """Run three-repetition Bottleneck Analysis."""
-    _start_and_follow("bottlenecks")
+def analyze(
+    setup: Annotated[
+        EvalSetup, typer.Option("--setup", help="Evaluation setup.")
+    ] = EvalSetup.current,
+):
+    """Run three-repetition Bottleneck Attribution."""
+    _start_and_follow("bottlenecks", setup=setup)
 
 
 @eval_cli.command("watch")
@@ -202,10 +258,12 @@ def watch(run_id: str):
 def list_runs():
     environment, _ = _runtime()
     rows = _call(environment, "/v1/evals/list")["runs"]
-    table = Table("Run", "Preset", "Status", "Progress", "Started")
+    table = Table("Run", "Setup", "Team", "Preset", "Status", "Progress", "Started")
     for item in rows:
         table.add_row(
             item["runId"],
+            item["setup"],
+            item.get("teamSelection", "Preparing team"),
             item["preset"],
             item["status"],
             f"{item['completed']}/{item['total']}",

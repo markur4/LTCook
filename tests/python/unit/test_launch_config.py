@@ -862,3 +862,56 @@ def test_timeout_on_unowned_port_allows_startup(monkeypatch, tmp_path):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError()),
     )
     assert client.probe_runtime(environment) is None
+
+
+def test_evaluation_context_excludes_credentials_and_does_not_write_native_state(
+    tmp_path, monkeypatch, capsys
+):
+    for key in tuple(os.environ):
+        if key.startswith(("LTCOOK_", "PI_", "PASEO_")):
+            monkeypatch.delenv(key)
+    for key, value in {
+        "HOME": str(tmp_path / "home"),
+        "USERPROFILE": str(tmp_path / "home"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "APPDATA": str(tmp_path / "config"),
+        "LOCALAPPDATA": str(tmp_path / "data"),
+        "OPENAI_API_KEY": "evaluation-secret-sentinel",
+        "ANTHROPIC_API_KEY": "evaluation-secret-sentinel",
+        "LTCOOK_API_TOKEN": "evaluation-secret-sentinel",
+    }.items():
+        monkeypatch.setenv(key, value)
+    launch.evaluation_context(None)
+    output = capsys.readouterr().out
+    context = json.loads(output)
+    assert context["teamSelection"]
+    assert context["guidanceDirectory"]
+    assert "webConfiguration" in context
+    assert "evaluation-secret-sentinel" not in output
+    assert not list(tmp_path.rglob("models.json"))
+    assert not list(tmp_path.rglob("auth.json"))
+
+
+def test_evaluation_context_rejects_unregistered_workspace_before_launch(
+    tmp_path, monkeypatch
+):
+    import ltcook.config.app as app_config
+
+    manager = SimpleNamespace(
+        inspect=lambda **kwargs: SimpleNamespace(
+            resolved=SimpleNamespace(workspace=None)
+        )
+    )
+    monkeypatch.setattr(
+        app_config, "APP_RC", SimpleNamespace(manage=lambda **kwargs: manager)
+    )
+
+    def unexpected_resolution(*args, **kwargs):
+        raise AssertionError("unregistered workspace reached launch resolution")
+
+    monkeypatch.setattr(launch, "resolve_launch", unexpected_resolution)
+    with pytest.raises(ValueError, match="registered with AppRC"):
+        launch.evaluation_context(tmp_path)

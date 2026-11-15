@@ -46,6 +46,8 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 💥 Breaking changes
 
+- Breaking: Agent Evals uses a new run-record format and requires Bubblewrap for Linux/WSL execution. Existing evaluation histories are unsupported and left unchanged. Users can preserve old results, stop the runtime, remove its `evals/runs` directory, and restart to reset history. See PR #2.
+
 <br>
 - Breaking: personal clear-writing, TypeScript, React/Vite, reader-load and Modes planning guidance are no longer bundled by Core. Affected: installations relying on those defaults or the `ltcook-typescript`, `ltcook-react-vite` and `ltcook-reader-load` names. Migration: supply personal rules and native skill directories under the configured User guidance root; use the shared OMP skill names when using the chezmoi configuration. Core planning operations, approval gates, lookup and explore remain available without personal guidance.
 
@@ -111,6 +113,8 @@ All notable changes to `ltcook` will be documented in this file.
   and authentication checks remain read-only.
 
 ### ➕ Added
+
+- Agent Evals supports Current Setup and Synthetic Setup selection in the CLI and Paseo panel, a model-free `eval audit --static-only`, and `eval run --behavior-only`.
 
 <br>
 - Added normal-install Ollama/Spark provisioning and opt-in local IBB instruction,

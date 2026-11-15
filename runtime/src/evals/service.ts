@@ -11,7 +11,15 @@ import {
   appendFile,
 } from 'node:fs/promises';
 import path from 'node:path';
-import type { EvalEvent, EvalPreset, EvalReportResponse, EvalSummary } from './contracts.js';
+import {
+  EvalStartRequestSchema,
+  EvalSummarySchema,
+  type EvalStartRequest,
+  type EvalEvent,
+  type EvalPreset,
+  type EvalReportResponse,
+  type EvalSummary,
+} from './contracts.js';
 
 export type EvalProgress = {
   event: 'suite.started' | 'case.started' | 'case.completed' | 'case.failed';
@@ -20,12 +28,25 @@ export type EvalProgress = {
   completed?: number;
   total?: number;
   message?: string;
+  metadata?: Partial<
+    Pick<EvalSummary, 'teamSelection' | 'model' | 'fixtureRevision' | 'provenance' | 'limitations'>
+  >;
 };
 export type EvalEngine = (input: {
   preset: EvalPreset;
+  setup: EvalStartRequest['setup'];
+  workspaceRoot?: string;
+  staticOnly: boolean;
+  runDirectory: string;
   signal: AbortSignal;
   progress(event: EvalProgress): void;
-}) => Promise<{ result: unknown; trace: unknown }>;
+}) => Promise<{
+  result: unknown;
+  trace: unknown;
+  metadata?: Partial<
+    Pick<EvalSummary, 'teamSelection' | 'model' | 'fixtureRevision' | 'provenance' | 'limitations'>
+  >;
+}>;
 
 function safeError(error: unknown): string {
   const value = error instanceof Error ? error.message : 'Agent Evals run failed';
@@ -80,9 +101,9 @@ export class EvalRunService {
       const metadata = await stat(directory);
       if (!metadata.isDirectory()) continue;
       try {
-        const summary = JSON.parse(
-          await readFile(path.join(directory, 'run.json'), 'utf8'),
-        ) as EvalSummary;
+        const summary = EvalSummarySchema.parse(
+          JSON.parse(await readFile(path.join(directory, 'run.json'), 'utf8')),
+        );
         if (summary.runId !== entry.name) continue;
         this.sequences.set(summary.runId, (await this.readEvents(summary.runId)).length);
         if (summary.status === 'running') {
@@ -100,27 +121,32 @@ export class EvalRunService {
     }
   }
 
-  async start(preset: EvalPreset): Promise<string> {
+  async start(input: EvalStartRequest): Promise<string> {
+    const request = EvalStartRequestSchema.parse(input);
+    const { preset, setup, staticOnly = false } = request;
     if (this.active || this.starting) throw new Error('An Agent Evals run is already active.');
     this.starting = true;
     const now = new Date().toISOString();
     const runId = randomUUID();
     const summary: EvalSummary = {
-      schema: 1,
+      schema: 2,
       runId,
       preset,
+      setup,
+      staticOnly,
+      limitations: [],
       status: 'running',
       createdAt: now,
       updatedAt: now,
       completed: 0,
-      total: this.caseCount(preset),
+      total: staticOnly ? 1 : this.caseCount(preset),
     };
     this.summaries.set(runId, summary);
     try {
       await this.saveSummary(summary);
       await this.emit(summary, 'run.started');
       const controller = new AbortController();
-      const task = this.execute(summary, controller);
+      const task = this.execute(summary, controller, request);
       this.active = { runId, controller, task };
       return runId;
     } finally {
@@ -186,13 +212,22 @@ export class EvalRunService {
             : 26;
   }
 
-  private async execute(summary: EvalSummary, controller: AbortController): Promise<void> {
+  private async execute(
+    summary: EvalSummary,
+    controller: AbortController,
+    request: EvalStartRequest,
+  ): Promise<void> {
     const started = Date.now();
     try {
       const output = await this.engine({
         preset: summary.preset,
+        setup: summary.setup,
+        staticOnly: summary.staticOnly,
+        ...(request.workspaceRoot ? { workspaceRoot: request.workspaceRoot } : {}),
+        runDirectory: this.runDirectory(summary.runId),
         signal: controller.signal,
         progress: (event) => {
+          if (event.metadata) Object.assign(summary, sanitize(event.metadata));
           summary.currentSuite = event.suite;
           if (event.case) summary.currentCase = event.case;
           if (event.completed !== undefined) summary.completed = event.completed;
@@ -205,6 +240,7 @@ export class EvalRunService {
         },
       });
       await this.writes;
+      Object.assign(summary, sanitize(output.metadata ?? {}));
       this.results.set(summary.runId, sanitize(output.result));
       this.traces.set(summary.runId, sanitize(output.trace));
       await this.saveArtifact(summary.runId, 'result.json', this.results.get(summary.runId));

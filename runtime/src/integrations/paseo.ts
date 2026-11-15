@@ -93,6 +93,8 @@ export async function startPaseoHost(input: {
   runtimeApiUrl: string;
   userToken: string;
   pluginDirectory: string;
+  environment?: NodeJS.ProcessEnv;
+  piCommand?: string;
 }): Promise<PaseoHost> {
   const deploymentRoot = await realpath(input.deploymentRoot);
   const home = await resolvedPath(input.home);
@@ -109,12 +111,14 @@ export async function startPaseoHost(input: {
     await import('@getpaseo/server/daemon-control');
   const { hashDaemonPassword } = await import('@getpaseo/server');
   const appBin = path.join(appRoot, 'node_modules', '.bin');
-  const piCommand = path.join(appBin, process.platform === 'win32' ? 'ltcook-pi.cmd' : 'ltcook-pi');
+  const piCommand =
+    input.piCommand ??
+    path.join(appBin, process.platform === 'win32' ? 'ltcook-pi.cmd' : 'ltcook-pi');
   const pathEntries = [
     ...new Set([path.dirname(input.node), appBin, process.env.PATH].filter(Boolean)),
   ];
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...(input.environment ?? process.env),
     PATH: pathEntries.join(path.delimiter),
     PI_COMMAND: piCommand,
     PASEO_HOME: home,
@@ -254,6 +258,8 @@ export async function createPaseoAgentBackend(input: {
     workspaceRoot: string,
     sessionId: string,
   ): Record<string, string> | undefined;
+  preparedEnvironment?: Record<string, string>;
+  thinking?: string;
   identity(agentId: string): AgentRpcIdentity;
 }): Promise<AgentBackend> {
   const appRoot = path.dirname(await realpath(input.appNodeModules));
@@ -299,18 +305,22 @@ export async function createPaseoAgentBackend(input: {
       return result.entries.map((entry) => state(entry.agent));
     },
     async create(options: CreateAgentOptions) {
-      const workspaceEnv = resolveWorkspaceEnvironment(options.workspaceRoot, options.sessionId);
+      const workspaceEnv =
+        input.preparedEnvironment ??
+        resolveWorkspaceEnvironment(options.workspaceRoot, options.sessionId);
       const nativeAgentId = randomUUID();
       const identity = input.identity(nativeAgentId);
-      const configResult = spawnSync(
-        input.python,
-        ['-m', 'ltcook.launch', 'write-native-config', '--workspace', options.workspaceRoot],
-        {
-          encoding: 'utf8',
-          env: helperEnvironment(options.workspaceRoot, options.sessionId),
-          windowsHide: true,
-        },
-      );
+      const configResult = input.preparedEnvironment
+        ? { status: 0 }
+        : spawnSync(
+            input.python,
+            ['-m', 'ltcook.launch', 'write-native-config', '--workspace', options.workspaceRoot],
+            {
+              encoding: 'utf8',
+              env: helperEnvironment(options.workspaceRoot, options.sessionId),
+              windowsHide: true,
+            },
+          );
       if (configResult.status !== 0)
         throw new Error('AppRC could not write LTCook-owned native configuration');
       const agentHome = workspaceEnv.PI_CODING_AGENT_DIR || input.piHome;
@@ -377,7 +387,7 @@ export async function createPaseoAgentBackend(input: {
         title: options.member.name,
         config: {
           provider: `pi/${model}`,
-          thinkingOptionId: options.member.thinking,
+          thinkingOptionId: input.thinking ?? options.member.thinking,
           ...(mcpServers ? { mcpServers } : {}),
         },
         env: agentEnv,
@@ -395,7 +405,8 @@ export async function createPaseoAgentBackend(input: {
       return result ? state(result.agent) : null;
     },
     async send(id: string, message: string) {
-      await input.api.agents.ref(id).send(message);
+      // > Scheduling may hand work back to an agent inside its current tool turn.
+      await input.api.agents.ref(id).send(message, { activeTurnBehavior: 'steer' });
     },
     async close(id: string) {
       await input.api.agents.ref(id).archive();

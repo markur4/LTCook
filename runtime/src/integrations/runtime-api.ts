@@ -89,6 +89,11 @@ export class RuntimeApi {
   private shutdown: (() => Promise<void>) | undefined;
   private stopping = false;
   private evals: EvalRunService | undefined;
+  private evaluationObserver:
+    ((agentId: string, value: Record<string, unknown>) => void) | undefined;
+  setEvaluationObserver(observer: (agentId: string, value: Record<string, unknown>) => void): void {
+    this.evaluationObserver = observer;
+  }
   constructor(
     runtime: RuntimeController | undefined,
     private readonly secret: string,
@@ -172,6 +177,7 @@ export class RuntimeApi {
           '/v1/runtime/stop',
           '/v1/tool/authorize',
           '/v1/ried',
+          '/v1/evaluation/observe',
           '/v1/evals/start',
           '/v1/evals/status',
           '/v1/evals/list',
@@ -278,6 +284,27 @@ export class RuntimeApi {
         response.writeHead(401).end('{"error":"unauthorized"}');
         return;
       }
+      if (request.url === '/v1/evaluation/observe') {
+        if (
+          !this.evaluationObserver ||
+          actor.kind !== 'agent' ||
+          !input.sessionId ||
+          !this.runtime ||
+          !this.runtime
+            .snapshot(input.sessionId)
+            .members.some(
+              (member) =>
+                member.binding?.nativeAgentId === actor.nativeAgentId &&
+                member.binding.state === 'bound',
+            )
+        ) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        this.evaluationObserver(actor.nativeAgentId, parsed as Record<string, unknown>);
+        response.writeHead(200).end('{}');
+        return;
+      }
       if ((request.url ?? '').startsWith('/v1/evals/')) {
         if (actor.kind !== 'user') {
           response.writeHead(403).end('{"error":"user authentication required"}');
@@ -290,8 +317,8 @@ export class RuntimeApi {
         let value: unknown;
         switch (request.url) {
           case '/v1/evals/start': {
-            const { preset } = EvalStartRequestSchema.parse(parsed);
-            value = { runId: await this.evals.start(preset) };
+            const request = EvalStartRequestSchema.parse(parsed);
+            value = { runId: await this.evals.start(request) };
             break;
           }
           case '/v1/evals/status': {

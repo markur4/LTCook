@@ -16,6 +16,27 @@ import pytest
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux process acceptance")
 def test_real_pi_paseo_clockwork(tmp_path: Path) -> None:
     """Run native tools through a scheduled Pass with correction and recovery."""
+    _run_native_acceptance(tmp_path, "clockwork-acceptance.ts")
+
+
+@pytest.mark.system
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Linux Bubblewrap process acceptance"
+)
+@pytest.mark.parametrize(
+    "mode",
+    ["quick", "behavior", "current", "cancel", "bad-verification", "no-delegation"],
+)
+def test_agent_evaluation_runtime(tmp_path: Path, mode: str) -> None:
+    """Exercise the sandboxed evaluation path with real native tools and local scripts."""
+    assert shutil.which("bwrap"), (
+        "Install Bubblewrap before evaluation system acceptance"
+    )
+    _run_native_acceptance(tmp_path, "evaluation-acceptance.ts", mode)
+
+
+def _run_native_acceptance(tmp_path: Path, entry: str, *arguments: str) -> None:
+    """Run one maintained native acceptance fixture with bounded process cleanup."""
     root = Path(__file__).resolve().parents[3]
     bun = shutil.which(os.environ.get("BUN", "bun"))
     node = shutil.which("node")
@@ -35,7 +56,7 @@ def test_real_pi_paseo_clockwork(tmp_path: Path) -> None:
         DO_NOT_TRACK="1",
     )
     with subprocess.Popen(
-        [bun, "tests/runtime/system/clockwork-acceptance.ts", str(tmp_path)],
+        [bun, f"tests/runtime/system/{entry}", *(arguments or (str(tmp_path),))],
         cwd=root,
         env=environment,
         stdout=subprocess.PIPE,

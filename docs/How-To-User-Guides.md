@@ -157,21 +157,20 @@ The **Team status** panel contains three views:
 
 ## Run Agent Evals
 
-Agent Evals combines instruction auditing, behavioral evaluation, and performance
-bottleneck analysis to assess the correctness, reliability, and efficiency of
-LTCook agents. Runs use the prepared local Spark model. Open **Agent Evals** in
-the Paseo panel to see progress, run history, comparisons, and structured
-results; a project chat session is not required. The semantic Instruction Audit
-inspects an isolated Pi prompt and does not include all instructions added by
-Paseo or the live runtime.
-
-The terminal provides the same run history and controls:
+Agent Evals provides **Instruction Audit**, **Behavior Evaluation**, and
+**Bottleneck Attribution** through the CLI and the Paseo diagnostics panel.
+Choose **Current Setup** (the default) to evaluate the active team and installed
+guidance under local Spark, or **Synthetic Setup** for the packaged scenarios.
+Current Setup uses the selected registered workspace when available, otherwise
+global configuration. It does not measure the team's normal cloud model.
 
 ```shell
-ltcook eval audit
-ltcook eval run                 # all three categories
-ltcook eval run --quick         # fast instruction and targeted-fix check
-ltcook eval analyze
+ltcook eval audit --static-only
+ltcook eval audit --setup current
+ltcook eval run --setup current
+ltcook eval run --quick --setup synthetic
+ltcook eval run --behavior-only --setup synthetic
+ltcook eval analyze --setup synthetic
 ltcook eval list
 ltcook eval watch RUN_ID
 ltcook eval status RUN_ID
@@ -180,15 +179,23 @@ ltcook eval cancel RUN_ID
 ltcook eval delete RUN_ID
 ```
 
-`eval audit` runs the static inventory and semantic Instruction Audit;
-`eval analyze` runs paired Bottleneck Analysis with three repetitions. The
-default `eval run` covers all categories. `--quick` runs a static inventory and
-one targeted-fix behavioral case. Failed off-thinking cases retry once with low
-thinking; bottleneck comparisons do not retry. These are local
-diagnostics, not production-session evaluations. Run summaries, structured
-results, events, and timing traces are kept under LTCook runtime state; raw
-prompts and transcripts are not retained. Closing the terminal detaches from a
-run, while **Cancel run** or `ltcook eval cancel RUN_ID` stops it.
+Static Instruction Audit works without Ollama. LLM-dependent evaluations require
+local Ollama and the prepared Spark model; they never select another model when
+it is unavailable. Behavioral cases start with thinking off and may retry once
+with low thinking. Bottleneck Attribution compares guidance variants with three
+repetitions and no retry.
+
+Evaluation execution uses disposable state and workspace snapshots. Reports list
+included and excluded resources, configuration provenance, unsupported tools, and
+other limitations. Interactive Plan approval is outside evaluation coverage.
+Linux and WSL execution require working Bubblewrap isolation; unavailable sandbox
+support is reported as an error. Configured network access remains enabled.
+
+The CLI and Paseo share progress, cancellation, history, and sanitized results in
+runtime state. Closing the terminal detaches from a run; use `cancel` to stop it.
+Unsupported records from older evaluation formats are left unchanged. To reset
+history, stop the runtime, preserve any wanted results, and remove only its
+`evals/runs` directory before restarting.
 
 Use **Refresh** to reload coordination state. Recorded dependencies, verification
 and approval gates, unavailable members, and uncertain deliveries explain why

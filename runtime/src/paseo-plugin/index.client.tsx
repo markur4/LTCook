@@ -20,20 +20,33 @@ const evalsRpc = defineRpc({
   input: EvalRequestSchema,
   output: EvalResponseSchema,
 });
+const evalLabels: Record<string, string> = {
+  static: 'Instruction Audit · static',
+  semantic: 'Instruction Audit · semantic',
+  behavior: 'Behavior Evaluation',
+  bottlenecks: 'Bottleneck Attribution',
+};
 function resultSummary(report: any): string[] {
   return Object.entries(report.result?.results ?? {}).map(([name, value]: [string, any]) => {
     const tasks = Array.isArray(value) ? value : value?.tasks;
     if (Array.isArray(tasks)) {
       const passed = tasks.filter((task) => task.success).length;
-      return `${name}: ${passed}/${tasks.length} passed; ${tasks.filter((task) => task.attempts?.length > 1).length} retried`;
+      return `${evalLabels[name] ?? name}: ${passed}/${tasks.length} passed; ${tasks.filter((task) => task.attempts?.length > 1).length} retried`;
     }
     if (Array.isArray(value?.findings))
-      return `${name}: ${value.findings.length} potential findings`;
-    return `${name}: ${value?.resourceCount ?? 0} resources`;
+      return `${evalLabels[name] ?? name}: ${value.findings.length} potential findings`;
+    return `${evalLabels[name] ?? name}: ${value?.resourceCount ?? 0} resources`;
   });
 }
 
-function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
+function Diagnostics({
+  theme,
+  workspaceRoot,
+}: {
+  theme: PluginWorkspacePanelProps['theme'];
+  workspaceRoot?: string;
+}) {
+  const [setup, setSetup] = useState<'current' | 'synthetic'>('current');
   const call = useRpc(evalsRpc);
   const [runs, setRuns] = useState<any[]>([]);
   const [selected, setSelected] = useState<string>();
@@ -66,7 +79,12 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
   }, [refresh]);
   const start = async (preset: 'quick' | 'full') => {
     try {
-      const value = (await call({ action: 'start', preset })) as { runId: string };
+      const value = (await call({
+        action: 'start',
+        preset,
+        setup,
+        ...(setup === 'current' && workspaceRoot ? { workspaceRoot } : {}),
+      })) as { runId: string };
       setSelected(value.runId);
       setReport(undefined);
       setShowDetails(false);
@@ -82,10 +100,18 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
         Agent Evals
       </Label>
       <Label theme={theme} muted>
-        Local Spark checks. A semantic audit inspects the isolated Pi prompt; Paseo and live runtime
-        instructions are outside its coverage.
+        Local Spark evaluations. Interactive Plan approval is outside evaluation coverage.
       </Label>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        {(['current', 'synthetic'] as const).map((value) => (
+          <Action
+            key={value}
+            theme={theme}
+            title={value === 'current' ? 'Current Setup' : 'Synthetic Setup'}
+            selected={setup === value}
+            onPress={() => setSetup(value)}
+          />
+        ))}
         <Action theme={theme} title="Run quick check" onPress={() => void start('quick')} />
         <Action theme={theme} title="Run full Agent Evals" onPress={() => void start('full')} />
         <Action theme={theme} title="Refresh history" onPress={() => void refresh()} />
@@ -99,7 +125,7 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
         <Card theme={theme}>
           <Label
             theme={theme}
-          >{`${status.preset} · ${status.status} · ${status.completed}/${status.total}`}</Label>
+          >{`${status.setup} · ${status.teamSelection ?? 'Preparing team'} · ${status.preset} · ${status.status} · ${status.completed}/${status.total}`}</Label>
           <Label
             theme={theme}
             muted
@@ -121,7 +147,7 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
         <View key={item.runId} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           <Action
             theme={theme}
-            title={`${item.preset} · ${item.status} · ${item.completed}/${item.total} · ${item.createdAt}`}
+            title={`${item.setup} · ${item.teamSelection ?? 'Preparing team'} · ${item.preset} · ${item.status} · ${item.completed}/${item.total} · ${item.createdAt}`}
             selected={item.runId === selectedRun}
             onPress={() => {
               setSelected(item.runId);
@@ -159,6 +185,11 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
       {report && (
         <Card theme={theme}>
           <Label theme={theme}>Results</Label>
+          {(report.summary.limitations ?? []).map((limitation: string, index: number) => (
+            <Label key={index} theme={theme} muted>
+              {limitation}
+            </Label>
+          ))}
           {Object.entries(report.result?.results ?? {}).map(([name, value]: [string, any]) => {
             const tasks = Array.isArray(value) ? value : value?.tasks;
             const findings = value?.findings;
@@ -167,14 +198,7 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
               : undefined;
             return (
               <View key={name} style={{ gap: 4, paddingVertical: 4 }}>
-                <Label theme={theme}>
-                  {{
-                    static: 'Instruction Audit · static',
-                    semantic: 'Instruction Audit · semantic',
-                    behavior: 'Behavioral Evals',
-                    bottlenecks: 'Bottleneck Analysis',
-                  }[name] ?? name.replaceAll('-', ' ')}
-                </Label>
+                <Label theme={theme}>{evalLabels[name] ?? name.replaceAll('-', ' ')}</Label>
                 <Label theme={theme} muted>
                   {Array.isArray(tasks)
                     ? `${passed}/${tasks.length} behavior cases passed after retry`
@@ -182,6 +206,21 @@ function Diagnostics({ theme }: { theme: PluginWorkspacePanelProps['theme'] }) {
                       ? `${findings.length} potential findings`
                       : 'Completed'}
                 </Label>
+                {Array.isArray(tasks) && (
+                  <Label
+                    theme={theme}
+                    muted
+                  >{`${(tasks.reduce((total: number, task: any) => total + (task.elapsedMs ?? 0), 0) / 1000).toFixed(2)}s total task time`}</Label>
+                )}
+                {(value?.aggregates ?? [])
+                  .filter((arm: any) => arm.tasks > 0)
+                  .map((arm: any) => (
+                    <Label
+                      key={arm.arm}
+                      theme={theme}
+                      muted
+                    >{`${arm.arm}: mean ${(arm.meanTotalElapsedMs / 1000).toFixed(2)}s; observed ${(arm.minElapsedMs / 1000).toFixed(2)}–${(arm.maxElapsedMs / 1000).toFixed(2)}s`}</Label>
+                  ))}
               </View>
             );
           })}
@@ -314,7 +353,7 @@ function TeamStatus(props: PluginWorkspacePanelProps) {
           />
         </View>
       )}
-      {view === 'diagnostics' && <Diagnostics theme={theme} />}
+      {view === 'diagnostics' && <Diagnostics theme={theme} workspaceRoot={root ?? undefined} />}
       {snapshot && view !== 'diagnostics' && (
         <>
           {panel.detail?.status === 'loading' && (

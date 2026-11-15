@@ -209,6 +209,45 @@ def resolve_launch(
     return LaunchConfig(environment, config, root)
 
 
+@launch_cli.command("evaluation-context", hidden=True)
+def evaluation_context(
+    workspace: Annotated[Path | None, typer.Option("--workspace")] = None,
+) -> None:
+    """Resolve non-secret evaluation inputs through the production AppRC resolver."""
+    from ltcook.config.app import APP_RC
+    from ltcook.config.pi_config import pi_documents
+
+    if workspace is not None:
+        root = workspace.expanduser().resolve()
+        selected = (
+            APP_RC.manage(environment=_shell_environment(os.environ))
+            .inspect(workspace=str(root))
+            .resolved.workspace
+        )
+        if selected is None or selected.root.resolve() != root:
+            raise ValueError("Evaluation workspace must be registered with AppRC")
+    launch = resolve_launch(workspace)
+    config = launch.configuration
+    documents = pi_documents(
+        config, owned_dir=Path(launch.environment["LTCOOK_DEPLOYMENT_DIR"]) / "app"
+    )
+    web = next(
+        value for target, value in documents.items() if target.name == "web-search.json"
+    )
+    typer.echo(
+        json.dumps(
+            {
+                "teamSelection": config.app.team,
+                "guidanceDirectory": launch.environment["LTCOOK_GUIDANCE_DIR"],
+                "webConfiguration": web,
+                "limitations": [
+                    "Authenticated external tools are skipped; browser and authenticated MCP integrations are disabled."
+                ],
+            }
+        )
+    )
+
+
 @launch_cli.command("environment")
 def environment_command(
     workspace: Annotated[Path, typer.Option("--workspace")],

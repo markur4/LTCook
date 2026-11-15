@@ -33,6 +33,8 @@ const nativeIds = new Map<string, string>();
 let owner: ChildProcess | undefined;
 let cachedSnapshot: SessionSnapshot;
 let sequence = 0;
+let ownerRestart: Promise<void> | undefined;
+const ownerRequests = new Set<Promise<unknown>>();
 const pending = new Map<number, { resolve(value: unknown): void; reject(reason: unknown): void }>();
 const runtime = {
   snapshot(_sessionId: string): SessionSnapshot {
@@ -59,10 +61,16 @@ const runtime = {
 };
 function ownerRequest(kind: string, data: Record<string, unknown> = {}): Promise<unknown> {
   const id = ++sequence;
-  return new Promise((resolve, reject) => {
+  const request = new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
     owner!.send({ kind, id, ...data });
   });
+  ownerRequests.add(request);
+  void request.then(
+    () => ownerRequests.delete(request),
+    () => ownerRequests.delete(request),
+  );
+  return request;
 }
 let providerError: unknown;
 let requests = 0;
@@ -253,6 +261,8 @@ const provider = createServer(async (request, response) => {
       response.writeHead(503).end('Fixture stopping');
       return;
     }
+    // > Keep real native model continuations pending while the owner restarts.
+    while (ownerRestart) await ownerRestart;
     await ownerRequest('snapshot');
     const action = script(input.model, input.messages);
     if (action) toolCalls.push(action.name);
@@ -535,10 +545,20 @@ try {
       ),
   );
   const before = runtime.snapshot(sessionId);
-  await runtime.close();
-  const previousOwnerPid = owner!.pid;
-  await startOwner();
-  assert.notEqual(owner!.pid, previousOwnerPid);
+  let releaseOwner!: () => void;
+  ownerRestart = new Promise<void>((resolve) => {
+    releaseOwner = resolve;
+  });
+  try {
+    await Promise.all([...ownerRequests]);
+    await runtime.close();
+    const previousOwnerPid = owner!.pid;
+    await startOwner();
+    assert.notEqual(owner!.pid, previousOwnerPid);
+  } finally {
+    ownerRestart = undefined;
+    releaseOwner();
+  }
   assert.equal(runtime.snapshot(sessionId).session.id, before.session.id);
   assert.equal(runtime.snapshot(sessionId).assignments.length, before.assignments.length);
   await backend.send(nativeIds.get('main')!, 'FIXTURE_RETRY');

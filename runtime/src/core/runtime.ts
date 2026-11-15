@@ -29,6 +29,7 @@ type RuntimeOptions = {
   stateDirectory?: string;
   ried?: RiedService;
   onEvent?: (event: RuntimeEvent) => void;
+  evaluation?: { sessionId: string; toolBudget?: number };
 };
 
 /** Creates an exclusive runtime over one fixed team and native-agent backend. */
@@ -38,6 +39,10 @@ export function createRuntime(options: RuntimeOptions): RuntimeController {
 
 export class RuntimeController implements RuntimeControllerContract {
   private readonly store: CoordinationStore;
+  private evaluationPass: { sessionId: string; passId: string } | undefined;
+  private readonly evaluationSessionId: string | undefined;
+  private readonly evaluationToolBudget: number;
+  private evaluationToolCalls = 0;
   private readonly team: TeamPackage;
   private readonly agents: AgentBackend;
   private readonly onEvent: (event: RuntimeEvent) => void;
@@ -53,6 +58,8 @@ export class RuntimeController implements RuntimeControllerContract {
     if (options.team.apiVersion !== 2)
       throw new Error(`Unsupported team API version ${String(options.team.apiVersion)}`);
     this.team = options.team;
+    this.evaluationSessionId = options.evaluation?.sessionId;
+    this.evaluationToolBudget = options.evaluation?.toolBudget ?? 64;
     this.agents = options.agents;
     this.onEvent = options.onEvent ?? (() => undefined);
     for (const type of ['design', 'plan.prefill', 'plan.finalize', 'task.execute'] as const) {
@@ -71,13 +78,67 @@ export class RuntimeController implements RuntimeControllerContract {
         options.stateDirectory ??
         process.env.LTCOOK_RUNTIME_STATE_DIR ??
         path.join(path.dirname(options.databasePath), 'runtime'),
+      executionAllowed: (sessionId, passId) => this.executionAllowed(sessionId, passId),
       dispatch: (session, record, stage) => this.dispatchPlanning(session, record, stage),
       scheduleExecution: (session, record) => this.scheduleExecution(session, record),
     });
   }
 
+  /** Starts a predefined scenario in an evaluation-owned controller, without impersonating a user. */
+  async startEvaluation(input: {
+    sessionId: string;
+    workspaceRoot: string;
+    title: string;
+    description: string;
+  }): Promise<SessionSnapshot> {
+    if (
+      !this.evaluationSessionId ||
+      input.sessionId !== this.evaluationSessionId ||
+      this.evaluationPass
+    )
+      throw new Error('Evaluation authority is unavailable for this Session');
+    await this.openSession({ id: input.sessionId, workspaceRoot: input.workspaceRoot });
+    const pass = this.store.createPass(input.sessionId, { title: input.title });
+    this.evaluationPass = { sessionId: input.sessionId, passId: pass.id };
+    this.store.updatePass(input.sessionId, { passId: pass.id, status: 'running' });
+    const task = this.store.createTask(input.sessionId, {
+      passId: pass.id,
+      title: input.title,
+      description: input.description,
+      acceptance:
+        'Register the scenario Tasks, report the scheduling result, and complete this scheduling Task.',
+      scheduled: false,
+      requestId: `evaluation:${pass.id}:execution-handoff`,
+    });
+    const coordinator = this.store
+      .listBindings(input.sessionId)
+      .find((binding) => binding.memberKey === this.team.definition.coordinatorKey);
+    if (coordinator?.state !== 'bound' || !coordinator.nativeAgentId)
+      throw new Error(
+        `Evaluation coordinator is unavailable: ${coordinator?.blocker ?? coordinator?.state}`,
+      );
+    const assignment = this.store.createAssignment(input.sessionId, {
+      taskId: task.id,
+      memberKey: coordinator.memberKey,
+      nativeAgentId: coordinator.nativeAgentId,
+      message: `Predefined evaluation scope for Pass ${pass.id}. Interactive Plan approval is outside this evaluation. ${input.description} Register scheduled task.execute Tasks with this passId, submit report.create for this scheduling assignment, then task.update this scheduling Task to completed. The production scheduler dispatches the Tasks.`,
+    });
+    await this.deliverAssignment(assignment);
+    await this.schedule(this.session(input.sessionId));
+    return this.snapshot(input.sessionId);
+  }
+
+  private executionAllowed(sessionId: string, passId: string): boolean {
+    return (
+      (this.evaluationPass?.sessionId === sessionId && this.evaluationPass.passId === passId) ||
+      this.planning.approvedPass(sessionId, passId)
+    );
+  }
+
   async openSession(input: { id?: string; workspaceRoot: string }): Promise<SessionSnapshot> {
     this.assertOpen();
+    if (this.evaluationSessionId && input.id !== this.evaluationSessionId)
+      throw new Error('Evaluation controllers accept only their disposable Session');
     const session =
       input.id === undefined
         ? this.store.createSession({
@@ -248,6 +309,11 @@ export class RuntimeController implements RuntimeControllerContract {
       throw new Error('Agent identity is not bound to this session');
     const coordinator = identity?.memberKey === this.team.definition.coordinatorKey;
     if (
+      this.evaluationSessionId === sessionId &&
+      (command.type.startsWith('planning.') || command.type.startsWith('decision.'))
+    )
+      throw new Error('Interactive planning and user decisions are outside evaluation coverage');
+    if (
       command.type.startsWith('planning.') ||
       command.type.startsWith('decision.') ||
       command.type.startsWith('guidance.')
@@ -258,7 +324,7 @@ export class RuntimeController implements RuntimeControllerContract {
       if (
         passId === undefined ||
         this.store.getPass(sessionId, passId).status !== 'running' ||
-        !this.planning.approvedPass(sessionId, passId)
+        !this.executionAllowed(sessionId, passId)
       )
         throw new Error('Execution work requires an active approved Pass');
     };
@@ -302,7 +368,7 @@ export class RuntimeController implements RuntimeControllerContract {
         return this.store.createPass(sessionId, command);
       case 'pass.update': {
         this.requireCoordinator(actor, coordinator);
-        if (command.status === 'running' && !this.planning.approvedPass(sessionId, command.passId))
+        if (command.status === 'running' && !this.executionAllowed(sessionId, command.passId))
           throw new Error('Pass execution requires its registered Plan approval');
         if (
           command.status === 'completed' &&
@@ -452,10 +518,18 @@ export class RuntimeController implements RuntimeControllerContract {
             )
         )
           throw new Error('Planning stages require planning.submit with validated document output');
-        return this.store.createReport(sessionId, {
+        const report = this.store.createReport(sessionId, {
           ...command,
           nativeAgentId: actor.nativeAgentId,
         });
+        this.emit({
+          type: 'assignment.reported',
+          sessionId,
+          taskId: assignment.taskId,
+          assignmentId: assignment.id,
+          memberKey: assignment.memberKey,
+        });
+        return report;
       }
       case 'step.update': {
         const step = this.store.getStep(sessionId, command.stepId);
@@ -592,7 +666,16 @@ export class RuntimeController implements RuntimeControllerContract {
   /** Serializes dispatch decisions while native members perform their work concurrently. */
   private schedule(session: Session): Promise<void> {
     const previous = this.scheduling.get(session.id) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(() => this.advanceSession(session));
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        this.emit({ type: 'scheduler.start', sessionId: session.id });
+        try {
+          await this.advanceSession(session);
+        } finally {
+          this.emit({ type: 'scheduler.end', sessionId: session.id });
+        }
+      });
     this.scheduling.set(session.id, next);
     return next.finally(() => {
       if (this.scheduling.get(session.id) === next) this.scheduling.delete(session.id);
@@ -625,7 +708,7 @@ export class RuntimeController implements RuntimeControllerContract {
   private async advanceSession(session: Session): Promise<void> {
     if (this.closed) return;
     for (const pass of this.store.listPasses(session.id)) {
-      if (pass.status !== 'running' || !this.planning.approvedPass(session.id, pass.id)) continue;
+      if (pass.status !== 'running' || !this.executionAllowed(session.id, pass.id)) continue;
       const tasks = this.store.listTasks(session.id).filter((task) => task.passId === pass.id);
       const barrier = tasks.find((task) => task.requestId?.endsWith(':execution-handoff'));
       if (!barrier || barrier.status !== 'completed') continue;
@@ -706,7 +789,7 @@ export class RuntimeController implements RuntimeControllerContract {
   private async dispatchScheduled(session: Session, task: Task): Promise<void> {
     if (
       !task.passId ||
-      !this.planning.approvedPass(session.id, task.passId) ||
+      !this.executionAllowed(session.id, task.passId) ||
       this.taskGates(session.id, task).length
     )
       return;
@@ -754,7 +837,7 @@ export class RuntimeController implements RuntimeControllerContract {
     }
     // > A routing hook may yield while a new blocking decision is recorded.
     if (
-      !this.planning.approvedPass(session.id, task.passId) ||
+      !this.executionAllowed(session.id, task.passId) ||
       this.taskGates(session.id, this.store.getTask(session.id, task.id)).length
     )
       return;
@@ -935,6 +1018,13 @@ export class RuntimeController implements RuntimeControllerContract {
   }
 
   private async deliverAssignment(assignment: Assignment): Promise<void> {
+    this.emit({
+      type: 'assignment.dispatch',
+      sessionId: assignment.sessionId,
+      taskId: assignment.taskId,
+      assignmentId: assignment.id,
+      memberKey: assignment.memberKey,
+    });
     this.store.updateAssignment(assignment.sessionId, assignment.id, 'sending');
     try {
       await this.agents.send(
@@ -967,7 +1057,7 @@ export class RuntimeController implements RuntimeControllerContract {
     if (
       record.passId === undefined ||
       this.store.getPass(session.id, record.passId).status !== 'running' ||
-      !this.planning.approvedPass(session.id, record.passId)
+      !this.executionAllowed(session.id, record.passId)
     )
       return;
     const requestId = `${record.id}:execution-handoff`;
@@ -1096,6 +1186,11 @@ export class RuntimeController implements RuntimeControllerContract {
     const member = this.snapshot(sessionId).members.find(
       (item) => item.binding?.nativeAgentId === nativeAgentId && item.binding.state === 'bound',
     )?.member;
+    if (this.evaluationSessionId === sessionId && member) {
+      if (this.evaluationToolCalls >= this.evaluationToolBudget)
+        return { allowed: false, reason: 'Evaluation tool budget exceeded' };
+      this.evaluationToolCalls++;
+    }
     if (
       member?.readOnly &&
       ![
@@ -1119,7 +1214,7 @@ export class RuntimeController implements RuntimeControllerContract {
         (member && this.team.definition.reviewPolicy.reviewerKeys.includes(member.key))) &&
       this.store
         .listPasses(sessionId)
-        .some((pass) => pass.status === 'running' && this.planning.approvedPass(sessionId, pass.id))
+        .some((pass) => pass.status === 'running' && this.executionAllowed(sessionId, pass.id))
     ) {
       // > Main may execute directly while it schedules the active Pass.
       if (
@@ -1174,6 +1269,7 @@ export class RuntimeController implements RuntimeControllerContract {
   }
   async close(): Promise<void> {
     if (this.closed) return;
+    this.evaluationPass = undefined;
     this.store.close();
     this.closed = true;
   }

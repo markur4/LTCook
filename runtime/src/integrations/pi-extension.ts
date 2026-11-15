@@ -68,6 +68,55 @@ export default async function activate(
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId, nativeAgentId, ...payload }),
     });
+  if (process.env.LTCOOK_EVAL_ARM) {
+    const observe = async (value: Record<string, unknown>) => {
+      const response = await rpc('/v1/evaluation/observe', value);
+      if (!response.ok) throw new Error('Evaluation observation unavailable');
+    };
+    pi.on('agent_start', async (_event, context) => {
+      await observe({ kind: 'prompt', prompt: context.getSystemPrompt() });
+    });
+    pi.on('before_provider_request', async (_event, context) => {
+      if (
+        context.model?.id !== 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest' ||
+        context.model.provider !== 'ollama' ||
+        context.model.baseUrl !== `${process.env.LTCOOK_EVAL_ENDPOINT}/v1`
+      )
+        throw new Error('Evaluation model pin violation');
+      await observe({ kind: 'model.start' });
+    });
+    pi.on('before_provider_headers', (event) => {
+      event.headers['x-ltcook-member'] = memberKey;
+    });
+    pi.on('message_end', async (event) => {
+      if (event.message.role === 'assistant')
+        await observe({
+          kind: 'model.end',
+          usage: event.message.usage,
+          stopReason: event.message.stopReason,
+        });
+    });
+    const fixtureVerifications = new Set<string>();
+    pi.on('tool_execution_start', async (event) => {
+      if (
+        event.toolName === 'bash' &&
+        typeof event.args?.command === 'string' &&
+        /(?:^|&&|;)\s*node\s+\.ltcook-evals\/verify\.cjs(?:\s|$)/.test(event.args.command)
+      )
+        fixtureVerifications.add(event.toolCallId);
+      await observe({ kind: 'tool.start', tool: event.toolName, callId: event.toolCallId });
+    });
+    pi.on('tool_execution_end', async (event) => {
+      await observe({
+        kind: 'tool.end',
+        tool: event.toolName,
+        callId: event.toolCallId,
+        durationMs: event.durationMs,
+        fixtureVerification: fixtureVerifications.delete(event.toolCallId),
+        isError: event.isError,
+      });
+    });
+  }
   const member = team.definition.members.find((candidate) => candidate.key === memberKey);
   if (!member) throw new Error('Native agent identity is not a member of the selected team');
   const publishGuidance = async () => {
