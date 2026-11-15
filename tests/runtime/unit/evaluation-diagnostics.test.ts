@@ -410,7 +410,7 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
       LTCOOK_SESSION_ID: 'session',
       LTCOOK_TEAM_INSTANCE_ID: 'instance',
       LTCOOK_TEAM_ID: '@ltcook/team-default-minimal',
-      LTCOOK_MEMBER_KEY: 'main',
+      LTCOOK_MEMBER_KEY: 'leader',
       LTCOOK_RUNTIME_API_URL: `http://127.0.0.1:${server.port}`,
       LTCOOK_AGENT_API_TOKEN: 'fixture-agent-token',
       LTCOOK_TEAM: 'default-minimal',
@@ -537,7 +537,7 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
     ).rejects.toThrow('Evaluation model pin violation');
     const headers: Record<string, string> = {};
     await handlers.get('before_provider_headers')!({ headers });
-    expect(headers['x-ltcook-member']).toBe('main');
+    expect(headers['x-ltcook-member']).toBe('leader');
     await handlers.get('session_compact')!({
       reason: 'overflow',
       willRetry: true,

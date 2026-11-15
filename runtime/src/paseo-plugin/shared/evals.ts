@@ -7,6 +7,7 @@ export const EvalRequestSchema = z.object({
   repetitions: z.number().int().positive().optional(),
   scenario: z.enum(['read-only', 'no-op', 'targeted-fix']).optional(),
   workspaceRoot: z.string().optional(),
+  sessionId: z.string().optional(),
   runId: z.string().uuid().optional(),
   after: z.number().int().nonnegative().optional(),
 });

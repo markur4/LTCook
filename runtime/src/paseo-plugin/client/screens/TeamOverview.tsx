@@ -10,16 +10,26 @@ function MemberCard({
   member,
   assignments,
   onSelect,
+  onOpenAgent,
 }: {
   theme: Theme;
   member: TeamStatusSnapshot['members'][number];
   assignments: TeamStatusSnapshot['assignments'];
   onSelect: () => void;
+  onOpenAgent?: (agentId: string) => void;
 }) {
   const live = useAgent(member.nativeAgentId ?? '', (agent) => agent.status);
+  const nativeAgentId = member.nativeAgentId;
   return (
     <Card theme={theme}>
       <Action theme={theme} title={member.name} onPress={onSelect} />
+      {nativeAgentId && onOpenAgent && (
+        <Action
+          theme={theme}
+          title="Open conversation"
+          onPress={() => onOpenAgent(nativeAgentId)}
+        />
+      )}
       <Label theme={theme} muted>
         {member.memberKey}
       </Label>
@@ -42,7 +52,9 @@ export function TeamOverview({
   theme,
   snapshot,
   compact,
+  leaderKey,
   onMember,
+  onOpenAgent,
   onIssues,
   issuesOpen,
   detail,
@@ -50,11 +62,21 @@ export function TeamOverview({
   theme: Theme;
   snapshot: TeamStatusSnapshot;
   compact: boolean;
+  leaderKey: string;
   onMember: (key: string) => void;
+  onOpenAgent?: (agentId: string) => void;
   onIssues: () => void;
   issuesOpen: boolean;
   detail: TeamDetailResponse | undefined;
 }) {
+  const roles = snapshot.members.filter((member) => member.memberKey !== leaderKey);
+  const persistentMembers = roles.filter((member) => member.lifetime === 'persistent');
+  const temporaryMembers = roles.filter(
+    (member) => member.lifetime === 'temporary' && member.nativeAgentId !== null,
+  );
+  const availableTemporaryRoles = roles.filter(
+    (member) => member.lifetime === 'temporary' && member.nativeAgentId === null,
+  );
   const tasks = progress(snapshot.tasks);
   const passes = snapshot.passes
     .filter((pass) => pass.status === 'running')
@@ -127,22 +149,73 @@ export function TeamOverview({
           )}
         </View>
       </View>
+      <RoleGroup
+        title="Persistent members"
+        empty="No persistent members are configured"
+        theme={theme}
+        members={persistentMembers}
+        snapshot={snapshot}
+        onMember={onMember}
+        onOpenAgent={onOpenAgent}
+      />
+      <RoleGroup
+        title="Temporary members"
+        empty="No temporary members are connected"
+        theme={theme}
+        members={temporaryMembers}
+        snapshot={snapshot}
+        onMember={onMember}
+        onOpenAgent={onOpenAgent}
+      />
+      <RoleGroup
+        title="Available temporary roles"
+        empty="No temporary roles are available"
+        theme={theme}
+        members={availableTemporaryRoles}
+        snapshot={snapshot}
+        onMember={onMember}
+        onOpenAgent={onOpenAgent}
+      />
+    </View>
+  );
+}
+
+function RoleGroup({
+  title,
+  empty,
+  theme,
+  members,
+  snapshot,
+  onMember,
+  onOpenAgent,
+}: {
+  title: string;
+  empty: string;
+  theme: Theme;
+  members: TeamStatusSnapshot['members'];
+  snapshot: TeamStatusSnapshot;
+  onMember: (key: string) => void;
+  onOpenAgent?: (agentId: string) => void;
+}) {
+  return (
+    <View style={{ gap: 8 }}>
       <Label theme={theme} heading>
-        Team members
+        {title}
       </Label>
-      {snapshot.members.length ? (
-        snapshot.members.map((member) => (
+      {members.length ? (
+        members.map((member) => (
           <MemberCard
             key={member.memberKey}
             theme={theme}
             member={member}
             assignments={currentAssignments(snapshot, member.memberKey)}
             onSelect={() => onMember(member.memberKey)}
+            onOpenAgent={onOpenAgent}
           />
         ))
       ) : (
         <Label theme={theme} muted>
-          No team members configured
+          {empty}
         </Label>
       )}
     </View>

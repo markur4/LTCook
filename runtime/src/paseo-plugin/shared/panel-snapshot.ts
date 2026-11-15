@@ -3,8 +3,11 @@ import type { PluginAgentSnapshot } from '@getpaseo/plugin';
 
 const work = z.object({ id: z.string(), title: z.string(), status: z.string() });
 export const PanelSnapshotSourceSchema = z.object({
-  session: z.object({ teamId: z.string() }),
-  definition: z.object({ name: z.string() }),
+  session: z.object({
+    id: z.string().min(1),
+    teamId: z.string().min(1),
+  }),
+  definition: z.object({ name: z.string(), leaderKey: z.string().min(1) }),
   members: z.array(
     z.object({
       member: z.object({
@@ -15,7 +18,12 @@ export const PanelSnapshotSourceSchema = z.object({
         readOnly: z.boolean(),
         lifetime: z.enum(['persistent', 'temporary']),
       }),
-      binding: z.object({ nativeAgentId: z.string().nullable() }).nullable(),
+      binding: z
+        .object({
+          nativeAgentId: z.string().nullable(),
+          state: z.enum(['creating', 'bound', 'missing', 'uncertain', 'closed']),
+        })
+        .nullable(),
       nativeStatus: z.string().nullable(),
     }),
   ),
@@ -34,14 +42,12 @@ export const PanelSnapshotSourceSchema = z.object({
 });
 export type PanelSnapshotSource = z.infer<typeof PanelSnapshotSourceSchema>;
 
-export const TeamSnapshotRequestSchema = z.object({ workspaceRoot: z.string().min(1) });
-export const SessionOpenRequestSchema = z.object({ workspaceRoot: z.string().min(1) });
-export const SessionOpenResponseSchema = z.object({
+export const TeamSnapshotRequestSchema = z.object({
   sessionId: z.string().min(1),
-  workspaceRoot: z.string().min(1),
+  leaderAgentId: z.string().min(1).optional(),
 });
-
-export type SessionOpenRequest = z.infer<typeof SessionOpenRequestSchema>;
+export { SessionOpenRequestSchema, SessionOpenResponseSchema } from './team-catalog';
+export type { SessionOpenRequest } from './team-catalog';
 
 const nativeStatuses = [
   'initializing',
@@ -54,6 +60,8 @@ const memberStatuses = [...nativeStatuses, 'unknown', 'not connected'] as const;
 const memberStatus = z.enum(memberStatuses);
 
 export const TeamStatusSnapshotSchema = z.object({
+  sessionId: z.string().min(1),
+  leaderKey: z.string().min(1),
   teamId: z.string(),
   teamName: z.string(),
   members: z.array(
@@ -112,6 +120,13 @@ function isNativeStatus(status: string | null): status is PluginAgentSnapshot['s
   return status !== null && nativeStatuses.some((candidate) => candidate === status);
 }
 
+function currentNativeAgentId(member: PanelSnapshotSource['members'][number]) {
+  const { binding, nativeStatus } = member;
+  return binding?.state === 'bound' && binding.nativeAgentId && nativeStatus !== 'closed'
+    ? binding.nativeAgentId
+    : null;
+}
+
 export function panelSnapshot(snapshot: PanelSnapshotSource): TeamStatusSnapshot {
   const blockedTasks = snapshot.tasks.filter((task) => task.status === 'blocked').length;
   const failedTasks = snapshot.tasks.filter((task) => task.status === 'failed').length;
@@ -121,7 +136,9 @@ export function panelSnapshot(snapshot: PanelSnapshotSource): TeamStatusSnapshot
   const uncertainAssignments = snapshot.assignments.filter(
     (assignment) => assignment.status === 'uncertain',
   ).length;
-  const unboundMembers = snapshot.members.filter(({ binding }) => !binding).length;
+  const unboundMembers = snapshot.members.filter(
+    (member) => member.member.lifetime === 'persistent' && !currentNativeAgentId(member),
+  ).length;
   const issues: string[] = [];
   if (blockedTasks) issues.push(`Blocked tasks: ${blockedTasks}`);
   if (failedTasks) issues.push(`Failed tasks: ${failedTasks}`);
@@ -142,18 +159,31 @@ export function panelSnapshot(snapshot: PanelSnapshotSource): TeamStatusSnapshot
     else stepsByTask.set(step.taskId, [step]);
   }
   return {
+    sessionId: snapshot.session.id,
+    leaderKey: snapshot.definition.leaderKey,
     teamId: snapshot.session.teamId,
     teamName: snapshot.definition.name,
-    members: snapshot.members.map(({ member, binding, nativeStatus }) => ({
-      memberKey: member.key,
-      name: member.name,
-      modelAlias: member.modelAlias,
-      thinking: member.thinking,
-      readOnly: member.readOnly,
-      lifetime: member.lifetime,
-      nativeAgentId: binding?.nativeAgentId ?? null,
-      status: isNativeStatus(nativeStatus) ? nativeStatus : binding ? 'unknown' : 'not connected',
-    })),
+    members: snapshot.members.map(({ member, binding, nativeStatus }) => {
+      const nativeAgentId = currentNativeAgentId({ member, binding, nativeStatus });
+      const status =
+        nativeStatus === 'closed' || binding?.state === 'closed'
+          ? 'closed'
+          : nativeAgentId
+            ? isNativeStatus(nativeStatus)
+              ? nativeStatus
+              : 'unknown'
+            : 'not connected';
+      return {
+        memberKey: member.key,
+        name: member.name,
+        modelAlias: member.modelAlias,
+        thinking: member.thinking,
+        readOnly: member.readOnly,
+        lifetime: member.lifetime,
+        nativeAgentId,
+        status,
+      };
+    }),
     passes: snapshot.passes.map((pass) => ({
       passId: pass.id,
       title: pass.title,

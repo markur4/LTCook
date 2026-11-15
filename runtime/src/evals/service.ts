@@ -89,6 +89,8 @@ export type EvalEngine = (input: {
   preset: EvalPreset;
   setup: EvalSetup;
   workspaceRoot?: string;
+  teamSelection?: string;
+  limitations?: string[];
   staticOnly: boolean;
   runDirectory: string;
   signal: AbortSignal;
@@ -190,7 +192,11 @@ export class EvalRunService {
     }
   }
 
-  async start(input: EvalStartRequest): Promise<string> {
+  async start(
+    input: EvalStartRequest,
+    teamSelection?: string,
+    limitations: string[] = [],
+  ): Promise<string> {
     const request = EvalStartRequestSchema.parse(input);
     const { preset, setup, staticOnly = false } = request;
     if (this.active && this.requireRun(this.active.runId).status !== 'running')
@@ -207,7 +213,7 @@ export class EvalRunService {
       staticOnly,
       repetitions: request.repetitions,
       ...(request.scenario ? { scenario: request.scenario } : {}),
-      limitations: [],
+      limitations: [...limitations],
       status: 'running',
       createdAt: now,
       updatedAt: now,
@@ -219,7 +225,7 @@ export class EvalRunService {
       await this.saveSummary(summary);
       await this.emit(summary, 'run.started');
       const controller = new AbortController();
-      const task = this.execute(summary, controller, request);
+      const task = this.execute(summary, controller, request, teamSelection, limitations);
       this.active = { runId, controller, task };
       return runId;
     } finally {
@@ -278,6 +284,8 @@ export class EvalRunService {
     summary: EvalSummary,
     controller: AbortController,
     request: EvalStartRequest,
+    teamSelection?: string,
+    limitations: string[] = [],
   ): Promise<void> {
     const started = Date.now();
     const hardware = this.timingHardware();
@@ -309,6 +317,8 @@ export class EvalRunService {
           this.timingSamples.set(summary.runId, samples);
         },
         ...(request.workspaceRoot ? { workspaceRoot: request.workspaceRoot } : {}),
+        ...(teamSelection ? { teamSelection } : {}),
+        ...(limitations.length ? { limitations } : {}),
         runDirectory: this.runDirectory(summary.runId),
         signal: controller.signal,
         checkpoint: async (output) => {

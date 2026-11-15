@@ -128,7 +128,7 @@ async function startRpc(input: {
     }
   }
 }
-test('parses the pinned Paseo Pi 0.15.4 launch argument forms', () => {
+test('parses the pinned Paseo Pi 0.16.0-beta.2 launch argument forms', () => {
   const session = {
     cwd: '/workspace',
     model: 'local/workspace-model',
@@ -201,11 +201,13 @@ test('runs the compiled Pi entry through its npm-style symlink with Node', () =>
   return build.then((buildResult) => {
     expect(buildResult.success, buildResult.logs.map((log) => log.message).join('\n')).toBe(true);
     const launcher = join(outputDirectory, 'ltcook-pi.mjs');
-    symlinkSync(
-      resolve(import.meta.dir, '../../../node_modules/@earendil-works'),
-      join(nodeModules, '@earendil-works'),
-      'dir',
-    );
+    for (const dependency of ['@earendil-works', 'zod']) {
+      symlinkSync(
+        resolve(import.meta.dir, '../../../node_modules', dependency),
+        join(nodeModules, dependency),
+        'dir',
+      );
+    }
     symlinkSync(launcher, join(binDirectory, 'ltcook-pi'));
     const result = spawnSync(node!, [join(binDirectory, 'ltcook-pi'), '--version'], {
       cwd: appRoot,
@@ -220,7 +222,7 @@ test('runs the compiled Pi entry through its npm-style symlink with Node', () =>
       },
     });
     expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('1.5.2');
   });
 });

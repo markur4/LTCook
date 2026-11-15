@@ -140,15 +140,20 @@ can contain sensitive details; do not share these files without reviewing them.
 If browser opening fails, the terminal prints the URL and continues following
 logs. WSL host navigation requires working interop and localhost forwarding.
 
-Opening the UI does not create a Session or start agents. In Paseo, select a
-project directory and use **Start session** when ready. Before starting agents,
+Opening the UI does not create a Session or start agents. In Paseo, use
+**+ → LTCook**, choose an installed **Team**, and send a message. The native
+agent is the Leader; its chat opens directly. On desktop, use the Team dropdown.
+On narrow screens, open the composer controls and select a Team from the native
+sheet before sending. Before starting agents,
 [choose their models](#initialize-saved-preferences) and
 [authenticate with Pi](#authenticate-with-pi).
 
-The **Team status** panel contains three views:
+The contextual **Team** panel is secondary to the Leader chat:
 
-- **Team Overview** shows active Passes, progress, members and issues. Select a
-  member to open Agent Focus; expand issue details to read recorded blockers.
+- The overview separates the **Leader**, **Persistent members**, running
+  **Temporary members**, and **Available temporary roles**. Connected members
+  have direct **Open conversation** actions. It also shows active Passes,
+  progress, and actionable blockers.
 - **Task Board** groups Tasks by their recorded state. Select a Task to inspect
   its description, acceptance criteria, ordered Steps, blocker and report.
 - **Agent Focus** shows role settings, current assignments, recorded handoff and
@@ -240,7 +245,7 @@ enabled by the runtime and needs no separate server, assets, or dependency. You
 can also connect through Paseo's existing client and select the LTCook
 team-status panel. If `LTCOOK_PASEO_PASSWORD` is set, it protects API and
 WebSocket access, not the static HTML page. Never put the password in the URL.
-The minimal team contains Main and Adjutant, not hidden specialists. Starting
+The minimal team contains Leader and Adjutant, not hidden specialists. Starting
 agents is distinct from sending a model-backed prompt, which needs a working
 provider and explicit input. The former terminal `ltcook launcher` is removed:
 use bare `ltcook` for Paseo and `ltcook app ...` for maintenance.
@@ -371,10 +376,17 @@ For a single POSIX invocation:
 LTCOOK_TEAM=default-minimal LTCOOK_SESSION=my-project ltcook launch runtime --workspace ROOT
 ```
 
-The aliases `default` and `default-minimal` resolve to the bundled team packages.
-Other values are dynamically imported JavaScript module specifiers; the module
-must already be resolvable in the deployment and export an `apiVersion: 2` team.
-Changing the setting does not install a module.
+The aliases `default` and `default-minimal` resolve to local Team packages.
+The catalog discovers managed direct packages under `teams/`; they must have
+locked dependencies, built assets, and the current `apiVersion: 3` contract.
+It accepts a local directory selection or canonical Team ID, not arbitrary module
+paths. Changing a selection does not install a package.
+
+The **Teams** sidebar lists installed, available, and invalid local Teams.
+Select an installed Team to open its most recently active Leader in the chosen
+Workspace, or create one when absent. **New Session** always starts a separate
+conversation. When no Workspace is selected, use Paseo's native project and
+Workspace choice. The Team badge in a running chat is read-only.
 
 When `LTCOOK_SESSION` is unset, opening a project creates a fresh chat Session.
 Starting the server without a project creates none. Set `LTCOOK_SESSION`
@@ -387,8 +399,8 @@ Only one runtime owns a coordination database. A later `ltcook launch runtime
 --workspace ROOT` command contacts that runtime to open the requested project
 session. A launch without `--workspace` only starts or connects to the idle host;
 it does not select a project. Stop the owner before starting another
-runtime against the same database. A different selected team requires a runtime
-configured for that team and must not be added to the existing owner's sessions.
+runtime against the same database. Different Teams and multiple Sessions in one
+Workspace share the same owner; each Session keeps its own Team and bindings.
 
 Recovery reconciles native bindings and leaves uncertain handoffs blocked rather
 than resending them. Inspect the panel's blockers and native conversations before
@@ -421,7 +433,7 @@ ltcook planning questions --session SESSION --plan Plan-2026_11_14-18_05-example
 
 Use the registered Plan ID returned by `start`; example timestamps are illustrative.
 `show` reads its current Markdown and workflow state; add `--json` for raw state.
-Adjutant writes the proposed Plan, then Main investigates and finalizes the same
+Adjutant writes the proposed Plan, then Leader investigates and finalizes the same
 file. Pending questions use native Paseo dialogs. If a dialog is interrupted,
 inspect `questions` and answer explicitly through the authenticated CLI:
 
@@ -437,11 +449,11 @@ permit execution. Missing responses, defaults and cancellation remain pending.
 Session and Plan context are always explicit; these commands do not create a
 Session or infer one from the current directory.
 
-After approval, Main registers the initial execution Tasks and completes the
+After approval, Leader registers the initial execution Tasks and completes the
 scheduling handoff. The runtime dispatches eligible Tasks in creation order,
 allowing different members to work concurrently and one active assignment per
 member. A blocking decision pauses new dispatch. A failed prerequisite keeps
-its dependents blocked: Main registers a linked correction, waits for it to
+its dependents blocked: Leader registers a linked correction, waits for it to
 finish, then explicitly retries the original Task. Its dependents unlock only
 when that original Task succeeds. The full Team receives one independent
 Pass-wide review; the minimal Team may register optional self-inspection before

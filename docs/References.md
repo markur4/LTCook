@@ -36,7 +36,7 @@
 | [src/ltcook/config/sections](../src/ltcook/config/sections) | Registered settings declarations grouped by owning component and environment prefix. |
 | [src/ltcook/config/pi_config.py](../src/ltcook/config/pi_config.py) | Writes only the private Pi `web-search.json` native configuration. |
 | [src/ltcook/launch.py](../src/ltcook/launch.py) | Global server settings, optional project overrides, and native process launch commands. |
-| [runtime/src/team-api](../runtime/src/team-api) | Team API v2 definitions and routing. |
+| [runtime/src/team-api](../runtime/src/team-api) | Team API v3 definitions and routing. |
 | [runtime/src/guidance-api](../runtime/src/guidance-api) | Guidance discovery, selection and inspection contract. |
 | [runtime/src/workflow-api](../runtime/src/workflow-api) | Planning, decisions, approvals and coordination contract. |
 | [runtime/resources](../runtime/resources) | Required Core rules and shared native skills/references. |
@@ -199,7 +199,7 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_GUIDANCE_DIR` | Global `runtime.guidance_dir`; defaults to `<AppRC config>/guidance` with `rules/` and `skills/`. |
 | `LTCOOK_RIED_CACHE_DIR` | Launch-derived `<AppRC cache>/projects`, holding the single versioned RIED cache. |
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
-| `LTCOOK_TEAM` | `AppSettings.team`; defaults to `default-minimal`. |
+| `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |
 | `LTCOOK_TEAM_INSTANCE_ID` | Runtime-derived identifier for the persistent TeamInstance shared by Sessions on the same selected team and canonical workspace. |
 | `LTCOOK_JS_ROOT` | JavaScript runtime root; source development uses the checkout root, and installed launches use `<deployment>/app`. |
@@ -227,9 +227,8 @@ and `playwright` sections; their declarations are in
 
 The runtime's ready line prints `Paseo <listen>`. Open `http://<listen>/` in a
 browser to use Paseo's bundled web UI; no separate server, assets, or dependency
-are needed. Select a directory and use **Start session** in the LTCook panel to
-activate its team. Merely starting the UI or selecting a directory does not
-create agents.
+are needed. Use **+ → LTCook → Team** and submit a message to open the
+Leader chat. Merely starting the UI or selecting a directory does not create agents.
 
 AppRC setting paths for these secrets are `runtime.api_token`,
 `web.crawl4ai.api_token`, and `web.searxng.secret`; the typed bundle fields are
@@ -277,7 +276,7 @@ The public import is `@ltcook/runtime/team-api`, authored in
 
 | Member | Type | Purpose |
 | --- | --- | --- |
-| `apiVersion` | `2` | Current clean prototype contract; old APIs are rejected. |
+| `apiVersion` | `3` | Current clean prototype contract; old APIs are rejected. |
 | `definition` | `TeamDefinition` | Identity, members, separate rule/skill refs, routing and review policy. |
 | `selectAssignee(context, eligible)` | optional function | Returns an eligible member key; Core validates and persists before dispatch. |
 
@@ -287,16 +286,17 @@ rule/skill kind. Teams have one default route per work type:
 
 | Work type | `default-minimal` | `default` |
 | --- | --- | --- |
-| `design` | Main | Main |
+| `design` | Leader | Leader |
 | `plan.prefill` | Adjutant | Adjutant |
-| `plan.finalize` | Main | Main |
-| `task.execute` | Main | Senior |
+| `plan.finalize` | Leader | Leader |
+| `task.execute` | Leader | Senior |
 
-Main can schedule among eligible execution members. The optional hook receives
+Leader can schedule among eligible execution members. The optional hook receives
 read-only work context and eligible members, without a privileged runtime handle
 or user approval authority. There are no `activateService`/`activateAgent` hooks.
-The built-in aliases are `default` and `default-minimal`; other Team modules must
-already be installed and resolvable. See the
+`TeamDefinition.leaderKey` names the canonical `leader` member. The built-in
+selections are `default` and `default-minimal`; other Teams must be managed local
+`teams/` workspaces with locked dependencies and valid API v3 exports. See the
 [selection-hook example](EXAMPLES.md#select-an-assignee-through-team-api).
 
 Independent-review eligibility, dispatch and current Pass-revision checks remain
@@ -363,7 +363,7 @@ Pi runtime workspace as the scan root and no Team Session or bearer. New, resume
 and forked Pi sessions rebind that workspace. The managed runtime derives its
 scan root from the Session. Its schema-version-1 result reports
 provenance, capture time, partial or stale status and diagnostics. Neither
-Team API v2 nor coordination snapshots carry the full inventory.
+Team API v3 nor coordination snapshots carry the full inventory.
 
 The local authenticated command endpoint accepts
 `POST /v1/command` with `{"sessionId":"SESSION","command":{"type":"..."}}`

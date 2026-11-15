@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -59,13 +60,17 @@ def _asset_source(root: Path) -> Path:
         "index.server.ts",
         "index.client.tsx",
         "shared/evals.ts",
+        "shared/team-catalog.ts",
         "shared/panel-snapshot.ts",
         "shared/panel-details.ts",
         "shared/view-model.ts",
         "client/use-team-panel.ts",
+        "client/use-team-catalog.ts",
         "client/components/PanelChrome.tsx",
         "client/components/StatusBadge.tsx",
         "client/screens/TeamOverview.tsx",
+        "client/screens/TeamsBrowser.tsx",
+        "client/components/TeamComposerItem.tsx",
         "client/screens/TaskBoard.tsx",
         "client/screens/AgentFocus.tsx",
     ):
@@ -75,7 +80,9 @@ def _asset_source(root: Path) -> Path:
     for team in ("default", "default-minimal"):
         (root / f"teams/{team}/dist").mkdir(parents=True)
         (root / f"teams/{team}/resources").mkdir(parents=True)
-        (root / f"teams/{team}/package.json").write_text("{}", encoding="utf-8")
+        (root / f"teams/{team}/package.json").write_text(
+            json.dumps({"name": f"@ltcook/team-{team}"}), encoding="utf-8"
+        )
         (root / f"teams/{team}/dist/index.js").write_text(team, encoding="utf-8")
         (root / f"teams/{team}/resources/rules.md").write_text(team, encoding="utf-8")
     (root / "services").mkdir()
@@ -109,6 +116,23 @@ def test_bundle_archive_is_deterministic_and_excludes_development_installs(
         assert all(
             info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist()
         )
+
+
+def test_bundle_includes_all_local_team_workspaces(tmp_path: Path) -> None:
+    """Additional managed Teams survive staging and incomplete packages fail."""
+    from ltcook_dev.packaging.package_assets import archive_assets, validate_bundle
+
+    root = _asset_source(tmp_path / "source")
+    extra = root / "teams/another"
+    shutil.copytree(root / "teams/default-minimal", extra)
+    (extra / "package.json").write_text(
+        json.dumps({"name": "@ltcook/team-another"}), encoding="utf-8"
+    )
+    result = archive_assets(root, tmp_path / "bundle.zip")
+    assert "teams/another/dist/index.js" in validate_bundle(result)
+    shutil.rmtree(extra / "dist")
+    with pytest.raises(FileNotFoundError, match="Required production assets"):
+        archive_assets(root, tmp_path / "incomplete.zip")
 
 
 def test_rebuild_replaces_owned_generated_output_with_current_assets(

@@ -124,6 +124,7 @@ export const RuntimeCommandSchema = Type.Union([
   Type.Object(
     {
       type: Type.Literal('guidance.loaded'),
+      waitUntilReady: Type.Optional(Type.Boolean()),
       inspection: Type.Object(
         {
           resources: Type.Array(

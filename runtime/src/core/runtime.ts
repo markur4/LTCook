@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { TeamRegistry } from '../integrations/team-loader.js';
 import { PlanningWorkflow } from './planning.js';
 import type { WorkType } from '../team-api/index.js';
 import type {
@@ -24,7 +25,8 @@ import { RiedService, type RiedRequest } from '../ried.js';
 
 type RuntimeOptions = {
   databasePath: string;
-  team: TeamPackage;
+  team?: TeamPackage;
+  teams?: TeamRegistry;
   agents: AgentBackend;
   stateDirectory?: string;
   ried?: RiedService;
@@ -32,7 +34,7 @@ type RuntimeOptions = {
   evaluation?: { sessionId: string; toolBudget?: number };
 };
 
-/** Creates an exclusive runtime over one fixed team and native-agent backend. */
+/** Creates one coordination owner with Session-specific Teams and native agents. */
 export function createRuntime(options: RuntimeOptions): RuntimeController {
   return new RuntimeController(options);
 }
@@ -43,7 +45,8 @@ export class RuntimeController implements RuntimeControllerContract {
   private readonly evaluationSessionId: string | undefined;
   private readonly evaluationToolBudget: number;
   private evaluationToolCalls = 0;
-  private readonly team: TeamPackage;
+  private readonly defaultTeam: TeamPackage | undefined;
+  private readonly teams: TeamRegistry;
   private readonly agents: AgentBackend;
   private readonly onEvent: (event: RuntimeEvent) => void;
   private readonly sessions = new Map<string, Session>();
@@ -55,22 +58,12 @@ export class RuntimeController implements RuntimeControllerContract {
   private readonly initializingSessions = new Map<string, Promise<void>>();
   private readonly scheduling = new Map<string, Promise<void>>();
   constructor(options: RuntimeOptions) {
-    if (options.team.apiVersion !== 2)
-      throw new Error(`Unsupported team API version ${String(options.team.apiVersion)}`);
-    this.team = options.team;
+    this.defaultTeam = options.team;
+    this.teams = options.teams ?? new TeamRegistry(options.team ? [options.team] : []);
     this.evaluationSessionId = options.evaluation?.sessionId;
     this.evaluationToolBudget = options.evaluation?.toolBudget ?? 64;
     this.agents = options.agents;
     this.onEvent = options.onEvent ?? (() => undefined);
-    for (const type of ['design', 'plan.prefill', 'plan.finalize', 'task.execute'] as const) {
-      const key = this.team.definition.routing[type];
-      if (
-        !this.team.definition.members.some(
-          (member) => member.key === key && member.workTypes.includes(type),
-        )
-      )
-        throw new Error(`Invalid routing for ${type}`);
-    }
     this.store = new CoordinationStore(options.databasePath);
     this.riedService = options.ried;
     this.planning = new PlanningWorkflow(this.store, {
@@ -111,21 +104,21 @@ export class RuntimeController implements RuntimeControllerContract {
       scheduled: false,
       requestId: `evaluation:${pass.id}:execution-handoff`,
     });
-    const coordinator = this.store
+    const leader = this.store
       .listBindings(input.sessionId)
-      .find((binding) => binding.memberKey === this.team.definition.coordinatorKey);
-    if (coordinator?.state !== 'bound' || !coordinator.nativeAgentId)
-      throw new Error(
-        `Evaluation coordinator is unavailable: ${coordinator?.blocker ?? coordinator?.state}`,
-      );
+      .find((binding) => binding.memberKey === this.teamFor(input.sessionId).definition.leaderKey);
+    if (leader?.state !== 'bound' || !leader.nativeAgentId)
+      throw new Error(`Evaluation leader is unavailable: ${leader?.blocker ?? leader?.state}`);
     const assignment = this.store.createAssignment(input.sessionId, {
       taskId: task.id,
-      memberKey: coordinator.memberKey,
-      nativeAgentId: coordinator.nativeAgentId,
-      message: `Predefined evaluation scope for Pass ${pass.id}. This assignment is ONLY the coordinator scheduling handoff. The runtime has authorized this predefined disposable scenario; interactive Design/Plan approval is outside evaluation coverage.
+      memberKey: leader.memberKey,
+      nativeAgentId: leader.nativeAgentId,
+      message: `Predefined evaluation scope for Pass ${pass.id}. This assignment is ONLY the leader scheduling handoff. The runtime has authorized this predefined disposable scenario; interactive Design/Plan approval is outside evaluation coverage.
 Use the native ltcook_team tool directly for the following coordination calls. This scheduling handoff needs no shell commands, file reads, Git inspection or source-code investigation.
-1. Call ltcook_team with a command object: command.type="task.create", command.passId="${pass.id}", command.workType="task.execute", plus nonempty command.title, command.description and command.acceptance describing the scenario below. Set command.assigneeKey to an eligible declared member: ${this.team.definition.members
-        .filter((member) => member.workTypes.includes('task.execute'))
+1. Call ltcook_team with a command object: command.type="task.create", command.passId="${pass.id}", command.workType="task.execute", plus nonempty command.title, command.description and command.acceptance describing the scenario below. Set command.assigneeKey to an eligible declared member: ${this.teamFor(
+        input.sessionId,
+      )
+        .definition.members.filter((member) => member.workTypes.includes('task.execute'))
         .map((member) => member.key)
         .join(', ')}. task.create schedules execution by default; do not set scheduled=false.
 2. Call ltcook_team with command.type="report.create", command.assignmentId equal to the scheduling Assignment ID shown above, and nonempty command.summary and command.evidence describing the scheduling result. Do not use the new Task ID as assignmentId.
@@ -145,18 +138,49 @@ Task to register: ${input.description}`,
     );
   }
 
-  async openSession(input: { id?: string; workspaceRoot: string }): Promise<SessionSnapshot> {
+  async openSession(input: {
+    id?: string;
+    workspaceRoot: string;
+    teamSelection?: string;
+    leaderAgentId?: string;
+  }): Promise<SessionSnapshot> {
     this.assertOpen();
     if (this.evaluationSessionId && input.id !== this.evaluationSessionId)
       throw new Error('Evaluation controllers accept only their disposable Session');
+    if (input.leaderAgentId && input.id !== input.leaderAgentId)
+      throw new Error('Session ID must equal its adopted Leader ID');
+    const selected = this.teams.resolve(
+      input.teamSelection ?? this.defaultTeam?.definition.id ?? '',
+    );
     const session =
       input.id === undefined
         ? this.store.createSession({
-            teamId: this.team.definition.id,
+            teamId: selected.definition.id,
             workspaceRoot: input.workspaceRoot,
           })
-        : this.loadOrCreateSession(input.id, input.workspaceRoot);
+        : this.loadOrCreateSession(input.id, input.workspaceRoot, selected.definition.id);
     this.assertSessionSelection(session, input.workspaceRoot);
+    if (session.teamId !== selected.definition.id) throw new Error('Session Team is immutable');
+    this.sessions.set(session.id, session);
+    if (input.leaderAgentId) {
+      const existing = this.store
+        .listBindings(session.id)
+        .find((binding) => binding.memberKey === selected.definition.leaderKey);
+      if (
+        session.id !== input.leaderAgentId ||
+        (existing && existing.nativeAgentId !== input.leaderAgentId)
+      )
+        throw new Error('Session Leader identity is immutable');
+      this.store.putBinding({
+        sessionId: session.id,
+        teamId: session.teamId,
+        memberKey: selected.definition.leaderKey,
+        nativeAgentId: input.leaderAgentId,
+        workspaceRoot: session.workspaceRoot,
+        state: 'bound',
+      });
+      return this.snapshot(session.id);
+    }
     if (this.initializedSessions.has(session.id)) return this.snapshot(session.id);
     await this.initializeSession(session);
     void this.riedService?.get(session, { operation: 'summary' }).catch(() => undefined);
@@ -170,10 +194,8 @@ Task to register: ${input.description}`,
   }
 
   private assertSessionSelection(session: Session, workspaceRoot: string): void {
-    if (
-      session.teamId !== this.team.definition.id ||
-      session.workspaceRoot !== canonicalWorkspace(workspaceRoot)
-    ) {
+    this.teams.resolve(session.teamId);
+    if (session.workspaceRoot !== canonicalWorkspace(workspaceRoot)) {
       throw new Error('A persisted session has a different selected team or workspace');
     }
   }
@@ -197,18 +219,16 @@ Task to register: ${input.description}`,
     }
   }
 
-  private loadOrCreateSession(id: string, workspaceRoot: string): Session {
+  private loadOrCreateSession(id: string, workspaceRoot: string, teamId: string): Session {
     const existing = this.store.listSessions().find((session) => session.id === id);
-    return (
-      existing ?? this.store.createSession({ id, teamId: this.team.definition.id, workspaceRoot })
-    );
+    return existing ?? this.store.createSession({ id, teamId, workspaceRoot });
   }
 
   snapshot(sessionId: string): SessionSnapshot {
     this.assertOpen();
     const session = this.session(sessionId);
     const bindings = this.store.listBindings(sessionId);
-    const members: MemberSnapshot[] = this.team.definition.members.map((member) => {
+    const members: MemberSnapshot[] = this.teamFor(sessionId).definition.members.map((member) => {
       const binding = bindings.find((item) => item.memberKey === member.key) ?? null;
       return {
         member,
@@ -236,7 +256,9 @@ Task to register: ${input.description}`,
             (item) => item.passId === task.passId && item.requestId?.endsWith(':execution-handoff'),
           );
         if (barrier?.status !== 'completed')
-          blockers.push(`Task ${task.id}: Waiting for Main to complete initial Task registration`);
+          blockers.push(
+            `Task ${task.id}: Waiting for Leader to complete initial Task registration`,
+          );
         if (task.phase === 'review' && task.assigneeKey === undefined)
           blockers.push(`Task ${task.id}: Waiting for an available declared Pass reviewer`);
         blockers.push(
@@ -268,7 +290,7 @@ Task to register: ${input.description}`,
     }
     return {
       session,
-      definition: this.team.definition,
+      definition: this.teamFor(sessionId).definition,
       members,
       passes: this.store.listPasses(sessionId),
       tasks: this.store.listTasks(sessionId),
@@ -286,7 +308,10 @@ Task to register: ${input.description}`,
 
   async execute(sessionId: string, actor: RuntimeActor, command: RuntimeCommand): Promise<unknown> {
     const result = await this.executeCommand(sessionId, actor, command);
-    if (this.initializedSessions.has(sessionId)) await this.schedule(this.session(sessionId));
+    // > Native input publishes guidance while a scheduler-owned send awaits its acknowledgement.
+    // > Guidance records do not change dispatch eligibility; initialization owns its own scheduling.
+    if (command.type !== 'guidance.loaded' && this.initializedSessions.has(sessionId))
+      await this.schedule(this.session(sessionId));
     return result;
   }
 
@@ -297,6 +322,46 @@ Task to register: ${input.description}`,
   ): Promise<unknown> {
     this.assertOpen();
     const session = this.session(sessionId);
+    if (
+      command.type === 'guidance.loaded' &&
+      actor.kind === 'agent' &&
+      this.store
+        .listBindings(sessionId)
+        .some(
+          (binding) => binding.nativeAgentId === actor.nativeAgentId && binding.state === 'bound',
+        )
+    ) {
+      const result = await this.planning.execute(session, actor, command);
+      if (command.waitUntilReady) {
+        if (command.inspection.diagnostics.length > 0)
+          throw new Error('Native guidance failed; Session initialization is unavailable');
+        // > Only a real turn waits. session_start must return before provider creation can finish.
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            this.initializeSession(session),
+            new Promise<never>((_resolve, reject) => {
+              timeout = setTimeout(
+                () => reject(new Error('Session initialization timed out; retry the conversation')),
+                20_000,
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timeout);
+        }
+      } else if (
+        !this.initializedSessions.has(sessionId) &&
+        command.inspection.diagnostics.length === 0
+      ) {
+        setTimeout(() => {
+          void this.initializeSession(session).catch(() =>
+            this.emit({ type: 'session.initialization.failed', sessionId }),
+          );
+        }, 0);
+      }
+      return result;
+    }
     if (
       (actor.kind === 'agent' ||
         command.type === 'planning.start' ||
@@ -317,7 +382,7 @@ Task to register: ${input.description}`,
         : undefined;
     if (actor.kind === 'agent' && identity === undefined)
       throw new Error('Agent identity is not bound to this session');
-    const coordinator = identity?.memberKey === this.team.definition.coordinatorKey;
+    const leader = identity?.memberKey === this.teamFor(sessionId).definition.leaderKey;
     if (
       this.evaluationSessionId === sessionId &&
       (command.type.startsWith('planning.') || command.type.startsWith('decision.'))
@@ -374,10 +439,10 @@ Task to register: ${input.description}`,
     }
     switch (command.type) {
       case 'pass.create':
-        this.requireCoordinator(actor, coordinator);
+        this.requireLeader(actor, leader);
         return this.store.createPass(sessionId, command);
       case 'pass.update': {
-        this.requireCoordinator(actor, coordinator);
+        this.requireLeader(actor, leader);
         if (command.status === 'running' && !this.executionAllowed(sessionId, command.passId))
           throw new Error('Pass execution requires its registered Plan approval');
         if (
@@ -387,7 +452,10 @@ Task to register: ${input.description}`,
             .some((task) => task.passId === command.passId && task.scheduled)
         )
           throw new Error('Scheduled Pass completion is owned by the runtime');
-        if (command.status === 'completed' && this.team.definition.reviewPolicy.required) {
+        if (
+          command.status === 'completed' &&
+          this.teamFor(sessionId).definition.reviewPolicy.required
+        ) {
           const pass = this.store.getPass(sessionId, command.passId);
           const latest = this.store
             .listReviews(sessionId)
@@ -400,7 +468,7 @@ Task to register: ${input.description}`,
         return this.store.updatePass(sessionId, command);
       }
       case 'task.create': {
-        this.requireCoordinator(actor, coordinator);
+        this.requireLeader(actor, leader);
         if (
           command.passId &&
           (command.workType === undefined || command.workType === 'task.execute')
@@ -408,7 +476,7 @@ Task to register: ${input.description}`,
           if (command.scheduled === false)
             throw new Error('Pass execution Tasks are scheduled by the runtime');
           if (command.phase === 'review') {
-            const policy = this.team.definition.reviewPolicy;
+            const policy = this.teamFor(sessionId).definition.reviewPolicy;
             if (policy.mode !== 'self')
               throw new Error('Core registers the independent Pass-wide review gate');
             const tasks = this.store
@@ -422,13 +490,13 @@ Task to register: ${input.description}`,
             return this.store.createTask(sessionId, {
               ...command,
               requestId: `${command.passId}:review`,
-              assigneeKey: this.team.definition.coordinatorKey,
+              assigneeKey: this.teamFor(sessionId).definition.leaderKey,
             });
           }
         }
         if (
           command.assigneeKey &&
-          !this.member(command.assigneeKey).workTypes.includes(
+          !this.member(session, command.assigneeKey).workTypes.includes(
             command.workType === 'design' ? 'design' : 'task.execute',
           )
         )
@@ -436,7 +504,7 @@ Task to register: ${input.description}`,
         return this.store.createTask(sessionId, command);
       }
       case 'task.retry':
-        this.requireCoordinator(actor, coordinator);
+        this.requireLeader(actor, leader);
         return this.store.retryTask(sessionId, command);
       case 'task.update': {
         const task = this.store.getTask(sessionId, command.taskId);
@@ -444,8 +512,8 @@ Task to register: ${input.description}`,
           throw new Error(
             'Scheduled Task status is owned by the runtime; report a result or retry it',
           );
-        if (command.dependencyIds !== undefined) this.requireCoordinator(actor, coordinator);
-        if (actor.kind === 'agent' && !coordinator) {
+        if (command.dependencyIds !== undefined) this.requireLeader(actor, leader);
+        if (actor.kind === 'agent' && !leader) {
           const ownsTask = this.store
             .listAssignments(sessionId)
             .some(
@@ -464,19 +532,19 @@ Task to register: ${input.description}`,
         return this.store.updateTask(sessionId, command);
       }
       case 'step.create':
-        this.requireCoordinator(actor, coordinator);
+        this.requireLeader(actor, leader);
         return this.store.createStep(sessionId, command);
       case 'assignment.create': {
-        this.requireCoordinator(actor, coordinator);
+        this.requireLeader(actor, leader);
         const task = this.store.getTask(sessionId, command.taskId);
         if (task.scheduled) throw new Error('Scheduled Tasks are assigned by the runtime');
         const workType = task.workType === 'design' ? 'design' : 'task.execute';
-        const eligible = this.team.definition.members.filter((member) =>
+        const eligible = this.teamFor(sessionId).definition.members.filter((member) =>
           member.workTypes.includes(workType),
         );
         const selected =
           command.memberKey ??
-          (await this.team.selectAssignee?.(
+          (await this.teamFor(sessionId).selectAssignee?.(
             Object.freeze({
               workType,
               sessionId,
@@ -484,10 +552,10 @@ Task to register: ${input.description}`,
             }),
             Object.freeze(eligible.map((member) => Object.freeze({ ...member }))),
           )) ??
-          this.team.definition.routing[workType];
+          this.teamFor(sessionId).definition.routing[workType];
         if (!eligible.some((member) => member.key === selected))
           throw new Error(`Selected member is not eligible for ${workType}`);
-        const member = this.member(selected);
+        const member = this.member(session, selected);
         const binding =
           member.lifetime === 'temporary'
             ? this.store.listBindings(sessionId).find((item) => item.memberKey === member.key)
@@ -546,7 +614,7 @@ Task to register: ${input.description}`,
         const task = this.store.getTask(sessionId, step.taskId);
         if (
           actor.kind === 'agent' &&
-          !coordinator &&
+          !leader &&
           !this.store
             .listAssignments(sessionId)
             .some(
@@ -560,16 +628,16 @@ Task to register: ${input.description}`,
       case 'review.create': {
         if (actor.kind !== 'agent' || identity === undefined)
           throw new Error('Review requires a bound agent');
-        const reviewPolicy = this.team.definition.reviewPolicy;
+        const reviewPolicy = this.teamFor(sessionId).definition.reviewPolicy;
         const selfReview =
           reviewPolicy.mode === 'self' &&
-          identity.memberKey === this.team.definition.coordinatorKey;
+          identity.memberKey === this.teamFor(sessionId).definition.leaderKey;
         if (reviewPolicy.mode === 'self' && !selfReview)
-          throw new Error('This team permits coordinator self-inspection only');
+          throw new Error('This team permits leader self-inspection only');
         if (
           reviewPolicy.mode === 'independent' &&
           (!reviewPolicy.reviewerKeys.includes(identity.memberKey) ||
-            identity.memberKey === this.team.definition.coordinatorKey)
+            identity.memberKey === this.teamFor(sessionId).definition.leaderKey)
         )
           throw new Error('This member is not an independent reviewer');
         const gate = this.store
@@ -634,21 +702,21 @@ Task to register: ${input.description}`,
           throw new Error('Only the trusted user route can create approvals');
         return this.store.createApproval(sessionId, command);
       case 'team.spawn':
-        this.requireCoordinator(actor, coordinator);
-        if (this.member(command.memberKey).lifetime !== 'temporary')
+        this.requireLeader(actor, leader);
+        if (this.member(session, command.memberKey).lifetime !== 'temporary')
           throw new Error('Only explicitly temporary members may be spawned on demand');
         return this.ensureMember(session, command.memberKey);
       case 'team.close':
-        this.requireCoordinator(actor, coordinator);
+        this.requireLeader(actor, leader);
         return this.closeTemporaryMember(session, command.memberKey);
       case 'team.message': {
-        const recipient = this.member(command.memberKey);
+        const recipient = this.member(session, command.memberKey);
         if (
           actor.kind === 'agent' &&
-          !coordinator &&
-          recipient.key !== this.team.definition.coordinatorKey
+          !leader &&
+          recipient.key !== this.teamFor(sessionId).definition.leaderKey
         ) {
-          throw new Error('Bound non-coordinators may send findings only to the coordinator');
+          throw new Error('Bound non-leaders may send findings only to the leader');
         }
         const binding = this.store
           .listBindings(sessionId)
@@ -763,7 +831,7 @@ Task to register: ${input.description}`,
       )
         continue;
       let gate = current.find((task) => task.scheduled && task.phase === 'review');
-      const policy = this.team.definition.reviewPolicy;
+      const policy = this.teamFor(session).definition.reviewPolicy;
       if (!gate && policy.required) {
         gate = this.store.createTask(session.id, {
           passId: pass.id,
@@ -808,15 +876,15 @@ Task to register: ${input.description}`,
       .filter((item) => item.taskId === task.id && (item.attempt ?? 1) === (task.attempt ?? 1))
       .at(-1);
     if (previous && previous.status !== 'pending') return;
-    const policy = this.team.definition.reviewPolicy;
+    const policy = this.teamFor(session).definition.reviewPolicy;
     const review = task.phase === 'review';
-    const eligible = this.team.definition.members.filter((member) => {
+    const eligible = this.teamFor(session).definition.members.filter((member) => {
       if (!member.workTypes.includes('task.execute')) return false;
       if (!review) return true;
-      if (policy.mode === 'self') return member.key === this.team.definition.coordinatorKey;
+      if (policy.mode === 'self') return member.key === this.teamFor(session).definition.leaderKey;
       return (
         policy.reviewerKeys.includes(member.key) &&
-        member.key !== this.team.definition.coordinatorKey &&
+        member.key !== this.teamFor(session).definition.leaderKey &&
         !assignments.some(
           (assignment) =>
             assignment.memberKey === member.key &&
@@ -830,14 +898,14 @@ Task to register: ${input.description}`,
     if (!selected) {
       selected = review
         ? (eligible.find((member) => member.lifetime === 'persistent')?.key ?? eligible[0]?.key)
-        : ((await this.team.selectAssignee?.(
+        : ((await this.teamFor(session).selectAssignee?.(
             Object.freeze({
               workType: 'task.execute',
               sessionId: session.id,
               workspaceRoot: session.workspaceRoot,
             }),
             Object.freeze(eligible.map((member) => Object.freeze({ ...member }))),
-          )) ?? this.team.definition.routing['task.execute']);
+          )) ?? this.teamFor(session).definition.routing['task.execute']);
       if (!selected) return;
       if (!eligible.some((member) => member.key === selected))
         throw new Error(
@@ -877,13 +945,13 @@ Task to register: ${input.description}`,
     await this.deliverAssignment(assignment);
   }
 
-  private requireCoordinator(actor: RuntimeActor, coordinator: boolean): void {
-    if (actor.kind === 'agent' && !coordinator)
-      throw new Error('Only the bound coordinator may schedule team work');
+  private requireLeader(actor: RuntimeActor, leader: boolean): void {
+    if (actor.kind === 'agent' && !leader)
+      throw new Error('Only the bound leader may schedule team work');
   }
 
-  private member(memberKey: string) {
-    const member = this.team.definition.members.find((item) => item.key === memberKey);
+  private member(session: Session, memberKey: string) {
+    const member = this.teamFor(session).definition.members.find((item) => item.key === memberKey);
     if (member === undefined) throw new Error(`Undeclared team member: ${memberKey}`);
     return member;
   }
@@ -913,7 +981,7 @@ Task to register: ${input.description}`,
         this.store.putBinding({ ...binding, state: 'bound', blocker: undefined });
       }
     }
-    for (const member of this.team.definition.members) {
+    for (const member of this.teamFor(session).definition.members) {
       if (bindingsByMember.has(member.key)) continue;
       if (member.lifetime === 'temporary') {
         const binding = this.store.putBinding({
@@ -942,7 +1010,7 @@ Task to register: ${input.description}`,
   }
 
   private async ensureMember(session: Session, memberKey: string): Promise<NativeBinding> {
-    const member = this.member(memberKey);
+    const member = this.member(session, memberKey);
     const binding = this.store
       .listBindings(session.id)
       .find((item) => item.memberKey === member.key);
@@ -966,6 +1034,16 @@ Task to register: ${input.description}`,
         teamInstanceId: session.teamInstanceId,
         teamId: session.teamId,
         workspaceRoot: session.workspaceRoot,
+        leaderAgentId:
+          this.store
+            .listBindings(session.id)
+            .find((binding) => binding.memberKey === this.teamFor(session).definition.leaderKey)
+            ?.nativeAgentId ?? undefined,
+        parentAgentId:
+          this.store
+            .listBindings(session.id)
+            .find((binding) => binding.memberKey === this.teamFor(session).definition.leaderKey)
+            ?.nativeAgentId ?? undefined,
       });
       this.nativeById.set(native.id, native);
       const created = this.store.putBinding({
@@ -991,7 +1069,7 @@ Task to register: ${input.description}`,
     }
   }
   private async closeTemporaryMember(session: Session, memberKey: string): Promise<NativeBinding> {
-    const member = this.member(memberKey);
+    const member = this.member(session, memberKey);
     if (member.lifetime !== 'temporary')
       throw new Error('Only explicitly temporary members may be closed');
     const binding = this.store
@@ -1079,32 +1157,32 @@ Task to register: ${input.description}`,
         workType: 'task.execute',
         scheduled: false,
         requestId,
-        description: `The user approved Plan ${record.id} at ${record.plan.path} for Pass ${record.passId}. Main now schedules execution Tasks among the declared eligible members. Preserve the approved scope and recorded decisions. Append detailed execution reports, Emerging Issues and User decisions post approval to this same Plan; record lasting design decisions in ${record.design.path}. Submit a report for this scheduling assignment and mark this scheduling Task complete after registering the execution Tasks, dependencies, assignees and gates. The runtime dispatches them after this handoff is complete.`,
+        description: `The user approved Plan ${record.id} at ${record.plan.path} for Pass ${record.passId}. Leader now schedules execution Tasks among the declared eligible members. Preserve the approved scope and recorded decisions. Append detailed execution reports, Emerging Issues and User decisions post approval to this same Plan; record lasting design decisions in ${record.design.path}. Submit a report for this scheduling assignment and mark this scheduling Task complete after registering the execution Tasks, dependencies, assignees and gates. The runtime dispatches them after this handoff is complete.`,
         acceptance:
-          'Main receives the approved Plan/Pass, schedules execution Tasks, and reports the scheduling handoff.',
+          'Leader receives the approved Plan/Pass, schedules execution Tasks, and reports the scheduling handoff.',
       });
     if (this.store.listAssignments(session.id).some((assignment) => assignment.taskId === task.id))
       return;
-    const coordinator = this.store
+    const leader = this.store
       .listBindings(session.id)
       .find(
         (binding) =>
-          binding.memberKey === this.team.definition.coordinatorKey &&
+          binding.memberKey === this.teamFor(session).definition.leaderKey &&
           binding.state === 'bound' &&
           binding.nativeAgentId !== null,
       );
-    if (!coordinator?.nativeAgentId) {
+    if (!leader?.nativeAgentId) {
       this.store.updateTask(session.id, {
         taskId: task.id,
         status: 'blocked',
-        blocker: 'Plan consent is recorded; coordinator scheduling awaits a reconciled bound Main',
+        blocker: 'Plan consent is recorded; leader scheduling awaits a reconciled bound Leader',
       });
       return;
     }
     const assignment = this.store.createAssignment(session.id, {
       taskId: task.id,
-      memberKey: coordinator.memberKey,
-      nativeAgentId: coordinator.nativeAgentId,
+      memberKey: leader.memberKey,
+      nativeAgentId: leader.nativeAgentId,
       message: `Approved Plan execution handoff. Scheduling Task ${task.id}. ${task.description}`,
     });
     await this.deliverAssignment(assignment);
@@ -1116,7 +1194,7 @@ Task to register: ${input.description}`,
     stage: 'prefill' | 'finalize',
   ): Promise<Assignment> {
     const workType: WorkType = stage === 'prefill' ? 'plan.prefill' : 'plan.finalize';
-    const eligible = this.team.definition.members.filter((member) =>
+    const eligible = this.teamFor(session).definition.members.filter((member) =>
       member.workTypes.includes(workType),
     );
     const context = {
@@ -1125,10 +1203,10 @@ Task to register: ${input.description}`,
       workspaceRoot: session.workspaceRoot,
     };
     const selected =
-      (await this.team.selectAssignee?.(
+      (await this.teamFor(session).selectAssignee?.(
         Object.freeze(context),
         Object.freeze(eligible.map((member) => Object.freeze({ ...member }))),
-      )) ?? this.team.definition.routing[workType];
+      )) ?? this.teamFor(session).definition.routing[workType];
     if (!eligible.some((member) => member.key === selected))
       throw new Error(`Assignee hook selected ineligible member ${selected} for ${workType}`);
     const binding = await this.ensureMember(session, selected);
@@ -1220,13 +1298,14 @@ Task to register: ${input.description}`,
     )
       return { allowed: false, reason: 'Member is read-only' };
     if (
-      (member?.key === this.team.definition.coordinatorKey ||
-        (member && this.team.definition.reviewPolicy.reviewerKeys.includes(member.key))) &&
+      (member?.key === this.teamFor(sessionId).definition.leaderKey ||
+        (member &&
+          this.teamFor(sessionId).definition.reviewPolicy.reviewerKeys.includes(member.key))) &&
       this.store
         .listPasses(sessionId)
         .some((pass) => pass.status === 'running' && this.executionAllowed(sessionId, pass.id))
     ) {
-      // > Main may execute directly while it schedules the active Pass.
+      // > Leader may execute directly while it schedules the active Pass.
       if (
         !this.planning
           .decisions(sessionId)
@@ -1237,7 +1316,7 @@ Task to register: ${input.description}`,
               this.planning.get(sessionId, decision.planId).stage === 'approved',
           )
       )
-        return { allowed: true, reason: 'Coordinator of an active approved Pass' };
+        return { allowed: true, reason: 'Leader of an active approved Pass' };
     }
     return this.planning.authorize(sessionId, nativeAgentId, toolName, input);
   }
@@ -1266,10 +1345,26 @@ Task to register: ${input.description}`,
     if (cached !== undefined) return cached;
     // > Metadata recovery is read-only; native work still requires explicit reconciliation.
     const persisted = this.store.getSession(sessionId);
-    if (persisted.teamId !== this.team.definition.id)
-      throw new Error('Persisted Session belongs to a different selected Team');
+    this.teams.resolve(persisted.teamId);
     this.sessions.set(sessionId, persisted);
     return persisted;
+  }
+  private teamFor(session: Session | string): TeamPackage {
+    return this.teams.resolve(
+      typeof session === 'string' ? this.session(session).teamId : session.teamId,
+    );
+  }
+  teamCatalog() {
+    return this.teams.catalog();
+  }
+  listSessions(workspaceRoot: string, teamSelection?: string): Session[] {
+    const root = canonicalWorkspace(workspaceRoot);
+    const teamId = teamSelection ? this.teams.resolve(teamSelection).definition.id : undefined;
+    return this.store
+      .listSessions()
+      .filter(
+        (session) => session.workspaceRoot === root && (!teamId || session.teamId === teamId),
+      );
   }
   private emit(event: RuntimeEvent): void {
     this.onEvent(event);

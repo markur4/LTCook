@@ -19,7 +19,12 @@ async function stateRoot() {
 async function finish(service: EvalRunService, runId: string) {
   for (let count = 0; count < 100; count++) {
     const value = await service.status(runId);
-    if (value.summary.status !== 'running') return value;
+    // > Terminal summaries precede the final persisted event; wait for both before asserting it.
+    if (
+      value.summary.status !== 'running' &&
+      value.events.some((event) => event.event === `run.${value.summary.status}`)
+    )
+      return value;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error('Agent Evals fake run did not finish');
@@ -114,6 +119,69 @@ describe('Agent Evals run service', () => {
         (await invoke(agentBearer(secret, 'agent-1'), '{"nativeAgentId":"agent-1"}')).status,
       ).toBe(403);
       expect((await invoke(secret)).status).toBe(200);
+    } finally {
+      await api.close();
+    }
+  });
+
+  test('Current Setup uses the selected registered Leader Team and reports ambiguous CLI workspaces', async () => {
+    const root = await stateRoot();
+    const observed: Array<{ teamSelection?: string; limitations?: string[] }> = [];
+    const service = new EvalRunService(root, async (input) => {
+      observed.push({ teamSelection: input.teamSelection, limitations: input.limitations });
+      if (observed.length === 3) throw new Error('fixture startup failure');
+      return { result: {}, trace: {} };
+    });
+    await service.initialize();
+    const socket = createServer();
+    await new Promise<void>((resolve) => socket.listen(0, '127.0.0.1', resolve));
+    const address = socket.address();
+    if (!address || typeof address === 'string') throw new Error('No test port assigned');
+    await new Promise<void>((resolve) => socket.close(() => resolve()));
+    const api = new RuntimeApi(undefined, 'test-user-token', `127.0.0.1:${address.port}`);
+    api.setEval(service);
+    api.setRuntime({
+      snapshot: () => ({ session: { workspaceRoot: root, teamId: 'team-b' } }),
+      listSessions: () => [{ teamId: 'team-a' }, { teamId: 'team-b' }],
+      teamCatalog: () => [{ teamId: 'team-b', selection: 'team-b-selection', status: 'installed' }],
+    } as never);
+    api.setSession(root, 'leader-b');
+    const base = await api.listen();
+    const start = (body: Record<string, unknown>) =>
+      fetch(`${base}/v1/evals/start`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-user-token', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          preset: 'audit',
+          setup: 'current',
+          staticOnly: true,
+          workspaceRoot: root,
+          ...body,
+        }),
+      });
+    try {
+      let response = await start({ sessionId: 'leader-b' });
+      expect(response.status).toBe(200);
+      await finish(service, ((await response.json()) as { runId: string }).runId);
+      expect(observed[0]?.teamSelection).toBe('team-b-selection');
+      response = await start({});
+      expect(response.status).toBe(200);
+      await finish(service, ((await response.json()) as { runId: string }).runId);
+      expect(observed[1]?.teamSelection).toBeUndefined();
+      expect(observed[1]?.limitations).toEqual([
+        'Multiple Teams have Sessions in this workspace; using the configured runtime Team.',
+      ]);
+      response = await start({});
+      const failedRunId = ((await response.json()) as { runId: string }).runId;
+      expect((await finish(service, failedRunId)).summary.status).toBe('failed');
+      const restarted = new EvalRunService(root, async () => ({ result: {}, trace: {} }));
+      await restarted.initialize();
+      expect(restarted.report(failedRunId).summary.limitations).toEqual(observed[1]?.limitations);
+      expect((await start({ sessionId: 'unregistered' })).status).not.toBe(200);
+      expect(
+        (await start({ sessionId: 'leader-b', workspaceRoot: path.dirname(root) })).status,
+      ).not.toBe(200);
+      expect((await start({ sessionId: 'leader-b', setup: 'synthetic' })).status).not.toBe(200);
     } finally {
       await api.close();
     }

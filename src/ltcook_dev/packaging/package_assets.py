@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import stat
@@ -28,13 +29,17 @@ REQUIRED_PASEO_PLUGIN_ASSETS = (
     "index.server.ts",
     "index.client.tsx",
     "shared/evals.ts",
+    "shared/team-catalog.ts",
     "shared/panel-snapshot.ts",
     "shared/panel-details.ts",
     "shared/view-model.ts",
     "client/use-team-panel.ts",
+    "client/use-team-catalog.ts",
     "client/components/PanelChrome.tsx",
     "client/components/StatusBadge.tsx",
     "client/screens/TeamOverview.tsx",
+    "client/screens/TeamsBrowser.tsx",
+    "client/components/TeamComposerItem.tsx",
     "client/screens/TaskBoard.tsx",
     "client/screens/AgentFocus.tsx",
 )
@@ -62,6 +67,25 @@ def _copy_tree(source: Path, destination: Path, *, required: bool) -> None:
         output = destination / item.relative_to(source)
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(item, output)
+
+
+def _team_packages(root: Path) -> tuple[Path, ...]:
+    """Find managed direct Team workspaces without following linked inputs."""
+    directory = root / "teams"
+    _no_links(directory)
+    packages: list[Path] = []
+    for package in sorted(directory.iterdir()):
+        _no_links(package)
+        if not package.is_dir() or not (package / "package.json").is_file():
+            continue
+        _no_links(package / "package.json")
+        manifest = json.loads((package / "package.json").read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("name"), str):
+            raise TypeError(f"Invalid Team package manifest: {package.name}")
+        packages.append(package)
+    if not packages:
+        raise ValueError("Production bundle requires at least one local Team package.")
+    return tuple(packages)
 
 
 def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
@@ -139,8 +163,8 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
         )
         launcher = staging / "runtime/dist/integrations/pi-rpc.js"
         launcher.chmod(launcher.stat().st_mode | 0o111)
-        for team in ("default", "default-minimal"):
-            source = root / "teams" / team
+        for source in _team_packages(root):
+            team = source.name
             _no_links(source)
             target = staging / "teams" / team
             manifest = source / "package.json"
@@ -224,7 +248,14 @@ def validate_bundle(archive: Path) -> tuple[str, ...]:
                     raise ValueError(
                         "Production bundle is missing required Core guidance."
                     )
-            for team in ("default", "default-minimal"):
+            teams = {
+                PurePosixPath(name).parts[1]
+                for name in names
+                if name.startswith("teams/") and len(PurePosixPath(name).parts) >= 3
+            }
+            if not teams:
+                raise ValueError("Production bundle is missing local Team packages.")
+            for team in sorted(teams):
                 for subtree in ("dist", "resources"):
                     if not any(
                         name.startswith(f"teams/{team}/{subtree}/") for name in names

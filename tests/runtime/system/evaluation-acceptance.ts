@@ -22,6 +22,7 @@ const verificationMarker = 'LTCook fixture verified';
 let requests = 0;
 let compactions = 0;
 const requestTokenLimits: number[] = [];
+const reasoningEfforts = new Set<string>();
 const assignmentText = new Map<string, string>();
 const effectivePrompts = new Map<string, Map<string, string>>();
 let semanticRequests = 0;
@@ -44,12 +45,14 @@ const server = createServer(async (request, response) => {
     const input = JSON.parse(body) as {
       model: string;
       think?: boolean;
+      reasoning_effort?: string;
       max_tokens?: number;
       max_completion_tokens?: number;
       tools?: Array<{ function?: { name?: string } }>;
       messages: Array<{ role: string; content: unknown; tool_call_id?: string }>;
     };
     assert.equal(input.model, EVAL_MODEL);
+    if (typeof input.reasoning_effort === 'string') reasoningEfforts.add(input.reasoning_effort);
     const tokenLimit = input.max_tokens ?? input.max_completion_tokens;
     if (typeof tokenLimit === 'number') requestTokenLimits.push(tokenLimit);
     if (request.url === '/v1/chat/completions') {
@@ -152,7 +155,7 @@ const server = createServer(async (request, response) => {
               ? 'Inspect the already correct answer and report 20 without changes.'
               : 'Read the input and report 20 without changes.',
           acceptance: 'Fixture correct',
-          assigneeKey: scenario === 'no-delegation' ? 'main' : 'adjutant',
+          assigneeKey: scenario === 'no-delegation' ? 'leader' : 'adjutant',
         });
       if (index === 1)
         command({
@@ -175,7 +178,8 @@ const server = createServer(async (request, response) => {
         name = 'bash';
         args = {
           command:
-            scenario === 'bad-verification'
+            scenario === 'bad-verification' ||
+            (scenario === 'fallback-success' && input.reasoning_effort === 'none')
               ? 'true'
               : 'test -z "$OPENAI_API_KEY" && test -z "$ANTHROPIC_API_KEY" && ! touch /usr/ltcook-evaluation-write-denied 2>/dev/null && node .ltcook-evals/verify.cjs && printf \'LTCook fixture verified\'',
         };
@@ -304,6 +308,7 @@ try {
                 'compaction',
                 'compaction-cancel',
                 'validation-recovery',
+                'fallback-success',
                 'compaction-error',
               ].includes(scenario)
             ? 'quick'
@@ -384,6 +389,8 @@ try {
             tasks: Array<{
               success: boolean;
               attempts: Array<{
+                thinking: string;
+                success: boolean;
                 failure?: string;
                 failureCategory?: string;
                 delegations?: number;
@@ -395,6 +402,19 @@ try {
         };
       }
     ).results.behavior.tasks;
+    if (scenario === 'fallback-success') {
+      assert.deepEqual(
+        tasks[0]?.attempts.map((attempt) => [attempt.thinking, attempt.success]),
+        [
+          ['off', false],
+          ['low', true],
+        ],
+      );
+      assert(
+        reasoningEfforts.has('none') && reasoningEfforts.has('low'),
+        'Both reasoning settings must reach the provider',
+      );
+    }
     if (scenario === 'compaction-error') {
       assert.equal(
         compactions,

@@ -46,8 +46,8 @@ describe('evaluation execution scope', () => {
       });
       const pass = initial.passes[0]!;
       const bootstrap = initial.assignments[0]!;
-      const coordinator = { kind: 'agent' as const, nativeAgentId: 'main' };
-      const task = (await runtime.execute('evaluation', coordinator, {
+      const leader = { kind: 'agent' as const, nativeAgentId: 'leader' };
+      const task = (await runtime.execute('evaluation', leader, {
         type: 'task.create',
         passId: pass.id,
         title: 'Fixture work',
@@ -56,13 +56,13 @@ describe('evaluation execution scope', () => {
         assigneeKey: 'adjutant',
       })) as Task;
       expect(runtime.snapshot('evaluation').assignments).toHaveLength(1);
-      await runtime.execute('evaluation', coordinator, {
+      await runtime.execute('evaluation', leader, {
         type: 'report.create',
         assignmentId: bootstrap.id,
         summary: 'Registered',
         evidence: 'Fixture graph',
       });
-      await runtime.execute('evaluation', coordinator, {
+      await runtime.execute('evaluation', leader, {
         type: 'task.update',
         taskId: bootstrap.taskId,
         status: 'completed',

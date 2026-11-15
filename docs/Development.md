@@ -105,7 +105,7 @@ requirement imposed on users of the application.
 
 The Python application resolves settings through AppRC. Keep native component
 translation in LTCook-owned paths and avoid a second hidden settings layer. The
-TypeScript runtime owns coordination; team packages use its public Team API v2.
+TypeScript runtime owns coordination; team packages use its public Team API v3.
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,
@@ -128,7 +128,7 @@ navigation as part of the same change. Follow the
 [documentation rules](README.md#documentation-rules) and source declarations.
 Examples should not invent settings or commands and must not be described as
 verified unless they were actually run. For this assignment, documentation
-examples are illustrative only; Main owns checks and execution.
+examples are illustrative only; Leader owns checks and execution.
 
 Do not imply that a model conversation, local service, browser workflow, or native
 platform has been exercised based only on source inspection. Explain real
@@ -220,6 +220,10 @@ configuration while confining filesystem writes to disposable workspace and run
 state. Native Windows/macOS behavioral execution is unsupported until an
 appropriate sandbox is implemented; do not launch Windows executables from WSL.
 
+For Current Setup, the Paseo panel uses the selected Leader's Team. The CLI uses
+the configured runtime Team and reports when the workspace has Sessions from
+multiple Teams.
+
 Reports, progress events and Perfetto traces live in runtime state under
 `evals/runs`, with prompts, transcripts, and credentials excluded. Instruction
 Audit records production loader provenance; semantic findings require review.
@@ -258,7 +262,7 @@ A failed summary aborts that disposable agent turn and ends its attempt. A later
 model request cannot clear the failure and repeat compaction until the safeguard;
 the run still permits only its single configured low-reasoning fallback.
 
-The coordinator scheduling handoff names the native `ltcook_team` operations and
+The Leader scheduling handoff names the native `ltcook_team` operations and
 required fields. Scheduled execution reports use `report.create` with an explicit
 success or failure outcome; the runtime owns scheduled Task status. Command
 validation selects errors by command type, so unrelated Task fields do not hide

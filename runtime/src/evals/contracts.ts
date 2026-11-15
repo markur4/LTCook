@@ -22,6 +22,7 @@ export const EvalStartRequestSchema = z
     preset: EvalPresetSchema,
     setup: EvalSetupSchema.default('current'),
     workspaceRoot: z.string().min(1).optional(),
+    sessionId: z.string().min(1).optional(),
     staticOnly: z.boolean().optional(),
     repetitions: z.number().int().positive().default(1),
     scenario: EvalScenarioSchema.optional(),

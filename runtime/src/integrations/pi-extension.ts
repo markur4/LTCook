@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { Type } from 'typebox';
 import { RiedService, type RiedRequest } from '../ried.js';
-import { selectedTeam } from './team-loader.js';
+import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
 import { evaluationToolError, sanitizeEvaluationText } from '../evals/diagnostics.js';
@@ -58,14 +58,18 @@ export default async function activate(
     return;
   }
 
-  const team = await selectedTeam(teamSelection);
+  const team = await loadTeam(teamSelection);
   if (team.definition.id !== teamId)
     throw new Error('Selected native team does not match the active session');
-  const rpc = async (pathname: string, payload: Record<string, unknown>): Promise<Response> =>
+  const rpc = async (
+    pathname: string,
+    payload: Record<string, unknown>,
+    timeoutMs = 3000,
+  ): Promise<Response> =>
     fetch(`${endpoint}${pathname}`, {
-      signal: globalThis.AbortSignal.timeout(pathname === '/v1/ried' ? 30000 : 3000) as NonNullable<
-        Parameters<typeof fetch>[1]
-      >['signal'],
+      signal: globalThis.AbortSignal.timeout(
+        pathname === '/v1/ried' ? 30000 : timeoutMs,
+      ) as NonNullable<Parameters<typeof fetch>[1]>['signal'],
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId, nativeAgentId, ...payload }),
@@ -232,11 +236,19 @@ export default async function activate(
   }
   const member = team.definition.members.find((candidate) => candidate.key === memberKey);
   if (!member) throw new Error('Native agent identity is not a member of the selected team');
-  const publishGuidance = async () => {
+  const publishGuidance = async (waitUntilReady = false) => {
     if (!inspection) throw new Error('Managed native guidance inspection is unavailable.');
-    const response = await rpc('/v1/command', {
-      command: { type: 'guidance.loaded', inspection: inspection() },
-    });
+    const response = await rpc(
+      '/v1/command',
+      {
+        command: {
+          type: 'guidance.loaded',
+          inspection: inspection(),
+          ...(waitUntilReady ? { waitUntilReady: true } : {}),
+        },
+      },
+      waitUntilReady ? 25_000 : 3000,
+    );
     if (!response.ok) throw new Error(`Native guidance registration failed (${response.status}).`);
   };
   pi.on('session_start', () => {
@@ -259,8 +271,21 @@ export default async function activate(
     };
     void publish();
   });
+  pi.on('input', async (_event, context) => {
+    try {
+      await publishGuidance(true);
+    } catch {
+      // > Pi reports before_agent_start exceptions and continues; handled input stops this prompt.
+      context.ui.notify(
+        'LTCook Session initialization is unavailable. Check the Team status and retry your message.',
+        'error',
+      );
+      return { action: 'handled' };
+    }
+    return undefined;
+  });
   pi.on('before_agent_start', async (event) => {
-    await publishGuidance();
+    await publishGuidance(true);
     if (!evaluation) return;
     try {
       const response = await rpc('/v1/evaluation/observe', { kind: 'scope.request' });
@@ -326,7 +351,7 @@ export default async function activate(
     name: 'ltcook_team',
     label: 'Team coordination',
     description:
-      'Coordinate LTCook work through the runtime. Call this native tool directly with one command object; command.type selects the operation. task.create registers work and requires title, description, acceptance and the active passId for execution. For scheduled work, submit report.create with assignmentId, summary, evidence and outcome="success" or "failure"; the runtime owns its Task status. task.update can complete the unscheduled coordinator handoff using taskId and status="completed". guidance.inspect reads loaded guidance. Shell commands do not submit coordination operations. Runtime authorization and member restrictions still apply.',
+      'Coordinate LTCook work through the runtime. Call this native tool directly with one command object; command.type selects the operation. task.create registers work and requires title, description, acceptance and the active passId for execution. For scheduled work, submit report.create with assignmentId, summary, evidence and outcome="success" or "failure"; the runtime owns its Task status. task.update can complete the unscheduled leader handoff using taskId and status="completed". guidance.inspect reads loaded guidance. Shell commands do not submit coordination operations. Runtime authorization and member restrictions still apply.',
     parameters: AgentRuntimeCommandInputSchema,
     async execute(_id, input, _signal, _onUpdate, ctx) {
       // > Native Pi validates the narrower projection of the shared command schema.
