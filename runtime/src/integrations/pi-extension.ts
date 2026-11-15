@@ -10,6 +10,7 @@ import { RiedService, type RiedRequest } from '../ried.js';
 import { selectedTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
+import { evaluationToolError, sanitizeEvaluationText } from '../evals/diagnostics.js';
 const require = createRequire(import.meta.url);
 async function activateOptionalBrowser(pi: ExtensionAPI): Promise<void> {
   if (process.env.LTCOOK_BROWSER_ENABLED !== 'true') return;
@@ -68,13 +69,18 @@ export default async function activate(
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId, nativeAgentId, ...payload }),
     });
-  if (process.env.LTCOOK_EVAL_ARM) {
-    const observe = async (value: Record<string, unknown>) => {
-      const response = await rpc('/v1/evaluation/observe', value);
-      if (!response.ok) throw new Error('Evaluation observation unavailable');
-    };
+  const evaluation = Boolean(process.env.LTCOOK_EVAL_ARM);
+  const observe = async (value: Record<string, unknown>) => {
+    const response = await rpc('/v1/evaluation/observe', value);
+    if (!response.ok) throw new Error('Evaluation observation unavailable');
+  };
+  if (evaluation) {
     pi.on('agent_start', async (_event, context) => {
+      await observe({ kind: 'agent.start' });
       await observe({ kind: 'prompt', prompt: context.getSystemPrompt() });
+    });
+    pi.on('agent_end', async () => {
+      await observe({ kind: 'agent.end' });
     });
     pi.on('before_provider_request', async (_event, context) => {
       if (
@@ -94,6 +100,10 @@ export default async function activate(
           kind: 'model.end',
           usage: event.message.usage,
           stopReason: event.message.stopReason,
+          rawStopReason: event.message.rawStopReason,
+          ...(event.message.errorMessage
+            ? { error: sanitizeEvaluationText(event.message.errorMessage) }
+            : {}),
         });
     });
     const fixtureVerifications = new Set<string>();
@@ -114,6 +124,7 @@ export default async function activate(
         durationMs: event.durationMs,
         fixtureVerification: fixtureVerifications.delete(event.toolCallId),
         isError: event.isError,
+        ...(event.isError ? { error: evaluationToolError(event.result) } : {}),
       });
     });
   }
@@ -187,7 +198,24 @@ export default async function activate(
       // > Native Pi validates the narrower projection of the shared command schema.
       const command = input.command;
       const response = await rpc('/v1/command', { command });
-      if (!response.ok) throw new Error(`Coordination request failed (${response.status})`);
+      if (!response.ok) {
+        if (evaluation) {
+          const error: unknown = await response.json().catch(() => undefined);
+          await observe({
+            kind: 'runtime.error',
+            operation: 'coordination',
+            commandType: command.type,
+            status: response.status,
+            ...(error &&
+            typeof error === 'object' &&
+            'error' in error &&
+            typeof error.error === 'string'
+              ? { error: sanitizeEvaluationText(error.error) }
+              : {}),
+          });
+        }
+        throw new Error(`Coordination request failed (${response.status})`);
+      }
       const result: unknown = await response.json();
       const value = (
         result as {

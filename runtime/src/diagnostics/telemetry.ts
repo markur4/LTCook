@@ -1,4 +1,4 @@
-import { appendFile, mkdir } from 'node:fs/promises';
+import { appendFile, mkdir, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -76,10 +76,23 @@ export class Telemetry {
       tid: lane,
     });
   }
+  /** Attach bounded caller-sanitized diagnostic metadata to the existing Perfetto stream. */
+  instant(name: string, fields: object = {}, lane: string | number = 0): void {
+    this.traceEvents.push({
+      name,
+      cat: 'ltcook',
+      ph: 'i',
+      s: 't',
+      ts: Number(process.hrtime.bigint() / 1000n),
+      pid: process.pid,
+      tid: lane,
+      args: redact(fields),
+    });
+  }
   async exportTrace(): Promise<void> {
     await mkdir(path.dirname(this.tracePath), { recursive: true, mode: 0o700 });
-    await import('node:fs/promises').then(({ writeFile }) =>
-      writeFile(this.tracePath, JSON.stringify({ traceEvents: this.traceEvents }), { mode: 0o600 }),
-    );
+    const temporary = `${this.tracePath}.${randomUUID()}.tmp`;
+    await writeFile(temporary, JSON.stringify({ traceEvents: this.traceEvents }), { mode: 0o600 });
+    await rename(temporary, this.tracePath);
   }
 }
