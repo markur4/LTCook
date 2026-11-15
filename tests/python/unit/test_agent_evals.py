@@ -98,3 +98,38 @@ def test_cli_rejects_quick_behavior_combination_before_start(monkeypatch):
     result = CliRunner().invoke(cli.eval_cli, ["run", "--quick", "--behavior-only"])
     assert result.exit_code == 2
     assert "cannot be combined" in result.output
+
+
+def test_cli_current_setup_passes_registered_workspace(monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    calls = []
+    workspace = SimpleNamespace(root=Path("/registered-project"))
+    manager = SimpleNamespace(
+        inspect=lambda: SimpleNamespace(resolved=SimpleNamespace(workspace=workspace))
+    )
+    monkeypatch.setattr(cli, "APP_RC", SimpleNamespace(manage=lambda: manager))
+    monkeypatch.setattr(cli, "_runtime", lambda: ({}, None))
+    monkeypatch.setattr(
+        cli,
+        "_call",
+        lambda environment, route, payload: (
+            calls.append(payload) or {"runId": "fixture"}
+        ),
+    )
+    monkeypatch.setattr(cli, "_follow", lambda environment, run_id: None)
+    result = CliRunner().invoke(cli.eval_cli, ["audit", "--static-only"])
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        {
+            "preset": "audit",
+            "setup": "current",
+            "staticOnly": True,
+            "workspaceRoot": "/registered-project",
+        }
+    ]

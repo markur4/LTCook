@@ -83,9 +83,9 @@ commands provide launch operations and diagnostics:
 | `ltcook services status [--workspace ROOT]` | Show local Compose status or the configured remote-service mode. |
 | `ltcook services logs [--workspace ROOT]` | Show recent local service logs. |
 | `ltcook app doctor --json`, `ltcook app paths` | Inspect installation health and recorded resource placement. |
-| `ltcook eval audit` | Run the static and semantic Instruction Audit. |
-| `ltcook eval run [--quick]` | Run all Agent Evals categories by default, or the fast check with `--quick`. |
-| `ltcook eval analyze` | Run three-repetition Bottleneck Attribution. |
+| `ltcook eval audit [--static-only] [--setup current|synthetic]` | Run Instruction Audit; static-only needs no Ollama. |
+| `ltcook eval run [--quick|--behavior-only] [--setup current|synthetic]` | Run all categories, a quick check, or Behavior Evaluation. |
+| `ltcook eval analyze [--setup current|synthetic]` | Run three-repetition Bottleneck Attribution. |
 | `ltcook eval report RUN_ID` | Show a persisted evaluation report. |
 | `ltcook eval list`, `watch`, `status`, `cancel`, `delete` | Manage shared Agent Evals runs and history. |
 | `python -m ltcook.launch runtime [--workspace ROOT]` | Internal module entry point for the same global or project launch. |
