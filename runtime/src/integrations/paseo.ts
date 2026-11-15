@@ -405,7 +405,8 @@ export async function createPaseoAgentBackend(input: {
       return result ? state(result.agent) : null;
     },
     async send(id: string, message: string) {
-      await input.api.agents.ref(id).send(message);
+      // > Scheduling may hand work back to an agent inside its current tool turn.
+      await input.api.agents.ref(id).send(message, { activeTurnBehavior: 'steer' });
     },
     async close(id: string) {
       await input.api.agents.ref(id).archive();
