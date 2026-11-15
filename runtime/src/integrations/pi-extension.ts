@@ -199,22 +199,31 @@ export default async function activate(
       const command = input.command;
       const response = await rpc('/v1/command', { command });
       if (!response.ok) {
+        let reason: string | undefined;
         if (evaluation) {
           const error: unknown = await response.json().catch(() => undefined);
+          if (
+            error &&
+            typeof error === 'object' &&
+            'error' in error &&
+            typeof error.error === 'string'
+          )
+            reason = sanitizeEvaluationText(error.error);
           await observe({
             kind: 'runtime.error',
             operation: 'coordination',
             commandType: command.type,
             status: response.status,
-            ...(error &&
-            typeof error === 'object' &&
-            'error' in error &&
-            typeof error.error === 'string'
-              ? { error: sanitizeEvaluationText(error.error) }
-              : {}),
+            hasPassId:
+              'passId' in command &&
+              typeof command.passId === 'string' &&
+              command.passId.length > 0,
+            ...(reason ? { error: reason } : {}),
           });
         }
-        throw new Error(`Coordination request failed (${response.status})`);
+        throw new Error(
+          `Coordination request failed (${response.status})${reason ? `: ${reason}` : ''}`,
+        );
       }
       const result: unknown = await response.json();
       const value = (

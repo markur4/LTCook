@@ -309,7 +309,7 @@ export function isRuntimeCommand(value: unknown): value is RuntimeCommand {
 }
 
 /** Agent tool schemas are projected from the authoritative command union. */
-export const AgentRuntimeCommandSchema = Type.Exclude(
+const AgentNonTaskCommandSchema = Type.Exclude(
   RuntimeCommandSchema,
   Type.Object({
     type: Type.Union([
@@ -318,9 +318,37 @@ export const AgentRuntimeCommandSchema = Type.Exclude(
       Type.Literal('planning.reject'),
       Type.Literal('decision.answer'),
       Type.Literal('approval.create'),
+      Type.Literal('pass.create'),
+      Type.Literal('task.create'),
     ]),
   }),
 );
+const TaskCreateCommandSchema = Type.Extract(
+  RuntimeCommandSchema,
+  Type.Object({ type: Type.Literal('task.create') }),
+);
+// > Agent execution Tasks require the active Pass; user backlog Tasks remain optional.
+export const AgentRuntimeCommandSchema = Type.Union([
+  AgentNonTaskCommandSchema,
+  Type.Object(
+    {
+      ...TaskCreateCommandSchema.properties,
+      passId: Type.String({ minLength: 1 }),
+      workType: Type.Optional(Type.Literal('task.execute')),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      ...TaskCreateCommandSchema.properties,
+      workType: Type.Exclude(
+        Type.Required(TaskCreateCommandSchema).properties.workType,
+        Type.Literal('task.execute'),
+      ),
+    },
+    { additionalProperties: false },
+  ),
+]);
 export const AgentRuntimeCommandInputSchema = Type.Object(
   { command: AgentRuntimeCommandSchema },
   { additionalProperties: false },

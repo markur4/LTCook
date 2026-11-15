@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { validateToolArguments } from '@earendil-works/pi-ai';
+import { Type } from 'typebox';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +10,7 @@ import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { readIncompleteEvaluationResult } from '../../../runtime/src/evals/runner.js';
 import {
   EvaluationDiagnosticCollector,
+  evaluationModelFailed,
   evaluationToolError,
   sanitizeEvaluationText,
 } from '../../../runtime/src/evals/diagnostics.js';
@@ -51,6 +54,76 @@ test('diagnostic error text preserves the reason while excluding credentials, pa
   ).toBe('ENOENT: cannot open "<private-path>"');
 });
 
+test('Pi schema failures retain field reasons without copying received arguments', () => {
+  let message = '';
+  try {
+    validateToolArguments(
+      {
+        name: 'validation-fixture',
+        description: 'Validate a scheduled task input.',
+        parameters: Type.Object({
+          command: Type.Object({ title: Type.String(), scheduled: Type.Boolean() }),
+        }),
+      },
+      {
+        type: 'toolCall',
+        id: 'call-validation',
+        name: 'validation-fixture',
+        arguments: {
+          command: { scheduled: { body: 'private argument payload' }, prompt: 'private prompt' },
+        },
+      },
+    );
+  } catch (error) {
+    message = error instanceof Error ? error.message : '';
+  }
+  expect(message).toContain('Received arguments:');
+  const summary = evaluationToolError({ content: [{ type: 'text', text: message }] });
+  expect(summary).toContain('command.title');
+  expect(summary).toContain('missing');
+  expect(summary).toContain('command.scheduled');
+  expect(summary).toContain('boolean');
+  expect(summary).not.toContain('private argument payload');
+  expect(summary).not.toContain('private prompt');
+  expect(summary).not.toContain('Received arguments:');
+  const collector = new EvaluationDiagnosticCollector();
+  collector.observe('agent', {
+    kind: 'tool.end',
+    tool: 'validation-fixture',
+    callId: 'call-validation',
+    isError: true,
+    error: summary,
+  });
+  expect(collector.snapshot().toolFailures[0]?.error).toContain('command.title');
+  expect(collector.snapshot().toolFailures[0]?.error).toContain('boolean');
+});
+
+test('length is a terminal model failure without guessing which length limit ended the response', () => {
+  for (const reason of ['length', 'error', 'aborted'])
+    expect(evaluationModelFailed(reason)).toBe(true);
+  for (const reason of ['stop', 'toolUse', undefined])
+    expect(evaluationModelFailed(reason)).toBe(false);
+  const collector = new EvaluationDiagnosticCollector();
+  collector.observe('agent', { kind: 'model.start' });
+  collector.observe('agent', {
+    kind: 'model.end',
+    stopReason: 'length',
+    rawStopReason: 'length',
+    usage: { input: 5377, output: 62, cacheRead: 2753, totalTokens: 8192 },
+  });
+  collector.observe('agent', { kind: 'agent.end' });
+  const state = collector.snapshot();
+  expect(state.modelFailures).toMatchObject([
+    {
+      stopReason: 'length',
+      rawStopReason: 'length',
+      usage: { input: 5377, output: 62, cacheRead: 2753, totalTokens: 8192 },
+    },
+  ]);
+  expect(state.modelFailures[0]?.error).toBeUndefined();
+  expect(state.activeModels).toEqual([]);
+});
+
 test('diagnostics retain failure causes and live work without copying prompts or task content', () => {
   const collector = new EvaluationDiagnosticCollector();
   collector.observe('agent-1', { kind: 'agent.start' });
@@ -85,6 +158,8 @@ test('diagnostics retain failure causes and live work without copying prompts or
     operation: 'coordination',
     status: 400,
     commandType: 'task.update',
+    hasPassId: true,
+    passId: 'private-pass-reference',
     error: 'Task has unmet dependencies',
   });
   collector.observe('agent-1', { kind: 'model.start' });
@@ -112,6 +187,7 @@ test('diagnostics retain failure causes and live work without copying prompts or
       operation: 'coordination',
       status: 400,
       commandType: 'task.update',
+      hasPassId: true,
       error: 'Task has unmet dependencies',
     },
   ]);
@@ -301,7 +377,9 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
         undefined,
         {} as never,
       ),
-    ).rejects.toThrow('Coordination request failed (400)');
+    ).rejects.toThrow(
+      'Coordination request failed (400): Task has unmet dependencies token=<redacted>',
+    );
     await handlers.get('agent_end')!({});
     expect(observed.filter(({ kind }) => kind !== 'prompt')).toMatchObject([
       { kind: 'agent.start' },
@@ -316,6 +394,7 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
         kind: 'runtime.error',
         status: 400,
         commandType: 'task.update',
+        hasPassId: false,
         error: 'Task has unmet dependencies token=<redacted>',
       },
       { kind: 'agent.end' },

@@ -14,6 +14,7 @@ import { EVAL_MODEL, hash, resourceIdentity } from './setup.js';
 import { EVALUATION_STOP_FILE, type EvaluationJob } from './runner.js';
 import {
   EvaluationDiagnosticCollector,
+  evaluationModelFailed,
   evaluationTokenUsage,
   sanitizeEvaluationText,
 } from './diagnostics.js';
@@ -263,7 +264,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       if (value.kind === 'model.start')
         modelSpans.set(agentId, telemetry.begin(`model.${agentId}`, randomUUID(), agentId));
       if (value.kind === 'model.end') {
-        if (value.stopReason === 'error' || value.stopReason === 'aborted') inferenceFailed = true;
+        if (evaluationModelFailed(value.stopReason)) inferenceFailed = true;
         modelSpans.get(agentId)?.end();
         modelSpans.delete(agentId);
         const usage = evaluationTokenUsage(value.usage);

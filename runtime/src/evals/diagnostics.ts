@@ -30,7 +30,7 @@ export function sanitizeEvaluationText(value: string): string {
     .slice(0, 1024);
 }
 
-/** Capture only the first error line; successful tool output and command arguments never enter diagnostics. */
+/** Preserve bounded schema field failures while excluding received arguments and successful output. */
 export function evaluationToolError(result: unknown): string | undefined {
   if (
     !result ||
@@ -39,10 +39,30 @@ export function evaluationToolError(result: unknown): string | undefined {
     !Array.isArray(result.content)
   )
     return undefined;
-  for (const item of result.content)
-    if (item && typeof item === 'object' && item.type === 'text' && typeof item.text === 'string')
-      return sanitizeEvaluationText(item.text);
+  for (const item of result.content) {
+    if (!item || typeof item !== 'object' || item.type !== 'text' || typeof item.text !== 'string')
+      continue;
+    const lines = item.text.split(/\r?\n/);
+    const header = sanitizeEvaluationText(lines[0] ?? '');
+    if (!/^Validation failed for tool "[^"\r\n]+":\s*$/.test(lines[0] ?? '')) return header;
+    const failures: string[] = [];
+    for (const line of lines.slice(1)) {
+      if (/^\s*Received arguments:/.test(line)) break;
+      const match = /^\s*-\s+([\w.~/-]{1,160}):\s+(.+)$/.exec(line);
+      if (!match) continue;
+      const field = sanitizeEvaluationText(match[1]).slice(0, 128);
+      const reason = sanitizeEvaluationText(match[2]).slice(0, 160);
+      failures.push(`[${field}] ${reason}`);
+      if (failures.length === 6) break;
+    }
+    return [header, ...failures].join(' ').slice(0, 1024);
+  }
   return undefined;
+}
+
+/** A length stop is terminal; its source may be context or output limits and is not guessed here. */
+export function evaluationModelFailed(stopReason: unknown): boolean {
+  return stopReason === 'error' || stopReason === 'aborted' || stopReason === 'length';
 }
 
 export function evaluationTokenUsage(value: unknown): Record<string, number> | undefined {
@@ -84,6 +104,7 @@ type DiagnosticEvent = {
   status?: number;
   operation?: string;
   commandType?: string;
+  hasPassId?: boolean;
   durationMs?: number;
   taskId?: string;
   assignmentId?: string;
@@ -153,6 +174,7 @@ export class EvaluationDiagnosticCollector {
       if (typeof value[key] === 'string') event[key] = sanitizeEvaluationText(value[key]);
     for (const key of ['durationMs', 'status'] as const)
       if (typeof value[key] === 'number' && Number.isFinite(value[key])) event[key] = value[key];
+    if (typeof value.hasPassId === 'boolean') event.hasPassId = value.hasPassId;
     const usage = evaluationTokenUsage(value.usage);
     if (usage) event.usage = usage;
     if (value.kind === 'agent.start') this.activeAgents.add(agentId);
@@ -160,8 +182,7 @@ export class EvaluationDiagnosticCollector {
     if (value.kind === 'model.start') this.activeModels.add(agentId);
     if (value.kind === 'model.end') {
       this.activeModels.delete(agentId);
-      if (value.stopReason === 'error' || value.stopReason === 'aborted')
-        this.retain(this.modelFailures, event, 8);
+      if (evaluationModelFailed(value.stopReason)) this.retain(this.modelFailures, event, 8);
     }
     if (value.kind === 'tool.start' && event.callId && event.tool)
       this.activeTools.set(`${agentId}:${event.callId}`, {
