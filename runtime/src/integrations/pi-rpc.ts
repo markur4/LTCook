@@ -165,11 +165,15 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
               throw new Error('LTCOOK_GUIDANCE_DIR must be resolved before native HOME changes');
             })(),
           coreGuidanceDirectory(),
+          process.env.LTCOOK_EVAL_ARM === 'minimal',
         )
       : undefined;
     // > Recreate cwd-bound resources on native new/resume/fork, retaining the shared auth path.
-    const projectTrusted =
-      parsed.projectTrustOverride ?? trustStore.get(cwd) ?? !hasTrustRequiringProjectResources(cwd);
+    const projectTrusted = process.env.LTCOOK_EVAL_ARM
+      ? true
+      : (parsed.projectTrustOverride ??
+        trustStore.get(cwd) ??
+        !hasTrustRequiringProjectResources(cwd));
     const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
     const modelRuntime = await ModelRuntime.create({
       authPath,
@@ -214,7 +218,7 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
             ? [paseoMcpExtension]
             : []),
         ],
-        noExtensions: parsed.noExtensions,
+        noExtensions: Boolean(process.env.LTCOOK_EVAL_ARM) || parsed.noExtensions,
         disabledBuiltinExtensions: parsed.noMcp ? ['mcp'] : undefined,
         noSkills: parsed.noSkills,
         noPromptTemplates: parsed.noPromptTemplates,

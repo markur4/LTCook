@@ -30,7 +30,11 @@ export class Telemetry {
     };
     await appendFile(this.logsPath, `${JSON.stringify(row)}\n`, { mode: 0o600 });
   }
-  begin(name: string, correlationId = randomUUID()): { correlationId: string; end(): void } {
+  begin(
+    name: string,
+    correlationId = randomUUID(),
+    lane: string | number = 0,
+  ): { correlationId: string; end(): void } {
     const start = process.hrtime.bigint();
     this.traceEvents.push({
       name,
@@ -38,7 +42,7 @@ export class Telemetry {
       ph: 'B',
       ts: Number(start / 1000n),
       pid: process.pid,
-      tid: 0,
+      tid: lane,
       args: { correlationId },
     });
     let ended = false;
@@ -53,11 +57,24 @@ export class Telemetry {
           ph: 'E',
           ts: Number(process.hrtime.bigint() / 1000n),
           pid: process.pid,
-          tid: 0,
+          tid: lane,
           args: { correlationId },
         });
       },
     };
+  }
+  /** Preserve native duration measurements as complete spans, including parallel tools. */
+  duration(name: string, durationMs: number, lane: string | number = 0): void {
+    const end = Number(process.hrtime.bigint() / 1000n);
+    this.traceEvents.push({
+      name,
+      cat: 'ltcook',
+      ph: 'X',
+      ts: end - durationMs * 1000,
+      dur: durationMs * 1000,
+      pid: process.pid,
+      tid: lane,
+    });
   }
   async exportTrace(): Promise<void> {
     await mkdir(path.dirname(this.tracePath), { recursive: true, mode: 0o700 });

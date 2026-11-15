@@ -37,6 +37,7 @@ const readTools = new Set([
   'ltcook_ried',
 ]);
 export interface PlanningDependencies {
+  executionAllowed?(sessionId: string, passId: string): boolean;
   stateDirectory: string;
   scheduleExecution(session: Session, record: PlanningRecord): Promise<void>;
   dispatch(
@@ -444,7 +445,12 @@ export class PlanningWorkflow {
     }
     const passes = this.store
       .listPasses(sessionId)
-      .filter((pass) => pass.status === 'running' && this.approvedPass(sessionId, pass.id));
+      .filter(
+        (pass) =>
+          pass.status === 'running' &&
+          (this.dependencies.executionAllowed?.(sessionId, pass.id) ??
+            this.approvedPass(sessionId, pass.id)),
+      );
     const allowed = passes.some((pass) =>
       this.store
         .listAssignments(sessionId)

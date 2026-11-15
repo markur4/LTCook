@@ -92,6 +92,8 @@ jobs:
           uv sync --locked --all-groups --no-install-project
       - name: Build native Pi entry point
         run: bun run build
+      - name: Install evaluation sandbox
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - name: Exercise offline native scheduling and recovery
         run: PYTHONPATH=src uv run --locked --no-sync pytest -q tests/python/system/test_clockwork_acceptance.py
 

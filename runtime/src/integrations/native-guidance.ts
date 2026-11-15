@@ -17,7 +17,13 @@ export class NativeGuidance {
   private readonly userDirectory: string;
   private readonly resourceDiagnostics: GuidanceInspection['diagnostics'] = [];
 
-  constructor(team: TeamPackage, memberKey: string, userDirectory: string, coreDirectory: string) {
+  constructor(
+    team: TeamPackage,
+    memberKey: string,
+    userDirectory: string,
+    coreDirectory: string,
+    private readonly reduced = false,
+  ) {
     if (!path.isAbsolute(userDirectory))
       throw new NativeGuidanceError('User guidance directory must be an absolute AppRC path');
     this.userDirectory = userDirectory;
@@ -66,7 +72,7 @@ export class NativeGuidance {
         loaded: false,
       };
       this.inspection.resources.push(row);
-      if (!applicable) continue;
+      if (!applicable || (this.reduced && resource.scope !== 'core')) continue;
       if (!existsSync(file)) {
         this.inspection.diagnostics.push({ source: file, reason: 'Guidance resource is missing' });
         if (resource.required)
@@ -87,7 +93,7 @@ export class NativeGuidance {
       } else this.skillPaths.push(file);
     }
     const userSkills = path.join(userDirectory, 'skills');
-    if (existsSync(userSkills)) this.skillPaths.push(userSkills);
+    if (!this.reduced && existsSync(userSkills)) this.skillPaths.push(userSkills);
     this.resourceDiagnostics.push(...this.inspection.diagnostics);
   }
 
@@ -115,6 +121,16 @@ export class NativeGuidance {
     const physical = new Set<string>();
     const names = new Map<string, string>();
     const skills = base.skills.filter((skill) => {
+      if (
+        this.reduced &&
+        !this.inspection.resources.some(
+          (row) =>
+            row.scope === 'core' &&
+            existsSync(row.path) &&
+            realpathSync(row.path) === realpathSync(skill.filePath),
+        )
+      )
+        return false;
       const file = realpathSync(skill.filePath);
       const previous = names.get(skill.name);
       if (previous && previous !== file)
@@ -167,7 +183,7 @@ export class NativeGuidance {
       }
       rules.push({ path: file, content: readFileSync(file, 'utf8') });
     }
-    for (const item of [...base.agentsFiles, ...rules]) {
+    for (const item of [...(this.reduced ? [] : base.agentsFiles), ...rules]) {
       const file = realpathSync(item.path);
       if (files.has(file)) continue;
       files.set(file, item);

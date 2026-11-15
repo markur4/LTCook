@@ -1,547 +1,188 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { createHash } from 'node:crypto';
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
-  type AgentSession,
-  type ToolDefinition,
-} from '@earendil-works/pi-coding-agent';
-import { Type } from 'typebox';
-import { NativeGuidance } from '../integrations/native-guidance.js';
-import { Telemetry } from '../diagnostics/telemetry.js';
-import type { TeamPackage } from '../team-api/index.js';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 
 export type Arm = 'minimal' | 'complete';
-export type BenchmarkThinking = 'off' | 'low' | 'high';
 export type Scenario = 'read-only' | 'no-op' | 'targeted-fix';
-export interface RunResult {
+export type EvaluationJob = {
+  directory: string;
+  appRoot: string;
+  nodeExecutable: string;
+  teamSelection: string;
   arm: Arm;
   scenario: Scenario;
-  repetition: number;
-  thinking: BenchmarkThinking;
+  thinking: 'off' | 'low';
+  endpoint: string;
+  timeoutMs: number;
+  webConfiguration: Record<string, unknown>;
+};
+export type EvaluationResult = {
   success: boolean;
-  elapsedMs: number;
-  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-  toolCalls: number;
-  delegations: number;
-  unnecessaryActionCandidates: {
-    repeatedReads: number;
-    repeatedVerification: number;
-    redundantWrites: number;
-  };
-  instructions: {
-    promptSha256: string | null;
-    promptCharacters: number | null;
-    resources: Array<{
-      name: string;
-      path: string;
-      scope: string;
-      kind: string;
-      loaded: boolean;
-      sha256?: string;
-    }>;
-    effectivePrompt?: string;
-  };
   failure?: string;
-}
-
-export interface TaskResult {
-  arm: Arm;
-  scenario: Scenario;
-  repetition: number;
-  attempts: RunResult[];
-  initialSuccess: boolean;
-  success: boolean;
   elapsedMs: number;
-  tokens: RunResult['tokens'];
   toolCalls: number;
-  delegations: number;
-  unnecessaryActionCandidates: RunResult['unnecessaryActionCandidates'];
+  delegations?: number;
+  instructions: { effectivePrompt?: string; promptSha256?: string; resources: unknown[] };
+  trace: { traceEvents: unknown[] };
+  limitations?: string[];
+};
+
+export function assertEvaluationSandbox(): void {
+  if (process.platform !== 'linux')
+    throw new Error('Behavior Evaluation requires Linux/WSL and Bubblewrap.');
+  const probe = spawnSync(
+    'bwrap',
+    [
+      '--ro-bind',
+      '/',
+      '/',
+      '--unshare-pid',
+      '--proc',
+      '/proc',
+      '--dev',
+      '/dev',
+      '--',
+      '/usr/bin/true',
+    ],
+    { encoding: 'utf8', timeout: 5000, env: { PATH: '/usr/bin:/bin', HOME: '/tmp' } },
+  );
+  if (probe.status !== 0)
+    throw new Error(
+      'Bubblewrap sandbox is unavailable; install Bubblewrap and permit user namespaces.',
+    );
 }
 
-/** Compare outcomes without interpreting heuristic action counts as agent errors. */
-export function aggregate(tasks: TaskResult[]) {
+/** Spawn the production controller/host/Pi tree inside an isolated filesystem and PID namespace. */
+export async function runTask(job: EvaluationJob, signal: AbortSignal): Promise<EvaluationResult> {
+  signal.throwIfAborted();
+  const node = await realpath(job.nodeExecutable);
+  await mkdir(path.join(job.directory, 'deployment'), { recursive: true });
+  await symlink(job.appRoot, path.join(job.directory, 'deployment/app'));
+  await writeFile(path.join(job.directory, 'job.json'), JSON.stringify(job), { mode: 0o600 });
+  const args = [
+    '--die-with-parent',
+    '--new-session',
+    '--unshare-pid',
+    '--unshare-ipc',
+    '--unshare-uts',
+    '--proc',
+    '/proc',
+    '--dev',
+    '/dev',
+    '--tmpfs',
+    '/tmp',
+  ];
+  for (const directory of ['/usr', '/bin', '/sbin', '/lib', '/lib64'])
+    if (existsSync(directory)) args.push('--ro-bind', directory, directory);
+  for (const file of [
+    '/etc/resolv.conf',
+    '/etc/hosts',
+    '/etc/nsswitch.conf',
+    '/etc/passwd',
+    '/etc/group',
+    '/etc/ssl',
+  ])
+    if (existsSync(file)) args.push('--ro-bind', file, file);
+  for (const directory of ['runtime', 'teams', 'node_modules']) {
+    const source = path.join(job.appRoot, directory);
+    if (existsSync(source)) args.push('--ro-bind', source, source);
+  }
+  const manifest = path.join(job.appRoot, 'package.json');
+  if (existsSync(manifest)) args.push('--ro-bind', manifest, manifest);
+  if (!node.startsWith('/usr/') && !node.startsWith('/bin/')) args.push('--ro-bind', node, node);
+  args.push(
+    '--bind',
+    job.directory,
+    job.directory,
+    '--chdir',
+    path.join(job.directory, 'workspace'),
+    '--',
+    node,
+    path.join(job.appRoot, 'runtime/dist/evals/worker.js'),
+    path.join(job.directory, 'job.json'),
+  );
+  const environment = {
+    PATH: `${path.dirname(node)}:/usr/bin:/bin`,
+    HOME: path.join(job.directory, 'deployment/home'),
+    TMPDIR: '/tmp',
+    LANG: 'C.UTF-8',
+    PI_OFFLINE: '1',
+    DO_NOT_TRACK: '1',
+  };
+  const child = spawn('bwrap', args, {
+    env: environment,
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString()).slice(-2000);
+  });
+  child.stdout.resume();
+  let force: ReturnType<typeof setTimeout> | undefined;
+  const terminate = () => {
+    if (child.pid && child.exitCode === null) {
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        /* Process may already have exited. */
+      }
+      force ??= setTimeout(() => {
+        try {
+          process.kill(-child.pid!, 'SIGKILL');
+        } catch {
+          /* Already stopped. */
+        }
+      }, 2000);
+    }
+  };
+  const timeout = setTimeout(terminate, job.timeoutMs + 60000);
+  signal.addEventListener('abort', terminate, { once: true });
+  if (signal.aborted) terminate();
+  try {
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', resolve);
+    });
+    signal.throwIfAborted();
+    if (code !== 0)
+      throw new Error(
+        `Evaluation sandbox process failed (${code}); ${stderr.replace(/(?:\/home\/[^\s]+|\/tmp\/[^\s]+)/g, '<private-path>')}`,
+      );
+    const result = JSON.parse(
+      await readFile(path.join(job.directory, 'output.json'), 'utf8'),
+    ) as EvaluationResult;
+    const end = Number(process.hrtime.bigint() / 1000n);
+    const events = result.trace.traceEvents as Array<Record<string, unknown>>;
+    const childEnd = Math.max(
+      0,
+      ...events.map((event) => Number(event.ts) + Number(event.dur ?? 0)),
+    );
+    result.trace.traceEvents = events.map((event) => ({
+      ...event,
+      pid: child.pid,
+      ts: Number(event.ts) + end - childEnd,
+    }));
+    return result;
+  } finally {
+    clearTimeout(timeout);
+    if (force) clearTimeout(force);
+    signal.removeEventListener('abort', terminate);
+  }
+}
+
+export function aggregate(tasks: Array<{ arm: Arm; success: boolean; elapsedMs: number }>) {
   return (['minimal', 'complete'] as const).map((arm) => {
-    const selected = tasks.filter((task) => task.arm === arm);
+    const cases = tasks.filter((task) => task.arm === arm);
+    const values = cases.map((task) => task.elapsedMs);
     return {
       arm,
-      tasks: selected.length,
-      byScenario: Object.fromEntries(
-        (['read-only', 'no-op', 'targeted-fix'] as const).map((scenario) => {
-          const cases = selected.filter((task) => task.scenario === scenario);
-          return [
-            scenario,
-            {
-              tasks: cases.length,
-              initialSuccesses: cases.filter((task) => task.initialSuccess).length,
-              successesAfterRetry: cases.filter((task) => task.success).length,
-            },
-          ];
-        }),
-      ),
-      initialSuccesses: selected.filter((task) => task.initialSuccess).length,
-      successesAfterRetry: selected.filter((task) => task.success).length,
-      lowThinkingRetries: selected.filter((task) => task.attempts.length > 1).length,
-      meanTotalElapsedMs: selected.reduce((sum, task) => sum + task.elapsedMs, 0) / selected.length,
-      providerReportedTokens: selected.reduce((sum, task) => sum + task.tokens.total, 0),
-      toolCalls: selected.reduce((sum, task) => sum + task.toolCalls, 0),
-      delegations: selected.reduce((sum, task) => sum + task.delegations, 0),
-      unnecessaryActionCandidates: selected.reduce(
-        (sum, task) =>
-          sum + Object.values(task.unnecessaryActionCandidates).reduce((a, b) => a + b, 0),
-        0,
-      ),
+      tasks: cases.length,
+      successes: cases.filter((task) => task.success).length,
+      meanTotalElapsedMs: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null,
+      minElapsedMs: values.length ? Math.min(...values) : null,
+      maxElapsedMs: values.length ? Math.max(...values) : null,
     };
   });
-}
-
-const fixture = { prices: [12, 7, 5], discount: 4 };
-const answer = fixture.prices.reduce((sum, value) => sum + value, 0) - fixture.discount;
-const response = (value: unknown) => ({
-  content: [{ type: 'text' as const, text: JSON.stringify(value) }],
-  details: {},
-});
-
-/** Run one isolated fixture using only fixed local tools and declared Team members. */
-export async function runFixture(input: {
-  arm: Arm;
-  scenario: Scenario;
-  repetition: number;
-  team: TeamPackage;
-  modelRuntime: ModelRuntime;
-  provider: string;
-  model: string;
-  timeoutMs: number;
-  thinking: BenchmarkThinking;
-  telemetry?: Telemetry;
-  signal?: AbortSignal;
-  capturePrompt?: boolean;
-}): Promise<RunResult> {
-  const model = input.modelRuntime.getModel(input.provider, input.model);
-  if (!model) throw new Error('Selected model is missing from Pi models.json.');
-  const directory = mkdtempSync(join(tmpdir(), 'ltcook-guidance-benchmark-'));
-  const sessions: AgentSession[] = [];
-  const started = performance.now();
-  const result: RunResult = {
-    arm: input.arm,
-    scenario: input.scenario,
-    repetition: input.repetition,
-    thinking: input.thinking,
-    success: false,
-    elapsedMs: 0,
-    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    toolCalls: 0,
-    delegations: 0,
-    unnecessaryActionCandidates: { repeatedReads: 0, repeatedVerification: 0, redundantWrites: 0 },
-    instructions: { promptSha256: null, promptCharacters: null, resources: [] },
-  };
-  const taskSpan = input.telemetry?.begin(
-    `evals.task.${input.scenario}.${input.arm}.${input.repetition}.${input.thinking}`,
-  );
-  const effectivePrompts: string[] = [];
-  const instructionResources = new Map<string, RunResult['instructions']['resources'][number]>();
-  const guidanceInstances: NativeGuidance[] = [];
-  let reads = 0;
-  let verifications = 0;
-  let writes = 0;
-  let expired = false;
-  let verifiedWrites = -1;
-  const countTool = () => {
-    if (expired || result.toolCalls >= 24) throw new Error('Fixture tool budget exceeded');
-    result.toolCalls++;
-  };
-  const output = join(directory, 'answer.json');
-  writeFileSync(join(directory, 'input.json'), JSON.stringify(fixture));
-  const initialAnswer = input.scenario === 'no-op' ? { total: answer } : { total: 0 };
-  if (input.scenario !== 'read-only') writeFileSync(output, JSON.stringify(initialAnswer));
-  const initialAnswerText =
-    input.scenario === 'read-only' ? undefined : readFileSync(output, 'utf8');
-  writeFileSync(
-    join(directory, 'verify.js'),
-    `const fs = require('node:fs'); const value = JSON.parse(fs.readFileSync('answer.json', 'utf8')); if (value.total !== ${answer}) process.exit(1);`,
-  );
-  const create = async (memberKey: string, depth: number): Promise<AgentSession> => {
-    const member = input.team.definition.members.find((entry) => entry.key === memberKey);
-    if (!member) throw new Error('Undeclared benchmark member');
-    const eligibleMemberKeys = input.team.definition.members
-      .filter((entry) => entry.key !== memberKey && entry.workTypes.includes('task.execute'))
-      .map((entry) => entry.key);
-    const agentDir = join(directory, member.key);
-    mkdirSync(agentDir, { recursive: true });
-    const team =
-      input.arm === 'complete'
-        ? input.team
-        : {
-            ...input.team,
-            definition: {
-              ...input.team.definition,
-              resources: [],
-              members: input.team.definition.members.map((entry) => ({
-                ...entry,
-                rules: [],
-                skills: [],
-              })),
-            },
-          };
-    const guidance = new NativeGuidance(team, memberKey, directory, resolve('runtime/resources'));
-    guidanceInstances.push(guidance);
-    for (const resource of guidance.inspection.resources) {
-      const source = guidance.rules.find((item) => item.path === resource.path);
-      const sourceContent =
-        source?.content ??
-        (resource.loaded && existsSync(resource.path)
-          ? readFileSync(resource.path, 'utf8')
-          : undefined);
-      instructionResources.set(resource.path, {
-        name: resource.name,
-        path: resource.path,
-        scope: resource.scope,
-        kind: resource.kind,
-        loaded: resource.loaded,
-        ...(sourceContent
-          ? { sha256: createHash('sha256').update(sourceContent).digest('hex') }
-          : {}),
-      });
-    }
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { enabled: false },
-      retry: { enabled: false },
-    });
-    const loader = new DefaultResourceLoader({
-      cwd: directory,
-      agentDir,
-      settingsManager,
-      noExtensions: true,
-      noContextFiles: true,
-      noPromptTemplates: true,
-      noThemes: true,
-      additionalSkillPaths: guidance.skillPaths,
-      skillsOverride: guidance.skillsOverride,
-      agentsFilesOverride: guidance.agentsFilesOverride,
-      extensionFactories: [
-        (pi) => {
-          pi.on('agent_start', (_event, context) => {
-            const prompt = context.getSystemPrompt();
-            effectivePrompts.push(prompt);
-          });
-        },
-      ],
-      appendSystemPrompt: [
-        `You are ${member.name}, a declared member of Team ${input.team.definition.id}. This isolated benchmark fixture is approved. Use only the provided fixture tools. No network, shell, credential, repository, or external changes are authorized.`,
-      ],
-    });
-    await loader.reload();
-    const tools: ToolDefinition[] = [
-      {
-        name: 'fixture_read',
-        label: 'Read fixture',
-        description: 'Read the approved input fixture.',
-        parameters: Type.Object({}),
-        async execute() {
-          const span = input.telemetry?.begin('evals.tool.fixture_read');
-          try {
-            countTool();
-            if (reads++) result.unnecessaryActionCandidates.repeatedReads++;
-            return response({
-              fixture,
-              currentAnswer: existsSync(output) ? JSON.parse(readFileSync(output, 'utf8')) : null,
-            });
-          } finally {
-            span?.end();
-          }
-        },
-      },
-      {
-        name: 'fixture_write',
-        label: 'Write answer',
-        description: 'Write the calculated total to answer.json.',
-        parameters: Type.Object({ total: Type.Number() }),
-        async execute(_id, args) {
-          const span = input.telemetry?.begin('evals.tool.fixture_write');
-          try {
-            countTool();
-            if (writes++) result.unnecessaryActionCandidates.redundantWrites++;
-            writeFileSync(output, JSON.stringify(args));
-            return response({ written: true });
-          } finally {
-            span?.end();
-          }
-        },
-      },
-      {
-        name: 'fixture_verify',
-        label: 'Verify answer',
-        description: 'Run the fixed local verification command.',
-        parameters: Type.Object({}),
-        async execute() {
-          const span = input.telemetry?.begin('evals.tool.fixture_verify');
-          try {
-            countTool();
-            if (verifications++) result.unnecessaryActionCandidates.repeatedVerification++;
-            const child = Bun.spawn([process.execPath, 'verify.js'], {
-              cwd: directory,
-              stdout: 'ignore',
-              stderr: 'ignore',
-            });
-            const passed = (await child.exited) === 0;
-            verifiedWrites = passed ? writes : -1;
-            return response({ passed });
-          } finally {
-            span?.end();
-          }
-        },
-      },
-      {
-        name: 'benchmark_delegate',
-        label: 'Synthetic benchmark delegation',
-        description: `Ask one eligible Team member (${eligibleMemberKeys.join(', ')}) to inspect this same fixed fixture. This is benchmark delegation, not a RuntimeController assignment.`,
-        parameters: Type.Object({
-          memberKey: Type.String({ enum: eligibleMemberKeys }),
-          message: Type.String({ maxLength: 2000 }),
-        }),
-        async execute(_id, raw) {
-          const span = input.telemetry?.begin('evals.tool.benchmark_delegate');
-          try {
-            const args = raw as { memberKey: string; message: string };
-            countTool();
-            const target = input.team.definition.members.find(
-              (entry) =>
-                entry.key === args.memberKey &&
-                entry.key !== memberKey &&
-                entry.workTypes.includes('task.execute'),
-            );
-            if (!target)
-              throw new Error(
-                `Unknown benchmark member. Eligible keys: ${eligibleMemberKeys.join(', ')}`,
-              );
-            if (depth > 0 || result.delegations >= 2 || expired)
-              throw new Error(
-                'Delegation is limited to two direct calls to another eligible declared member.',
-              );
-            result.delegations++;
-            const child = await create(target.key, depth + 1);
-            const promptSpan = input.telemetry?.begin('evals.pi.prompt');
-            try {
-              await child.prompt(args.message, { expandPromptTemplates: false });
-            } finally {
-              promptSpan?.end();
-            }
-            return response({
-              completed: true,
-              answer: child.state.messages.filter((message) => message.role === 'assistant').at(-1),
-            });
-          } finally {
-            span?.end();
-          }
-        },
-      },
-    ];
-    const activeTools =
-      depth === 0 ? tools : tools.filter((tool) => tool.name !== 'benchmark_delegate');
-    const { session } = await createAgentSession({
-      cwd: directory,
-      agentDir,
-      modelRuntime: input.modelRuntime,
-      model,
-      thinkingLevel: input.thinking,
-      resourceLoader: loader,
-      settingsManager,
-      sessionManager: SessionManager.inMemory(directory),
-      tools: activeTools.map((tool) => tool.name),
-      customTools: activeTools,
-    });
-    const abortSession = () => {
-      void session.abort();
-    };
-    input.signal?.addEventListener('abort', abortSession, { once: true });
-    if (input.signal?.aborted) abortSession();
-    if (expired) {
-      input.signal?.removeEventListener('abort', abortSession);
-      session.dispose();
-      throw new Error('Fixture timeout');
-    }
-    sessions.push(session);
-    session.subscribe((event) => {
-      if (event.type === 'tool_execution_start' && result.toolCalls >= 24) void session.abort();
-    });
-    return session;
-  };
-  let deadline: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      (async () => {
-        const session = await create(input.team.definition.coordinatorKey, 0);
-        const prompts: Record<Scenario, string> = {
-          'read-only':
-            'Read the fixture and report the total (sum(prices) minus discount). This is a tiny task. Do not write or delegate.',
-          'no-op':
-            'Inspect the fixture and existing answer. If the existing answer is already correct, report that and leave every file unchanged. This is a tiny task. Do not delegate.',
-          'targeted-fix':
-            'Inspect the fixture and existing answer. Correct only answer.json if needed, then use the provided verification tool and report the result. This is a tiny task. Do not delegate.',
-        };
-        const promptSpan = input.telemetry?.begin('evals.pi.prompt');
-        try {
-          await session.prompt(prompts[input.scenario], { expandPromptTemplates: false });
-        } finally {
-          promptSpan?.end();
-        }
-        for (const guidance of guidanceInstances)
-          for (const resource of guidance.inspection.resources) {
-            const source = guidance.rules.find((item) => item.path === resource.path);
-            const sourceContent =
-              source?.content ??
-              (resource.loaded && existsSync(resource.path)
-                ? readFileSync(resource.path, 'utf8')
-                : undefined);
-            instructionResources.set(resource.path, {
-              name: resource.name,
-              path: resource.path,
-              scope: resource.scope,
-              kind: resource.kind,
-              loaded: resource.loaded,
-              ...(sourceContent
-                ? { sha256: createHash('sha256').update(sourceContent).digest('hex') }
-                : {}),
-            });
-          }
-        const finalAnswer = existsSync(output) ? JSON.parse(readFileSync(output, 'utf8')) : null;
-        const assistantText = session.state.messages
-          .filter((message) => message.role === 'assistant')
-          .map((message) =>
-            'content' in message && Array.isArray(message.content)
-              ? message.content
-                  .filter((block) => block.type === 'text')
-                  .map((block) => block.text)
-                  .join('\n')
-              : '',
-          )
-          .join('\n');
-        const reportsAnswer = new RegExp(`\\b${answer}\\b`).test(assistantText);
-        const unchanged =
-          initialAnswerText === undefined ||
-          (existsSync(output) && readFileSync(output, 'utf8') === initialAnswerText);
-        result.success =
-          input.scenario === 'read-only'
-            ? reads > 0 && writes === 0 && reportsAnswer
-            : input.scenario === 'no-op'
-              ? reads > 0 && writes === 0 && unchanged && reportsAnswer
-              : reads > 0 &&
-                writes > 0 &&
-                verifications > 0 &&
-                verifiedWrites === writes &&
-                finalAnswer?.total === answer &&
-                reportsAnswer;
-        if (!result.success)
-          result.failure =
-            [
-              input.scenario === 'read-only' && reads === 0
-                ? 'Read-only task did not inspect the fixture'
-                : null,
-              input.scenario === 'read-only' && writes > 0
-                ? 'Read-only task wrote an answer'
-                : null,
-              input.scenario === 'no-op' && writes > 0 ? 'No-op task wrote an answer' : null,
-              input.scenario === 'targeted-fix' && finalAnswer?.total !== answer
-                ? 'Targeted answer is incorrect'
-                : null,
-              input.scenario === 'targeted-fix' && writes === 0 ? 'No targeted answer write' : null,
-              input.scenario === 'targeted-fix' && verifications === 0
-                ? 'No verification call'
-                : null,
-              !reportsAnswer ? 'Final response did not report the observed answer' : null,
-              input.scenario === 'no-op' && !unchanged ? 'No-op scenario changed the answer' : null,
-              input.scenario === 'targeted-fix' && verifiedWrites !== writes
-                ? 'Latest answer not verified'
-                : null,
-            ]
-              .filter(Boolean)
-              .join('; ') || 'Scenario oracle did not pass';
-        const prompt = effectivePrompts.at(-1);
-        if (prompt) {
-          result.instructions.promptSha256 = createHash('sha256').update(prompt).digest('hex');
-          result.instructions.promptCharacters = prompt.length;
-          if (input.capturePrompt) result.instructions.effectivePrompt = prompt;
-        }
-        result.instructions.resources = [...instructionResources.values()];
-      })(),
-      new Promise<never>((_resolve, reject) => {
-        deadline = setTimeout(() => {
-          expired = true;
-          for (const session of sessions) void session.abort();
-          reject(new Error('Fixture timeout'));
-        }, input.timeoutMs);
-      }),
-    ]);
-  } catch (error) {
-    result.failure = error instanceof Error ? error.message : 'Fixture failed';
-  } finally {
-    if (deadline) clearTimeout(deadline);
-    await Promise.all(sessions.map((session) => session.abort()));
-    for (const session of sessions) {
-      const stats = session.getSessionStats();
-      for (const key of Object.keys(result.tokens) as Array<keyof RunResult['tokens']>)
-        result.tokens[key] += stats.tokens[key];
-      session.dispose();
-    }
-    result.elapsedMs = performance.now() - started;
-    taskSpan?.end();
-    rmSync(directory, { recursive: true, force: true });
-    if (input.signal?.aborted) throw new DOMException('Agent Evals run cancelled', 'AbortError');
-  }
-  return result;
-}
-
-/** Retry an unsuccessful off-thinking task once with low thinking on a fresh fixture. */
-export async function runTask(
-  input: Omit<Parameters<typeof runFixture>[0], 'thinking'> & {
-    initialThinking?: BenchmarkThinking;
-    retryFailed?: boolean;
-    telemetry?: Telemetry;
-    signal?: AbortSignal;
-    capturePrompt?: boolean;
-  },
-): Promise<TaskResult> {
-  const started = performance.now();
-  const first = await runFixture({ ...input, thinking: input.initialThinking ?? 'off' });
-  const attempts = [first];
-  if (input.retryFailed !== false && first.thinking === 'off' && !first.success)
-    attempts.push(await runFixture({ ...input, thinking: 'low' }));
-  const tokens: RunResult['tokens'] = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  };
-  const unnecessaryActionCandidates: RunResult['unnecessaryActionCandidates'] = {
-    repeatedReads: 0,
-    repeatedVerification: 0,
-    redundantWrites: 0,
-  };
-  for (const attempt of attempts) {
-    for (const key of Object.keys(tokens) as Array<keyof RunResult['tokens']>)
-      tokens[key] += attempt.tokens[key];
-    for (const key of Object.keys(unnecessaryActionCandidates) as Array<
-      keyof RunResult['unnecessaryActionCandidates']
-    >)
-      unnecessaryActionCandidates[key] += attempt.unnecessaryActionCandidates[key];
-  }
-  return {
-    arm: input.arm,
-    scenario: input.scenario,
-    repetition: input.repetition,
-    attempts,
-    initialSuccess: first.success,
-    success: attempts.at(-1)!.success,
-    elapsedMs: performance.now() - started,
-    tokens,
-    toolCalls: attempts.reduce((sum, attempt) => sum + attempt.toolCalls, 0),
-    delegations: attempts.reduce((sum, attempt) => sum + attempt.delegations, 0),
-    unnecessaryActionCandidates,
-  };
 }
