@@ -31,6 +31,7 @@ export interface WorkspaceSessionRequest {
   sessionId: string;
   teamSelection: string;
   shellEnvironment: Record<string, string>;
+  leaderAgentId?: string;
 }
 
 /** Captures the shell before AppRC overlays, without retaining nested provenance. */
@@ -74,17 +75,22 @@ export function agentBearer(secret: string, nativeAgentId: string): string {
 export class RuntimeApi {
   private server: Server | undefined;
   private runtime: RuntimeController | undefined;
-  private selectedTeamId: string | undefined;
   private readonly sessions = new Map<string, string>();
-  private readonly defaultSessions = new Map<string, string>();
   private readonly pendingSessions = new Map<
     string,
     { workspaceRoot: string; pending: Promise<SessionSnapshot> }
   >();
-  private selectedTeam: string | undefined;
   private readonly startupShellEnvironment: Record<string, string>;
   private openWorkspace:
     ((request: WorkspaceSessionRequest) => Promise<SessionSnapshot>) | undefined;
+  private prepareSession:
+    | ((
+        request: WorkspaceSessionRequest & { leaderAgentId: string },
+      ) => Promise<{ env: Record<string, string>; mcpServers?: Record<string, unknown> }>)
+    | undefined;
+  setPrepareSessionHandler(handler: NonNullable<RuntimeApi['prepareSession']>): void {
+    this.prepareSession = handler;
+  }
   private lifecycle: RuntimeLifecycleIdentity | undefined;
   private shutdown: (() => Promise<void>) | undefined;
   private stopping = false;
@@ -123,16 +129,10 @@ export class RuntimeApi {
       throw new Error('Session is already bound to a different workspace');
     }
     this.sessions.set(sessionId, canonicalRoot);
-    if (!this.defaultSessions.has(canonicalRoot))
-      this.defaultSessions.set(canonicalRoot, sessionId);
   }
   setOpenWorkspaceHandler(
-    teamSelection: string,
     handler: (request: WorkspaceSessionRequest) => Promise<SessionSnapshot>,
-    teamId?: string,
   ): void {
-    this.selectedTeam = teamSelection;
-    this.selectedTeamId = teamId;
     this.openWorkspace = handler;
   }
   async listen(): Promise<string> {
@@ -174,6 +174,9 @@ export class RuntimeApi {
           '/v1/command',
           '/v1/snapshot',
           '/v1/session/open',
+          '/v1/team/catalog',
+          '/v1/session/list',
+          '/v1/session/prepare',
           '/v1/runtime/stop',
           '/v1/tool/authorize',
           '/v1/ried',
@@ -198,13 +201,11 @@ export class RuntimeApi {
         response.writeHead(401).end('{"error":"unauthorized"}');
         return;
       }
-      if (this.stopping || !this.lifecycle || !this.openWorkspace || !this.selectedTeam) {
+      if (this.stopping || !this.lifecycle || !this.openWorkspace) {
         response.writeHead(503).end('{"error":"LTCook runtime is starting or stopping"}');
         return;
       }
-      response
-        .writeHead(200)
-        .end(JSON.stringify({ teamSelection: this.selectedTeam, ...this.lifecycle }));
+      response.writeHead(200).end(JSON.stringify(this.lifecycle));
       return;
     }
     if (request.url === '/v1/runtime/stop' && !equalToken(bearer, this.secret)) {
@@ -231,13 +232,7 @@ export class RuntimeApi {
           response.writeHead(400).end('{"error":"instanceId is required"}');
           return;
         }
-        if (
-          this.stopping ||
-          !this.lifecycle ||
-          !this.shutdown ||
-          !this.openWorkspace ||
-          !this.selectedTeam
-        ) {
+        if (this.stopping || !this.lifecycle || !this.shutdown || !this.openWorkspace) {
           response.writeHead(503).end('{"error":"LTCook runtime is starting or stopping"}');
           return;
         }
@@ -268,6 +263,7 @@ export class RuntimeApi {
         workspaceRoot?: string;
         nativeAgentId?: string;
         teamSelection?: string;
+        leaderAgentId?: string;
         shellEnvironment?: unknown;
         toolName?: unknown;
         input?: unknown;
@@ -388,14 +384,6 @@ export class RuntimeApi {
             );
           return;
         }
-        if (input.teamSelection !== this.selectedTeam) {
-          response
-            .writeHead(409)
-            .end(
-              '{"error":"A running runtime cannot switch its selected team; stop and relaunch it explicitly"}',
-            );
-          return;
-        }
         const workspaceRoot = canonicalWorkspace(input.workspaceRoot);
         const registeredWorkspace = this.sessions.get(input.sessionId);
         if (registeredWorkspace && registeredWorkspace !== workspaceRoot) {
@@ -404,9 +392,23 @@ export class RuntimeApi {
             .end('{"error":"Session is already bound to a different workspace"}');
           return;
         }
-        let snapshot = registeredWorkspace ? runtime.snapshot(input.sessionId) : undefined;
+        let snapshot: SessionSnapshot | undefined;
+        if (registeredWorkspace) {
+          const existing = runtime.snapshot(input.sessionId);
+          if (
+            existing.session.teamId !==
+            runtime
+              .teamCatalog()
+              .find(
+                (team) =>
+                  team.selection === input.teamSelection || team.teamId === input.teamSelection,
+              )?.teamId
+          )
+            throw new Error('Session Team is immutable');
+          if (!input.leaderAgentId) snapshot = existing;
+        }
         if (!snapshot) {
-          let entry = this.pendingSessions.get(input.sessionId);
+          let entry = input.leaderAgentId ? undefined : this.pendingSessions.get(input.sessionId);
           if (entry && entry.workspaceRoot !== workspaceRoot) {
             response
               .writeHead(409)
@@ -420,6 +422,7 @@ export class RuntimeApi {
               workspaceRoot,
               sessionId: input.sessionId,
               teamSelection: input.teamSelection,
+              ...(input.leaderAgentId ? { leaderAgentId: input.leaderAgentId } : {}),
               shellEnvironment: captureShellEnvironment(
                 shell === undefined
                   ? this.startupShellEnvironment
@@ -427,7 +430,7 @@ export class RuntimeApi {
               ),
             });
             entry = { workspaceRoot, pending };
-            this.pendingSessions.set(input.sessionId, entry);
+            if (!input.leaderAgentId) this.pendingSessions.set(input.sessionId, entry);
           }
           try {
             snapshot = await entry.pending;
@@ -442,22 +445,98 @@ export class RuntimeApi {
             response.writeHead(409).end('{"error":"Runtime opened a different workspace session"}');
             return;
           }
-          if (this.selectedTeamId && snapshot.session.teamId !== this.selectedTeamId) {
-            response.writeHead(409).end('{"error":"Runtime opened a different team session"}');
-            return;
-          }
+          const selected = runtime
+            .teamCatalog()
+            .find(
+              (team) =>
+                team.selection === input.teamSelection || team.teamId === input.teamSelection,
+            );
+          if (!selected || snapshot.session.teamId !== selected.teamId)
+            throw new Error('Session Team is immutable');
           this.setSession(workspaceRoot, snapshot.session.id);
         }
         response.writeHead(200).end(
           JSON.stringify({
             sessionId: snapshot.session.id,
             workspaceRoot: snapshot.session.workspaceRoot,
+            teamId: snapshot.session.teamId,
+            teamInstanceId: snapshot.session.teamInstanceId,
+            leaderAgentId:
+              snapshot.members.find((item) => item.member.key === snapshot.definition.leaderKey)
+                ?.binding?.nativeAgentId ?? null,
           }),
         );
         return;
       }
       if (!runtime) {
         response.writeHead(503).end('{"error":"LTCook runtime is not ready"}');
+        return;
+      }
+      if (request.url === '/v1/session/prepare') {
+        if (actor.kind !== 'user') {
+          response.writeHead(403).end('{"error":"user authentication required"}');
+          return;
+        }
+        if (!this.prepareSession) throw new Error('Session preparation is not ready');
+        if (
+          !input.sessionId ||
+          !input.workspaceRoot ||
+          !input.teamSelection ||
+          input.leaderAgentId !== input.sessionId
+        )
+          throw new Error('Explicit Session Leader identity is required');
+        const snapshot = runtime.snapshot(input.sessionId);
+        const team = runtime
+          .teamCatalog()
+          .find(
+            (entry) =>
+              entry.selection === input.teamSelection || entry.teamId === input.teamSelection,
+          );
+        const leader = snapshot.members.find(
+          (item) => item.member.key === snapshot.definition.leaderKey,
+        );
+        if (
+          !team ||
+          snapshot.session.teamId !== team.teamId ||
+          canonicalWorkspace(input.workspaceRoot) !== snapshot.session.workspaceRoot ||
+          leader?.binding?.nativeAgentId !== input.leaderAgentId
+        )
+          throw new Error('Session preparation identity does not match its binding');
+        const prepared = await this.prepareSession({
+          sessionId: input.sessionId,
+          workspaceRoot: snapshot.session.workspaceRoot,
+          teamSelection: input.teamSelection,
+          leaderAgentId: input.leaderAgentId!,
+          shellEnvironment: this.startupShellEnvironment,
+        });
+        response.writeHead(200).end(JSON.stringify(prepared));
+        return;
+      }
+      if (request.url === '/v1/team/catalog' || request.url === '/v1/session/list') {
+        if (actor.kind !== 'user') {
+          response.writeHead(403).end('{"error":"user authentication required"}');
+          return;
+        }
+        if (request.url === '/v1/team/catalog') {
+          response.writeHead(200).end(JSON.stringify({ teams: runtime.teamCatalog() }));
+        } else {
+          if (!input.workspaceRoot) throw new Error('workspaceRoot is required');
+          const sessions = runtime
+            .listSessions(input.workspaceRoot, input.teamSelection)
+            .map((session) => {
+              const snapshot = runtime.snapshot(session.id);
+              return {
+                sessionId: session.id,
+                teamId: session.teamId,
+                workspaceRoot: session.workspaceRoot,
+                createdAt: session.createdAt,
+                leaderAgentId:
+                  snapshot.members.find((item) => item.member.key === snapshot.definition.leaderKey)
+                    ?.binding?.nativeAgentId ?? null,
+              };
+            });
+          response.writeHead(200).end(JSON.stringify({ sessions }));
+        }
         return;
       }
       if (request.url === '/v1/ried') {
@@ -509,9 +588,7 @@ export class RuntimeApi {
           ) {
             throw new Error('Session does not belong to the requested workspace');
           }
-          const sessionId =
-            input.sessionId ??
-            (requestedWorkspace ? this.defaultSessions.get(requestedWorkspace) : undefined);
+          const sessionId = input.sessionId;
           if (!sessionId) {
             response
               .writeHead(404)

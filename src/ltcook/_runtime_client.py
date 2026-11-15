@@ -33,7 +33,6 @@ class RuntimeClientError(ValueError):
 class RuntimeStatus:
     """Authenticated installation identity returned only by a ready owner."""
 
-    team_selection: str
     instance_id: str
     deployment_root: str
     database_path: str
@@ -150,7 +149,6 @@ def _status(
     if not isinstance(payload, dict):
         raise RuntimeClientError("Running LTCook runtime returned invalid status data.")
     names = (
-        "teamSelection",
         "instanceId",
         "deploymentRoot",
         "databasePath",
@@ -180,10 +178,6 @@ def _status(
     database = payload["databasePath"]
     # > A pinned viewer/stop waiter ends on replacement without adopting its config.
     if previous_instance_id is None or payload["instanceId"] == previous_instance_id:
-        if payload["teamSelection"] != environment["LTCOOK_TEAM"]:
-            raise RuntimeClientError(
-                "A runtime is already active with a different team selection."
-            )
         if _canonical(deployment) != _canonical(environment["LTCOOK_DEPLOYMENT_DIR"]):
             raise RuntimeClientError(
                 "The running runtime belongs to a different deployment."
@@ -213,7 +207,6 @@ def _status(
             "Running LTCook runtime returned an unsafe backend log path."
         )
     return RuntimeStatus(
-        payload["teamSelection"],
         payload["instanceId"],
         deployment,
         database,
