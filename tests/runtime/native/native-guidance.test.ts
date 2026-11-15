@@ -219,3 +219,45 @@ test('native reload replaces loading inspection and refreshes standing rules', a
   rmSync(path.join(f.core, 'rules/baseline.md'));
   await expect(loader.reload()).rejects.toThrow('Required guidance is missing');
 });
+
+test('Core and Team activate without any User guidance directory', async () => {
+  const f = fixture();
+  rmSync(f.user, { recursive: true });
+  const managed = f.guidance();
+  const loader = await f.load(managed);
+  expect(loader.getSkills().skills.map((item) => item.name)).toEqual(['ltcook-method']);
+  expect(
+    loader
+      .getAgentsFiles()
+      .agentsFiles.some((item) => item.content === 'Standing Core requirement.'),
+  ).toBe(true);
+  expect(managed.inspection.resources.some((item) => item.scope === 'user')).toBe(false);
+});
+
+test('User clear writing and shared named skills load independently of Core methods', async () => {
+  const f = fixture();
+  f.file('user/rules/clear-writing.md', 'Personal clear-writing preference.');
+  f.file(
+    'user/skills/typescript-best-practices/SKILL.md',
+    '---\nname: typescript-best-practices\ndescription: Personal TypeScript guidance\n---\nUser-owned body.',
+  );
+  f.file(
+    'user/skills/principle-minimize-reader-load/SKILL.md',
+    '---\nname: principle-minimize-reader-load\ndescription: Explicit reader-load guidance\ndisable-model-invocation: true\n---\nOnly on request.',
+  );
+  const managed = f.guidance();
+  const loader = await f.load(managed);
+  expect(
+    loader
+      .getAgentsFiles()
+      .agentsFiles.some((item) => item.content === 'Personal clear-writing preference.'),
+  ).toBe(true);
+  const skills = loader.getSkills().skills;
+  expect(skills.some((item) => item.name === 'ltcook-method')).toBe(true);
+  expect(skills.some((item) => item.name === 'typescript-best-practices')).toBe(true);
+  expect(formatSkillsForPrompt(skills)).not.toContain('User-owned body.');
+  expect(formatSkillsForPrompt(skills)).not.toContain('Explicit reader-load guidance');
+  expect(
+    managed.inspection.resources.filter((item) => item.scope === 'user' && item.loaded),
+  ).toHaveLength(3);
+});

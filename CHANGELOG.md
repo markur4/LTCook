@@ -49,6 +49,8 @@ All notable changes to `ltcook` will be documented in this file.
 - Breaking: Agent Evals uses a new run-record format and requires Bubblewrap for Linux/WSL execution. Existing evaluation histories are unsupported and left unchanged. Users can preserve old results, stop the runtime, remove its `evals/runs` directory, and restart to reset history. See PR #2.
 
 <br>
+- Breaking: personal clear-writing, TypeScript, React/Vite, reader-load and Modes planning guidance are no longer bundled by Core. Affected: installations relying on those defaults or the `ltcook-typescript`, `ltcook-react-vite` and `ltcook-reader-load` names. Migration: supply personal rules and native skill directories under the configured User guidance root; use the shared OMP skill names when using the chezmoi configuration. Core planning operations, approval gates, lookup and explore remain available without personal guidance.
+
 - Breaking: IBB is renamed to Agent Evals. Affected: CLI users and developers
   using `ltcook ibb`, `just ibb`, `LTCOOK_IBB_RESULTS`, or IBB runtime/cache paths.
   Migration: use `ltcook eval`, `just eval`, `LTCOOK_EVAL_RESULTS`, and the new

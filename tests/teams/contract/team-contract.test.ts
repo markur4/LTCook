@@ -130,7 +130,7 @@ describe.each(packages)('team API contract: %s', (team) => {
   });
 });
 
-test('Core guidance catalog keeps required shared resources and optional skills distinct', () => {
+test('Core guidance catalog keeps functional resources required', () => {
   const resourcesRoot = resolve(import.meta.dir, '../../../runtime/resources');
   const catalog = JSON.parse(readFileSync(resolve(resourcesRoot, 'catalog.json'), 'utf8')) as {
     path: string;
@@ -142,7 +142,7 @@ test('Core guidance catalog keeps required shared resources and optional skills 
   expect(byPath.size).toBe(catalog.length);
   for (const resource of catalog)
     expect(existsSync(resolve(resourcesRoot, resource.path))).toBe(true);
-  for (const path of ['rules/planning.md', 'rules/clear-writing.md']) {
+  for (const path of ['rules/planning.md']) {
     expect(byPath.get(path)).toMatchObject({ kind: 'rule', required: true });
   }
   for (const path of [
@@ -152,16 +152,9 @@ test('Core guidance catalog keeps required shared resources and optional skills 
   ]) {
     expect(byPath.get(path)).toMatchObject({ kind: 'skill', required: true });
   }
-  for (const path of [
-    'skills/ltcook-typescript/SKILL.md',
-    'skills/ltcook-react-vite/SKILL.md',
-    'skills/ltcook-reader-load/SKILL.md',
-  ]) {
-    expect(byPath.get(path)).toMatchObject({ kind: 'skill', required: false });
-  }
 });
 
-test('Core SKILL.md files pass the native Pi parser and reader-load stays explicit-only', () => {
+test('Core SKILL.md files pass the native Pi parser', () => {
   const skillsDirectory = resolve(import.meta.dir, '../../../runtime/resources/skills');
   const loaded = loadSkillsFromDir({ dir: skillsDirectory, source: 'ltcook-core' });
 
@@ -170,13 +163,7 @@ test('Core SKILL.md files pass the native Pi parser and reader-load stays explic
     'ltcook-explore',
     'ltcook-lookup',
     'ltcook-planning',
-    'ltcook-react-vite',
-    'ltcook-reader-load',
-    'ltcook-typescript',
   ]);
-  expect(
-    loaded.skills.find((skill) => skill.name === 'ltcook-reader-load')?.disableModelInvocation,
-  ).toBe(true);
 });
 
 test('Team API v2 preserves both review policies', () => {
