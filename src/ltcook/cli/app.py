@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -80,6 +81,25 @@ def _diagnose_payload() -> dict[str, object]:
     except rc.InstallationError as error:
         paths = None
         path_error = str(error)
+    ollama_readiness = None
+    if paths is not None and paths.appdata_dir is not None:
+        receipt = paths.appdata_dir / "deployment" / "ollama.json"
+        if receipt.is_file():
+            try:
+                data = json.loads(receipt.read_text(encoding="utf-8"))
+                ollama_readiness = {
+                    "ready": data.get("ready") is True,
+                    "version": data.get("version"),
+                    "endpoint": data.get("endpoint"),
+                    "model": data.get("model"),
+                    "model_digest": data.get("model_digest"),
+                    "ibb_model": data.get("ibb_model"),
+                }
+            except (OSError, json.JSONDecodeError):
+                ollama_readiness = {
+                    "ready": False,
+                    "diagnostic": "Invalid Ollama receipt",
+                }
     return {
         "cwd": str(Path.cwd()),
         "installation_directory": str(inspection.directory),
@@ -109,6 +129,7 @@ def _diagnose_payload() -> dict[str, object]:
         "python_executable": sys.executable,
         "python_version": sys.version,
         "version": _package_version(),
+        "ollama": ollama_readiness,
     }
 
 
@@ -158,6 +179,51 @@ def _setup_app_logging(level: str | int = "INFO", **_: object) -> None:
     logging.basicConfig(level=level)
 
 
+def _ollama_resource_diagnostics(appdata: Path) -> dict[str, object]:
+    """Expose local inference readiness in AppRC's existing application doctor."""
+    receipt = appdata / "deployment" / "ollama.json"
+    if not receipt.is_file():
+        raise ValueError("Ollama setup receipt is missing.")
+    try:
+        data = json.loads(receipt.read_text(encoding="utf-8"))
+        from ltcook_distr.payload.app_lifecycle.prepare_ollama import (
+            ENDPOINT,
+            IBB_MODEL,
+            MODEL,
+            _json,
+        )
+
+        version = _json(f"{ENDPOINT}/api/version").get("version")
+        models = _json(f"{ENDPOINT}/api/tags").get("models", [])
+        model_details = _json(
+            f"{ENDPOINT}/api/show", data={"name": IBB_MODEL, "verbose": False}
+        )
+        names = {item.get("name") for item in models if isinstance(item, dict)}
+        ready = (
+            data.get("ready") is True
+            and MODEL in names
+            and IBB_MODEL in names
+            and "PARAMETER num_ctx 8192" in str(model_details.get("modelfile", ""))
+            and version == data.get("version")
+        )
+        if not ready:
+            raise ValueError("Ollama service or required Spark model is not ready.")
+        return {
+            "ollama": {
+                "ready": True,
+                "version": version,
+                "model": MODEL,
+                "model_present": True,
+                "ibb_model": IBB_MODEL,
+                "ibb_model_present": True,
+                "context_tokens": 8192,
+                "endpoint": ENDPOINT,
+            }
+        }
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ValueError(f"Ollama readiness check failed: {error}") from error
+
+
 runtime = rc.cli.CliRuntime(
     APP_RC,
     runtime_policy=rc.cli.CliRuntimePolicy(
@@ -195,6 +261,7 @@ runtime.mount_app_groups(
     installation_hooks=InstallationHooks(
         initialize="ltcook_distr.payload.app_lifecycle.actions:initialize",
     ),
+    resource_diagnostics={"appdata": _ollama_resource_diagnostics},
 )
 
 

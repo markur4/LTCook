@@ -27,6 +27,9 @@ export UV_PROJECT_ENVIRONMENT := env_var_or_default("UV_PROJECT_ENVIRONMENT", ju
 [group('Runtime')]
 mod runtime 'runtime/justfile'
 
+[group('IBB')]
+mod ibb 'tests/ibb/justfile'
+
 # Run `just` with no recipe to list tasks
 default:
     @just --list

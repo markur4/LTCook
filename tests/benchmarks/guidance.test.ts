@@ -25,33 +25,32 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
         reasoning_effort?: string;
       };
       if (body.reasoning_effort) requestedThinking.add(body.reasoning_effort);
+      const userContent =
+        body.messages.filter((message) => message.role === 'user').at(-1)?.content ?? '';
+      const taskPrompt =
+        typeof userContent === 'string' ? userContent : JSON.stringify(userContent);
+      const scenario = taskPrompt.includes('Correct only')
+        ? 'targeted-fix'
+        : taskPrompt.includes('already correct')
+          ? 'no-op'
+          : 'read-only';
+      const needsCorrection = scenario === 'targeted-fix';
       const calls = body.messages.filter((message) => message.role === 'assistant').length;
-      const child = body.messages.some(
-        (message) =>
-          message.role === 'user' && JSON.stringify(message.content).includes('Inspect fixture.'),
-      );
-      if (!child && calls === 0) primaryRuns++;
-      const name = child
+      if (calls === 0) primaryRuns++;
+      const name = calls === 0
         ? 'fixture_read'
-        : calls === 0
-          ? 'benchmark_delegate'
-          : calls === 1
-            ? 'fixture_write'
-            : 'fixture_verify';
-      const args =
-        name === 'benchmark_delegate'
-          ? {
-              memberKey:
-                body.tools?.find((tool) => tool.function.name === name)?.function.parameters
-                  ?.properties?.memberKey?.enum?.[0] ?? 'undisclosed-member',
-              message: 'Inspect fixture.',
-            }
-          : name === 'fixture_write'
-            ? { total: primaryRuns === 1 ? 19 : 20 }
-            : {};
-      const done = child ? calls >= 1 : calls >= 3;
+        : needsCorrection && calls === 1
+          ? 'fixture_write'
+          : 'fixture_verify';
+      const args = name === 'fixture_write' ? { total: primaryRuns === 1 ? 19 : 20 } : {};
+      const done = needsCorrection ? calls >= 3 : calls >= 1;
       const delta = done
-        ? { content: 'Complete.' }
+        ? {
+            content:
+              scenario === 'no-op'
+                ? 'The existing answer is already correct; total: 20.'
+                : 'The total is 20.',
+          }
         : {
             tool_calls: [
               {
@@ -114,6 +113,7 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
     for (const arm of ['minimal', 'complete'] as const) {
       const task = await runTask({
         arm,
+        scenario: 'targeted-fix',
         repetition: 0,
         team,
         modelRuntime,
@@ -122,12 +122,32 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
         timeoutMs: 10000,
       });
       expect(task.success).toBe(true);
-      expect(task.delegations).toBe(task.attempts.length);
-      expect(task.toolCalls).toBe(task.attempts.length * 4);
+      expect(task.delegations).toBe(0);
+      expect(task.toolCalls).toBe(task.attempts.length * 3);
       expect(task.tokens.total).toBeGreaterThan(0);
       expect(task.elapsedMs).toBeGreaterThan(0);
       tasks.push(task);
     }
+    const scenarioResults = [];
+    for (const scenario of ['read-only', 'no-op'] as const) {
+      const task = await runTask({
+        arm: 'complete',
+        scenario,
+        repetition: 0,
+        team,
+        modelRuntime,
+        provider: 'local',
+        model: 'fixture',
+        timeoutMs: 10000,
+        retryFailed: false,
+      });
+      expect(task.success).toBe(true);
+      expect(task.toolCalls).toBe(1);
+      expect(task.delegations).toBe(0);
+      scenarioResults.push(task);
+    }
+    expect(scenarioResults.map((task) => task.scenario)).toEqual(['read-only', 'no-op']);
+    expect(scenarioResults.map((task) => task.attempts[0]?.success)).toEqual([true, true]);
     expect(tasks[0]?.attempts.map((attempt) => [attempt.thinking, attempt.success])).toEqual([
       ['off', false],
       ['low', true],
@@ -153,7 +173,7 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
         initialSuccesses: 0,
         successesAfterRetry: 1,
         lowThinkingRetries: 1,
-        toolCalls: 8,
+        toolCalls: 6,
       },
       {
         arm: 'complete',
@@ -161,7 +181,7 @@ test('scripted local Pi usage produces comparable reports in both guidance arms'
         initialSuccesses: 1,
         successesAfterRetry: 1,
         lowThinkingRetries: 0,
-        toolCalls: 4,
+        toolCalls: 3,
       },
     ]);
   } finally {

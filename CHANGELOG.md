@@ -103,15 +103,17 @@ All notable changes to `ltcook` will be documented in this file.
 ### ➕ Added
 
 <br>
+- Added normal-install Ollama/Spark provisioning and opt-in local IBB instruction,
+  behavior, semantic-audit, and paired timing diagnostics, with Pydantic Evals
+  oracles and private Perfetto-compatible traces.
 - Added runtime dispatch of eligible approved Pass Tasks, persisted dependencies,
   verification and user approval gates, same-member serialization, correction and
   explicit retry, restart delivery handling, and one current-revision Pass review.
 - Added required Linux real Pi/Paseo system acceptance using a scripted local
-  endpoint, plus an opt-in local Pi/llama.cpp guidance benchmark with per-run
-  outcomes, provider usage, tool/delegation counts and action candidates. The
-  benchmark defaults to Spark-X2.6-4B Q8 with thinking off and retries failed
-  tasks once at low thinking, reporting total task completion time. It declares
-  eligible delegation keys to the model and records unmet fixture steps.
+  endpoint, plus local Pi guidance benchmarks for read-only, no-op, and targeted
+  fixes. Benchmarks use Spark-X2.6-4B Q8 with thinking off, retry failed behavior
+  cases once at low thinking, and record total task time, provider usage,
+  tool/delegation counts, and action candidates.
 - Added Core/Team/Project/User guidance with required standing Core rules, native
   progressive skills, source diagnostics and `ltcook guidance inspect`.
 - Added Team-routed Plan prefill/finalization, Team-authored timestamped Markdown,

@@ -475,11 +475,16 @@ def test_initialize_uses_pending_appdata_and_keeps_extracted_bundle_alive(
         "ltcook_distr.payload.app_lifecycle.prepare_services.prepare_services",
         lambda root, *, environment: observed.update(services_appdata=root),
     )
+    monkeypatch.setattr(
+        "ltcook_distr.payload.app_lifecycle.prepare_ollama.prepare_ollama",
+        lambda root, *, environment: observed.update(ollama_appdata=root),
+    )
 
     actions.initialize(context)
 
     assert observed["appdata"] == appdata
     assert observed["services_appdata"] == appdata
+    assert observed["ollama_appdata"] == appdata
     assert not observed["bundle"].exists()
     assert owner.read_text(encoding="utf-8") == "pending-owner"
     assert not (tmp_path / "config").exists()

@@ -423,12 +423,18 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just runtime test` | Run runtime unit/native/integration and team contract tests. |
 | `just runtime test-integration` | Run runtime integration tests. |
 | `just runtime build` | Compile the runtime, Pi SDK/RPC launcher, Pi extension, and Paseo plugin. |
+| `just ibb probe` | Run the opt-in local Spark/Pi probe; requires normal app setup and the exact local model. |
+| `just ibb audit-static` | Run model-free guidance inventory checks. |
+| `just ibb audit` | Run the local Spark semantic guidance audit. |
+| `just ibb behavior` | Run read-only, no-op, and targeted-fix scenarios in both guidance arms; retry failures once at low thinking. |
+| `just ibb bottlenecks` | Run all three paired scenarios for three repetitions with retries disabled and Perfetto-compatible traces. |
+| `ltcook app doctor --verbose --json` | Inspect AppRC paths and local Ollama/Spark readiness. |
 | `just check` | Enforce Prettier/Ruff formatting, TypeScript types, Python lint, and Pyright. |
 | `just test` | Run Bun unit/native/integration and team contract tests, plus Python tests excluding `integration` and `system`. |
 | `just test-integration` | Run marked Python and TypeScript integration tests. |
 | `just test-system` | Run system checks, including required Linux real Pi/Paseo scripted acceptance. |
 | `just build` | Build/stage runtime, team, and service production assets and the Python wheel/source distribution. |
-| `just sync`, `just install` | Prepare the checkout-local uv environment, install frozen locks, build, stage assets, and install the Python application. |
+| `just sync`, `just install` | Prepare the checkout-local uv environment, install frozen locks, build, stage assets, and register the Python application. Does not provision Ollama. |
 | `just build-native` | Build committed-source Linux setup and SDK checksums with uv 0.13.6 and Rust/LLVM. |
 | `just format`, `just format-check` | Format authored TypeScript/Python or check the existing formatting. |
 | `just run -- COMMAND ...` | Run a command with preserved arguments in the locked uv environment. |

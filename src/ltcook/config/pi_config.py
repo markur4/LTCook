@@ -95,7 +95,30 @@ def pi_documents(
             ]
         },
     }
-    return {agent_home / "web-search.json": web}
+    models: dict[str, object] = {
+        "providers": {
+            "ollama": {
+                "baseUrl": "http://127.0.0.1:11434/v1",
+                "api": "openai-completions",
+                "apiKey": "ollama",
+                "models": [
+                    {
+                        "id": "ltcook-spark-x2.6-4b-q8_0-ctx8192:latest",
+                        "name": "LTCook Spark Q8_0 (8192 context)",
+                        "contextWindow": 8192,
+                        "maxTokens": 2048,
+                        "reasoning": True,
+                        "thinkingLevelMap": {
+                            "off": "none",
+                            "low": "low",
+                            "high": "high",
+                        },
+                    }
+                ],
+            }
+        }
+    }
+    return {agent_home / "web-search.json": web, agent_home / "models.json": models}
 
 
 def write_pi_config(
@@ -120,6 +143,21 @@ def write_pi_config(
         pi_home=pi_home,
     ).items():
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if path.name == "models.json" and path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError("Managed Pi models.json is not valid JSON.") from exc
+            if isinstance(existing, dict):
+                existing_providers = existing.get("providers", {})
+                new_providers = document.get("providers", {})
+                if isinstance(existing_providers, dict) and isinstance(
+                    new_providers, dict
+                ):
+                    document = {
+                        **existing,
+                        "providers": {**existing_providers, **new_providers},
+                    }
         fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:

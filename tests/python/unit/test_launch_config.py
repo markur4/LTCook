@@ -280,7 +280,7 @@ def test_pi_documents_keep_secrets_out_of_json_and_write_private_files(tmp_path)
     )
     rendered = json.dumps(list(documents.values()))
 
-    document = next(iter(documents.values()))
+    document = documents[pi_home / "web-search.json"]
     assert document["provider"] == "searxng"
     assert document["webSearch"] == {"allowedProviders": ["searxng"]}
     assert "searchRouting" not in document
@@ -292,7 +292,16 @@ def test_pi_documents_keep_secrets_out_of_json_and_write_private_files(tmp_path)
         "allowedModes": ["readable", "raw"],
         "defaultMode": "readable",
     }
-    assert set(documents) == {pi_home / "web-search.json"}
+    assert set(documents) == {pi_home / "web-search.json", pi_home / "models.json"}
+    assert (
+        documents[pi_home / "models.json"]["providers"]["ollama"]["models"][0][
+            "contextWindow"
+        ]
+        == 8192
+    )
+    assert documents[pi_home / "models.json"]["providers"]["ollama"]["models"][0][
+        "thinkingLevelMap"
+    ] == {"off": "none", "low": "low", "high": "high"}
     assert "$CRAWL4AI_API_TOKEN" in rendered
     assert "secret-value" not in rendered
     assert all("context7" not in document for document in documents.values())
@@ -306,6 +315,21 @@ def test_pi_documents_keep_secrets_out_of_json_and_write_private_files(tmp_path)
     assert all(path.stat().st_mode & 0o777 == 0o600 for path in written)
     assert {path.parent for path in written} == {pi_home}
     assert json.loads(paseo_config.read_text(encoding="utf-8")) == {"user-owned": True}
+
+
+def test_pi_writer_preserves_unrelated_local_models(tmp_path):
+    config = _native_config()
+    deployment = tmp_path / "deployment"
+    pi_home = deployment / "workspaces" / "workspace" / "pi"
+    pi_home.mkdir(parents=True)
+    models_path = pi_home / "models.json"
+    models_path.write_text(json.dumps({"providers": {"custom": {"models": []}}}))
+
+    write_pi_config(config, owned_dir=deployment / "app", pi_home=pi_home)
+
+    models = json.loads(models_path.read_text())
+    assert "custom" in models["providers"]
+    assert "ollama" in models["providers"]
 
 
 def test_pi_writer_refuses_external_home_without_overwriting_files(tmp_path):

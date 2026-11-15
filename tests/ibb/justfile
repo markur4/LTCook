@@ -1,0 +1,25 @@
+set working-directory := "../.."
+
+[group('IBB')]
+probe:
+    uv run --locked python -m ltcook_dev.ibb probe
+
+[group('IBB')]
+audit-static:
+    uv run --locked python -m ltcook_dev.ibb audit --static
+
+[group('IBB')]
+audit:
+    uv run --locked python -m ltcook_dev.ibb audit
+
+[group('IBB')]
+behavior:
+    uv run --locked python -m ltcook_dev.ibb behavior
+
+[group('IBB')]
+bottlenecks:
+    uv run --locked python -m ltcook_dev.ibb bottlenecks
+
+[group('IBB')]
+all:
+    uv run --locked python -m ltcook_dev.ibb all

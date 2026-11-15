@@ -13,7 +13,7 @@ layout, packaging boundary, verification limits, and current release workflow.
   - [Documentation authoring](#documentation-authoring)
 - [Verify and release](#verify-and-release)
   - [Verification](#verification)
-  - [Local guidance benchmark](#local-guidance-benchmark)
+  - [Local Ollama and IBB](#local-ollama-and-ibb)
   - [Asset packaging](#asset-packaging)
   - [Integration and system procedures](#integration-and-system-procedures)
   - [Releases](#releases)
@@ -168,56 +168,61 @@ an explicitly prepared environment. System checks may require service, network,
 source archive, native OS, or installer prerequisites. Do not add an unbounded
 model prompt loop to quick checks.
 
-## Local guidance benchmark
+## Local Ollama and IBB
 
-The opt-in [guidance benchmark](../tests/benchmarks/guidance.ts) compares minimal
-Team guidance with complete LTCook guidance using the same `default-minimal`
-Team, selected model, tool definitions, fixture, and Core rules/skills in both
-arms. It uses Pi's public SDK and existing `models.json` provider configuration.
-Start your own llama.cpp OpenAI-compatible server on loopback and register the
-model there through Pi's normal configuration. No model download, authentication
-client, external provider, or service provisioning is performed.
+Normal LTCook application setup detects a local Ollama installation or uses the
+official platform installer when missing, then ensures
+`SparkLLM/Spark-X2.6-4B:q8_0` (about 4.4 GB). This is separate from `just sync`,
+editable registration, deterministic tests, and CI. Setup records readiness
+under AppRC ownership and reuses a healthy user-managed service. It does not bind
+Ollama beyond loopback or stop a user-owned service.
 
-Run from the checkout root after `just sync`:
+Ollama's [Linux installer](https://docs.ollama.com/linux) may require `sudo`;
+the [Windows installer](https://docs.ollama.com/windows) is user-scoped; the
+[macOS application](https://docs.ollama.com/macos) requires a GUI install/consent
+handoff. Model storage stays under Ollama's own platform-specific location. This
+checkout's live verification used Fedora 44 on WSL2 only; Windows and macOS
+installation behavior remains documented, not natively validated.
+
+IBB commands require a prepared local model and do not install Ollama or pull
+weights:
 
 ```shell
-bun tests/benchmarks/guidance.ts /absolute/path/to/models.json local Spark-X2.6-4B-Q8 /absolute/path/to/results.json 3
+just ibb probe
+just ibb audit-static
+just ibb audit
+just ibb behavior
+just ibb bottlenecks
 ```
 
-The first two arguments select an existing Pi model file and provider ID. The
-remaining arguments select model ID, JSON output, 1–20 repetitions, and optional
-starting thinking level (`off`, `low`, or `high`). The default model label is
-`Spark-X2.6-4B-Q8`; use the exact ID in your Pi configuration and configure it
-with reasoning support. The default is thinking off. Each failed off-thinking
-task automatically repeats once with low thinking on a fresh copy of the same
-fixture. Low and high starts are diagnostic runs and do not auto-retry.
-For Spark served by LM Studio, set the Pi model's `thinkingLevelMap.off` to
-`"none"` so the provider receives an explicit reasoning-off request. This backend
-accepts a low request but runs its on setting; low and high are not distinct
-reasoning levels there. Confirm the provider's effective setting before comparing
-thinking modes. With an 8,192-token server context, a conservative Pi context
-estimate may leave only one output token. Set the Pi model's
-`samplingParams.max_completion_tokens` to a tested value such as `2048` only when
-the server has enough room for both the actual prompt and response.
-Only a loopback endpoint is accepted. A run has a 120-second deadline, a 24-tool
-budget, and at most two direct delegations to another declared eligible member.
-The delegate tool declares the eligible member keys in its schema; a child cannot
-delegate again. A failed run records which required fixture steps were missed.
-It exposes only fixed fixture read/write/verification tools and a clearly named
-synthetic `benchmark_delegate` tool; it does not measure RuntimeController Pass
-scheduling. Each run uses a fresh temporary workspace, removed after disposal.
+Reports and Perfetto-compatible Chrome trace files are written privately under
+`~/.cache/ltcook/ibb` by default. Open a `.trace.json` artifact in
+[Perfetto UI](https://ui.perfetto.dev/) to inspect task, Pi prompt, and fixture
+tool timing without prompt or transcript content. Live runs use Pi and the local
+Ollama endpoint. Small samples are smoke measurements, not broad performance
+claims. The static audit is model-free; the semantic audit sends the captured
+Pi prompt and one loaded source at a time to Ollama's structured-output API to
+fit the 8,192-token context. Live evaluation is opt-in and must not run in
+ordinary CI. Use `ltcook app doctor` and the existing repair flow to diagnose
+installed prerequisites.
 
-The JSON report records each task's initial and final success, total wall-clock
-completion time across attempts, and each attempt's thinking level, success,
-elapsed time, provider-reported input, output/cache tokens, tool calls,
-delegations, and rule-based unnecessary-action candidates. Aggregates include
-initial and post-retry success and mean total task time. Repeated reads,
-verification calls, and answer writes are candidates
-for inspection; a necessary correction may trigger them. Aggregates compare the
-two arms, whose order alternates each repetition. Zero usage may mean the provider
-did not report tokens; it is not an estimate. Model scores never gate CI or Pass
-completion. A live local model run is explicitly initiated by this command;
-normal checks use no model service.
+The benchmark uses fixture tools and no longer requires synthetic delegation for
+trivial tasks. Isolated Pi comparisons do not establish production Paseo
+scheduling behavior.
+
+Behavior runs include read-only, no-op, and targeted-fix cases. Failed
+off-thinking cases retry once with low thinking; paired timing runs disable
+retries. Pydantic Evals grades the fixture oracles. The JSON report records each
+task's initial and final success, total wall-clock completion time across
+attempts, and each attempt's thinking level, success, elapsed time,
+provider-reported input, output/cache tokens, tool calls, delegations, and
+rule-based unnecessary-action candidates. Aggregates include initial and
+post-retry success and mean total task time. Repeated reads, verification calls,
+and answer writes are candidates for inspection; a necessary correction may
+trigger them. Aggregates compare the two arms, whose order alternates each
+repetition. Zero usage may mean the provider did not report tokens; it is not an
+estimate. Model scores never gate CI or Pass completion. A live local model run
+is explicitly initiated by this command; normal checks use no model service.
 
 ## Asset packaging
 

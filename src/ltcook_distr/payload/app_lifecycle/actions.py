@@ -35,6 +35,7 @@ def initialize(context: OperationContext) -> None:
     :param context: Pending operation with SDK-initialized resource placement.
     :return: None.
     """
+    from .prepare_ollama import prepare_ollama
     from .prepare_runtime import prepare_runtime
     from .prepare_services import prepare_services
 
@@ -51,6 +52,7 @@ def initialize(context: OperationContext) -> None:
         extract_archive(archive, bundle)
         prepare_runtime(bundle, appdata, environment=environment)
     prepare_services(appdata, environment=environment)
+    prepare_ollama(appdata, environment=environment)
 
 
 def ensure_service_secrets(environment: Mapping[str, str]) -> None:
