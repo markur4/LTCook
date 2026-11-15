@@ -15,6 +15,7 @@ dependencies = [
     "apprc @ git+https://github.com/HisQu/apprc.git@ae99f240568bb1ef6890dfa5db677a686834d609#subdirectory=src/apprc_dev/packaging/terminal",
     "filelock>=3.18",
     "typer",
+    "rich>=13.9",
 ]
 
 [project.urls]

@@ -9,7 +9,7 @@ from ltcook_distr.payload.app_lifecycle import prepare_ollama
 
 def test_existing_server_and_models_are_reused_without_mutation(tmp_path, monkeypatch):
     base = {"name": prepare_ollama.MODEL, "digest": "base-digest"}
-    derived = {"name": prepare_ollama.IBB_MODEL, "digest": "derived-digest"}
+    derived = {"name": prepare_ollama.EVAL_MODEL, "digest": "derived-digest"}
     calls = []
 
     def json_response(url, **_):
@@ -30,14 +30,14 @@ def test_existing_server_and_models_are_reused_without_mutation(tmp_path, monkey
     assert receipt["ready"] is True
     assert receipt["ollama_installed_by_ltcook"] is False
     assert receipt["server_started_by_ltcook"] is False
-    assert receipt["ibb_model_digest"] == "derived-digest"
+    assert receipt["eval_model_digest"] == "derived-digest"
     assert calls == []
 
 
 def test_missing_derived_model_is_created_from_exact_q8_source(tmp_path, monkeypatch):
     base = {"name": prepare_ollama.MODEL, "digest": "base-digest"}
     responses = iter(
-        [[base], [base, {"name": prepare_ollama.IBB_MODEL, "digest": "ctx-digest"}]]
+        [[base], [base, {"name": prepare_ollama.EVAL_MODEL, "digest": "ctx-digest"}]]
     )
     calls = []
 
@@ -68,7 +68,7 @@ def test_missing_derived_model_is_created_from_exact_q8_source(tmp_path, monkeyp
         [
             str(executable),
             "create",
-            prepare_ollama.IBB_MODEL,
+            prepare_ollama.EVAL_MODEL,
             "-f",
             str(tmp_path / "deployment/spark-8192.Modelfile"),
         ]
@@ -76,4 +76,4 @@ def test_missing_derived_model_is_created_from_exact_q8_source(tmp_path, monkeyp
     assert (tmp_path / "deployment/spark-8192.Modelfile").read_text() == (
         f"FROM {prepare_ollama.MODEL}\nPARAMETER num_ctx 8192\n"
     )
-    assert json.loads(receipt.read_text())["ibb_model"] == prepare_ollama.IBB_MODEL
+    assert json.loads(receipt.read_text())["eval_model"] == prepare_ollama.EVAL_MODEL

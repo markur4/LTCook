@@ -83,6 +83,11 @@ commands provide launch operations and diagnostics:
 | `ltcook services status [--workspace ROOT]` | Show local Compose status or the configured remote-service mode. |
 | `ltcook services logs [--workspace ROOT]` | Show recent local service logs. |
 | `ltcook app doctor --json`, `ltcook app paths` | Inspect installation health and recorded resource placement. |
+| `ltcook eval audit` | Run the static and semantic Instruction Audit. |
+| `ltcook eval run [--quick]` | Run all Agent Evals categories by default, or the fast check with `--quick`. |
+| `ltcook eval analyze` | Run three-repetition Bottleneck Analysis. |
+| `ltcook eval report RUN_ID` | Show a persisted evaluation report. |
+| `ltcook eval list`, `watch`, `status`, `cancel`, `delete` | Manage shared Agent Evals runs and history. |
 | `python -m ltcook.launch runtime [--workspace ROOT]` | Internal module entry point for the same global or project launch. |
 | `python -m ltcook.launch environment --workspace ROOT` | Emit raw workspace-specific child environment JSON; may contain secrets. |
 | `python -m ltcook.launch write-native-config --workspace ROOT` | Internal entry point for the private Pi-only `web-search.json` writer. |
@@ -423,11 +428,11 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just runtime test` | Run runtime unit/native/integration and team contract tests. |
 | `just runtime test-integration` | Run runtime integration tests. |
 | `just runtime build` | Compile the runtime, Pi SDK/RPC launcher, Pi extension, and Paseo plugin. |
-| `just ibb probe` | Run the opt-in local Spark/Pi probe; requires normal app setup and the exact local model. |
-| `just ibb audit-static` | Run model-free guidance inventory checks. |
-| `just ibb audit` | Run the local Spark semantic guidance audit. |
-| `just ibb behavior` | Run read-only, no-op, and targeted-fix scenarios in both guidance arms; retry failures once at low thinking. |
-| `just ibb bottlenecks` | Run all three paired scenarios for three repetitions with retries disabled and Perfetto-compatible traces. |
+| `just eval probe` | Run the opt-in local Spark/Pi probe; requires normal app setup and the exact local model. |
+| `just eval audit-static` | Run model-free instruction inventory checks. |
+| `just eval audit` | Run the local Spark semantic Instruction Audit. |
+| `just eval behavior` | Run read-only, no-op, and targeted-fix Behavioral Evals in both guidance arms; retry failures once at low thinking. |
+| `just eval bottlenecks` | Run all three paired scenarios for three repetitions with retries disabled and Perfetto-compatible traces. |
 | `ltcook app doctor --verbose --json` | Inspect AppRC paths and local Ollama/Spark readiness. |
 | `just check` | Enforce Prettier/Ruff formatting, TypeScript types, Python lint, and Pyright. |
 | `just test` | Run Bun unit/native/integration and team contract tests, plus Python tests excluding `integration` and `system`. |

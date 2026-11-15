@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 from ._common import SetupError, download, no_links, run, write_json
 
 MODEL = "SparkLLM/Spark-X2.6-4B:q8_0"
-IBB_MODEL = "ltcook-spark-x2.6-4b-q8_0-ctx8192:latest"
+EVAL_MODEL = "ltcook-spark-x2.6-4b-q8_0-ctx8192:latest"
 ENDPOINT = "http://127.0.0.1:11434"
 
 
@@ -141,20 +141,20 @@ def prepare_ollama(appdata: Path, *, environment: dict[str, str] | None = None) 
         model = next((item for item in tags if item.get("name") == MODEL), None)
     if model is None:
         raise SetupError(f"Ollama did not make the required model available: {MODEL}")
-    derived = next((item for item in tags if item.get("name") == IBB_MODEL), None)
+    derived = next((item for item in tags if item.get("name") == EVAL_MODEL), None)
     if derived is None:
         if executable is None:
-            raise SetupError(f"The LTCook 8192 context model is missing: {IBB_MODEL}")
+            raise SetupError(f"The LTCook 8192 context model is missing: {EVAL_MODEL}")
         modelfile = deployment / "spark-8192.Modelfile"
         modelfile.write_text(
             f"FROM {MODEL}\nPARAMETER num_ctx 8192\n", encoding="utf-8"
         )
-        run([executable, "create", IBB_MODEL, "-f", str(modelfile)], environment=env)
+        run([executable, "create", EVAL_MODEL, "-f", str(modelfile)], environment=env)
         tags = _json(f"{ENDPOINT}/api/tags").get("models", [])
-        derived = next((item for item in tags if item.get("name") == IBB_MODEL), None)
+        derived = next((item for item in tags if item.get("name") == EVAL_MODEL), None)
     if derived is None:
         raise SetupError("Ollama did not create the LTCook 8192-token Spark model.")
-    show = _json(f"{ENDPOINT}/api/show", data={"name": IBB_MODEL, "verbose": False})
+    show = _json(f"{ENDPOINT}/api/show", data={"name": EVAL_MODEL, "verbose": False})
     if "PARAMETER num_ctx 8192" not in str(show.get("modelfile", "")):
         raise SetupError("Ollama did not confirm the 8192-token Spark allocation.")
     write_json(
@@ -166,8 +166,8 @@ def prepare_ollama(appdata: Path, *, environment: dict[str, str] | None = None) 
             "version": version,
             "model": MODEL,
             "model_digest": model.get("digest"),
-            "ibb_model": IBB_MODEL,
-            "ibb_model_digest": derived.get("digest"),
+            "eval_model": EVAL_MODEL,
+            "eval_model_digest": derived.get("digest"),
             "context_tokens": 8192,
             "ollama_installed_by_ltcook": installed,
             "server_started_by_ltcook": owned_process,

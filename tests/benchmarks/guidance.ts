@@ -140,7 +140,7 @@ export async function runFixture(input: {
     instructions: { promptSha256: null, promptCharacters: null, resources: [] },
   };
   const taskSpan = input.telemetry?.begin(
-    `ibb.task.${input.scenario}.${input.arm}.${input.repetition}.${input.thinking}`,
+    `evals.task.${input.scenario}.${input.arm}.${input.repetition}.${input.thinking}`,
   );
   const effectivePrompts: string[] = [];
   const instructionResources = new Map<string, RunResult['instructions']['resources'][number]>();
@@ -242,7 +242,7 @@ export async function runFixture(input: {
         description: 'Read the approved input fixture.',
         parameters: Type.Object({}),
         async execute() {
-          const span = input.telemetry?.begin('ibb.tool.fixture_read');
+          const span = input.telemetry?.begin('evals.tool.fixture_read');
           try {
             countTool();
             if (reads++) result.unnecessaryActionCandidates.repeatedReads++;
@@ -261,7 +261,7 @@ export async function runFixture(input: {
         description: 'Write the calculated total to answer.json.',
         parameters: Type.Object({ total: Type.Number() }),
         async execute(_id, args) {
-          const span = input.telemetry?.begin('ibb.tool.fixture_write');
+          const span = input.telemetry?.begin('evals.tool.fixture_write');
           try {
             countTool();
             if (writes++) result.unnecessaryActionCandidates.redundantWrites++;
@@ -278,7 +278,7 @@ export async function runFixture(input: {
         description: 'Run the fixed local verification command.',
         parameters: Type.Object({}),
         async execute() {
-          const span = input.telemetry?.begin('ibb.tool.fixture_verify');
+          const span = input.telemetry?.begin('evals.tool.fixture_verify');
           try {
             countTool();
             if (verifications++) result.unnecessaryActionCandidates.repeatedVerification++;
@@ -304,7 +304,7 @@ export async function runFixture(input: {
           message: Type.String({ maxLength: 2000 }),
         }),
         async execute(_id, raw) {
-          const span = input.telemetry?.begin('ibb.tool.benchmark_delegate');
+          const span = input.telemetry?.begin('evals.tool.benchmark_delegate');
           try {
             const args = raw as { memberKey: string; message: string };
             countTool();
@@ -324,7 +324,7 @@ export async function runFixture(input: {
               );
             result.delegations++;
             const child = await create(target.key, depth + 1);
-            const promptSpan = input.telemetry?.begin('ibb.pi.prompt');
+            const promptSpan = input.telemetry?.begin('evals.pi.prompt');
             try {
               await child.prompt(args.message, { expandPromptTemplates: false });
             } finally {
@@ -377,7 +377,7 @@ export async function runFixture(input: {
           'targeted-fix':
             'Inspect the fixture and existing answer. Correct only answer.json if needed, then use the provided verification tool and report the result. This is a tiny task. Do not delegate.',
         };
-        const promptSpan = input.telemetry?.begin('ibb.pi.prompt');
+        const promptSpan = input.telemetry?.begin('evals.pi.prompt');
         try {
           await session.prompt(prompts[input.scenario], { expandPromptTemplates: false });
         } finally {
@@ -458,7 +458,7 @@ export async function runFixture(input: {
         if (prompt) {
           result.instructions.promptSha256 = createHash('sha256').update(prompt).digest('hex');
           result.instructions.promptCharacters = prompt.length;
-          if (process.env.LTCOOK_IBB_CAPTURE_PROMPT === '1')
+          if (process.env.LTCOOK_AGENT_EVALS_CAPTURE_PROMPT === '1')
             result.instructions.effectivePrompt = prompt;
         }
         result.instructions.resources = [...instructionResources.values()];

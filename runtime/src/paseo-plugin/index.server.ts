@@ -1,4 +1,5 @@
 import { defineRpc } from '@getpaseo/plugin';
+import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import {
   PanelDetailSourceSchema,
@@ -10,6 +11,11 @@ const teamDetail = defineRpc({
   name: 'ltcook.team.detail',
   input: TeamDetailRequestSchema,
   output: TeamDetailResponseSchema,
+});
+const evalsDiagnostics = defineRpc({
+  name: 'ltcook.evals.diagnostics',
+  input: EvalRequestSchema,
+  output: EvalResponseSchema,
 });
 import {
   panelSnapshot,
@@ -73,6 +79,25 @@ async function runtimeRequest(
 }
 
 export default function contribute(server: PluginServerContext) {
+  server.handle(evalsDiagnostics, async (input) => {
+    const { endpoint, headers } = runtimeConfig();
+    const routes = {
+      start: '/v1/evals/start',
+      list: '/v1/evals/list',
+      status: '/v1/evals/status',
+      report: '/v1/evals/report',
+      cancel: '/v1/evals/cancel',
+      delete: '/v1/evals/delete',
+    };
+    const { response, detail } = await runtimeRequest(endpoint, headers, routes[input.action], {
+      ...(input.preset ? { preset: input.preset } : {}),
+      ...(input.runId ? { runId: input.runId } : {}),
+      ...(input.after !== undefined ? { after: input.after } : {}),
+    });
+    if (!response.ok)
+      throw new Error(`Agent Evals diagnostics unavailable (${response.status})${detail}`);
+    return response.json();
+  });
   server.handle(teamDetail, async (input) => {
     const { endpoint, headers } = runtimeConfig();
     const { response, detail, payload } = await runtimeRequest(endpoint, headers, '/v1/snapshot', {

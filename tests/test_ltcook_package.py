@@ -50,6 +50,7 @@ def _asset_source(root: Path) -> Path:
         "paseo-plugin.json",
         "index.server.ts",
         "index.client.tsx",
+        "shared/evals.ts",
         "shared/panel-snapshot.ts",
         "shared/panel-details.ts",
         "shared/view-model.ts",

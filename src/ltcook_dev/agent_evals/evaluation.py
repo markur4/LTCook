@@ -1,4 +1,4 @@
-"""Pydantic Evals cases and objective success evaluators for IBB."""
+"""Pydantic Evals cases and objective success evaluators for Agent Evals."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ def _success(ctx: EvaluatorContext[dict[str, str], dict[str, bool], None]) -> bo
 
 
 DATASET = Dataset(
-    name="ltcook-ibb-v1",
+    name="ltcook-agent-evals-v1",
     cases=[
         Case(
             name="read-only",

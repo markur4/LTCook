@@ -9,6 +9,13 @@ import type {
   SessionSnapshot,
 } from '../workflow-api/index.js';
 import { canonicalWorkspace } from '../core/workspace.js';
+import type { EvalRunService } from '../evals/service.js';
+import {
+  EvalDeleteRequestSchema,
+  EvalRunIdSchema,
+  EvalStartRequestSchema,
+  EvalStatusRequestSchema,
+} from '../evals/contracts.js';
 export interface RuntimeLifecycleIdentity {
   instanceId: string;
   deploymentRoot: string;
@@ -81,6 +88,7 @@ export class RuntimeApi {
   private lifecycle: RuntimeLifecycleIdentity | undefined;
   private shutdown: (() => Promise<void>) | undefined;
   private stopping = false;
+  private evals: EvalRunService | undefined;
   constructor(
     runtime: RuntimeController | undefined,
     private readonly secret: string,
@@ -92,6 +100,9 @@ export class RuntimeApi {
   }
   setRuntime(runtime: RuntimeController): void {
     this.runtime = runtime;
+  }
+  setEval(service: EvalRunService): void {
+    this.evals = service;
   }
   setLifecycle(identity: RuntimeLifecycleIdentity, shutdown: () => Promise<void>): void {
     this.lifecycle = { ...identity };
@@ -161,6 +172,12 @@ export class RuntimeApi {
           '/v1/runtime/stop',
           '/v1/tool/authorize',
           '/v1/ried',
+          '/v1/evals/start',
+          '/v1/evals/status',
+          '/v1/evals/list',
+          '/v1/evals/report',
+          '/v1/evals/cancel',
+          '/v1/evals/delete',
         ].includes(request.url ?? '')) ||
       (request.method === 'GET' && request.url === '/v1/status')
     )) {
@@ -259,6 +276,53 @@ export class RuntimeApi {
           : undefined;
       if (!actor) {
         response.writeHead(401).end('{"error":"unauthorized"}');
+        return;
+      }
+      if ((request.url ?? '').startsWith('/v1/evals/')) {
+        if (actor.kind !== 'user') {
+          response.writeHead(403).end('{"error":"user authentication required"}');
+          return;
+        }
+        if (!this.evals) {
+          response.writeHead(503).end('{"error":"Agent Evals service is not ready"}');
+          return;
+        }
+        let value: unknown;
+        switch (request.url) {
+          case '/v1/evals/start': {
+            const { preset } = EvalStartRequestSchema.parse(parsed);
+            value = { runId: await this.evals.start(preset) };
+            break;
+          }
+          case '/v1/evals/status': {
+            const { runId, after } = EvalStatusRequestSchema.parse(parsed);
+            value = await this.evals.status(runId, after);
+            break;
+          }
+          case '/v1/evals/list':
+            value = { runs: this.evals.list() };
+            break;
+          case '/v1/evals/report': {
+            const { runId } = EvalRunIdSchema.parse(parsed);
+            value = this.evals.report(runId);
+            break;
+          }
+          case '/v1/evals/cancel': {
+            const { runId } = EvalRunIdSchema.parse(parsed);
+            value = { summary: await this.evals.cancel(runId) };
+            break;
+          }
+          case '/v1/evals/delete': {
+            const { runId } = EvalDeleteRequestSchema.parse(parsed);
+            await this.evals.delete(runId);
+            value = { deleted: true };
+            break;
+          }
+          default:
+            response.writeHead(404).end('{}');
+            return;
+        }
+        response.writeHead(200).end(JSON.stringify(value));
         return;
       }
       if (request.url === '/v1/session/open' && actor.kind !== 'user') {

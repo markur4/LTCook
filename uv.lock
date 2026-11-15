@@ -198,6 +198,7 @@ dependencies = [
     { name = "apprc" },
     { name = "apprc-core" },
     { name = "filelock" },
+    { name = "rich" },
     { name = "typer" },
 ]
 
@@ -216,6 +217,7 @@ requires-dist = [
     { name = "apprc", git = "https://github.com/HisQu/apprc.git?subdirectory=src%2Fapprc_dev%2Fpackaging%2Fterminal&rev=ae99f240568bb1ef6890dfa5db677a686834d609" },
     { name = "apprc-core", git = "https://github.com/HisQu/apprc.git?rev=ae99f240568bb1ef6890dfa5db677a686834d609" },
     { name = "filelock", specifier = ">=3.18" },
+    { name = "rich", specifier = ">=13.9" },
     { name = "typer" },
 ]
 

@@ -152,7 +152,7 @@ it installs the official user-scoped `uv` executable and lets `uv` provision a
 compatible Python; no system Python or administrator access is required.
 
 Application setup also prepares Node, selected web-service prerequisites, and
-local Ollama with Spark Q8_0 (about 4.4 GB) for agent evaluation. `just sync` does
+local Ollama with Spark Q8_0 (about 4.4 GB) for Agent Evals. `just sync` does
 not provision these application services.
 Installing a missing Podman may require the host's normal elevation or package
 manager. Merely entering this repository or inspecting status must not install

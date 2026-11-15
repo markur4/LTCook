@@ -1,4 +1,4 @@
-from ltcook_dev.ibb.__main__ import _audit_static
+from ltcook_dev.agent_evals.__main__ import _audit_static
 
 
 def test_static_audit_detects_exact_duplicates_and_reports_coverage(

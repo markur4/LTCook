@@ -1,4 +1,4 @@
-"""Credential-free local IBB command line."""
+"""Credential-free local Agent Evals command line."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from ltcook_dev.ibb.evaluation import DATASET
+from ltcook_dev.agent_evals.evaluation import DATASET
 
 MODEL = "ltcook-spark-x2.6-4b-q8_0-ctx8192:latest"
 ENDPOINT = "http://127.0.0.1:11434"
@@ -25,7 +25,9 @@ def _ollama() -> dict:
 
 
 def _report(kind: str, result: dict) -> Path:
-    root = Path(os.environ.get("LTCOOK_IBB_RESULTS", Path.home() / ".cache/ltcook/ibb"))
+    root = Path(
+        os.environ.get("LTCOOK_EVAL_RESULTS", Path.home() / ".cache/ltcook/evals")
+    )
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     root.chmod(0o700)
     path = root / f"{kind}-{int(time.time())}.json"
@@ -33,7 +35,7 @@ def _report(kind: str, result: dict) -> Path:
     path.chmod(0o600)
     summary = path.with_suffix(".md")
     summary.write_text(
-        f"# IBB {kind}\n\n```json\n{json.dumps(result, indent=2)}\n```\n",
+        f"# Agent Evals {kind}\n\n```json\n{json.dumps(result, indent=2)}\n```\n",
         encoding="utf-8",
     )
     summary.chmod(0o600)
@@ -109,7 +111,9 @@ def _run_benchmark(
     capture_prompt: bool = False,
 ) -> dict:
     readiness = _probe()
-    root = Path(os.environ.get("LTCOOK_IBB_RESULTS", Path.home() / ".cache/ltcook/ibb"))
+    root = Path(
+        os.environ.get("LTCOOK_EVAL_RESULTS", Path.home() / ".cache/ltcook/evals")
+    )
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     models = root / "models.json"
     models.write_text(
@@ -153,7 +157,7 @@ def _run_benchmark(
     ]
     environment = os.environ.copy()
     if capture_prompt:
-        environment["LTCOOK_IBB_CAPTURE_PROMPT"] = "1"
+        environment["LTCOOK_AGENT_EVALS_CAPTURE_PROMPT"] = "1"
     completed = subprocess.run(
         command,
         env=environment,
@@ -359,7 +363,7 @@ def _semantic_audit() -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="ltcook-ibb")
+    parser = argparse.ArgumentParser(prog="ltcook-evals")
     parser.add_argument(
         "command", choices=("probe", "audit", "behavior", "bottlenecks", "all")
     )
@@ -390,5 +394,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (OSError, RuntimeError, ValueError) as error:
-        print(f"IBB failed: {error}", file=sys.stderr)
+        print(f"Agent Evals failed: {error}", file=sys.stderr)
         raise SystemExit(1)

@@ -13,7 +13,7 @@ layout, packaging boundary, verification limits, and current release workflow.
   - [Documentation authoring](#documentation-authoring)
 - [Verify and release](#verify-and-release)
   - [Verification](#verification)
-  - [Local Ollama and IBB](#local-ollama-and-ibb)
+  - [Local Ollama and Agent Evals](#local-ollama-and-agent-evals)
   - [Asset packaging](#asset-packaging)
   - [Integration and system procedures](#integration-and-system-procedures)
   - [Releases](#releases)
@@ -168,7 +168,7 @@ an explicitly prepared environment. System checks may require service, network,
 source archive, native OS, or installer prerequisites. Do not add an unbounded
 model prompt loop to quick checks.
 
-## Local Ollama and IBB
+## Local Ollama and Agent Evals
 
 Normal LTCook application setup detects a local Ollama installation or uses the
 official platform installer when missing, then ensures
@@ -184,19 +184,23 @@ handoff. Model storage stays under Ollama's own platform-specific location. This
 checkout's live verification used Fedora 44 on WSL2 only; Windows and macOS
 installation behavior remains documented, not natively validated.
 
-IBB commands require a prepared local model and do not install Ollama or pull
+Agent Evals commands require a prepared local model and do not install Ollama or pull
 weights:
 
 ```shell
-just ibb probe
-just ibb audit-static
-just ibb audit
-just ibb behavior
-just ibb bottlenecks
+ltcook eval audit
+ltcook eval run
+ltcook eval run --quick
+ltcook eval analyze
+just eval probe
+just eval audit-static
+just eval audit
+just eval behavior
+just eval bottlenecks
 ```
 
 Reports and Perfetto-compatible Chrome trace files are written privately under
-`~/.cache/ltcook/ibb` by default. Open a `.trace.json` artifact in
+`~/.cache/ltcook/evals` by default. Open a `.trace.json` artifact in
 [Perfetto UI](https://ui.perfetto.dev/) to inspect task, Pi prompt, and fixture
 tool timing without prompt or transcript content. Live runs use Pi and the local
 Ollama endpoint. Small samples are smoke measurements, not broad performance
@@ -206,7 +210,7 @@ fit the 8,192-token context. Live evaluation is opt-in and must not run in
 ordinary CI. Use `ltcook app doctor` and the existing repair flow to diagnose
 installed prerequisites.
 
-The benchmark uses fixture tools and no longer requires synthetic delegation for
+Behavioral Evals use fixture tools and no longer require synthetic delegation for
 trivial tasks. Isolated Pi comparisons do not establish production Paseo
 scheduling behavior.
 

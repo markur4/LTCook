@@ -6,6 +6,7 @@
   - [Install a release](#install-a-release)
   - [Install from a checkout](#install-from-a-checkout)
   - [Run the first command](#run-the-first-command)
+  - [Run Agent Evals](#run-agent-evals)
   - [Remove an installation](#remove-an-installation)
 - [Configure settings and paths](#configure-settings-and-paths)
   - [Initialize saved preferences](#initialize-saved-preferences)
@@ -153,6 +154,41 @@ The **Team status** panel contains three views:
 - **Agent Focus** shows role settings, current assignments, recorded handoff and
   report, plus native model/activity when available. **Open conversation** uses
   Paseo's existing chat and is unavailable for disconnected members.
+
+## Run Agent Evals
+
+Agent Evals combines instruction auditing, behavioral evaluation, and performance
+bottleneck analysis to assess the correctness, reliability, and efficiency of
+LTCook agents. Runs use the prepared local Spark model. Open **Agent Evals** in
+the Paseo panel to see progress, run history, comparisons, and structured
+results; a project chat session is not required. The semantic Instruction Audit
+inspects an isolated Pi prompt and does not include all instructions added by
+Paseo or the live runtime.
+
+The terminal provides the same run history and controls:
+
+```shell
+ltcook eval audit
+ltcook eval run                 # all three categories
+ltcook eval run --quick         # fast instruction and targeted-fix check
+ltcook eval analyze
+ltcook eval list
+ltcook eval watch RUN_ID
+ltcook eval status RUN_ID
+ltcook eval report RUN_ID
+ltcook eval cancel RUN_ID
+ltcook eval delete RUN_ID
+```
+
+`eval audit` runs the static inventory and semantic Instruction Audit;
+`eval analyze` runs paired Bottleneck Analysis with three repetitions. The
+default `eval run` covers all categories. `--quick` runs a static inventory and
+one targeted-fix behavioral case. Failed off-thinking cases retry once with low
+thinking; bottleneck comparisons do not retry. These are local
+diagnostics, not production-session evaluations. Run summaries, structured
+results, events, and timing traces are kept under LTCook runtime state; raw
+prompts and transcripts are not retained. Closing the terminal detaches from a
+run, while **Cancel run** or `ltcook eval cancel RUN_ID` stops it.
 
 Use **Refresh** to reload coordination state. Recorded dependencies, verification
 and approval gates, unavailable members, and uncertain deliveries explain why

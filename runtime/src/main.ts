@@ -5,6 +5,8 @@ import type { SessionSnapshot } from './workflow-api/index.js';
 import { selectedTeam } from './integrations/team-loader.js';
 import { RiedService } from './ried.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
+import { EvalRunService } from './evals/service.js';
+import { createEvalEngine } from './evals/engine.js';
 const EX_TEMPFAIL = 75;
 function isListenAddressInUse(error: unknown): boolean {
   return (
@@ -138,6 +140,7 @@ async function run(): Promise<void> {
   let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
   let apiListening = false;
   let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined;
+  let evals: EvalRunService | undefined;
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
   let shutdownPromise: Promise<void> | undefined;
@@ -174,6 +177,7 @@ async function run(): Promise<void> {
         }),
       );
       if (runtime) await attempt(() => runtime!.close());
+      if (evals) await attempt(() => evals!.close());
       if (host) await attempt(() => host!.close());
       if (api && apiListening) await attempt(() => api!.close());
       await attempt(() => telemetry.exportTrace());
@@ -200,7 +204,13 @@ async function run(): Promise<void> {
         'AppRC did not resolve required native runtime paths; launch through `ltcook launch runtime`.',
       );
     }
+    evals = new EvalRunService(
+      stateDirectory,
+      createEvalEngine({ piHome, resources: path.join(appRoot, 'runtime', 'resources') }),
+    );
+    await evals.initialize();
     api = new RuntimeApi(undefined, apiToken, apiListen);
+    api.setEval(evals);
     const apiUrl = await api.listen();
     apiListening = true;
     if (stopping) {

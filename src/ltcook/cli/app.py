@@ -17,6 +17,7 @@ from apprc.definition.installation import InstallationHooks
 import ltcook
 from ltcook._runtime_client import RuntimeClientError, stop_runtime
 from ltcook.auth import auth_cli
+from ltcook.cli.eval import eval_cli
 from ltcook.cli.planning import guidance_cli, planning_cli
 from ltcook.config.app import APP_RC
 from ltcook.config.bundle import LtcookConfig
@@ -45,6 +46,7 @@ app.add_typer(
     name="services",
     help="Manage local and configured remote service connections.",
 )
+app.add_typer(eval_cli, name="eval", help="Run and inspect Agent Evals.")
 
 
 def _package_version() -> str:
@@ -93,7 +95,7 @@ def _diagnose_payload() -> dict[str, object]:
                     "endpoint": data.get("endpoint"),
                     "model": data.get("model"),
                     "model_digest": data.get("model_digest"),
-                    "ibb_model": data.get("ibb_model"),
+                    "eval_model": data.get("eval_model"),
                 }
             except (OSError, json.JSONDecodeError):
                 ollama_readiness = {
@@ -188,7 +190,7 @@ def _ollama_resource_diagnostics(appdata: Path) -> dict[str, object]:
         data = json.loads(receipt.read_text(encoding="utf-8"))
         from ltcook_distr.payload.app_lifecycle.prepare_ollama import (
             ENDPOINT,
-            IBB_MODEL,
+            EVAL_MODEL,
             MODEL,
             _json,
         )
@@ -196,13 +198,13 @@ def _ollama_resource_diagnostics(appdata: Path) -> dict[str, object]:
         version = _json(f"{ENDPOINT}/api/version").get("version")
         models = _json(f"{ENDPOINT}/api/tags").get("models", [])
         model_details = _json(
-            f"{ENDPOINT}/api/show", data={"name": IBB_MODEL, "verbose": False}
+            f"{ENDPOINT}/api/show", data={"name": EVAL_MODEL, "verbose": False}
         )
         names = {item.get("name") for item in models if isinstance(item, dict)}
         ready = (
             data.get("ready") is True
             and MODEL in names
-            and IBB_MODEL in names
+            and EVAL_MODEL in names
             and "PARAMETER num_ctx 8192" in str(model_details.get("modelfile", ""))
             and version == data.get("version")
         )
@@ -214,8 +216,8 @@ def _ollama_resource_diagnostics(appdata: Path) -> dict[str, object]:
                 "version": version,
                 "model": MODEL,
                 "model_present": True,
-                "ibb_model": IBB_MODEL,
-                "ibb_model_present": True,
+                "eval_model": EVAL_MODEL,
+                "eval_model_present": True,
                 "context_tokens": 8192,
                 "endpoint": ENDPOINT,
             }
@@ -248,6 +250,7 @@ runtime = rc.cli.CliRuntime(
                 skip_empty=True,
             ),
             "diagnose": rc.cli.RuntimeIndependentCommand(skip_empty=True),
+            "eval": rc.cli.RuntimeIndependentCommand(skip_empty=True),
         },
         extra_cli_flag_options={"--json"},
     ),

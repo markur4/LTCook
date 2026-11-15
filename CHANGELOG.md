@@ -47,6 +47,14 @@ All notable changes to `ltcook` will be documented in this file.
 ### 💥 Breaking changes
 
 <br>
+- Breaking: IBB is renamed to Agent Evals. Affected: CLI users and developers
+  using `ltcook ibb`, `just ibb`, `LTCOOK_IBB_RESULTS`, or IBB runtime/cache paths.
+  Migration: use `ltcook eval`, `just eval`, `LTCOOK_EVAL_RESULTS`, and the new
+  `evals` paths. Existing generated cache files and the old Ollama receipt are
+  left untouched; rerun the supported LTCook setup/repair flow to write the new
+  `eval_model` receipt field. No aliases, readers, or automatic data migration
+  are provided.
+
 - Breaking: Coordination schema 3 adds scheduled Task graphs, gates and assignment
   attempts. Affected: users with older prototype coordination stores and custom
   command consumers. Migration: preserve the old store, select a new empty
