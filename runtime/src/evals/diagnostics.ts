@@ -195,6 +195,10 @@ type DiagnosticEvent = {
   taskId?: string;
   assignmentId?: string;
   memberKey?: string;
+  reasoningEffort?: string;
+  outputLimit?: number;
+  toolCount?: number;
+  messageCount?: number;
   usage?: Record<string, number>;
 };
 export type EvaluationDiagnostics = {
@@ -272,7 +276,16 @@ export class EvaluationDiagnosticCollector {
       'commandType',
     ] as const)
       if (typeof value[key] === 'string') event[key] = sanitizeEvaluationText(value[key]);
-    for (const key of ['durationMs', 'status', 'tokensBefore'] as const)
+    if (['none', 'low', 'high', 'omitted', 'other'].includes(String(value.reasoningEffort)))
+      event.reasoningEffort = String(value.reasoningEffort);
+    for (const key of [
+      'durationMs',
+      'status',
+      'tokensBefore',
+      'outputLimit',
+      'toolCount',
+      'messageCount',
+    ] as const)
       if (typeof value[key] === 'number' && Number.isFinite(value[key])) event[key] = value[key];
     for (const key of ['willRetry', 'fromExtension', 'aborted'] as const)
       if (typeof value[key] === 'boolean') event[key] = value[key];

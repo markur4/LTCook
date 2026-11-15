@@ -140,6 +140,23 @@ test('length is a terminal model failure without guessing which length limit end
   expect(state.activeModels).toEqual([]);
 });
 
+test('request diagnostics retain bounded settings without request content', () => {
+  const collector = new EvaluationDiagnosticCollector();
+  collector.observe('agent', {
+    kind: 'model.start',
+    reasoningEffort: 'none',
+    outputLimit: 2048,
+    toolCount: 6,
+    messageCount: 2,
+    prompt: 'private prompt',
+  });
+  const events = collector.snapshot().recentEvents;
+  expect(events).toMatchObject([
+    { reasoningEffort: 'none', outputLimit: 2048, toolCount: 6, messageCount: 2 },
+  ]);
+  expect(JSON.stringify(events)).not.toContain('private prompt');
+});
+
 test('diagnostics retain failure causes and live work without copying prompts or task content', () => {
   const collector = new EvaluationDiagnosticCollector();
   collector.observe('agent-1', { kind: 'agent.start' });
@@ -516,7 +533,17 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
         baseUrl: `${process.env.LTCOOK_EVAL_ENDPOINT}/v1`,
       },
     };
-    await handlers.get('before_provider_request')!({}, pinned);
+    await handlers.get('before_provider_request')!(
+      {
+        payload: {
+          reasoning_effort: 'none',
+          max_tokens: 2048,
+          tools: [{}],
+          messages: [{ content: 'private payload' }],
+        },
+      },
+      pinned,
+    );
     await handlers.get('session_before_compact')!({
       reason: 'overflow',
       willRetry: true,
@@ -574,6 +601,12 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
     expect(aborted).toBe(true);
     const lifecycle = observed.slice(compactionOffset);
     expect(lifecycle.filter(({ kind }) => kind === 'model.start')).toHaveLength(2);
+    expect(lifecycle.find(({ kind }) => kind === 'model.start')).toMatchObject({
+      reasoningEffort: 'none',
+      outputLimit: 2048,
+      toolCount: 1,
+      messageCount: 1,
+    });
     expect(
       lifecycle.filter(({ kind }) => typeof kind === 'string' && kind.startsWith('compaction.')),
     ).toMatchObject([

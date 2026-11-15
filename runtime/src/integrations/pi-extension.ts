@@ -138,14 +138,34 @@ export default async function activate(
     pi.on('agent_end', async () => {
       await observe({ kind: 'agent.end' });
     });
-    pi.on('before_provider_request', async (_event, context) => {
+    pi.on('before_provider_request', async (event, context) => {
       if (
         context.model?.id !== EVAL_MODEL ||
         context.model.provider !== 'ollama' ||
         context.model.baseUrl !== `${process.env.LTCOOK_EVAL_ENDPOINT}/v1`
       )
         throw new Error('Evaluation model pin violation');
-      if (!compacting) await observe({ kind: 'model.start' });
+      if (!compacting) {
+        const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+        const effort = 'reasoning_effort' in payload ? payload.reasoning_effort : undefined;
+        const outputLimit = 'max_tokens' in payload ? payload.max_tokens : undefined;
+        const tools =
+          'tools' in payload && Array.isArray(payload.tools) ? payload.tools : undefined;
+        const messages =
+          'messages' in payload && Array.isArray(payload.messages) ? payload.messages : undefined;
+        await observe({
+          kind: 'model.start',
+          reasoningEffort:
+            effort === 'none' || effort === 'low' || effort === 'high'
+              ? effort
+              : effort === undefined
+                ? 'omitted'
+                : 'other',
+          ...(typeof outputLimit === 'number' ? { outputLimit } : {}),
+          ...(tools ? { toolCount: tools.length } : {}),
+          ...(messages ? { messageCount: messages.length } : {}),
+        });
+      }
     });
     pi.on('before_provider_headers', (event) => {
       providerStreamError = undefined;
