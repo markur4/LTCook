@@ -96,6 +96,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - name: Exercise offline native scheduling and recovery
         run: PYTHONPATH=src uv run --locked --no-sync pytest -q tests/python/system/test_clockwork_acceptance.py
+      - name: Install Linux browser for native GUI acceptance
+        run: node node_modules/agent-browser/bin/agent-browser.js install --with-deps
+      - name: Exercise native Paseo GUI at desktop and mobile widths
+        run: PYTHONPATH=src uv run --locked --no-sync pytest -q tests/python/system/test_paseo_gui_acceptance.py
 
   slow-integration:
     name: Slow integration and system checks (manual)
