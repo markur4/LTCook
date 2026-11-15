@@ -142,7 +142,7 @@ def _print_report(report: dict) -> None:
                 table.add_row(
                     labels.get(name, name.replace("-", " ")),
                     f"{passed}/{len(tasks)} passed",
-                    f"{retries} retried",
+                    f"{retries} retried · {sum(task.get('elapsedMs', 0) for task in tasks) / 1000:.2f}s total task time",
                 )
                 continue
         findings = value.get("findings")
@@ -156,6 +156,15 @@ def _print_report(report: dict) -> None:
             table.add_row(labels.get(name, name.replace("-", " ")), "Completed", "")
     if table.row_count:
         console.print(table)
+    for name, value in result.get("results", {}).items():
+        if not isinstance(value, dict):
+            continue
+        for arm in value.get("aggregates", []):
+            console.print(
+                f"{labels.get(name, name)} · {arm['arm']}: "
+                f"mean {arm['meanTotalElapsedMs'] / 1000:.2f}s; "
+                f"observed {arm['minElapsedMs'] / 1000:.2f}–{arm['maxElapsedMs'] / 1000:.2f}s"
+            )
 
 
 def _start_and_follow(
