@@ -140,6 +140,7 @@ export async function startPaseoHost(input: {
     agents: {
       providers: {
         pi: { enabled: true, env: { PI_COMMAND: piCommand } },
+        ltcook: { enabled: true, extends: 'pi', label: 'LTCook', env: { PI_COMMAND: piCommand } },
       },
     },
     features: {
@@ -261,7 +262,20 @@ export async function createPaseoAgentBackend(input: {
   preparedEnvironment?: Record<string, string>;
   thinking?: string;
   identity(agentId: string): AgentRpcIdentity;
-}): Promise<AgentBackend> {
+}): Promise<
+  AgentBackend & {
+    prepare(
+      options: CreateAgentOptions,
+      nativeAgentId: string,
+    ): Promise<{
+      env: Record<string, string>;
+      model: string;
+      mcpServers:
+        | NonNullable<Parameters<PaseoApi['agents']['create']>[0]['config']['mcpServers']>
+        | undefined;
+    }>;
+  }
+> {
   const appRoot = path.dirname(await realpath(input.appNodeModules));
   const extensionPath = await realpath(input.extensionPath);
   if (!isWithin(appRoot, extensionPath)) {
@@ -299,92 +313,104 @@ export async function createPaseoAgentBackend(input: {
       throw new Error('AppRC resolved a different native-agent workspace');
     return response.environment;
   };
+  const prepare = async (options: CreateAgentOptions, nativeAgentId: string) => {
+    const workspaceEnv =
+      input.preparedEnvironment ??
+      resolveWorkspaceEnvironment(options.workspaceRoot, options.sessionId);
+    const identity = input.identity(nativeAgentId);
+    const configResult = input.preparedEnvironment
+      ? { status: 0 }
+      : spawnSync(
+          input.python,
+          ['-m', 'ltcook.launch', 'write-native-config', '--workspace', options.workspaceRoot],
+          {
+            encoding: 'utf8',
+            env: helperEnvironment(options.workspaceRoot, options.sessionId),
+            windowsHide: true,
+          },
+        );
+    if (configResult.status !== 0)
+      throw new Error('AppRC could not write LTCook-owned native configuration');
+    const agentHome = workspaceEnv.PI_CODING_AGENT_DIR || input.piHome;
+    await mkdir(agentHome, { recursive: true, mode: 0o700 });
+    const settingsPath = path.join(agentHome, 'settings.json');
+    const browserEnabled =
+      input.browserAvailable && workspaceEnv.LTCOOK_BROWSER_ENABLED !== 'false';
+    const codeSearchEnabled = workspaceEnv.LTCOOK_CODESEARCH_ENABLED === 'true';
+    const ownedExtensions = [
+      ...webAccessExtensions,
+      ...(codeSearchEnabled ? codeSearchExtensions : []),
+    ];
+    const legacyExtensions = [extensionPath, ...webAccessExtensions, ...codeSearchExtensions];
+    await configurePiExtensions(settingsPath, ownedExtensions, legacyExtensions);
+    const model =
+      workspaceEnv[`LTCOOK_MODEL_${options.member.modelAlias.toUpperCase()}`] ||
+      workspaceEnv.LTCOOK_MODEL_SMART;
+    if (!model) throw new Error(`No model configured for alias ${options.member.modelAlias}`);
+    const browserHome =
+      workspaceEnv.LTCOOK_BROWSER_HOME || path.join(path.dirname(agentHome), 'browser-home');
+    const appBin = path.join(input.appNodeModules, '.bin');
+    const pathEntries = [
+      ...new Set([path.dirname(input.deploymentNode), appBin, workspaceEnv.PATH].filter(Boolean)),
+    ];
+    const agentEnv = agentEnvironment({
+      ...workspaceEnv,
+      PATH: pathEntries.join(path.delimiter),
+      LTCOOK_RUNTIME_API_URL: input.runtimeApiUrl,
+      LTCOOK_AGENT_API_TOKEN: identity.token,
+      LTCOOK_NATIVE_AGENT_ID: nativeAgentId,
+      LTCOOK_SESSION: options.sessionId,
+      LTCOOK_SESSION_ID: options.sessionId,
+      LTCOOK_TEAM_INSTANCE_ID: options.teamInstanceId,
+      LTCOOK_TEAM_ID: options.teamId,
+      LTCOOK_TEAM: options.teamId,
+      LTCOOK_MEMBER_KEY: options.member.key,
+      LTCOOK_READONLY: options.member.readOnly ? '1' : '0',
+      LTCOOK_BROWSER_ENABLED: browserEnabled ? 'true' : 'false',
+      AGENT_BROWSER_EXECUTABLE_PATH: browserEnabled
+        ? input.browserExecutable || workspaceEnv.AGENT_BROWSER_EXECUTABLE_PATH || ''
+        : '',
+      HOME: browserHome,
+      ...(process.platform === 'win32' ? { USERPROFILE: browserHome } : {}),
+    });
+    const context7Enabled = agentEnv.LTCOOK_CONTEXT7_ENABLED === 'true';
+    const context7Url = agentEnv.LTCOOK_CONTEXT7_URL;
+    if (context7Enabled && !context7Url) {
+      throw new Error('LTCOOK_CONTEXT7_URL must be configured when Context7 is enabled.');
+    }
+    const mcpServers = context7Enabled
+      ? {
+          context7: {
+            type: 'http' as const,
+            url: context7Url,
+            ...(agentEnv.CONTEXT7_API_KEY
+              ? { headers: { Authorization: `Bearer ${agentEnv.CONTEXT7_API_KEY}` } }
+              : {}),
+          },
+        }
+      : undefined;
+    return { env: agentEnv, model, mcpServers };
+  };
   return {
+    prepare,
     async list() {
       const result = await input.api.agents.list();
       return result.entries.map((entry) => state(entry.agent));
     },
     async create(options: CreateAgentOptions) {
-      const workspaceEnv =
-        input.preparedEnvironment ??
-        resolveWorkspaceEnvironment(options.workspaceRoot, options.sessionId);
       const nativeAgentId = randomUUID();
-      const identity = input.identity(nativeAgentId);
-      const configResult = input.preparedEnvironment
-        ? { status: 0 }
-        : spawnSync(
-            input.python,
-            ['-m', 'ltcook.launch', 'write-native-config', '--workspace', options.workspaceRoot],
-            {
-              encoding: 'utf8',
-              env: helperEnvironment(options.workspaceRoot, options.sessionId),
-              windowsHide: true,
-            },
-          );
-      if (configResult.status !== 0)
-        throw new Error('AppRC could not write LTCook-owned native configuration');
-      const agentHome = workspaceEnv.PI_CODING_AGENT_DIR || input.piHome;
-      await mkdir(agentHome, { recursive: true, mode: 0o700 });
-      const settingsPath = path.join(agentHome, 'settings.json');
-      const browserEnabled =
-        input.browserAvailable && workspaceEnv.LTCOOK_BROWSER_ENABLED !== 'false';
-      const codeSearchEnabled = workspaceEnv.LTCOOK_CODESEARCH_ENABLED === 'true';
-      const ownedExtensions = [
-        ...webAccessExtensions,
-        ...(codeSearchEnabled ? codeSearchExtensions : []),
-      ];
-      const legacyExtensions = [extensionPath, ...webAccessExtensions, ...codeSearchExtensions];
-      await configurePiExtensions(settingsPath, ownedExtensions, legacyExtensions);
-      const model =
-        workspaceEnv[`LTCOOK_MODEL_${options.member.modelAlias.toUpperCase()}`] ||
-        workspaceEnv.LTCOOK_MODEL_SMART;
-      if (!model) throw new Error(`No model configured for alias ${options.member.modelAlias}`);
-      const browserHome =
-        workspaceEnv.LTCOOK_BROWSER_HOME || path.join(path.dirname(agentHome), 'browser-home');
-      const appBin = path.join(input.appNodeModules, '.bin');
-      const pathEntries = [
-        ...new Set([path.dirname(input.deploymentNode), appBin, workspaceEnv.PATH].filter(Boolean)),
-      ];
-      const agentEnv = agentEnvironment({
-        ...workspaceEnv,
-        PATH: pathEntries.join(path.delimiter),
-        LTCOOK_RUNTIME_API_URL: input.runtimeApiUrl,
-        LTCOOK_AGENT_API_TOKEN: identity.token,
-        LTCOOK_NATIVE_AGENT_ID: nativeAgentId,
-        LTCOOK_SESSION: options.sessionId,
-        LTCOOK_SESSION_ID: options.sessionId,
-        LTCOOK_TEAM_INSTANCE_ID: options.teamInstanceId,
-        LTCOOK_TEAM_ID: options.teamId,
-        LTCOOK_MEMBER_KEY: options.member.key,
-        LTCOOK_READONLY: options.member.readOnly ? '1' : '0',
-        LTCOOK_BROWSER_ENABLED: browserEnabled ? 'true' : 'false',
-        AGENT_BROWSER_EXECUTABLE_PATH: browserEnabled
-          ? input.browserExecutable || workspaceEnv.AGENT_BROWSER_EXECUTABLE_PATH || ''
-          : '',
-        HOME: browserHome,
-        ...(process.platform === 'win32' ? { USERPROFILE: browserHome } : {}),
-      });
-      const context7Enabled = agentEnv.LTCOOK_CONTEXT7_ENABLED === 'true';
-      const context7Url = agentEnv.LTCOOK_CONTEXT7_URL;
-      if (context7Enabled && !context7Url) {
-        throw new Error('LTCOOK_CONTEXT7_URL must be configured when Context7 is enabled.');
-      }
-      const mcpServers = context7Enabled
-        ? {
-            context7: {
-              type: 'http' as const,
-              url: context7Url,
-              ...(agentEnv.CONTEXT7_API_KEY
-                ? { headers: { Authorization: `Bearer ${agentEnv.CONTEXT7_API_KEY}` } }
-                : {}),
-            },
-          }
-        : undefined;
+      const { env: agentEnv, model, mcpServers } = await prepare(options, nativeAgentId);
       const handle = await input.api.agents.create({
         agentId: nativeAgentId,
         idempotencyKey: nativeAgentId,
         cwd: options.workspaceRoot,
-        title: options.member.name,
+        title:
+          options.member.key === 'leader'
+            ? `${path.basename(options.workspaceRoot)} · ${options.teamId}`
+            : options.member.name,
+        ...(options.member.key !== 'leader' && options.leaderAgentId
+          ? { parent: options.leaderAgentId }
+          : {}),
         config: {
           provider: `pi/${model}`,
           thinkingOptionId: input.thinking ?? options.member.thinking,

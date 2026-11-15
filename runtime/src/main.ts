@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import type { SessionSnapshot } from './workflow-api/index.js';
-import { selectedTeam } from './integrations/team-loader.js';
+import { TeamRegistry } from './integrations/team-loader.js';
 import { RiedService } from './ried.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
 import { EvalRunService } from './evals/service.js';
@@ -110,7 +110,8 @@ async function run(): Promise<void> {
   const databasePath = process.env.LTCOOK_DATABASE;
   const apiListen = process.env.LTCOOK_API_LISTEN;
   const paseoListen = process.env.LTCOOK_PASEO_LISTEN;
-  const team = await selectedTeam(teamSelection);
+  const teams = await TeamRegistry.load(appRoot);
+  const team = workspaceRoot ? teams.resolve(teamSelection) : undefined;
   const apiToken = process.env.LTCOOK_API_TOKEN;
   if (!apiToken) {
     throw new Error(
@@ -291,7 +292,8 @@ async function run(): Promise<void> {
       ried: new RiedService(riedCacheDirectory, process.env.LTCOOK_BRIEF_EXECUTABLE, (id) =>
         workspaceShellEnvironments.get(id),
       ),
-      team,
+      ...(team ? { team } : {}),
+      teams,
       agents: backend,
       onEvent(event) {
         void telemetry.log('info', 'runtime.event', event);
@@ -306,26 +308,51 @@ async function run(): Promise<void> {
       api.setSession(workspaceRoot, initialSnapshot.session.id);
     }
     if (stopping) return;
-    api.setOpenWorkspaceHandler(
-      teamSelection,
-      async (request) => {
-        const targetWorkspace = path.resolve(request.workspaceRoot);
-        const shellEnvironment = { ...request.shellEnvironment };
-        delete shellEnvironment.LTCOOK_SHELL_PROVENANCE;
-        workspaceShellEnvironments.set(request.sessionId, shellEnvironment);
-        try {
-          await ensureProjectServices();
-          return await runtimeController.openSession({
-            id: request.sessionId,
-            workspaceRoot: targetWorkspace,
-          });
-        } catch (error) {
-          workspaceShellEnvironments.delete(request.sessionId);
-          throw error;
-        }
-      },
-      team.definition.id,
-    );
+    api.setOpenWorkspaceHandler(async (request) => {
+      const targetWorkspace = path.resolve(request.workspaceRoot);
+      const shellEnvironment = { ...request.shellEnvironment };
+      delete shellEnvironment.LTCOOK_SHELL_PROVENANCE;
+      workspaceShellEnvironments.set(request.sessionId, shellEnvironment);
+      try {
+        if (!request.leaderAgentId) await ensureProjectServices();
+        else
+          void ensureProjectServices().catch((error: unknown) =>
+            telemetry.log('error', 'runtime.services.unavailable', {
+              message: safeErrorMessage(error),
+            }),
+          );
+        return await runtimeController.openSession({
+          id: request.sessionId,
+          workspaceRoot: targetWorkspace,
+          teamSelection: request.teamSelection,
+          ...(request.leaderAgentId ? { leaderAgentId: request.leaderAgentId } : {}),
+        });
+      } catch (error) {
+        workspaceShellEnvironments.delete(request.sessionId);
+        throw error;
+      }
+    });
+    api.setPrepareSessionHandler(async (request) => {
+      const snapshot = runtimeController.snapshot(request.sessionId);
+      const leader = snapshot.definition.members.find(
+        (member) => member.key === snapshot.definition.leaderKey,
+      );
+      if (!leader) throw new Error('Selected Team has no Leader');
+      const prepared = await backend.prepare(
+        {
+          member: leader,
+          sessionId: snapshot.session.id,
+          teamInstanceId: snapshot.session.teamInstanceId,
+          teamId: snapshot.session.teamId,
+          workspaceRoot: snapshot.session.workspaceRoot,
+        },
+        request.leaderAgentId,
+      );
+      return {
+        env: prepared.env,
+        ...(prepared.mcpServers ? { mcpServers: prepared.mcpServers } : {}),
+      };
+    });
     let backendLogPath: string | null = null;
     const capturePath = process.env.LTCOOK_BACKEND_LOG_PATH;
     if (capturePath) {
@@ -375,7 +402,7 @@ async function run(): Promise<void> {
     startup.end();
     await telemetry.log('info', 'runtime.ready', {
       sessionId: initialSnapshot?.session.id,
-      teamId: team.definition.id,
+      teamId: team?.definition.id,
       memberCount: initialSnapshot?.members.length ?? 0,
       connectedPersistentAgentCount:
         initialSnapshot?.members.filter(
