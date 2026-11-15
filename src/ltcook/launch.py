@@ -350,7 +350,7 @@ def _run_foreground_runtime(
         return 130
     if child.process.poll() == 75:
         if launch.workspace_root is None:
-            typer.echo(f"Reusing LTCook runtime for team {status.team_selection}.")
+            typer.echo("Reusing LTCook runtime.")
         elif _open_existing_runtime(launch, shell):
             typer.echo(f"Opened workspace session for {launch.workspace_root}")
         else:
@@ -392,7 +392,7 @@ def runtime_command(
             workspace is None or _open_existing_runtime(launch, shell)
         ):
             if workspace is None:
-                typer.echo(f"Reusing LTCook runtime for team {status.team_selection}.")
+                typer.echo("Reusing LTCook runtime.")
             else:
                 typer.echo(f"Opened workspace session for {launch.workspace_root}")
             if verbose:

@@ -14,12 +14,12 @@ const expectedMembers = new Map([
     defaultTeam.definition.id,
     [
       [
-        'main',
+        'leader',
         'persistent',
         'smart',
         'high',
         false,
-        ['coordinator'],
+        ['leader'],
         ['design', 'plan.finalize', 'task.execute'],
       ],
       [
@@ -45,12 +45,12 @@ const expectedMembers = new Map([
     minimalTeam.definition.id,
     [
       [
-        'main',
+        'leader',
         'persistent',
         'smart',
         'high',
         false,
-        ['coordinator'],
+        ['leader'],
         ['design', 'plan.finalize', 'task.execute'],
       ],
       [
@@ -70,23 +70,28 @@ const expectedRoutes = new Map([
   [
     defaultTeam.definition.id,
     {
-      design: 'main',
+      design: 'leader',
       'plan.prefill': 'adjutant',
-      'plan.finalize': 'main',
+      'plan.finalize': 'leader',
       'task.execute': 'senior',
     },
   ],
   [
     minimalTeam.definition.id,
-    { design: 'main', 'plan.prefill': 'adjutant', 'plan.finalize': 'main', 'task.execute': 'main' },
+    {
+      design: 'leader',
+      'plan.prefill': 'adjutant',
+      'plan.finalize': 'leader',
+      'task.execute': 'leader',
+    },
   ],
 ]);
 
 describe.each(packages)('team API contract: %s', (team) => {
-  test('declares v2 routing and keeps member identities and model settings', () => {
-    expect(team.apiVersion).toBe(2);
+  test('declares v3 routing and keeps member identities and model settings', () => {
+    expect(team.apiVersion).toBe(3);
     expect(
-      team.definition.members.filter((member) => member.key === team.definition.coordinatorKey),
+      team.definition.members.filter((member) => member.key === team.definition.leaderKey),
     ).toHaveLength(1);
 
     expect(team.definition.routing).toEqual(expectedRoutes.get(team.definition.id));

@@ -474,7 +474,6 @@ def test_probe_distinguishes_starting_from_absent(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("teamSelection", "another-team"),
         ("deploymentRoot", "/other/deployment"),
         ("databasePath", "/other/database.sqlite"),
         ("instanceId", "not-a-uuid"),
@@ -606,7 +605,6 @@ def test_explicit_global_runtime_reuses_ready_owner_without_session_or_spawn(
     from ltcook._runtime_client import RuntimeStatus
 
     status = RuntimeStatus(
-        "default-minimal",
         "d30f894c-5fdc-4fa6-aa83-9829f64be3c4",
         "/deployment",
         "/deployment/database.sqlite",
@@ -673,7 +671,6 @@ def test_start_persists_missing_secrets_before_the_child_uses_them(
     monkeypatch.setenv("LTCOOK_API_TOKEN", "overlay-must-not-be-used")
     captured = []
     status = RuntimeStatus(
-        "default-minimal",
         "d30f894c-5fdc-4fa6-aa83-9829f64be3c4",
         "/deployment",
         "/deployment/database.sqlite",

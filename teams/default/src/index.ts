@@ -2,13 +2,13 @@ import type { TeamDefinition, TeamMember, TeamPackage } from '@ltcook/runtime/te
 
 const members: readonly TeamMember[] = [
   {
-    key: 'main',
-    name: 'Main',
+    key: 'leader',
+    name: 'Leader',
     lifetime: 'persistent',
     modelAlias: 'smart',
     thinking: 'high',
     readOnly: false,
-    roles: ['coordinator'],
+    roles: ['leader'],
     workTypes: ['design', 'plan.finalize', 'task.execute'],
     rules: ['rules/delegation.md', 'rules/research-handoffs.md'],
     skills: [],
@@ -131,11 +131,11 @@ const resources = [
 export const definition: TeamDefinition = {
   id: '@ltcook/team-default',
   name: 'Default',
-  coordinatorKey: 'main',
+  leaderKey: 'leader',
   routing: {
-    design: 'main',
+    design: 'leader',
     'plan.prefill': 'adjutant',
-    'plan.finalize': 'main',
+    'plan.finalize': 'leader',
     'task.execute': 'senior',
   },
   members,
@@ -148,5 +148,5 @@ export const definition: TeamDefinition = {
   })),
   reviewPolicy: { mode: 'independent', reviewerKeys: ['reviewer', 'reviewer-tmp'], required: true },
 };
-const team: TeamPackage = { apiVersion: 2, definition };
+const team: TeamPackage = { apiVersion: 3, definition };
 export default team;

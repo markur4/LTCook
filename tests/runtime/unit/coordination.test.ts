@@ -79,7 +79,7 @@ describe('CoordinationStore', () => {
     store.putBinding({
       sessionId: first.id,
       teamId: first.teamId,
-      memberKey: 'main',
+      memberKey: 'leader',
       nativeAgentId: 'native-one',
       workspaceRoot: first.workspaceRoot,
       state: 'bound',
@@ -87,7 +87,7 @@ describe('CoordinationStore', () => {
     store.putBinding({
       sessionId: second.id,
       teamId: second.teamId,
-      memberKey: 'main',
+      memberKey: 'leader',
       nativeAgentId: 'native-two',
       workspaceRoot: second.workspaceRoot,
       state: 'bound',
@@ -148,7 +148,7 @@ describe('CoordinationStore', () => {
   test('rejects an incomplete current schema before creating an owner', () => {
     const path = databasePath();
     const invalid = new Database(path);
-    invalid.exec('PRAGMA user_version=3');
+    invalid.exec('PRAGMA user_version=4');
     invalid.close();
     const original = readFileSync(path);
     expect(() => new CoordinationStore(path)).toThrow(/missing required tables/);

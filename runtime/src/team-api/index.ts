@@ -21,7 +21,7 @@ export interface ReviewPolicy {
 export interface TeamDefinition {
   id: string;
   name: string;
-  coordinatorKey: string;
+  leaderKey: string;
   members: readonly TeamMember[];
   resources: readonly GuidanceResource[];
   routing: Record<WorkType, string>;
@@ -33,7 +33,7 @@ export interface WorkContext {
   workspaceRoot: string;
 }
 export interface TeamPackage {
-  apiVersion: 2;
+  apiVersion: 3;
   definition: TeamDefinition;
   selectAssignee?(
     context: Readonly<WorkContext>,

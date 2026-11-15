@@ -159,6 +159,8 @@ export interface NativeAgent {
   status: string;
 }
 export interface CreateAgentOptions {
+  parentAgentId?: string;
+  leaderAgentId?: string;
   member: TeamMember;
   sessionId: string;
   teamInstanceId: string;
@@ -202,7 +204,14 @@ export interface RuntimeEvent {
   memberKey?: string;
 }
 export interface RuntimeController {
-  openSession(options: { id?: string; workspaceRoot: string }): Promise<SessionSnapshot>;
+  openSession(options: {
+    id?: string;
+    workspaceRoot: string;
+    teamSelection?: string;
+    leaderAgentId?: string;
+  }): Promise<SessionSnapshot>;
+  teamCatalog(): import('../integrations/team-loader.js').TeamCatalogEntry[];
+  listSessions(workspaceRoot: string, teamSelection?: string): Session[];
   snapshot(sessionId: string): SessionSnapshot;
   ried(sessionId: string, request: import('../ried.js').RiedRequest): Promise<unknown>;
   execute(sessionId: string, actor: RuntimeActor, command: RuntimeCommand): Promise<unknown>;
