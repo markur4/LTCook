@@ -317,7 +317,28 @@ export class RuntimeController implements RuntimeControllerContract {
         )
     ) {
       const result = await this.planning.execute(session, actor, command);
-      if (!this.initializedSessions.has(sessionId) && command.inspection.diagnostics.length === 0) {
+      if (command.waitUntilReady) {
+        if (command.inspection.diagnostics.length > 0)
+          throw new Error('Native guidance failed; Session initialization is unavailable');
+        // > Only a real turn waits. session_start must return before provider creation can finish.
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            this.initializeSession(session),
+            new Promise<never>((_resolve, reject) => {
+              timeout = setTimeout(
+                () => reject(new Error('Session initialization timed out; retry the conversation')),
+                20_000,
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timeout);
+        }
+      } else if (
+        !this.initializedSessions.has(sessionId) &&
+        command.inspection.diagnostics.length === 0
+      ) {
         setTimeout(() => {
           void this.initializeSession(session).catch(() =>
             this.emit({ type: 'session.initialization.failed', sessionId }),
@@ -1123,7 +1144,7 @@ export class RuntimeController implements RuntimeControllerContract {
         requestId,
         description: `The user approved Plan ${record.id} at ${record.plan.path} for Pass ${record.passId}. Leader now schedules execution Tasks among the declared eligible members. Preserve the approved scope and recorded decisions. Append detailed execution reports, Emerging Issues and User decisions post approval to this same Plan; record lasting design decisions in ${record.design.path}. Submit a report for this scheduling assignment and mark this scheduling Task complete after registering the execution Tasks, dependencies, assignees and gates. The runtime dispatches them after this handoff is complete.`,
         acceptance:
-          'Main receives the approved Plan/Pass, schedules execution Tasks, and reports the scheduling handoff.',
+          'Leader receives the approved Plan/Pass, schedules execution Tasks, and reports the scheduling handoff.',
       });
     if (this.store.listAssignments(session.id).some((assignment) => assignment.taskId === task.id))
       return;

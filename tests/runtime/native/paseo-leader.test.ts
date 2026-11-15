@@ -92,3 +92,56 @@ test('missing Team selection fails before opening native LTCook', async () => {
     await hook({ request: { config: { provider: 'pi', cwd: '/workspace' } } }),
   ).toBeUndefined();
 });
+
+test('a real turn fails before inference when native initialization is unavailable', async () => {
+  const { createRuntime } = await import('../../../runtime/src/core/runtime.js');
+  const { default: team } = await import('../../../teams/default-minimal/src/index.js');
+  const runtime = createRuntime({
+    databasePath: ':memory:',
+    team,
+    agents: {
+      async list() {
+        throw new Error('Native directory unavailable');
+      },
+      async create() {
+        throw new Error('Unexpected native creation');
+      },
+      async inspect() {
+        return null;
+      },
+      async send() {},
+      async close() {},
+    },
+  });
+  try {
+    await runtime.openSession({
+      id: 'leader-native',
+      leaderAgentId: 'leader-native',
+      workspaceRoot: '/workspace',
+    });
+    await expect(
+      runtime.execute(
+        'leader-native',
+        { kind: 'agent', nativeAgentId: 'leader-native' },
+        {
+          type: 'guidance.loaded',
+          inspection: { resources: [], diagnostics: [] },
+          waitUntilReady: true,
+        },
+      ),
+    ).rejects.toThrow('Native directory unavailable');
+    await expect(
+      runtime.execute(
+        'leader-native',
+        { kind: 'agent', nativeAgentId: 'unbound-native' },
+        {
+          type: 'guidance.loaded',
+          inspection: { resources: [], diagnostics: [] },
+          waitUntilReady: true,
+        },
+      ),
+    ).rejects.toThrow('Session must be explicitly opened');
+  } finally {
+    await runtime.close();
+  }
+});
