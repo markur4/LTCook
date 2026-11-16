@@ -8,7 +8,7 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 DOCS = ROOT / "docs"
 FENCE = re.compile(r"^```[^\n]*\n.*?^```\s*$", re.MULTILINE | re.DOTALL)
 HEADING = re.compile(r"^(#{1,6}) (.+)$", re.MULTILINE)
