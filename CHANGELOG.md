@@ -211,6 +211,9 @@ All notable changes to `ltcook` will be documented in this file.
 ### 🔨 Fixed
 
 <br>
+- Agent Evals preserves coordination command labels and execution Pass guidance
+  when Ollama renders tool schemas, and reports a finished scheduling handoff
+  with no registered work without waiting for the time limit.
 - Fixed missing `ltcook_ried` in standalone LTCook Pi chats; native Pi workspace
   changes now rebind inventory while reusing the existing scanner and AppRC cache.
 

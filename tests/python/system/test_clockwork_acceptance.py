@@ -47,6 +47,8 @@ def test_native_paseo_leader_adoption(tmp_path: Path) -> None:
         "validation-recovery",
         "compaction-error",
         "fallback-success",
+        "no-scheduled-work",
+        "settlement-recovery",
     ],
 )
 def test_agent_evaluation_runtime(tmp_path: Path, mode: str) -> None:

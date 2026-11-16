@@ -57,12 +57,13 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   const modelSpans = new Map<string, ReturnType<Telemetry['begin']>>();
   const prompts = new Map<string, string>();
   const operationSpans = new Map<string, ReturnType<Telemetry['begin']>>();
+  const finishedAgentTurns = new Set<string>();
   let toolCalls = 0;
   const pendingToolAttempts = new Map<string, number>();
   let writeCalls = 0;
   let verificationCalls = 0;
   let inferenceFailed = false;
-  let inferenceFailedAt = 0;
+  let failedAgentId: string | undefined;
   let compactionFailure: string | undefined;
   let scopeFailed = false;
   let toolErrors = 0;
@@ -283,6 +284,8 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       if (value.kind === 'runtime.error' && value.operation === 'evaluation.scope')
         scopeFailed = true;
       const diagnostic = diagnostics.observe(agentId, value);
+      if (value.kind === 'agent.start') finishedAgentTurns.delete(agentId);
+      if (value.kind === 'agent.settled') finishedAgentTurns.add(agentId);
       if (diagnostic) {
         telemetry.instant(`evaluation.${value.kind}`, diagnostic, agentId);
         diagnosticWrites = diagnosticWrites.then(() =>
@@ -292,7 +295,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       if (value.kind === 'prompt' && typeof value.prompt === 'string')
         prompts.set(agentId, value.prompt);
       if (value.kind === 'compaction.start') {
-        inferenceFailed = false;
+        if (failedAgentId === agentId) inferenceFailed = false;
         operationSpans.set(
           `compaction:${agentId}`,
           telemetry.begin('model.compaction', randomUUID(), agentId),
@@ -310,13 +313,13 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         if (usage) tokenUsage.push(usage);
       }
       if (value.kind === 'model.start') {
-        inferenceFailed = false;
+        if (failedAgentId === agentId) inferenceFailed = false;
         modelSpans.set(agentId, telemetry.begin(`model.${agentId}`, randomUUID(), agentId));
       }
       if (value.kind === 'model.end') {
         if (evaluationModelFailed(value.stopReason)) {
           inferenceFailed = true;
-          inferenceFailedAt = performance.now();
+          failedAgentId = agentId;
         }
         modelSpans.get(agentId)?.end();
         modelSpans.delete(agentId);
@@ -383,13 +386,30 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         throw new Error(`Local model context compaction failed: ${compactionFailure}`);
       }
       if (snapshot.passes[0]?.status === 'completed') break;
-      // > Let Pi announce its existing overflow/compaction recovery before ending the case.
-      if (inferenceFailed && performance.now() - inferenceFailedAt >= 250) {
+      // > Pi settles only after its automatic recovery and any queued continuation.
+      if (inferenceFailed && failedAgentId && finishedAgentTurns.has(failedAgentId)) {
         failureCategory = 'inference';
         const failure = diagnostics.snapshot().modelFailures.at(-1);
         throw new Error(
           `Local model ${failure?.stopReason ?? 'request failed'}${failure?.error ? `: ${failure.error}` : ''}`,
         );
+      }
+      const handoff = snapshot.tasks.find((task) => task.requestId?.endsWith(':execution-handoff'));
+      const leaderId = snapshot.members.find(
+        (member) => member.member.key === team.definition.leaderKey,
+      )?.binding?.nativeAgentId;
+      if (
+        !inferenceFailed &&
+        handoff?.status === 'completed' &&
+        leaderId &&
+        finishedAgentTurns.has(leaderId) &&
+        snapshot.assignments.some(
+          (assignment) => assignment.taskId === handoff.id && assignment.status === 'reported',
+        ) &&
+        !snapshot.tasks.some((task) => task.passId === handoff.passId && task.scheduled)
+      ) {
+        failureCategory = 'criteria';
+        throw new Error('Scheduling handoff finished without registering a scenario Task');
       }
       if (performance.now() >= deadline) {
         failureCategory = 'limits';

@@ -246,6 +246,7 @@ export class EvaluationDiagnosticCollector {
       ![
         'agent.start',
         'agent.end',
+        'agent.settled',
         'model.start',
         'model.end',
         'model.response',

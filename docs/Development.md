@@ -267,6 +267,11 @@ required fields. Scheduled execution reports use `report.create` with an explici
 success or failure outcome; the runtime owns scheduled Task status. Command
 validation selects errors by command type, so unrelated Task fields do not hide
 invalid report fields.
+Evaluation requests encode coordination command names and Pass requirements in
+forms Ollama retains; Pi and the runtime still validate the original schema. If
+the Leader finishes and reports the scheduling handoff without registering any
+scheduled Task, the case fails with that reason instead of waiting for its time
+limit.
 Tool counts and the existing tool budget include rejected validation attempts,
 counted once per attempt even when a provider reuses call IDs. Provider diagnostics retain HTTP status,
 reported stop reasons, usage and sanitized stream errors; ordinary content chunks

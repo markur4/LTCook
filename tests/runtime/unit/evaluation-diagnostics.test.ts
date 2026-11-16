@@ -504,6 +504,7 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
       'Coordination request failed (400): Task has unmet dependencies token=<redacted>',
     );
     await handlers.get('agent_end')!({});
+    await handlers.get('agent_settled')!({});
     expect(observed.filter(({ kind }) => kind !== 'prompt')).toMatchObject([
       { kind: 'agent.start' },
       {
@@ -521,6 +522,7 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
         error: 'Task has unmet dependencies token=<redacted>',
       },
       { kind: 'agent.end' },
+      { kind: 'agent.settled' },
     ]);
     expect(JSON.stringify(observed.filter(({ kind }) => kind !== 'prompt'))).not.toContain(
       'private',

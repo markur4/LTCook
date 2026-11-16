@@ -12,6 +12,7 @@ import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
 import { evaluationToolError, sanitizeEvaluationText } from '../evals/diagnostics.js';
 import { EVAL_MODEL, EVALUATION_EXECUTION_CONTEXT } from '../evals/setup.js';
+import { ollamaCoordinationPayload } from '../evals/ollama-schema.js';
 const require = createRequire(import.meta.url);
 async function activateOptionalBrowser(pi: ExtensionAPI): Promise<void> {
   if (process.env.LTCOOK_BROWSER_ENABLED !== 'true') return;
@@ -138,6 +139,9 @@ export default async function activate(
     pi.on('agent_end', async () => {
       await observe({ kind: 'agent.end' });
     });
+    pi.on('agent_settled', async () => {
+      await observe({ kind: 'agent.settled' });
+    });
     pi.on('before_provider_request', async (event, context) => {
       if (
         context.model?.id !== EVAL_MODEL ||
@@ -166,6 +170,7 @@ export default async function activate(
           ...(messages ? { messageCount: messages.length } : {}),
         });
       }
+      return ollamaCoordinationPayload(event.payload);
     });
     pi.on('before_provider_headers', (event) => {
       providerStreamError = undefined;
