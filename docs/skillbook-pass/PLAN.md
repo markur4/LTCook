@@ -1,6 +1,6 @@
 # Plan: shared agent skillbook
 
-Status: Executing. Approved in the originating conversation.
+Status: Verified source handoff; final integration evidence belongs in PR #12 and the final report. Approved in the originating conversation.
 
 ## Outcome
 
