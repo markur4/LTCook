@@ -361,11 +361,12 @@ try {
     node: process.env.LTCOOK_TEST_NODE ?? 'node',
     home: path.join(deployment, 'paseo'),
     deploymentRoot: deployment,
-    listen: `127.0.0.1:${await freePort()}`,
+    listen: '127.0.0.1:0',
     runtimeApiUrl: endpoint,
     userToken: 'fake-user-token',
     pluginDirectory: path.join(root, 'runtime/src/paseo-plugin'),
   });
+  assert.match(host.listen, /^127\.0\.0\.1:[1-9]\d*$/);
   const native = host.api;
   const backend: AgentBackend = {
     async list() {

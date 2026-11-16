@@ -143,7 +143,7 @@ try {
     node,
     home: path.join(deployment, 'paseo'),
     deploymentRoot: deployment,
-    listen: `127.0.0.1:${await freePort()}`,
+    listen: '127.0.0.1:0',
     runtimeApiUrl: endpoint,
     userToken: secret,
     pluginDirectory: path.join(root, 'runtime/src/paseo-plugin'),
