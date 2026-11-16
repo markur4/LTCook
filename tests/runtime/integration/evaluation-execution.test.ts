@@ -42,8 +42,12 @@ describe('evaluation execution scope', () => {
         sessionId: 'evaluation',
         workspaceRoot: '/evaluation',
         title: 'Fixture',
-        description: 'Delegate the fixture to Adjutant.',
+        description: 'Read fixture.',
+        requireDelegation: true,
       });
+      expect(agents.sends[0]?.message).toContain(
+        'assigneeKey to an eligible declared member: adjutant',
+      );
       const pass = initial.passes[0]!;
       const bootstrap = initial.assignments[0]!;
       const leader = { kind: 'agent' as const, nativeAgentId: 'leader' };

@@ -85,6 +85,7 @@ export class RuntimeController implements RuntimeControllerContract {
     workspaceRoot: string;
     title: string;
     description: string;
+    requireDelegation?: boolean;
   }): Promise<SessionSnapshot> {
     if (
       !this.evaluationSessionId ||
@@ -120,9 +121,16 @@ Use the native ltcook_team tool directly for the following coordination calls. T
 1. Call ltcook_team with a command object: command.type="task.create", command.passId="${pass.id}", command.workType="task.execute", plus nonempty command.title, command.description and command.acceptance describing the scenario below. Set command.assigneeKey to an eligible declared member: ${this.teamFor(
         input.sessionId,
       )
-        .definition.members.filter((member) => member.workTypes.includes('task.execute'))
+        .definition.members.filter(
+          (member) =>
+            member.workTypes.includes('task.execute') &&
+            (!input.requireDelegation ||
+              member.key !== this.teamFor(input.sessionId).definition.leaderKey),
+        )
         .map((member) => member.key)
-        .join(', ')}. task.create schedules execution by default; do not set scheduled=false.
+        .join(
+          ', ',
+        )}.${input.requireDelegation ? ' This scenario requires delegation to one of these collaborators; keep this scheduling requirement out of the execution Task description.' : ''} task.create schedules execution by default; do not set scheduled=false.
 2. Call ltcook_team with command.type="report.create", command.assignmentId equal to the scheduling Assignment ID shown above, and nonempty command.summary and command.evidence describing the scheduling result. Do not use the new Task ID as assignmentId.
 3. Call ltcook_team with command.type="task.update", command.taskId="${task.id}" and command.status="completed".
 The production scheduler dispatches the registered Task and manages Pass status. Do not update the Pass status, perform the business scenario in this scheduling assignment, create another Pass, or manually complete the scheduled execution Task.
