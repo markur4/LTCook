@@ -314,15 +314,25 @@ export async function createPaseoAgentBackend(input: {
             workspaceRoot: string;
             environment: Record<string, string>;
             dependencies: string[];
+            identityPaths: string[];
+            reusable: boolean;
           };
           if (path.resolve(response.workspaceRoot) !== path.resolve(options.workspaceRoot))
             throw new Error('AppRC resolved a different native-agent workspace');
           if (
             !Array.isArray(response.dependencies) ||
-            !response.dependencies.every((file) => typeof file === 'string')
+            !response.dependencies.every((file) => typeof file === 'string') ||
+            !Array.isArray(response.identityPaths) ||
+            !response.identityPaths.every((file) => typeof file === 'string') ||
+            typeof response.reusable !== 'boolean'
           )
             throw new Error('AppRC did not report workspace preparation dependencies');
-          return { environment: response.environment, dependencies: response.dependencies };
+          return {
+            environment: response.environment,
+            dependencies: response.dependencies,
+            identityPaths: response.identityPaths,
+            reusable: response.reusable,
+          };
         })
       ).environment;
     const identity = input.identity(nativeAgentId);

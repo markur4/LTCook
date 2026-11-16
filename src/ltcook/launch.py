@@ -11,12 +11,13 @@ import sys
 import time
 import urllib.error
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
 import typer
+from apprc import ResolvedConfig
 
 from ltcook._runtime_client import (
     RuntimeClientError,
@@ -46,6 +47,52 @@ class LaunchConfig:
     environment: dict[str, str]
     configuration: LtcookConfig
     workspace_root: Path | None
+
+
+@dataclass
+class NativePreparationInputs:
+    """Track filesystem guards for reuse of an installed AppRC snapshot."""
+
+    dependencies: set[Path] = field(default_factory=set)
+    identity_paths: set[Path] = field(default_factory=set)
+    reusable: bool = True
+
+    def capture(self, snapshot: ResolvedConfig) -> None:
+        """Keep reuse within the pinned resolver's representable authority path.
+
+        :param snapshot: Resolved settings and installation placement.
+        :return: None; unrepresentable layouts require fresh resolution.
+        """
+        paths = snapshot.paths
+        if (
+            os.name != "posix"
+            or paths.source != "installation"
+            or paths.installation.revision is None
+            or paths.installation.generation_id is None
+            or snapshot.issues
+            or snapshot.workspace_issues
+        ):
+            self.reusable = False
+        for layer in snapshot.layers:
+            if layer.path is not None:
+                self.dependencies.add(layer.path)
+            elif layer.resource is not None:
+                self.reusable = False
+        self.dependencies.add(paths.installation.directory / "installation.json")
+        self.dependencies.add(
+            paths.require("config") / snapshot.schema.apprc_toml_filename
+        )
+        for kind in ("config", "appdata", "cache", "state"):
+            root = paths.require(kind)
+            self.identity_paths.add(root)
+            self.dependencies.add(root / ".apprc-owner.json")
+
+    def guard_ancestors(self) -> None:
+        """Retain link and permission checks without following ancestor links."""
+        for path in (*self.dependencies, *self.identity_paths):
+            absolute = path.expanduser().absolute()
+            self.identity_paths.add(absolute)
+            self.identity_paths.update(absolute.parents)
 
 
 def _shell_environment(environment: Mapping[str, str]) -> dict[str, str]:
@@ -82,13 +129,13 @@ def resolve_launch(
     workspace_root: str | Path | None = None,
     *,
     original_environment: Mapping[str, str] | None = None,
-    input_paths: set[Path] | None = None,
+    preparation_inputs: NativePreparationInputs | None = None,
 ) -> LaunchConfig:
     """Resolve global runtime settings and optional project overlays.
 
     :param workspace_root: Explicit project directory, or None for global startup.
     :param original_environment: Captured shell variables before AppRC overlays.
-    :param input_paths: Optional set receiving configuration paths used for reuse.
+    :param preparation_inputs: Optional collector for installed configuration reuse.
     :return: Settings and child environment for this invocation.
     """
     shell = _shell_environment(
@@ -104,18 +151,17 @@ def resolve_launch(
         else resolve_global_config(environment=shell)
     )
     global_config = global_resolved.build(LtcookConfig)
-    if input_paths is not None:
+    if preparation_inputs is not None:
         for snapshot in (resolved, global_resolved):
-            input_paths.update(layer.path for layer in snapshot.layers if layer.path)
-            input_paths.add(
-                snapshot.paths.require("config") / snapshot.schema.apprc_toml_filename
-            )
+            preparation_inputs.capture(snapshot)
         if workspace_root is not None:
             workspace_path = Path(workspace_root).expanduser().resolve()
-            input_paths.add(workspace_path)
+            preparation_inputs.identity_paths.add(workspace_path)
             marker = workspace_path / resolved.schema.workspace_dotenv_filename
-            input_paths.add(marker)
-            input_paths.add(marker.with_name(f"{marker.stem}.secret{marker.suffix}"))
+            preparation_inputs.dependencies.add(marker)
+            preparation_inputs.dependencies.add(
+                marker.with_name(f"{marker.stem}.secret{marker.suffix}")
+            )
     environment = dict(shell)
     for section in config.__dict__.values():
         environment.update(
@@ -554,9 +600,9 @@ def prepare_native_command(
     workspace: Annotated[Path, typer.Option("--workspace")],
 ) -> None:
     """Resolve one workspace and write its owned native configuration together."""
-    inputs: set[Path] = set()
+    inputs = NativePreparationInputs()
     launch = resolve_launch(
-        workspace, original_environment=os.environ, input_paths=inputs
+        workspace, original_environment=os.environ, preparation_inputs=inputs
     )
     try:
         outputs = write_pi_config(
@@ -566,12 +612,16 @@ def prepare_native_command(
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
+    inputs.dependencies.update(outputs)
+    inputs.guard_ancestors()
     typer.echo(
         json.dumps(
             {
                 "workspaceRoot": str(launch.workspace_root),
                 "environment": launch.environment,
-                "dependencies": sorted(map(str, inputs.union(outputs))),
+                "dependencies": sorted(map(str, inputs.dependencies)),
+                "identityPaths": sorted(map(str, inputs.identity_paths)),
+                "reusable": inputs.reusable,
             }
         )
     )

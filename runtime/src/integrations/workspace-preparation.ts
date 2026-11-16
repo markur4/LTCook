@@ -1,22 +1,35 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, readlinkSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 
 export type WorkspacePreparation = {
   environment: Record<string, string>;
   dependencies: string[];
+  identityPaths: string[];
+  reusable: boolean;
 };
 
-function fingerprint(paths: string[]): string {
+function fingerprint(preparation: WorkspacePreparation): string | undefined {
   const hash = createHash('sha256');
-  for (const file of paths) {
+  for (const file of preparation.identityPaths) {
     hash.update(JSON.stringify(file));
     try {
       const stat = lstatSync(file);
-      hash.update(JSON.stringify([stat.mode, stat.size, stat.dev, stat.ino]));
-      if (stat.isSymbolicLink()) hash.update(readlinkSync(file));
-      if (!stat.isDirectory()) hash.update(readFileSync(file));
+      if (!stat.isFile() && !stat.isDirectory()) return undefined;
+      hash.update(JSON.stringify([stat.mode, stat.size, stat.dev, stat.ino, stat.uid, stat.gid]));
     } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) return undefined;
+      hash.update('missing');
+    }
+  }
+  for (const file of preparation.dependencies) {
+    hash.update(JSON.stringify(file));
+    try {
+      const stat = lstatSync(file);
+      if (!stat.isFile() && !stat.isDirectory()) return undefined;
+      hash.update(JSON.stringify([stat.mode, stat.size, stat.dev, stat.ino, stat.uid, stat.gid]));
+      if (stat.isFile()) hash.update(readFileSync(file));
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) return undefined;
       hash.update('missing');
     }
   }
@@ -29,24 +42,19 @@ export class WorkspacePreparationCache {
     string,
     { preparation: WorkspacePreparation; fingerprint: string }
   >();
-  private readonly pending = new Map<string, Promise<WorkspacePreparation>>();
-
   async get(key: string, prepare: () => WorkspacePreparation): Promise<WorkspacePreparation> {
     const existing = this.entries.get(key);
-    if (existing && fingerprint(existing.preparation.dependencies) === existing.fingerprint)
-      return existing.preparation;
-    const inFlight = this.pending.get(key);
-    if (inFlight) return inFlight;
-    const task = Promise.resolve().then(() => {
-      const preparation = prepare();
-      this.entries.set(key, { preparation, fingerprint: fingerprint(preparation.dependencies) });
-      return preparation;
-    });
-    this.pending.set(key, task);
-    try {
-      return await task;
-    } finally {
-      this.pending.delete(key);
+    if (existing) {
+      const observed = fingerprint(existing.preparation);
+      if (observed !== undefined && observed === existing.fingerprint) return existing.preparation;
     }
+    this.entries.delete(key);
+    // > Preparation is synchronous; publish reusable results before the next caller can run.
+    const preparation = prepare();
+    if (preparation.reusable) {
+      const observed = fingerprint(preparation);
+      if (observed !== undefined) this.entries.set(key, { preparation, fingerprint: observed });
+    }
+    return preparation;
   }
 }

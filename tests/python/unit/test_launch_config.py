@@ -2,8 +2,10 @@ import errno
 import json
 import os
 import urllib.error
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -34,7 +36,8 @@ def test_native_preparation_reports_configuration_inputs_and_outputs(
     launch.prepare_native_command(project)
     result = json.loads(capsys.readouterr().out)
     inputs = set(result["dependencies"])
-    assert str(project) in inputs
+    assert str(project) in result["identityPaths"]
+    assert result["reusable"] is False
     marker = project / APP_RC.schema.workspace_dotenv_filename
     assert str(marker) in inputs
     assert str(marker.with_name(f"{marker.stem}.secret{marker.suffix}")) in inputs
@@ -45,6 +48,55 @@ def test_native_preparation_reports_configuration_inputs_and_outputs(
     for filename in ("models.json", "web-search.json"):
         assert str(pi_home / filename) in inputs
         assert (pi_home / filename).is_file()
+
+
+def test_native_preparation_tracks_installed_authority_and_disables_unknown_guards(
+    tmp_path: Path,
+) -> None:
+    shell = {
+        "HOME": str(tmp_path / "home"),
+        "USERPROFILE": str(tmp_path / "home"),
+        "APPDATA": str(tmp_path / "config"),
+        "LOCALAPPDATA": str(tmp_path / "data"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
+    snapshot = launch.resolve_global_config(environment=shell)
+    installed = replace(
+        snapshot,
+        paths=replace(
+            snapshot.paths,
+            source="installation",
+            installation=replace(
+                snapshot.paths.installation,
+                revision="fixture-revision",
+                generation_id=uuid4(),
+            ),
+        ),
+    )
+    inputs = launch.NativePreparationInputs()
+    inputs.capture(installed)
+    inputs.guard_ancestors()
+    assert inputs.reusable is (os.name == "posix")
+    assert (
+        installed.paths.installation.directory / "installation.json"
+        in inputs.dependencies
+    )
+    for kind in ("config", "appdata", "cache", "state"):
+        root = installed.paths.require(kind)
+        assert root / ".apprc-owner.json" in inputs.dependencies
+        assert root in inputs.identity_paths
+        assert root.parent in inputs.identity_paths
+
+    fallback = launch.NativePreparationInputs()
+    fallback.capture(snapshot)
+    assert fallback.reusable is False
+    resource = replace(installed.layers[0], path=None, resource=("fixture", "defaults"))
+    inaccessible = launch.NativePreparationInputs()
+    inaccessible.capture(replace(installed, layers=(resource,)))
+    assert inaccessible.reusable is False
 
 
 def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
