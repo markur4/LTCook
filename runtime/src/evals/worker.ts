@@ -354,7 +354,9 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     });
     const delegate = team.definition.members.some(
       (member) =>
-        member.key !== team.definition.leaderKey && member.workTypes.includes('task.execute'),
+        member.key !== team.definition.leaderKey &&
+        !member.readOnly &&
+        member.workTypes.includes('task.execute'),
     );
     const descriptions = {
       'read-only':
@@ -371,6 +373,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       title: `Agent Evals ${job.scenario}`,
       description: `${descriptions[job.scenario]} Do not start interactive planning, request user answers, commit, push or change unrelated files. This predefined scenario scope covers only the disposable fixture.`,
       requireDelegation: job.scenario === 'targeted-fix' && delegate,
+      requiresWrite: job.scenario === 'targeted-fix',
     });
     api.setSession(workspace, sessionId);
     const deadline = performance.now() + job.timeoutMs;

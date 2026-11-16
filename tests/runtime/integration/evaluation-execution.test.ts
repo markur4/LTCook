@@ -111,6 +111,43 @@ describe('evaluation execution scope', () => {
     }
   });
 
+  test('correction scenarios exclude read-only members and reject teams without a writer', async () => {
+    for (const leaderReadOnly of [false, true]) {
+      const agents = backend();
+      const members = team.definition.members.map((member) => ({
+        ...member,
+        readOnly: member.key === team.definition.leaderKey ? leaderReadOnly : true,
+      }));
+      const runtime = createRuntime({
+        databasePath: ':memory:',
+        team: { ...team, definition: { ...team.definition, members } },
+        agents: agents.value,
+        evaluation: { sessionId: 'evaluation' },
+      });
+      try {
+        const start = runtime.startEvaluation({
+          sessionId: 'evaluation',
+          workspaceRoot: '/evaluation',
+          title: 'Correction',
+          description: 'Correct the fixture.',
+          requiresWrite: true,
+        });
+        if (leaderReadOnly) {
+          await expect(start).rejects.toThrow(
+            'No eligible member can perform the evaluation scenario',
+          );
+        } else {
+          await start;
+          expect(agents.sends[0]?.message).toContain(
+            'assigneeKey to an eligible declared member: leader.',
+          );
+        }
+      } finally {
+        await runtime.close();
+      }
+    }
+  });
+
   test('ordinary controllers cannot create evaluation execution authority', async () => {
     const agents = backend();
     const runtime = createRuntime({ databasePath: ':memory:', team, agents: agents.value });
