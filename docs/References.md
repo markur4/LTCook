@@ -425,10 +425,10 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just runtime dev -- --help` | Display runtime help after resolving AppRC for the checkout workspace. |
 | `just runtime watch -- --help` | Display runtime help with Bun watch enabled and AppRC resolved. |
 | `just runtime check` | Type-check the runtime workspace. |
-| `just runtime test` | Run runtime unit/native/integration and team contract tests. |
+| `just runtime test` | Run runtime unit/native/integration tests. |
 | `just runtime test-integration` | Run runtime integration tests. |
 | `just runtime build` | Compile the runtime, Pi SDK/RPC launcher, Pi extension, and Paseo plugin. |
-| `just eval probe` | Run the opt-in local Ornith/Pi probe; requires normal app setup and the exact local model. |
+| `just eval probe` | Run the opt-in quick Agent Evals preset; requires normal app setup and the exact local model. |
 | `just eval audit-static` | Run model-free instruction inventory checks. |
 | `just eval audit` | Run the local Ornith semantic Instruction Audit. |
 | `just eval behavior` | Run read-only, no-op and targeted-fix Behavior Evaluation once with full instructions; fall back once to low reasoning on failure. |

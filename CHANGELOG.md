@@ -125,7 +125,7 @@ All notable changes to `ltcook` will be documented in this file.
   Team/Tasks panels. Multiple Teams share one runtime, including Sessions in the
   same Workspace. Paseo packages use the matching composer-capable published beta.
 
-- Symbolic Python tests use pytest-xdist with six workers by default. Complete test-suite timing includes symbolic tests and live agent evaluations, reported separately and together.
+- Python tests use pytest-xdist with six workers by default. Complete test-suite timing includes Traditional Tests and model-backed Agent Evals, reported separately and together.
 
 - Agent Evals supports Current Setup and Synthetic Setup selection in the CLI and Paseo panel, a model-free `eval audit --static-only`, full-instruction Behavior Evaluation by default, `--case` selection, and `--repetitions` defaulting to one. Bottleneck Attribution uses the same executions and traces; `eval run --all` also performs Instruction Audit. Failed cases stop after their low-reasoning fallback, with saved partial results and safeguard history.
   Evaluation attempts use independent copy-on-write workspace copies where supported, release disposable state between attempts, and avoid duplicate runtime-state polling.
@@ -142,8 +142,8 @@ All notable changes to `ltcook` will be documented in this file.
   verification and user approval gates, same-member serialization, correction and
   explicit retry, restart delivery handling, and one current-revision Pass review.
 - Added required Linux real Pi/Paseo system acceptance using a scripted local
-  endpoint, plus local Pi guidance benchmarks for read-only, no-op, and targeted
-  fixes. Benchmarks use Ornith 1.5 9B with thinking off, retry failed behavior
+  endpoint, plus Agent Evals for read-only, no-op, and targeted
+  fixes. These Agent Evals use Ornith 1.5 9B with thinking off, retry failed behavior
   cases once at low thinking, and record total task time, provider usage,
   tool/delegation counts, and action candidates.
 - Added Core/Team/Project/User guidance with required standing Core rules, native

@@ -100,7 +100,9 @@ requirement imposed on users of the application.
 | TypeScript runtime, native integrations, panel | `runtime/src` |
 | Bundled teams and Markdown resources | `teams/default`, `teams/default-minimal` |
 | Compose definitions and templates | `services` |
-| Python, runtime, team, and system tests | `tests` |
+| Traditional Tests, including tests of Agent Evals | `tests` |
+| Checkout-only Agent Evals recipes and live runner | `evals` |
+| Agent Evals implementation and bundled scenarios | `runtime/src/evals`, `runtime/resources/evals` |
 | User and maintainer documentation | `docs` |
 
 The Python application resolves settings through AppRC. Keep native component
@@ -143,27 +145,33 @@ agent loops.
 
 ## Verification
 
+Traditional Tests include unit, integration, system, and browser tests. Browser tests
+can also be system tests. Tests of Agent Evals belong to Traditional Tests; the
+model-free Instruction Audit remains an Agent Eval. Agent Evals also include
+Behavior Evaluation and Bottleneck Attribution. Scripted model responses and
+model-backed runs describe how a particular test or Agent Eval operates.
+
 Use the root quick checks described in
 [Contributing](../CONTRIBUTING.md#run-checks). `just check` performs Prettier and
 TypeScript checks, Ruff formatting/lint checks, and Pyright; `just test` runs Bun
 runtime/native/team contracts and Python tests excluding `integration` and
-`system`. `just runtime test` is the focused runtime/native/team contract subset.
+`system`. `just runtime test` is the focused runtime unit/native/integration subset.
 `just build` is a packaging action, not a routine test.
 
-Symbolic Python tests use pytest-xdist with six workers by default. This is
+Python tests use pytest-xdist with six workers by default. This is
 repository policy: retain the dependency and six-worker default unless the user
 explicitly approves changing them. An explicit `-n 0` can isolate a failing test
 for diagnosis; it does not change the default. Small scheduling batches
 (`--maxschedchunk=1`) keep the slow process-based checks distributed across
 workers.
 
-A complete test-suite measurement includes symbolic tests and live agent
-evaluations. Report elapsed time and outcomes for each category and their
-combined total. For complete live coverage, use the full evaluation preset in
-both Current and Synthetic setups. Run live agent evaluations sequentially so local
-model contention does not distort elapsed-time estimates. Ordinary CI runs symbolic
-tests, including scripted checks of the evaluation machinery; live agent
-evaluations remain separately invoked.
+A complete test-suite measurement includes Traditional Tests and model-backed
+Agent Evals. Report elapsed time and outcomes for each category and their combined
+total. For complete live coverage, use the full evaluation preset in
+both Current and Synthetic setups. Run model-backed Agent Evals sequentially so
+local model contention does not distort elapsed-time estimates. Ordinary CI runs
+tests, including scripted checks of the evaluation machinery; model-backed Agent
+Evals remain separately invoked.
 
 Prettier is pinned as a development-only JavaScript dependency. Its commands cover
 authored runtime, team, and test TypeScript, excluding generated distributions.
@@ -188,7 +196,7 @@ model prompt loop to quick checks.
 Normal LTCook application setup detects a local Ollama installation or uses the
 official platform installer when missing, then ensures
 `ornith-1.5:9b` (about 6.6 GB). This is separate from `just sync`,
-editable registration, deterministic tests, and CI. Setup records readiness
+editable registration, tests, and CI. Setup records readiness
 under AppRC ownership and reuses a healthy user-managed service. It does not bind
 Ollama beyond loopback or stop a user-owned service.
 
@@ -294,7 +302,7 @@ temporary execution folders are removed. Cleanup failures remain visible in the
 run's limitations and are retried on the next restart; unsupported histories stay
 unchanged.
 
-Agent evaluation safeguards use three times the slowest of the five most recent
+Agent Evals safeguards use three times the slowest of the five most recent
 comparable successful attempts. Reasoning modes have separate histories, and
 model, fixture, setup, instruction/tool configuration and verified inference
 hardware must match. Failed or cancelled attempts do not increase the safeguard.
@@ -305,8 +313,8 @@ history and partial results belong to runtime state, not a separate database.
 
 Run records use schema 3. Unsupported older histories remain unchanged and are
 not read as current results. Preserve them if needed, stop the runtime, remove
-its `evals/runs` directory, and restart to reset history. Symbolic tests use
-scripted responses without Ollama or user login; live agent evaluations remain
+its `evals/runs` directory, and restart to reset history. Tests of the evaluation
+machinery use scripted responses without Ollama or user login; model-backed Agent Evals remain
 explicitly invoked outside ordinary CI.
 
 ## Asset packaging
