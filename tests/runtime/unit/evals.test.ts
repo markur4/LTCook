@@ -41,7 +41,11 @@ describe('Agent Evals run service', () => {
       JSON.stringify({ name: '@ltcook/team-default-minimal' }),
     );
     const projectRoot = path.resolve(import.meta.dir, '../../..');
-    await symlink(path.join(projectRoot, 'node_modules'), path.join(root, 'node_modules'), 'dir');
+    await symlink(
+      path.join(projectRoot, 'node_modules'),
+      path.join(root, 'node_modules'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
     const bundle = await Bun.build({
       entrypoints: [path.join(projectRoot, 'runtime/src/evals/engine.ts')],
       outdir: path.join(root, 'runtime/dist'),
