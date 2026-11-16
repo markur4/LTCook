@@ -1658,6 +1658,29 @@ describe('approved Pass scheduling', () => {
     return { runtime, id, pass, agents, create, release, report, databasePath, directory };
   }
 
+  test('snapshots reuse task and approval reads while preserving dependency blockers', async () => {
+    const f = await fixture(team);
+    let tasksRead: ReturnType<typeof spyOn> | undefined;
+    let approvalsRead: ReturnType<typeof spyOn> | undefined;
+    try {
+      const prerequisite = await f.create('snapshot-prerequisite');
+      const dependent = await f.create('snapshot-dependent', { dependencyIds: [prerequisite.id] });
+      await f.create('snapshot-other', { dependencyIds: [prerequisite.id] });
+      tasksRead = spyOn(CoordinationStore.prototype, 'listTasks');
+      approvalsRead = spyOn(CoordinationStore.prototype, 'listApprovals');
+      const snapshot = f.runtime.snapshot(f.id);
+      expect(tasksRead).toHaveBeenCalledTimes(1);
+      expect(approvalsRead).toHaveBeenCalledTimes(1);
+      expect(snapshot.blockers).toContain(
+        `Task ${dependent.id}: Dependency ${prerequisite.id} is ${prerequisite.status}`,
+      );
+    } finally {
+      tasksRead?.mockRestore();
+      approvalsRead?.mockRestore();
+      await f.runtime.close();
+    }
+  });
+
   test('Leader readiness publication completes inside its own scheduled native send', async () => {
     const f = await fixture(team);
     try {
