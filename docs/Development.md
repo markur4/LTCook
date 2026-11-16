@@ -56,7 +56,8 @@ The restored scaffold recipes remain available alongside LTCook's runtime module
 | `just lock`, `just upgrade`, `just upgrade-repos`, `just uprep` | Intentionally update locks or Git-based dependencies; upgrades run the full sync afterward. |
 | `just run -- COMMAND ...`, `just tree`, `just diagnose` | Run a command in the locked environment or inspect dependencies and interpreter state. |
 | `just worktree-create BRANCH DESTINATION BASE`, `just worktree-remove DESTINATION` | Prepare a separate locked checkout or remove an eligible, merged checkout. |
-| `just clean` | Remove build/cache artifacts, including pruning the global uv cache; it does not delete the environment or lockfiles. |
+| `just clean` | Remove project-local build artifacts and caches without deleting the environment or lockfiles. |
+| `just clean-uv-cache` | Explicitly prune the globally shared uv cache. |
 | `just format`, `just format-check` | Format authored TypeScript with Prettier and Python with Ruff, or check without rewriting. |
 
 > [!WARNING]

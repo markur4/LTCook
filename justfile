@@ -343,12 +343,15 @@ _check-clean-worktree action="publishing":
 # Clean / environment helpers
 # ---------------------------------------------------------------
 
-# Remove transient junk: uv cache,  __pycache__, .pytest_cache, .mypy_cache, .ruff_cache. Does NOT touch uv.lock or your venv.
+# Remove project-local build artifacts and caches without touching the environment.
 clean:
     @echo "🧹 Cleaning caches and build artifacts..."
-    find . -type d -name "__pycache__" -prune -exec rm -rf {} + || true
-    rm -rf .pytest_cache .mypy_cache .ruff_cache dist build *.egg-info || true
-    uv cache prune -y || true
+    find src tests \( -name .venv -o -name node_modules -o -name .git \) -prune -o -type d -name "__pycache__" -prune -exec rm -rf {} +
+    rm -rf __pycache__ .pytest_cache .mypy_cache .ruff_cache dist build *.egg-info
+
+# Prune uv's global shared cache only when explicitly requested.
+clean-uv-cache:
+    uv cache prune -y
 
 
 # Rebuilds python venv from uv.lock
