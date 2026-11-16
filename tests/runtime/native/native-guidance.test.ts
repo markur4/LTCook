@@ -47,7 +47,9 @@ function fixture() {
       members: minimal.definition.members.map((member) => ({ ...member, rules: [], skills: [] })),
     },
   };
-  const guidance = () => new NativeGuidance(team, 'leader', user, core);
+  const shared = path.join(root, 'real-home', '.agents', 'skills');
+  const guidance = (reduced = false) =>
+    new NativeGuidance(team, 'leader', user, core, reduced, shared);
   async function load(managed: NativeGuidance, projectTrusted = true) {
     const settingsManager = SettingsManager.create(project, agentDir, { projectTrusted });
     const loader = new DefaultResourceLoader({
@@ -64,7 +66,7 @@ function fixture() {
     await loader.reload();
     return loader;
   }
-  return { root, core, user, project, agentDir, file, guidance, load };
+  return { root, core, user, project, agentDir, shared, file, guidance, load };
 }
 
 test('native loader keeps rules standing and skill bodies progressive across a different agent HOME', async () => {
@@ -260,4 +262,66 @@ test('User clear writing and shared named skills load independently of Core meth
   expect(
     managed.inspection.resources.filter((item) => item.scope === 'user' && item.loaded),
   ).toHaveLength(3);
+});
+
+test('real-user shared skills load across a private HOME with explicit-only metadata and user inspection', async () => {
+  const f = fixture();
+  const skill = f.file(
+    'real-home/.agents/skills/shared-method/SKILL.md',
+    '---\nname: shared-method\ndescription: Shared method\ndisable-model-invocation: true\n---\nShared body.',
+  );
+  const managed = f.guidance();
+  const loader = await f.load(managed, false);
+  expect(
+    loader.getSkills().skills.find((item) => item.name === 'shared-method')?.disableModelInvocation,
+  ).toBe(true);
+  expect(managed.inspection.resources.find((item) => item.path === skill)?.scope).toBe('user');
+  expect(formatSkillsForPrompt(loader.getSkills().skills)).not.toContain('shared-method');
+  rmSync(skill);
+  await loader.reload();
+  expect(loader.getSkills().skills.some((item) => item.name === 'shared-method')).toBe(false);
+  expect(managed.inspection.resources.find((item) => item.path === skill)?.loaded).toBe(false);
+});
+
+test('shared skills deduplicate physical sources, reject conflicts, and stay absent in reduced setups', async () => {
+  const f = fixture();
+  f.file(
+    'real-home/.agents/skills/shared-method/SKILL.md',
+    '---\nname: shared-method\ndescription: Shared method\n---\nBody.',
+  );
+  mkdirSync(path.join(f.user, 'skills'), { recursive: true });
+  symlinkSync(path.join(f.shared, 'shared-method'), path.join(f.user, 'skills/shared-method'));
+  expect(
+    (await f.load(f.guidance())).getSkills().skills.filter((item) => item.name === 'shared-method'),
+  ).toHaveLength(1);
+  const reduced = await f.load(f.guidance(true));
+  expect(reduced.getSkills().skills.map((item) => item.name)).toEqual(['ltcook-method']);
+  f.file(
+    'user/skills/conflict/SKILL.md',
+    '---\nname: shared-method\ndescription: Conflict\n---\nBody.',
+  );
+  await expect(f.load(f.guidance())).rejects.toThrow('Conflicting skill name');
+});
+
+test('shared discovery rejects a relative global root', () => {
+  const f = fixture();
+  expect(
+    () => new NativeGuidance(minimal, 'leader', f.user, f.core, false, 'relative-skills'),
+  ).toThrow('Shared skills directory must be an absolute user path');
+});
+
+test('a skill directory linked from the shared root remains User guidance', async () => {
+  const f = fixture();
+  const skill = f.file(
+    'separate-library/linked-method/SKILL.md',
+    '---\nname: linked-method\ndescription: Linked user method\n---\nMethod.',
+  );
+  mkdirSync(f.shared, { recursive: true });
+  symlinkSync(path.dirname(skill), path.join(f.shared, 'linked-method'));
+  const managed = f.guidance();
+  const loader = await f.load(managed);
+  expect(loader.getSkills().skills.some((item) => item.name === 'linked-method')).toBe(true);
+  expect(managed.inspection.resources.find((item) => item.name === 'linked-method')?.scope).toBe(
+    'user',
+  );
 });

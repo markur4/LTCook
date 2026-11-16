@@ -9,6 +9,7 @@ layout, packaging boundary, verification limits, and current release workflow.
 - [Work in the project](#work-in-the-project)
   - [Maintainer environment](#maintainer-environment)
   - [Repository routing](#repository-routing)
+  - [Shared personal skill discovery](#shared-personal-skill-discovery)
 - [Document the project](#document-the-project)
   - [Documentation authoring](#documentation-authoring)
 - [Verify and release](#verify-and-release)
@@ -397,3 +398,16 @@ exact SDK checksum entry. The schema-2 manifest hashes the final package/native
 assets without hashing itself; stale setup binaries and legacy script/zipapp
 manifests are rejected. Windows/macOS native behavior needs independent native
 verification; never run Windows verification executables from WSL.
+
+
+## Shared personal skill discovery
+
+The launch helper resolves the original user's `~/.agents/skills` as the internal
+`LTCOOK_SHARED_SKILLS_DIR` environment input before Paseo changes native `HOME`.
+Native guidance adds this optional source to Pi and reports its resources as User
+guidance. Core/Team requirements, native project trust, explicit-only invocation,
+physical-path deduplication and conflicting-name errors remain authoritative.
+Current Setup snapshots shared skill files under `shared-skills` and uses that
+snapshot for Instruction Audit and execution. Synthetic Setup uses an empty
+shared source, and reduced instructions exclude all non-Core guidance. Existing
+credential and symlink snapshot exclusions apply to the added source too.

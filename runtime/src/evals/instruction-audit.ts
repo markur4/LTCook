@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { loadTeam } from '../integrations/team-loader.js';
@@ -17,7 +18,14 @@ export async function staticAudit(input: {
   for (const member of input.team.definition.members) {
     let guidance: NativeGuidance;
     try {
-      guidance = new NativeGuidance(input.team, member.key, input.guidance, input.resources);
+      guidance = new NativeGuidance(
+        input.team,
+        member.key,
+        input.guidance,
+        input.resources,
+        false,
+        path.join(input.guidance, 'shared-skills'),
+      );
     } catch (error) {
       findings.push({
         kind: 'resource-load-error',
@@ -34,9 +42,16 @@ export async function staticAudit(input: {
       agentDir: input.guidance,
       settingsManager: SettingsManager.inMemory({}),
       noExtensions: true,
+      noSkills: true,
       noPromptTemplates: true,
       noThemes: true,
-      additionalSkillPaths: guidance.skillPaths,
+      // > Audit only captured inputs, never the host's automatically discovered skills.
+      additionalSkillPaths: [
+        ...guidance.skillPaths,
+        ...['.agents', '.pi']
+          .map((directory) => path.join(input.workspace, directory, 'skills'))
+          .filter((directory) => existsSync(directory)),
+      ],
       skillsOverride: guidance.skillsOverride,
       agentsFilesOverride: guidance.agentsFilesOverride,
     });

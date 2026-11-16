@@ -188,6 +188,9 @@ def resolve_launch(
     )
     environment["LTCOOK_RUNTIME_STATE_DIR"] = str(runtime_state)
     environment["LTCOOK_GUIDANCE_DIR"] = str(guidance)
+    environment["LTCOOK_SHARED_SKILLS_DIR"] = str(
+        (home / ".agents" / "skills").resolve()
+    )
     environment["LTCOOK_RIED_CACHE_DIR"] = str(
         global_resolved.paths.require("cache") / "projects"
     )
@@ -298,6 +301,7 @@ def evaluation_context(
             {
                 "teamSelection": config.app.team,
                 "guidanceDirectory": launch.environment["LTCOOK_GUIDANCE_DIR"],
+                "sharedSkillsDirectory": launch.environment["LTCOOK_SHARED_SKILLS_DIR"],
                 "webConfiguration": web,
                 "limitations": [
                     "Authenticated external tools are skipped; browser and authenticated MCP integrations are disabled."

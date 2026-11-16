@@ -20,6 +20,7 @@ Keep all full standing instructions and member restrictions. Follow the assigned
 export type EvaluationContext = {
   teamSelection: string;
   guidanceDirectory: string;
+  sharedSkillsDirectory: string;
   webConfiguration: Record<string, unknown>;
   limitations: string[];
 };
@@ -107,12 +108,16 @@ export async function snapshotWorkspace(
   return entries;
 }
 
-export async function copyGuidance(source: string, destination: string): Promise<SnapshotEntry[]> {
+export async function copyGuidance(
+  source: string,
+  destination: string,
+  sharedSkillsDirectory = '',
+): Promise<SnapshotEntry[]> {
   await mkdir(destination, { recursive: true });
   const entries: SnapshotEntry[] = [];
-  if (!source) return entries;
-  const walk = async (relative: string): Promise<void> => {
-    const file = path.join(source, relative);
+  const walk = async (relative: string, sourceRoot: string, prefix = ''): Promise<void> => {
+    const file = path.join(sourceRoot, relative);
+    const outputPath = path.posix.join(prefix, relative);
     let info;
     try {
       info = await lstat(file);
@@ -122,23 +127,27 @@ export async function copyGuidance(source: string, destination: string): Promise
     }
     if (info.isSymbolicLink() || secret.test(relative)) {
       entries.push({
-        path: relative,
+        path: outputPath,
         included: false,
         reason: 'credential or symbolic link excluded',
       });
       return;
     }
     if (info.isDirectory()) {
-      for (const name of await readdir(file)) await walk(path.posix.join(relative, name));
+      for (const name of await readdir(file))
+        await walk(path.posix.join(relative, name), sourceRoot, prefix);
     } else if (info.isFile()) {
       const content = await readFile(file);
-      await mkdir(path.dirname(path.join(destination, relative)), { recursive: true });
-      await writeFile(path.join(destination, relative), content, { mode: info.mode & 0o777 });
-      entries.push({ path: relative, included: true, sha256: hash(content) });
-    } else entries.push({ path: relative, included: false, reason: 'special file excluded' });
+      await mkdir(path.dirname(path.join(destination, outputPath)), { recursive: true });
+      await writeFile(path.join(destination, outputPath), content, { mode: info.mode & 0o777 });
+      entries.push({ path: outputPath, included: true, sha256: hash(content) });
+    } else entries.push({ path: outputPath, included: false, reason: 'special file excluded' });
   };
-  await walk('rules');
-  await walk('skills');
+  if (source) {
+    await walk('rules', source);
+    await walk('skills', source);
+  }
+  if (sharedSkillsDirectory) await walk('', sharedSkillsDirectory, 'shared-skills');
   return entries;
 }
 
@@ -154,6 +163,7 @@ export function resolveEvaluationContext(input: {
     return {
       teamSelection: 'default-minimal',
       guidanceDirectory: '',
+      sharedSkillsDirectory: '',
       webConfiguration: {},
       limitations: [],
     };
@@ -185,6 +195,7 @@ export function resolveEvaluationContext(input: {
   if (
     !context ||
     typeof context.guidanceDirectory !== 'string' ||
+    typeof context.sharedSkillsDirectory !== 'string' ||
     typeof context.teamSelection !== 'string' ||
     !context.webConfiguration
   )

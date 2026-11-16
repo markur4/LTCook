@@ -478,6 +478,12 @@ ltcook guidance inspect --session SESSION --agent NATIVE_AGENT_ID
 
 Personal writing, language/frontend guidance and detailed Modes planning preferences are supplied by the User, not bundled by Core. For example, register native skills named `typescript-best-practices`, `vercel-react-best-practices`, and `principle-minimize-reader-load` in the user skills directory. Existing `ltcook-typescript`, `ltcook-react-vite` and `ltcook-reader-load` invocations are removed.
 
+Shared personal skills in `~/.agents/skills/` are also loaded, matching standalone
+Pi and Codex. LTCook resolves this user directory before switching native agent
+`HOME`; project settings cannot redirect it. An absent shared directory is harmless.
+The same physical skill is loaded once; distinct files with the same skill name
+fail activation. Keep skill bodies and relative references together in one directory.
+
 Rules are Markdown standing instructions. Skills use native `SKILL.md` directories
 with names and descriptions. Their bodies and references load on demand; explicit-only skills remain available only on request. The inspector reports scope,
 kind, applicability, diagnostics and actual native loading. Distinct resources

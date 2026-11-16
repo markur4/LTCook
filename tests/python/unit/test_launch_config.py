@@ -134,6 +134,9 @@ def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
     global_launch = launch.resolve_launch(project, original_environment=environment)
 
     assert global_launch.environment["LTCOOK_TEAM"] == "global-team"
+    assert global_launch.environment["LTCOOK_SHARED_SKILLS_DIR"] == str(
+        (user_home / ".agents" / "skills").resolve()
+    )
     assert global_launch.environment["LTCOOK_PI_AUTH_DIR"] == str(global_auth.resolve())
     assert global_launch.environment["LTCOOK_WORKSPACE"] == str(project.resolve())
     assert not marker_file.exists()
@@ -973,6 +976,7 @@ def test_evaluation_context_excludes_credentials_and_does_not_write_native_state
     output = capsys.readouterr().out
     context = json.loads(output)
     assert context["teamSelection"]
+    assert context["sharedSkillsDirectory"]
     assert context["guidanceDirectory"]
     assert "webConfiguration" in context
     assert "evaluation-secret-sentinel" not in output

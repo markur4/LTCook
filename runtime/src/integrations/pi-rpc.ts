@@ -196,6 +196,7 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
             })(),
           coreGuidanceDirectory(),
           process.env.LTCOOK_EVAL_ARM === 'minimal',
+          process.env.LTCOOK_SHARED_SKILLS_DIR ?? '',
         )
       : undefined;
     // > Recreate cwd-bound resources on native new/resume/fork, retaining the shared auth path.

@@ -3,8 +3,14 @@ import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveEvaluationContext, snapshotWorkspace } from '../../../runtime/src/evals/setup.js';
+import {
+  copyGuidance,
+  resolveEvaluationContext,
+  snapshotWorkspace,
+} from '../../../runtime/src/evals/setup.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
+import { staticAudit } from '../../../runtime/src/evals/instruction-audit.js';
+import minimal from '../../../teams/default-minimal/src/index.js';
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
@@ -49,6 +55,7 @@ test('Current Setup applies explicit non-secret overrides through the real AppRC
       },
     });
     expect(context.teamSelection).toBe('default');
+    expect(context.sharedSkillsDirectory).toBe(path.join(root, '.agents', 'skills'));
     expect(context.webConfiguration.searxngBaseUrl).toBe('http://127.0.0.1:8123');
     expect(context.limitations).not.toContain(
       'Workspace team selection differs from the active runtime; using the active runtime team.',
@@ -110,3 +117,74 @@ for (const schema of [1, 2]) {
     );
   });
 }
+
+test('Current Setup snapshots shared skill inputs and Synthetic Setup excludes host skill roots', async () => {
+  const root = await temporary();
+  const shared = path.join(root, 'shared');
+  const destination = path.join(root, 'snapshot');
+  await mkdir(path.join(shared, 'example'), { recursive: true });
+  await writeFile(path.join(shared, 'example', 'SKILL.md'), 'Shared skill body.');
+  await writeFile(path.join(shared, 'auth.json'), 'private');
+  await symlink('/etc/passwd', path.join(shared, 'outside'));
+  const entries = await copyGuidance('', destination, shared);
+  expect(await readFile(path.join(destination, 'shared-skills/example/SKILL.md'), 'utf8')).toBe(
+    'Shared skill body.',
+  );
+  expect(entries.find((entry) => entry.path === 'shared-skills/auth.json')?.included).toBe(false);
+  expect(entries.find((entry) => entry.path === 'shared-skills/outside')?.included).toBe(false);
+  expect(
+    resolveEvaluationContext({ python: 'unused', setup: 'synthetic', teamSelection: 'default' })
+      .sharedSkillsDirectory,
+  ).toBe('');
+});
+
+test('Instruction Audit uses captured shared and project skills without discovering live host skills', async () => {
+  const root = await temporary();
+  const home = path.join(root, 'host-home');
+  const guidance = path.join(root, 'guidance');
+  const workspace = path.join(root, 'workspace');
+  const core = path.join(root, 'core');
+  const syntheticGuidance = path.join(root, 'synthetic-guidance');
+  const syntheticWorkspace = path.join(root, 'synthetic-workspace');
+  for (const directory of [core, syntheticGuidance, syntheticWorkspace])
+    await mkdir(directory, { recursive: true });
+  await writeFile(path.join(core, 'catalog.json'), '[]');
+  for (const [directory, name, description] of [
+    [path.join(home, '.agents/skills/shared-method'), 'shared-method', 'Live host method'],
+    [path.join(guidance, 'shared-skills/shared-method'), 'shared-method', 'Captured method'],
+    [path.join(workspace, '.agents/skills/project-method'), 'project-method', 'Captured project'],
+  ] as const) {
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      path.join(directory, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: ${description}\n---\nMethod.`,
+    );
+  }
+  const team = {
+    ...minimal,
+    definition: { ...minimal.definition, resources: [] },
+  };
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const current = await staticAudit({ team, workspace, guidance, resources: core });
+    expect(current.findings.some((finding) => finding.kind === 'resource-load-error')).toBe(false);
+    expect(
+      current.resources.some((resource) => resource.name === 'shared-method' && resource.loaded),
+    ).toBe(true);
+    expect(
+      current.resources.some((resource) => resource.name === 'project-method' && resource.loaded),
+    ).toBe(true);
+    expect(JSON.stringify(current)).not.toContain(home);
+    const synthetic = await staticAudit({
+      team,
+      workspace: syntheticWorkspace,
+      guidance: syntheticGuidance,
+      resources: core,
+    });
+    expect(synthetic.resources).toEqual([]);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  }
+});

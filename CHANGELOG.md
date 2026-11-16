@@ -120,6 +120,8 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ➕ Added
 
+- Native agents discover the real user's shared `~/.agents/skills` directory even when LTCook gives them a private HOME. Required Core/Team guidance, project trust, explicit-only skills and conflict checks remain active. Current evaluation snapshots include shared skills; synthetic setups remain isolated from the live user library.
+
 - Added a native LTCook Paseo provider with per-Session Team selection, direct
   Leader chat, a local Teams browser, native child conversations, and contextual
   Team/Tasks panels. Multiple Teams share one runtime, including Sessions in the

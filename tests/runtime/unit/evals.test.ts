@@ -74,6 +74,7 @@ describe('Agent Evals run service', () => {
           context: {
             teamSelection: 'fixture-selected',
             guidanceDirectory: root,
+            sharedSkillsDirectory: '',
             webConfiguration: {},
             limitations: [],
           },
@@ -273,6 +274,7 @@ test('missing Bonsai is a hard failure and never invokes another provider', asyn
     context: {
       teamSelection: 'default-minimal',
       guidanceDirectory: '',
+      sharedSkillsDirectory: '',
       webConfiguration: {},
       limitations: [],
     },
@@ -310,6 +312,7 @@ test('an incorrectly configured Bonsai context fails before inference', async ()
     context: {
       teamSelection: 'default-minimal',
       guidanceDirectory: '',
+      sharedSkillsDirectory: '',
       webConfiguration: {},
       limitations: [],
     },
