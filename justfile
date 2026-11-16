@@ -343,12 +343,15 @@ _check-clean-worktree action="publishing":
 # Clean / environment helpers
 # ---------------------------------------------------------------
 
-# Remove transient junk: uv cache,  __pycache__, .pytest_cache, .mypy_cache, .ruff_cache. Does NOT touch uv.lock or your venv.
+# Remove project-local build artifacts and caches without touching the environment.
 clean:
     @echo "🧹 Cleaning caches and build artifacts..."
-    find . -type d -name "__pycache__" -prune -exec rm -rf {} + || true
-    rm -rf .pytest_cache .mypy_cache .ruff_cache dist build *.egg-info || true
-    uv cache prune -y || true
+    find src tests \( -name .venv -o -name node_modules -o -name .git \) -prune -o -type d -name "__pycache__" -prune -exec rm -rf {} +
+    rm -rf __pycache__ .pytest_cache .mypy_cache .ruff_cache dist build *.egg-info
+
+# Prune uv's global shared cache only when explicitly requested.
+clean-uv-cache:
+    uv cache prune -y
 
 
 # Rebuilds python venv from uv.lock
@@ -558,7 +561,7 @@ release-wheel-smoke:
     (cd "$smoke_root"; uv run --isolated --python 3.12 --with "ltcook @ $artifact_uri" python "$smoke_script" --expected-version "$version")
 
 release-install-smoke:
-    LTCOOK_NATIVE_SETUP="$(realpath dist/ltcook-setup-linux-x86_64)" PYTHONPATH=src uv run --locked --no-sync pytest tests/test_ltcook_package.py::test_native_setup_initializes_ready_authority_and_retains_resources
+    LTCOOK_NATIVE_SETUP="$(realpath dist/ltcook-setup-linux-x86_64)" PYTHONPATH=src uv run --locked --no-sync pytest tests/python/system/test_native_setup.py::test_native_setup_initializes_ready_authority_and_retains_resources
 
 # Rehearse the release gate. It does not upload anything.
 release-check:

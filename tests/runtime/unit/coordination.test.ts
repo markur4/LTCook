@@ -123,9 +123,8 @@ describe('CoordinationStore', () => {
     expect(() => store.getStep('another-session', first.id)).toThrow();
     store.close();
   });
-  test.each([0, 1, 2, 4])(
-    'rejects incompatible schema %s without modifying any bytes',
-    (version) => {
+  for (const version of [0, 1, 2, 4]) {
+    test(`rejects incompatible schema ${version} without modifying any bytes`, () => {
       const path = databasePath();
       const legacy = new Database(path);
       legacy.exec(
@@ -143,8 +142,8 @@ describe('CoordinationStore', () => {
         probe.prepare("SELECT name FROM sqlite_master WHERE name='owner'").get(),
       ).toBeUndefined();
       probe.close();
-    },
-  );
+    });
+  }
   test('rejects an incomplete current schema before creating an owner', () => {
     const path = databasePath();
     const invalid = new Database(path);

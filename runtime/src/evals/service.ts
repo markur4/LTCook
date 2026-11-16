@@ -22,6 +22,7 @@ import {
   type EvalEvent,
   type EvalPreset,
   type EvalSetup,
+  type EvalEnvironmentOverrides,
   type EvalReportResponse,
   type EvalSummary,
 } from './contracts.js';
@@ -90,6 +91,7 @@ export type EvalEngine = (input: {
   setup: EvalSetup;
   workspaceRoot?: string;
   teamSelection?: string;
+  environmentOverrides?: EvalEnvironmentOverrides;
   limitations?: string[];
   staticOnly: boolean;
   runDirectory: string;
@@ -318,6 +320,9 @@ export class EvalRunService {
         },
         ...(request.workspaceRoot ? { workspaceRoot: request.workspaceRoot } : {}),
         ...(teamSelection ? { teamSelection } : {}),
+        ...(request.environmentOverrides
+          ? { environmentOverrides: request.environmentOverrides }
+          : {}),
         ...(limitations.length ? { limitations } : {}),
         runDirectory: this.runDirectory(summary.runId),
         signal: controller.signal,
@@ -340,23 +345,47 @@ export class EvalRunService {
       });
       await this.writes;
       await this.saveOutput(summary, output);
-      summary.status = controller.signal.aborted ? 'cancelled' : 'completed';
-      summary.completed = summary.total;
-      summary.updatedAt = new Date().toISOString();
-      await this.saveSummary(summary);
-      await this.emit(summary, summary.status === 'cancelled' ? 'run.cancelled' : 'run.completed', {
-        elapsedMs: Date.now() - started,
-      });
+      const terminal: EvalSummary = {
+        ...summary,
+        status: controller.signal.aborted ? 'cancelled' : 'completed',
+        completed: summary.total,
+        updatedAt: new Date().toISOString(),
+      };
+      await this.saveSummary(terminal);
+      await this.emit(
+        terminal,
+        terminal.status === 'cancelled' ? 'run.cancelled' : 'run.completed',
+        {
+          elapsedMs: Date.now() - started,
+        },
+      );
+      Object.assign(summary, terminal);
     } catch (error) {
       await this.writes.catch(() => undefined);
-      summary.status = controller.signal.aborted ? 'cancelled' : 'failed';
-      summary.error = safeError(error);
-      summary.updatedAt = new Date().toISOString();
-      await this.saveSummary(summary);
-      await this.emit(summary, summary.status === 'cancelled' ? 'run.cancelled' : 'run.failed', {
-        elapsedMs: Date.now() - started,
-        message: summary.error,
-      });
+      const terminal: EvalSummary = {
+        ...summary,
+        status: controller.signal.aborted ? 'cancelled' : 'failed',
+        error: safeError(error),
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        await this.saveSummary(terminal);
+        await this.emit(
+          terminal,
+          terminal.status === 'cancelled' ? 'run.cancelled' : 'run.failed',
+          {
+            elapsedMs: Date.now() - started,
+            message: terminal.error,
+          },
+        );
+      } catch (storageError) {
+        Object.assign(summary, terminal, {
+          status: 'failed',
+          error: `${terminal.error}; could not persist the terminal evaluation result: ${safeError(storageError)}`,
+        });
+        return;
+      }
+      Object.assign(summary, terminal);
     } finally {
       this.active = undefined;
     }

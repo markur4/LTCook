@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
-import urllib.request
 from enum import StrEnum
 from typing import Annotated
 
@@ -22,13 +22,14 @@ from rich.table import Table
 
 from ltcook._runtime_client import (
     RuntimeClientError,
+    open_runtime_request,
     probe_runtime,
-    runtime_api_url,
+    redact_runtime_token,
     start_runtime,
     wait_for_runtime,
 )
 from ltcook.config.app import APP_RC
-from ltcook.launch import resolve_launch
+from ltcook.launch import _shell_environment, resolve_launch
 
 eval_cli = typer.Typer(help="Run and inspect Agent Evals.", no_args_is_help=True)
 console = Console()
@@ -48,6 +49,15 @@ EVAL_LABELS.update(
     }
 )
 
+# > Only non-secret settings consumed by Current Setup cross the local API.
+_EVALUATION_ENVIRONMENT_KEYS = (
+    "LTCOOK_TEAM",
+    "LTCOOK_GUIDANCE_DIR",
+    "LTCOOK_SEARXNG_URL",
+    "LTCOOK_CRAWL4AI_URL",
+    "LTCOOK_SSRF_ALLOW_RANGES",
+)
+
 
 class EvalCase(StrEnum):
     read_only = "read-only"
@@ -61,12 +71,16 @@ class EvalSetup(StrEnum):
 
 
 def _runtime():
-    launch = resolve_launch(None)
+    shell = _shell_environment(os.environ)
+    launch = resolve_launch(None, original_environment=shell)
     status = probe_runtime(launch.environment)
     child = None
     if status is None:
         child = start_runtime(
-            launch.environment, workspace_root=None, shell_environment={}, detached=True
+            launch.environment,
+            workspace_root=None,
+            shell_environment=shell,
+            detached=True,
         )
         status = wait_for_runtime(launch.environment, child)
     elif status == "starting":
@@ -75,19 +89,9 @@ def _runtime():
 
 
 def _call(environment, route: str, payload: object = None):
-    url = runtime_api_url(environment["LTCOOK_API_LISTEN"]) + route
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload or {}).encode(),
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {environment['LTCOOK_API_TOKEN']}",
-            "Content-Type": "application/json",
-        },
-    )
     try:
-        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
-            request, timeout=30
+        with open_runtime_request(
+            environment, route, payload or {}, timeout=30
         ) as response:
             return json.loads(response.read().decode())
     except (
@@ -97,8 +101,10 @@ def _call(environment, route: str, payload: object = None):
         ValueError,
     ) as error:
         raise RuntimeClientError(
-            f"Agent Evals runtime request failed: {error}"
-        ) from error
+            redact_runtime_token(
+                f"Agent Evals runtime request failed: {error}", environment
+            )
+        ) from None
 
 
 def _follow(environment, run_id: str) -> None:
@@ -218,8 +224,9 @@ def _start_and_follow(
 ) -> None:
     try:
         environment, _ = _runtime()
+        shell = _shell_environment(os.environ)
         workspace = (
-            APP_RC.manage().inspect().resolved.workspace
+            APP_RC.manage(environment=shell).inspect().resolved.workspace
             if setup == EvalSetup.current
             else None
         )
@@ -233,6 +240,12 @@ def _start_and_follow(
             request["scenario"] = scenario.value
         if workspace is not None:
             request["workspaceRoot"] = str(workspace.root)
+        if setup == EvalSetup.current:
+            overrides = {
+                key: shell[key] for key in _EVALUATION_ENVIRONMENT_KEYS if key in shell
+            }
+            if overrides:
+                request["environmentOverrides"] = overrides
         run_id = _call(
             environment,
             "/v1/evals/start",

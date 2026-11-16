@@ -309,3 +309,78 @@ test('an incorrectly configured Bonsai context fails before inference', async ()
     fetchSpy.mockRestore();
   }
 });
+
+test('Current Setup preserves allowed caller overrides while rejecting credentials and Session mismatches', async () => {
+  const root = await stateRoot();
+  const observed: Array<{ teamSelection?: string; environmentOverrides?: unknown }> = [];
+  const service = new EvalRunService(root, async (input) => {
+    observed.push({
+      teamSelection: input.teamSelection,
+      environmentOverrides: input.environmentOverrides,
+    });
+    return { result: {}, trace: {} };
+  });
+  await service.initialize();
+  const socket = createServer();
+  await new Promise<void>((resolve) => socket.listen(0, '127.0.0.1', resolve));
+  const address = socket.address();
+  if (!address || typeof address === 'string') throw new Error('No test port assigned');
+  await new Promise<void>((resolve) => socket.close(() => resolve()));
+  const api = new RuntimeApi(undefined, 'user-secret', `127.0.0.1:${address.port}`);
+  api.setEval(service);
+  api.setRuntime({
+    snapshot: () => ({ session: { workspaceRoot: root, teamId: 'team-b' } }),
+    listSessions: () => [],
+    teamCatalog: () => [
+      { teamId: 'team-a', selection: 'team-a-selection', status: 'installed' },
+      { teamId: 'team-b', selection: 'team-b-selection', status: 'installed' },
+    ],
+  } as never);
+  api.setSession(root, 'leader-b');
+  const base = await api.listen();
+  const start = (body: Record<string, unknown>, token = 'user-secret') =>
+    fetch(`${base}/v1/evals/start`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        preset: 'audit',
+        setup: 'current',
+        staticOnly: true,
+        workspaceRoot: root,
+        ...body,
+      }),
+    });
+  try {
+    const overrides = {
+      LTCOOK_TEAM: 'team-a-selection',
+      LTCOOK_SEARXNG_URL: 'http://127.0.0.1:8123',
+    };
+    const response = await start({ environmentOverrides: overrides });
+    expect(response.status).toBe(200);
+    const id = ((await response.json()) as { runId: string }).runId;
+    await finish(service, id);
+    expect(observed).toEqual([
+      { teamSelection: 'team-a-selection', environmentOverrides: overrides },
+    ]);
+    expect(JSON.stringify(service.report(id))).not.toContain('8123');
+    const matching = await start({
+      sessionId: 'leader-b',
+      environmentOverrides: { LTCOOK_TEAM: 'team-b' },
+    });
+    expect(matching.status).toBe(200);
+    await finish(service, ((await matching.json()) as { runId: string }).runId);
+    expect(observed[1]?.teamSelection).toBe('team-b');
+    expect((await start({ environmentOverrides: { OPENAI_API_KEY: 'not-allowed' } })).status).toBe(
+      400,
+    );
+    expect((await start({ environmentOverrides: { LTCOOK_TEAM: 'missing' } })).status).toBe(400);
+    expect((await start({ sessionId: 'leader-b', environmentOverrides: overrides })).status).toBe(
+      400,
+    );
+    expect((await start({ environmentOverrides: overrides }, 'wrong-token')).status).toBe(401);
+    expect(observed).toHaveLength(2);
+  } finally {
+    await api.close();
+    await service.close();
+  }
+});

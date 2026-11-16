@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { snapshotWorkspace } from '../../../runtime/src/evals/setup.js';
+import { resolveEvaluationContext, snapshotWorkspace } from '../../../runtime/src/evals/setup.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 const roots: string[] = [];
 afterEach(async () => {
@@ -14,6 +14,53 @@ async function temporary() {
   roots.push(root);
   return root;
 }
+
+test('Current Setup applies explicit non-secret overrides through the real AppRC resolver', async () => {
+  const root = await temporary();
+  const previous = process.env.LTCOOK_SHELL_PROVENANCE;
+  const previousPythonPath = process.env.PYTHONPATH;
+  process.env.PYTHONPATH = [path.resolve(import.meta.dir, '../../../src'), previousPythonPath]
+    .filter(Boolean)
+    .join(path.delimiter);
+  process.env.LTCOOK_SHELL_PROVENANCE = JSON.stringify({
+    HOME: root,
+    USERPROFILE: root,
+    APPDATA: path.join(root, 'config'),
+    LOCALAPPDATA: path.join(root, 'data'),
+    XDG_CONFIG_HOME: path.join(root, 'config'),
+    XDG_DATA_HOME: path.join(root, 'data'),
+    XDG_CACHE_HOME: path.join(root, 'cache'),
+    XDG_STATE_HOME: path.join(root, 'state'),
+    LTCOOK_TEAM: 'default-minimal',
+    OPENAI_API_KEY: 'must-not-appear-in-context',
+  });
+  try {
+    const python = path.join(
+      process.env.UV_PROJECT_ENVIRONMENT ?? path.resolve(import.meta.dir, '../../../.venv'),
+      process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python',
+    );
+    const context = resolveEvaluationContext({
+      python,
+      setup: 'current',
+      teamSelection: 'default',
+      environmentOverrides: {
+        LTCOOK_TEAM: 'default',
+        LTCOOK_SEARXNG_URL: 'http://127.0.0.1:8123',
+      },
+    });
+    expect(context.teamSelection).toBe('default');
+    expect(context.webConfiguration.searxngBaseUrl).toBe('http://127.0.0.1:8123');
+    expect(context.limitations).not.toContain(
+      'Workspace team selection differs from the active runtime; using the active runtime team.',
+    );
+    expect(JSON.stringify(context)).not.toContain('must-not-appear-in-context');
+  } finally {
+    if (previous === undefined) delete process.env.LTCOOK_SHELL_PROVENANCE;
+    else process.env.LTCOOK_SHELL_PROVENANCE = previous;
+    if (previousPythonPath === undefined) delete process.env.PYTHONPATH;
+    else process.env.PYTHONPATH = previousPythonPath;
+  }
+});
 
 test('snapshots uncommitted inputs and selected ignored guidance, excluding credentials and escaping links', async () => {
   const root = await temporary();
@@ -41,9 +88,8 @@ test('snapshots uncommitted inputs and selected ignored guidance, excluding cred
   expect(await readdir(source)).toContain('outside');
 });
 
-test.each([1, 2])(
-  'unsupported schema %s saved records remain unchanged and are never restarted',
-  async (schema) => {
+for (const schema of [1, 2]) {
+  test(`unsupported schema ${schema} saved records remain unchanged and are never restarted`, async () => {
     const root = await temporary();
     const id = 'b9c2c440-a86a-43c2-9672-2030cf391de4';
     const folder = path.join(root, 'evals/runs', id);
@@ -62,5 +108,5 @@ test.each([1, 2])(
     expect(await readFile(path.join(oldExecution, 'output.json'), 'utf8')).toBe(
       'preserve unsupported state',
     );
-  },
-);
+  });
+}

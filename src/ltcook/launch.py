@@ -10,21 +10,21 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.request
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
 import typer
+from apprc import ResolvedConfig
 
 from ltcook._runtime_client import (
     RuntimeClientError,
     RuntimeStatus,
     follow_runtime_logs,
+    open_runtime_request,
     probe_runtime,
-    runtime_api_url,
     start_runtime,
     wait_for_runtime,
 )
@@ -47,6 +47,52 @@ class LaunchConfig:
     environment: dict[str, str]
     configuration: LtcookConfig
     workspace_root: Path | None
+
+
+@dataclass
+class NativePreparationInputs:
+    """Track filesystem guards for reuse of an installed AppRC snapshot."""
+
+    dependencies: set[Path] = field(default_factory=set)
+    identity_paths: set[Path] = field(default_factory=set)
+    reusable: bool = True
+
+    def capture(self, snapshot: ResolvedConfig) -> None:
+        """Keep reuse within the pinned resolver's representable authority path.
+
+        :param snapshot: Resolved settings and installation placement.
+        :return: None; unrepresentable layouts require fresh resolution.
+        """
+        paths = snapshot.paths
+        if (
+            os.name != "posix"
+            or paths.source != "installation"
+            or paths.installation.revision is None
+            or paths.installation.generation_id is None
+            or snapshot.issues
+            or snapshot.workspace_issues
+        ):
+            self.reusable = False
+        for layer in snapshot.layers:
+            if layer.path is not None:
+                self.dependencies.add(layer.path)
+            elif layer.resource is not None:
+                self.reusable = False
+        self.dependencies.add(paths.installation.directory / "installation.json")
+        self.dependencies.add(
+            paths.require("config") / snapshot.schema.apprc_toml_filename
+        )
+        for kind in ("config", "appdata", "cache", "state"):
+            root = paths.require(kind)
+            self.identity_paths.add(root)
+            self.dependencies.add(root / ".apprc-owner.json")
+
+    def guard_ancestors(self) -> None:
+        """Retain link and permission checks without following ancestor links."""
+        for path in (*self.dependencies, *self.identity_paths):
+            absolute = path.expanduser().absolute()
+            self.identity_paths.add(absolute)
+            self.identity_paths.update(absolute.parents)
 
 
 def _shell_environment(environment: Mapping[str, str]) -> dict[str, str]:
@@ -83,11 +129,13 @@ def resolve_launch(
     workspace_root: str | Path | None = None,
     *,
     original_environment: Mapping[str, str] | None = None,
+    preparation_inputs: NativePreparationInputs | None = None,
 ) -> LaunchConfig:
     """Resolve global runtime settings and optional project overlays.
 
     :param workspace_root: Explicit project directory, or None for global startup.
     :param original_environment: Captured shell variables before AppRC overlays.
+    :param preparation_inputs: Optional collector for installed configuration reuse.
     :return: Settings and child environment for this invocation.
     """
     shell = _shell_environment(
@@ -103,6 +151,17 @@ def resolve_launch(
         else resolve_global_config(environment=shell)
     )
     global_config = global_resolved.build(LtcookConfig)
+    if preparation_inputs is not None:
+        for snapshot in (resolved, global_resolved):
+            preparation_inputs.capture(snapshot)
+        if workspace_root is not None:
+            workspace_path = Path(workspace_root).expanduser().resolve()
+            preparation_inputs.identity_paths.add(workspace_path)
+            marker = workspace_path / resolved.schema.workspace_dotenv_filename
+            preparation_inputs.dependencies.add(marker)
+            preparation_inputs.dependencies.add(
+                marker.with_name(f"{marker.stem}.secret{marker.suffix}")
+            )
     environment = dict(shell)
     for section in config.__dict__.values():
         environment.update(
@@ -283,27 +342,20 @@ def _open_existing_runtime(
         return False
     if status == "starting":
         status = wait_for_runtime(environment, None, timeout=60)
-    request = urllib.request.Request(
-        f"{runtime_api_url(environment['LTCOOK_API_LISTEN'])}/v1/session/open",
-        data=json.dumps(
-            {
-                "workspaceRoot": str(workspace_root),
-                "sessionId": environment["LTCOOK_SESSION"],
-                "teamSelection": environment["LTCOOK_TEAM"],
-                "shellEnvironment": dict(shell_environment),
-            }
-        ).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {environment['LTCOOK_API_TOKEN']}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+    request = {
+        "workspaceRoot": str(workspace_root),
+        "sessionId": environment["LTCOOK_SESSION"],
+        "teamSelection": environment["LTCOOK_TEAM"],
+        "shellEnvironment": dict(shell_environment),
+    }
     deadline = time.monotonic() + 60
     while True:
         try:
-            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
-                request, timeout=max(0.1, deadline - time.monotonic())
+            with open_runtime_request(
+                environment,
+                "/v1/session/open",
+                request,
+                timeout=max(0.1, deadline - time.monotonic()),
             ) as response:
                 if response.status != 200:
                     raise RuntimeClientError(
@@ -370,7 +422,7 @@ def _run_foreground_runtime(
 
 
 @launch_cli.command("runtime")
-def runtime_command(
+def launch_runtime(
     workspace: Annotated[Path | None, typer.Option("--workspace")] = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", help="Show complete runtime diagnostics.")
@@ -541,6 +593,38 @@ def write_native_command(
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(json.dumps([str(path) for path in paths]))
+
+
+@launch_cli.command("prepare-native")
+def prepare_native_command(
+    workspace: Annotated[Path, typer.Option("--workspace")],
+) -> None:
+    """Resolve one workspace and write its owned native configuration together."""
+    inputs = NativePreparationInputs()
+    launch = resolve_launch(
+        workspace, original_environment=os.environ, preparation_inputs=inputs
+    )
+    try:
+        outputs = write_pi_config(
+            launch.configuration,
+            owned_dir=Path(launch.environment["LTCOOK_DEPLOYMENT_DIR"]) / "app",
+            pi_home=launch.environment["PI_CODING_AGENT_DIR"],
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    inputs.dependencies.update(outputs)
+    inputs.guard_ancestors()
+    typer.echo(
+        json.dumps(
+            {
+                "workspaceRoot": str(launch.workspace_root),
+                "environment": launch.environment,
+                "dependencies": sorted(map(str, inputs.dependencies)),
+                "identityPaths": sorted(map(str, inputs.identity_paths)),
+                "reusable": inputs.reusable,
+            }
+        )
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> None:

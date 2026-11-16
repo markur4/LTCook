@@ -99,11 +99,31 @@ def _request(environment: Mapping[str, str], route: str, body: object = None):
     )
 
 
+def open_runtime_request(
+    environment: Mapping[str, str], route: str, body: object = None, *, timeout: float
+):
+    """Open an authenticated loopback request without proxies or redirects.
+
+    :param environment: Resolved runtime address and user token.
+    :param route: Runtime API route.
+    :param body: JSON request body, or None for a GET request.
+    :param timeout: Request timeout in seconds.
+    :return: The response context manager; callers own error handling.
+    """
+    return _HTTP.open(_request(environment, route, body), timeout=timeout)
+
+
+def redact_runtime_token(message: str, environment: Mapping[str, str]) -> str:
+    """Keep an echoed runtime credential out of user-facing errors."""
+    token = environment.get("LTCOOK_API_TOKEN")
+    return message.replace(token, "<redacted>") if token else message
+
+
 def _canonical(path: str) -> str:
     return str(Path(path).expanduser().resolve())
 
 
-def runtime_command(
+def send_runtime_command(
     environment: Mapping[str, str], session_id: str, command: Mapping[str, object]
 ) -> object:
     """Send a user-authenticated command to this installation's ready owner.
@@ -133,8 +153,10 @@ def runtime_command(
         except (ValueError, UnicodeError):
             pass
         raise RuntimeClientError(
-            f"Runtime command rejected (HTTP {error.code}){detail}"
-        ) from error
+            redact_runtime_token(
+                f"Runtime command rejected (HTTP {error.code}){detail}", environment
+            )
+        ) from None
     except (OSError, urllib.error.URLError, UnicodeError, ValueError) as error:
         raise RuntimeClientError(
             "Could not confirm the runtime command result."

@@ -4,7 +4,7 @@ import {
   evaluationCaseCount,
 } from '../../../runtime/src/evals/contracts.js';
 
-import { attributeEvaluationTrace } from '../../../runtime/src/evals/engine.js';
+import { attributeEvaluationTrace } from '../../../runtime/src/evals/attribution.js';
 
 describe('evaluation execution controls', () => {
   test('defaults to one repetition and counts shared execution only once', () => {

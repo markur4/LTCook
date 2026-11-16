@@ -135,6 +135,7 @@ All notable changes to `ltcook` will be documented in this file.
   Evaluation output caps use Ollama's supported `max_tokens` field, including compaction. Leader handoffs explain native scheduling operations, and command validation reports errors for the selected command type.
   Rejected tool attempts count toward the existing budget; sanitized provider metadata preserves stream failures without saving stream text or headers.
   Failed context summaries end the attempt instead of repeating compaction until timeout.
+  Current Setup retains explicit shell overrides when starting or reusing a runtime.
 
 <br>
 - Added normal-install Ollama/Bonsai provisioning and opt-in local Agent Evals with private Perfetto-compatible traces and safeguards derived from comparable successful runs.
@@ -175,11 +176,13 @@ All notable changes to `ltcook` will be documented in this file.
   Paseo, with named Passes, ordered Step progress, native conversation links and
   selected task/handoff/blocker details. Bulk status excludes private work text.
 - Added exact LTCook-owned Pi extension reconciliation with preserved independent
-  extensions, one shared TypeBox command schema, and focused package validation
-  used by the installer builder and release tooling.
+  and unowned extensions, one shared TypeBox command schema, and focused package
+  validation used by the installer builder and release tooling. Authenticated
+  runtime requests stay on loopback and reject redirects.
 - Restored Buildben scaffold development recipes with checkout-local uv
   environments and LTCook's asset-aware setup. Release recipes retain asset-only
-  behavior and disabled PyPI publication.
+  behavior and disabled PyPI publication. `just clean` removes project-local
+  artifacts; `just clean-uv-cache` explicitly prunes the shared uv cache.
 - Added pinned Prettier development formatting and Ruff format checks for authored
   source, with generated AppRC assets excluded and marked generated.
 - Added idle server/UI startup without a selected project, optional AppRC project

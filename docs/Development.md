@@ -56,7 +56,8 @@ The restored scaffold recipes remain available alongside LTCook's runtime module
 | `just lock`, `just upgrade`, `just upgrade-repos`, `just uprep` | Intentionally update locks or Git-based dependencies; upgrades run the full sync afterward. |
 | `just run -- COMMAND ...`, `just tree`, `just diagnose` | Run a command in the locked environment or inspect dependencies and interpreter state. |
 | `just worktree-create BRANCH DESTINATION BASE`, `just worktree-remove DESTINATION` | Prepare a separate locked checkout or remove an eligible, merged checkout. |
-| `just clean` | Remove build/cache artifacts, including pruning the global uv cache; it does not delete the environment or lockfiles. |
+| `just clean` | Remove project-local build artifacts and caches without deleting the environment or lockfiles. |
+| `just clean-uv-cache` | Explicitly prune the globally shared uv cache. |
 | `just format`, `just format-check` | Format authored TypeScript with Prettier and Python with Ruff, or check without rewriting. |
 
 > [!WARNING]
@@ -129,8 +130,7 @@ and table-of-contents conventions; update useful incoming links and affected
 navigation as part of the same change. Follow the
 [documentation rules](README.md#documentation-rules) and source declarations.
 Examples should not invent settings or commands and must not be described as
-verified unless they were actually run. For this assignment, documentation
-examples are illustrative only; Leader owns checks and execution.
+verified unless they were actually run.
 
 Do not imply that a model conversation, local service, browser workflow, or native
 platform has been exercised based only on source inspection. Explain real
@@ -203,9 +203,8 @@ Ollama beyond loopback or stop a user-owned service.
 Ollama's [Linux installer](https://docs.ollama.com/linux) may require `sudo`;
 the [Windows installer](https://docs.ollama.com/windows) is user-scoped; the
 [macOS application](https://docs.ollama.com/macos) requires a GUI install/consent
-handoff. Model storage stays under Ollama's own platform-specific location. This
-checkout's live verification used Fedora 44 on WSL2 only; Windows and macOS
-installation behavior remains documented, not natively validated.
+handoff. Model storage stays under Ollama's own platform-specific location.
+Windows and macOS installation behavior requires verification on those platforms.
 
 Agent Evals uses the shared installed CLI and Paseo run service. Static audit
 needs no model; LLM-dependent runs require the prepared local Bonsai model
@@ -233,8 +232,10 @@ state. Native Windows/macOS behavioral execution is unsupported until an
 appropriate sandbox is implemented; do not launch Windows executables from WSL.
 
 For Current Setup, the Paseo panel uses the selected Leader's Team. The CLI uses
-the configured runtime Team and reports when the workspace has Sessions from
-multiple Teams.
+an explicitly exported `LTCOOK_TEAM` when present, including when reusing a
+runtime. Otherwise it uses the configured runtime Team and reports when the
+workspace has Sessions from multiple Teams. Only non-secret evaluation settings
+needed for Current Setup cross the authenticated local API.
 
 Reports, progress events and Perfetto traces live in runtime state under
 `evals/runs`, with prompts, transcripts, and credentials excluded. Instruction
@@ -366,11 +367,10 @@ provider, configured credentials, and the actual Compose assets. Live research
 requires reachable services and a working model provider. Browser verification
 requires the separately installed browser executable and browser files.
 
-The source declares platform preparation code, but this pass has not established
-native Windows/macOS behavior, live web research, or model-backed workflows.
-Linux-only release automation does not establish those behaviors. Native platform
-checks need the respective native environment; do not launch Windows verification
-executables from WSL.
+Linux-only release automation does not establish native Windows/macOS behavior,
+live web research, or model-backed workflows. Native platform checks need the
+respective native environment; do not launch Windows verification executables
+from WSL.
 
 ## Releases
 
