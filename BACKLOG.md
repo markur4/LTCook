@@ -93,10 +93,10 @@ Treat this as the parking lot for actionable problems discovered while working b
 ## P1 / E1 [Tooling] - *Verify complete Agent Evals with the configured model*
 - **Area:** `runtime/src/evals/` and `runtime/src/integrations/pi-extension.ts`
 - **Observed while:** Verifying Agent Evals diagnostics in PR #4.
-- **Why not fixed now:** The selected model has been validated in an isolated source copy, but its default configuration and both setups need verification together.
-- **Evidence:** Bonsai 2 27B completed the full Synthetic Agent Evals in 83.1 seconds with one repetition per case. The targeted-fix case included delegation. Traditional Tests, including scripted process tests, passed on the earlier configuration.
-- **Context:** Current Setup and the final integrated configuration have not yet been checked with the selected model.
-- **Suggested next step:** Run both full setups on the final configuration, record their elapsed times and review the results. See [PR #6](https://github.com/markur4/LTCook/pull/6) for retained evidence.
+- **Why not fixed now:** The user requested merging the reconciled progress before live evaluation work is complete.
+- **Evidence:** Bonsai 2 27B completed the full Synthetic Agent Evals in 83.1 seconds in an isolated source copy. A later run passed read-only and no-op, but targeted-fix failed after a timeout and an unmet fixture check. A focused diagnostic captured a shell command that attempted the verifier with a trailing status echo; the evaluation did not recognize it, and its output was not retained, so its success is unproven.
+- **Context:** The selected model's reliability, verifier detection, and Current Setup remain incompletely verified. Preserve the existing success criteria and authorization.
+- **Suggested next step:** Investigate verification-command detection and the targeted-fix failures; then run both full setups on the integrated configuration and record their elapsed times. See [PR #6](https://github.com/markur4/LTCook/pull/6) for retained evidence.
 
 <br>
 
