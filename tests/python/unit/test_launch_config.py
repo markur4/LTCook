@@ -986,6 +986,15 @@ def test_runtime_requests_never_forward_credentials_across_redirects(
                 self.send_response(401)
                 self.end_headers()
                 return
+            if self.path == "/echo-token":
+                self.send_response(401, "private-test-token")
+                self.end_headers()
+                return
+            if self.path == "/v1/command":
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b'{"error":"echo private-test-token"}')
+                return
             if self.path == "/malformed":
                 self.send_response(200)
                 self.end_headers()
@@ -1017,6 +1026,10 @@ def test_runtime_requests_never_forward_credentials_across_redirects(
         assert eval_cli._call(environment, "/success") == {"ok": True}
         with pytest.raises(RuntimeClientError, match="401"):
             eval_cli._call(environment, "/unauthorized")
+        with pytest.raises(RuntimeClientError) as failure:
+            eval_cli._call(environment, "/echo-token")
+        assert "private-test-token" not in str(failure.value)
+        assert "<redacted>" in str(failure.value)
         with pytest.raises(
             RuntimeClientError, match="Agent Evals runtime request failed"
         ):
@@ -1027,8 +1040,19 @@ def test_runtime_requests_never_forward_credentials_across_redirects(
         config = SimpleNamespace(environment=environment, workspace_root=tmp_path)
         with pytest.raises(RuntimeClientError, match="redirect"):
             launch._open_existing_runtime(config, {})
+        from ltcook import _runtime_client
+
+        monkeypatch.setattr(
+            _runtime_client, "probe_runtime", lambda _environment: object()
+        )
+        with pytest.raises(RuntimeClientError) as failure:
+            _runtime_client.send_runtime_command(
+                environment, "session", {"type": "fixture"}
+            )
+        assert "private-test-token" not in str(failure.value)
+        assert "<redacted>" in str(failure.value)
         assert seen == []
-        assert source_tokens == ["Bearer private-test-token"] * 5
+        assert source_tokens == ["Bearer private-test-token"] * 7
     finally:
         for server in (source, destination):
             server.shutdown()

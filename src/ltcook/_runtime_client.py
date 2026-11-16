@@ -113,6 +113,12 @@ def open_runtime_request(
     return _HTTP.open(_request(environment, route, body), timeout=timeout)
 
 
+def redact_runtime_token(message: str, environment: Mapping[str, str]) -> str:
+    """Keep an echoed runtime credential out of user-facing errors."""
+    token = environment.get("LTCOOK_API_TOKEN")
+    return message.replace(token, "<redacted>") if token else message
+
+
 def _canonical(path: str) -> str:
     return str(Path(path).expanduser().resolve())
 
@@ -147,8 +153,10 @@ def send_runtime_command(
         except (ValueError, UnicodeError):
             pass
         raise RuntimeClientError(
-            f"Runtime command rejected (HTTP {error.code}){detail}"
-        ) from error
+            redact_runtime_token(
+                f"Runtime command rejected (HTTP {error.code}){detail}", environment
+            )
+        ) from None
     except (OSError, urllib.error.URLError, UnicodeError, ValueError) as error:
         raise RuntimeClientError(
             "Could not confirm the runtime command result."

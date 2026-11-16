@@ -24,6 +24,7 @@ from ltcook._runtime_client import (
     RuntimeClientError,
     open_runtime_request,
     probe_runtime,
+    redact_runtime_token,
     start_runtime,
     wait_for_runtime,
 )
@@ -100,8 +101,10 @@ def _call(environment, route: str, payload: object = None):
         ValueError,
     ) as error:
         raise RuntimeClientError(
-            f"Agent Evals runtime request failed: {error}"
-        ) from error
+            redact_runtime_token(
+                f"Agent Evals runtime request failed: {error}", environment
+            )
+        ) from None
 
 
 def _follow(environment, run_id: str) -> None:
