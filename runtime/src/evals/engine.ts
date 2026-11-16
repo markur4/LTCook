@@ -2,12 +2,12 @@ import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { loadTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
-import { NativeGuidance } from '../integrations/native-guidance.js';
 import type { EvalBudget, EvalEngine } from './service.js';
 import { evaluationCaseCount } from './contracts.js';
+import { staticAudit } from './instruction-audit.js';
+import { attributeEvaluationTrace } from './attribution.js';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import {
   assertEvaluationSandbox,
@@ -26,7 +26,6 @@ import {
   hash,
   resolveEvaluationContext,
   snapshotWorkspace,
-  resourceIdentity,
   type EvaluationContext,
 } from './setup.js';
 
@@ -597,130 +596,4 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
       await rm(temporary, { recursive: true, force: true });
     }
   };
-}
-
-/** Native resource parsing and guidance composition without a model or executable extensions. */
-async function staticAudit(input: {
-  team: Awaited<ReturnType<typeof loadTeam>>;
-  workspace: string;
-  guidance: string;
-  resources: string;
-}) {
-  const resources = [];
-  const findings: Array<Record<string, unknown>> = [];
-  for (const member of input.team.definition.members) {
-    let guidance: NativeGuidance;
-    try {
-      guidance = new NativeGuidance(input.team, member.key, input.guidance, input.resources);
-    } catch (error) {
-      findings.push({
-        kind: 'resource-load-error',
-        member: member.key,
-        reason: (error instanceof Error ? error.message : 'Native resource loading failed')
-          .replaceAll(input.resources, '<core>')
-          .replaceAll(input.guidance, '<user>')
-          .replaceAll(input.workspace, '<project>'),
-      });
-      continue;
-    }
-    const loader = new DefaultResourceLoader({
-      cwd: input.workspace,
-      agentDir: input.guidance,
-      settingsManager: SettingsManager.inMemory({}),
-      noExtensions: true,
-      noPromptTemplates: true,
-      noThemes: true,
-      additionalSkillPaths: guidance.skillPaths,
-      skillsOverride: guidance.skillsOverride,
-      agentsFilesOverride: guidance.agentsFilesOverride,
-    });
-    try {
-      await loader.reload();
-    } catch (error) {
-      findings.push({
-        kind: 'resource-load-error',
-        member: member.key,
-        reason: error instanceof Error ? error.message : 'Native resource loading failed',
-      });
-    }
-    for (const resource of guidance.inspection.resources) {
-      if (resource.loaded) {
-        const words = (await readFile(resource.path, 'utf8')).split(/\s+/).length;
-        if (words > 3000)
-          findings.push({
-            kind: 'large_resource',
-            member: member.key,
-            source: resourceIdentity(resource, input.workspace, input.guidance),
-            words,
-          });
-      }
-      resources.push({
-        member: member.key,
-        ...resource,
-        name: path.isAbsolute(resource.name) ? path.basename(resource.name) : resource.name,
-        path: resourceIdentity(resource, input.workspace, input.guidance),
-        ...(resource.loaded ? { sha256: hash(await readFile(resource.path)) } : {}),
-      });
-    }
-  }
-  const seen = new Map<string, string>();
-  for (const resource of resources)
-    if (resource.sha256) {
-      const prior = seen.get(resource.sha256);
-      if (prior && prior !== resource.path)
-        findings.push({ kind: 'duplicate', sources: [prior, resource.path] });
-      seen.set(resource.sha256, resource.path);
-    }
-  return {
-    resources,
-    resourceCount: resources.length,
-    loadedResourceCount: resources.filter((resource) => resource.loaded).length,
-    uniqueContentCount: seen.size,
-    findings,
-    coverageComplete: false,
-    coverageNote:
-      'Production guidance and Pi resource loaders; executable extension-generated instructions require semantic runtime capture.',
-  };
-}
-
-/** Union intervals within each category; separate categories can overlap. */
-export function attributeEvaluationTrace(events: unknown[]) {
-  const categories = ['model', 'tool', 'scheduler', 'wait', 'delegation'] as const;
-  const intervals = new Map<string, Array<[number, number]>>(categories.map((name) => [name, []]));
-  const starts = new Map<string, { category: string; start: number }>();
-  for (const raw of events) {
-    if (!raw || typeof raw !== 'object') continue;
-    const event = raw as Record<string, unknown>;
-    if (typeof event.name !== 'string' || typeof event.ts !== 'number') continue;
-    const category = categories.find(
-      (name) => event.name === name || (event.name as string).startsWith(`${name}.`),
-    );
-    if (!category) continue;
-    const args =
-      event.args && typeof event.args === 'object' ? (event.args as Record<string, unknown>) : {};
-    const key = JSON.stringify([event.pid, args.correlationId, event.name, event.tid]);
-    if (event.ph === 'B') starts.set(key, { category, start: event.ts });
-    if (event.ph === 'E') {
-      const start = starts.get(key);
-      if (start && event.ts >= start.start) intervals.get(category)!.push([start.start, event.ts]);
-      starts.delete(key);
-    }
-    if (event.ph === 'X' && typeof event.dur === 'number' && event.dur >= 0)
-      intervals.get(category)!.push([event.ts, event.ts + event.dur]);
-  }
-  return Object.fromEntries(
-    [...intervals].map(([category, values]) => {
-      values.sort((a, b) => a[0] - b[0]);
-      let elapsed = 0;
-      let active: [number, number] | undefined;
-      for (const interval of values) {
-        if (!active) active = [...interval];
-        else if (interval[0] > active[1]) {
-          elapsed += active[1] - active[0];
-          active = [...interval];
-        } else active[1] = Math.max(active[1], interval[1]);
-      }
-      return [category, (elapsed + (active ? active[1] - active[0] : 0)) / 1000];
-    }),
-  );
 }
