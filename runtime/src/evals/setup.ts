@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstat, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { EvalSetup } from './contracts.js';
+import { captureShellEnvironment } from '../integrations/shell-environment.js';
+import type { EvalEnvironmentOverrides, EvalSetup } from './contracts.js';
 
 export const EVAL_MODEL = 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest';
 export const FIXTURE_REVISION = 'agent-evals-v4';
@@ -146,6 +147,7 @@ export function resolveEvaluationContext(input: {
   setup: EvalSetup;
   workspaceRoot?: string;
   teamSelection: string;
+  environmentOverrides?: EvalEnvironmentOverrides;
 }): EvaluationContext {
   if (input.setup === 'synthetic')
     return {
@@ -162,6 +164,17 @@ export function resolveEvaluationContext(input: {
     timeout: 30000,
     maxBuffer: 2 * 1024 * 1024,
     windowsHide: true,
+    ...(input.environmentOverrides
+      ? {
+          env: {
+            ...process.env,
+            LTCOOK_SHELL_PROVENANCE: JSON.stringify({
+              ...captureShellEnvironment(process.env),
+              ...input.environmentOverrides,
+            }),
+          },
+        }
+      : {}),
   });
   if (child.status !== 0)
     throw new Error(

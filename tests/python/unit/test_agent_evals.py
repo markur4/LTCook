@@ -90,12 +90,15 @@ def test_cli_current_setup_passes_registered_workspace(monkeypatch):
 
     import ltcook.cli.eval as cli
 
+    monkeypatch.setenv("LTCOOK_SHELL_PROVENANCE", "{}")
     calls = []
     workspace = SimpleNamespace(root=Path("/registered-project"))
     manager = SimpleNamespace(
         inspect=lambda: SimpleNamespace(resolved=SimpleNamespace(workspace=workspace))
     )
-    monkeypatch.setattr(cli, "APP_RC", SimpleNamespace(manage=lambda: manager))
+    monkeypatch.setattr(
+        cli, "APP_RC", SimpleNamespace(manage=lambda **_kwargs: manager)
+    )
     monkeypatch.setattr(cli, "_runtime", lambda: ({}, None))
     monkeypatch.setattr(
         cli,
@@ -279,3 +282,49 @@ def test_eval_runtime_preserves_shell_provenance_on_cold_start_and_reuse(monkeyp
     assert environment["LTCOOK_TEAM"] == "default"
     assert actual is status
     assert len(started) == 1
+
+
+def test_current_eval_forwards_only_relevant_original_shell_overrides(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    import ltcook.cli.eval as cli
+
+    shell = {
+        "LTCOOK_TEAM": "default",
+        "LTCOOK_SEARXNG_URL": "http://127.0.0.1:8123",
+        "OPENAI_API_KEY": "must-not-cross-api",
+        "LTCOOK_API_TOKEN": "must-not-cross-api",
+    }
+    monkeypatch.setenv("LTCOOK_SHELL_PROVENANCE", json.dumps(shell))
+    monkeypatch.setenv("LTCOOK_TEAM", "overlaid-value")
+    manager = SimpleNamespace(
+        inspect=lambda: SimpleNamespace(resolved=SimpleNamespace(workspace=None))
+    )
+    captured_environments = []
+    monkeypatch.setattr(
+        cli,
+        "APP_RC",
+        SimpleNamespace(
+            manage=lambda *, environment: (
+                captured_environments.append(environment) or manager
+            )
+        ),
+    )
+    monkeypatch.setattr(cli, "_runtime", lambda: ({}, None))
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "_call",
+        lambda _environment, _route, payload: (
+            calls.append(payload) or {"runId": "fixture"}
+        ),
+    )
+    monkeypatch.setattr(cli, "_follow", lambda *_args: None)
+    cli._start_and_follow("behavior", setup=cli.EvalSetup.current)
+    assert captured_environments == [shell]
+    assert calls[0]["environmentOverrides"] == {
+        "LTCOOK_TEAM": "default",
+        "LTCOOK_SEARXNG_URL": "http://127.0.0.1:8123",
+    }
+    assert "must-not-cross-api" not in json.dumps(calls)

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { snapshotWorkspace } from '../../../runtime/src/evals/setup.js';
+import { resolveEvaluationContext, snapshotWorkspace } from '../../../runtime/src/evals/setup.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 const roots: string[] = [];
 afterEach(async () => {
@@ -14,6 +14,47 @@ async function temporary() {
   roots.push(root);
   return root;
 }
+
+test('Current Setup applies explicit non-secret overrides through the real AppRC resolver', async () => {
+  const root = await temporary();
+  const previous = process.env.LTCOOK_SHELL_PROVENANCE;
+  process.env.LTCOOK_SHELL_PROVENANCE = JSON.stringify({
+    HOME: root,
+    USERPROFILE: root,
+    APPDATA: path.join(root, 'config'),
+    LOCALAPPDATA: path.join(root, 'data'),
+    XDG_CONFIG_HOME: path.join(root, 'config'),
+    XDG_DATA_HOME: path.join(root, 'data'),
+    XDG_CACHE_HOME: path.join(root, 'cache'),
+    XDG_STATE_HOME: path.join(root, 'state'),
+    LTCOOK_TEAM: 'default-minimal',
+    OPENAI_API_KEY: 'must-not-appear-in-context',
+  });
+  try {
+    const python = path.join(
+      process.env.UV_PROJECT_ENVIRONMENT ?? path.resolve(import.meta.dir, '../../../.venv'),
+      process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python',
+    );
+    const context = resolveEvaluationContext({
+      python,
+      setup: 'current',
+      teamSelection: 'default',
+      environmentOverrides: {
+        LTCOOK_TEAM: 'default',
+        LTCOOK_SEARXNG_URL: 'http://127.0.0.1:8123',
+      },
+    });
+    expect(context.teamSelection).toBe('default');
+    expect(context.webConfiguration.searxngBaseUrl).toBe('http://127.0.0.1:8123');
+    expect(context.limitations).not.toContain(
+      'Workspace team selection differs from the active runtime; using the active runtime team.',
+    );
+    expect(JSON.stringify(context)).not.toContain('must-not-appear-in-context');
+  } finally {
+    if (previous === undefined) delete process.env.LTCOOK_SHELL_PROVENANCE;
+    else process.env.LTCOOK_SHELL_PROVENANCE = previous;
+  }
+});
 
 test('snapshots uncommitted inputs and selected ignored guidance, excluding credentials and escaping links', async () => {
   const root = await temporary();

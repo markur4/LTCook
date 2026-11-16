@@ -59,7 +59,8 @@ async function run(): Promise<void> {
 
   const [
     { createRuntime },
-    { RuntimeApi, agentBearer, captureShellEnvironment },
+    { RuntimeApi, agentBearer },
+    { captureShellEnvironment },
     { createPaseoAgentBackend, startPaseoHost },
     { Telemetry },
     fs,
@@ -67,6 +68,7 @@ async function run(): Promise<void> {
   ] = await Promise.all([
     import('./core/runtime.js'),
     import('./integrations/runtime-api.js'),
+    import('./integrations/shell-environment.js'),
     import('./integrations/paseo.js'),
     import('./diagnostics/telemetry.js'),
     import('node:fs/promises'),

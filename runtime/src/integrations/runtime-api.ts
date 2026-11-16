@@ -10,6 +10,7 @@ import type {
   SessionSnapshot,
 } from '../workflow-api/index.js';
 import { canonicalWorkspace } from '../core/workspace.js';
+import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
 import {
   EvalDeleteRequestSchema,
@@ -38,35 +39,6 @@ export interface WorkspaceSessionRequest {
 export interface EvaluationExecutionScope {
   sessionId: string;
   passId: string;
-}
-
-/** Captures the shell before AppRC overlays, without retaining nested provenance. */
-export function captureShellEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
-  const encoded = source.LTCOOK_SHELL_PROVENANCE;
-  let original: Record<string, unknown> = source;
-  if (encoded !== undefined) {
-    let decoded: unknown;
-    try {
-      decoded = JSON.parse(encoded);
-    } catch {
-      throw new Error('LTCOOK_SHELL_PROVENANCE is not an environment mapping');
-    }
-    if (
-      !decoded ||
-      typeof decoded !== 'object' ||
-      Array.isArray(decoded) ||
-      !Object.values(decoded).every((value) => typeof value === 'string')
-    ) {
-      throw new Error('LTCOOK_SHELL_PROVENANCE is not an environment mapping');
-    }
-    original = decoded as Record<string, string>;
-  }
-  return Object.fromEntries(
-    Object.entries(original).filter(
-      (entry): entry is [string, string] =>
-        entry[0] !== 'LTCOOK_SHELL_PROVENANCE' && typeof entry[1] === 'string',
-    ),
-  );
 }
 
 function equalToken(left: string, right: string): boolean {
@@ -367,6 +339,19 @@ export class RuntimeApi {
             const request = EvalStartRequestSchema.parse(parsed);
             let teamSelection: string | undefined;
             const limitations: string[] = [];
+            const requestedTeam = request.environmentOverrides?.LTCOOK_TEAM;
+            const requestedEntry =
+              requestedTeam === undefined
+                ? undefined
+                : this.runtime
+                    ?.teamCatalog()
+                    .find(
+                      (entry) =>
+                        entry.status === 'installed' &&
+                        (entry.selection === requestedTeam || entry.teamId === requestedTeam),
+                    );
+            if (requestedTeam !== undefined && !requestedEntry)
+              throw new Error('The requested evaluation Team is not installed');
             if (request.sessionId) {
               if (request.setup !== 'current' || !request.workspaceRoot || !this.runtime)
                 throw new Error('A Current Setup workspace and active Session are required');
@@ -381,16 +366,19 @@ export class RuntimeApi {
                 .teamCatalog()
                 .find((entry) => entry.teamId === session.teamId && entry.status === 'installed');
               if (!team) throw new Error('The Session Team is not installed');
-              teamSelection = team.selection;
+              if (requestedEntry && requestedEntry.teamId !== team.teamId)
+                throw new Error('Evaluation Team does not match the selected Session');
+              teamSelection = requestedTeam ?? team.selection;
             } else if (request.setup === 'current' && request.workspaceRoot && this.runtime) {
               const teamIds = new Set(
                 this.runtime.listSessions(request.workspaceRoot).map((session) => session.teamId),
               );
-              if (teamIds.size > 1)
+              if (teamIds.size > 1 && !requestedEntry)
                 limitations.push(
                   'Multiple Teams have Sessions in this workspace; using the configured runtime Team.',
                 );
             }
+            if (!teamSelection && requestedEntry) teamSelection = requestedTeam;
             value = { runId: await this.evals.start(request, teamSelection, limitations) };
             break;
           }

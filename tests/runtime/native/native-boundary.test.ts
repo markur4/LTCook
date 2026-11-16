@@ -18,11 +18,8 @@ import {
 } from '../../../runtime/src/integrations/native-policy.js';
 import { panelSnapshot } from '../../../runtime/src/paseo-plugin/shared/panel-snapshot.js';
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
-import {
-  agentBearer,
-  captureShellEnvironment,
-  RuntimeApi,
-} from '../../../runtime/src/integrations/runtime-api.js';
+import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { captureShellEnvironment } from '../../../runtime/src/integrations/shell-environment.js';
 import { startPaseoHost } from '../../../runtime/src/integrations/paseo.js';
 import { configurePiExtensions } from '../../../runtime/src/integrations/pi-settings.js';
 

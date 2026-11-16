@@ -22,6 +22,7 @@ import {
   type EvalEvent,
   type EvalPreset,
   type EvalSetup,
+  type EvalEnvironmentOverrides,
   type EvalReportResponse,
   type EvalSummary,
 } from './contracts.js';
@@ -90,6 +91,7 @@ export type EvalEngine = (input: {
   setup: EvalSetup;
   workspaceRoot?: string;
   teamSelection?: string;
+  environmentOverrides?: EvalEnvironmentOverrides;
   limitations?: string[];
   staticOnly: boolean;
   runDirectory: string;
@@ -318,6 +320,9 @@ export class EvalRunService {
         },
         ...(request.workspaceRoot ? { workspaceRoot: request.workspaceRoot } : {}),
         ...(teamSelection ? { teamSelection } : {}),
+        ...(request.environmentOverrides
+          ? { environmentOverrides: request.environmentOverrides }
+          : {}),
         ...(limitations.length ? { limitations } : {}),
         runDirectory: this.runDirectory(summary.runId),
         signal: controller.signal,

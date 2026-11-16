@@ -56,6 +56,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
     staticOnly,
     workspaceRoot,
     teamSelection,
+    environmentOverrides,
     limitations = [],
     runDirectory,
     signal,
@@ -73,6 +74,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         python: options.python ?? process.env.LTCOOK_PYTHON ?? '',
         setup,
         workspaceRoot,
+        environmentOverrides,
         teamSelection:
           teamSelection ?? options.teamSelection ?? process.env.LTCOOK_TEAM ?? 'default-minimal',
       });

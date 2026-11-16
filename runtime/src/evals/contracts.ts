@@ -8,6 +8,18 @@ export type EvalPreset = z.infer<typeof EvalPresetSchema>;
 export const EvalScenarioSchema = z.enum(['read-only', 'no-op', 'targeted-fix']);
 export type EvalScenario = z.infer<typeof EvalScenarioSchema>;
 
+// > Only settings consumed by Current Setup cross the authenticated API boundary.
+export const EvalEnvironmentOverridesSchema = z
+  .object({
+    LTCOOK_TEAM: z.string().optional(),
+    LTCOOK_GUIDANCE_DIR: z.string().optional(),
+    LTCOOK_SEARXNG_URL: z.string().optional(),
+    LTCOOK_CRAWL4AI_URL: z.string().optional(),
+    LTCOOK_SSRF_ALLOW_RANGES: z.string().optional(),
+  })
+  .strict();
+export type EvalEnvironmentOverrides = z.infer<typeof EvalEnvironmentOverridesSchema>;
+
 export const EvalStatusSchema = z.enum([
   'running',
   'completed',
@@ -26,6 +38,7 @@ export const EvalStartRequestSchema = z
     staticOnly: z.boolean().optional(),
     repetitions: z.number().int().positive().default(1),
     scenario: EvalScenarioSchema.optional(),
+    environmentOverrides: EvalEnvironmentOverridesSchema.optional(),
   })
   .refine((input) => !input.staticOnly || input.preset === 'audit', {
     message: 'staticOnly requires the audit preset',
@@ -35,6 +48,9 @@ export const EvalStartRequestSchema = z
   })
   .refine((input) => !input.scenario || !['audit', 'quick'].includes(input.preset), {
     message: 'A selected case requires Behavior Evaluation or Bottleneck Attribution',
+  })
+  .refine((input) => !input.environmentOverrides || input.setup === 'current', {
+    message: 'Environment overrides require Current Setup',
   });
 export type EvalStartRequest = z.input<typeof EvalStartRequestSchema>;
 

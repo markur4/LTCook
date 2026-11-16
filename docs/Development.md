@@ -230,8 +230,10 @@ state. Native Windows/macOS behavioral execution is unsupported until an
 appropriate sandbox is implemented; do not launch Windows executables from WSL.
 
 For Current Setup, the Paseo panel uses the selected Leader's Team. The CLI uses
-the configured runtime Team and reports when the workspace has Sessions from
-multiple Teams.
+an explicitly exported `LTCOOK_TEAM` when present, including when reusing a
+runtime. Otherwise it uses the configured runtime Team and reports when the
+workspace has Sessions from multiple Teams. Only non-secret evaluation settings
+needed for Current Setup cross the authenticated local API.
 
 Reports, progress events and Perfetto traces live in runtime state under
 `evals/runs`, with prompts, transcripts, and credentials excluded. Instruction

@@ -48,6 +48,15 @@ EVAL_LABELS.update(
     }
 )
 
+# > Only non-secret settings consumed by Current Setup cross the local API.
+_EVALUATION_ENVIRONMENT_KEYS = (
+    "LTCOOK_TEAM",
+    "LTCOOK_GUIDANCE_DIR",
+    "LTCOOK_SEARXNG_URL",
+    "LTCOOK_CRAWL4AI_URL",
+    "LTCOOK_SSRF_ALLOW_RANGES",
+)
+
 
 class EvalCase(StrEnum):
     read_only = "read-only"
@@ -212,8 +221,9 @@ def _start_and_follow(
 ) -> None:
     try:
         environment, _ = _runtime()
+        shell = _shell_environment(os.environ)
         workspace = (
-            APP_RC.manage().inspect().resolved.workspace
+            APP_RC.manage(environment=shell).inspect().resolved.workspace
             if setup == EvalSetup.current
             else None
         )
@@ -227,6 +237,12 @@ def _start_and_follow(
             request["scenario"] = scenario.value
         if workspace is not None:
             request["workspaceRoot"] = str(workspace.root)
+        if setup == EvalSetup.current:
+            overrides = {
+                key: shell[key] for key in _EVALUATION_ENVIRONMENT_KEYS if key in shell
+            }
+            if overrides:
+                request["environmentOverrides"] = overrides
         run_id = _call(
             environment,
             "/v1/evals/start",
