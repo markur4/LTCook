@@ -405,11 +405,16 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         finishedAgentTurns.has(leaderId) &&
         snapshot.assignments.some(
           (assignment) => assignment.taskId === handoff.id && assignment.status === 'reported',
-        ) &&
-        !snapshot.tasks.some((task) => task.passId === handoff.passId && task.scheduled)
+        )
       ) {
-        failureCategory = 'criteria';
-        throw new Error('Scheduling handoff finished without registering a scenario Task');
+        if (!snapshot.tasks.some((task) => task.passId === handoff.passId && task.scheduled)) {
+          failureCategory = 'criteria';
+          throw new Error('Scheduling handoff finished without registering a scenario Task');
+        }
+        if (handoff.status !== 'completed') {
+          failureCategory = 'criteria';
+          throw new Error('Scheduling handoff was reported but its Task was not completed');
+        }
       }
       if (performance.now() >= deadline) {
         failureCategory = 'limits';

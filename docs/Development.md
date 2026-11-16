@@ -261,12 +261,12 @@ attempt uses an independent workspace, requests copy-on-write copies where
 supported, and releases disposable state after its diagnostics are preserved.
 
 Pi's existing context compaction remains enabled for the pinned 65,536-token
-model, reserving 2,048 tokens and keeping 1,024 recent tokens. Summary calls use
+model, reserving 4,096 tokens and keeping 1,024 recent tokens. Summary calls use
 the same isolated model and provider state. Diagnostics record compaction timing,
 reported usage and failures, while excluding summary text.
 Pi sends the full instructions using the `system` message role supported by the
 Ollama provider, with `supportsDeveloperRole: false` in its isolated model state.
-Execution and compaction requests explicitly send `max_tokens: 2048`, the field
+Execution and compaction requests explicitly send `max_tokens: 4096`, the field
 accepted by Ollama. The isolated model's sampling override retains that output
 cap while Pi uses its existing compaction and overflow handling. The configured
 context does not guarantee that every input fits.
