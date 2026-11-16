@@ -130,8 +130,7 @@ and table-of-contents conventions; update useful incoming links and affected
 navigation as part of the same change. Follow the
 [documentation rules](README.md#documentation-rules) and source declarations.
 Examples should not invent settings or commands and must not be described as
-verified unless they were actually run. For this assignment, documentation
-examples are illustrative only; Leader owns checks and execution.
+verified unless they were actually run.
 
 Do not imply that a model conversation, local service, browser workflow, or native
 platform has been exercised based only on source inspection. Explain real
@@ -204,9 +203,8 @@ Ollama beyond loopback or stop a user-owned service.
 Ollama's [Linux installer](https://docs.ollama.com/linux) may require `sudo`;
 the [Windows installer](https://docs.ollama.com/windows) is user-scoped; the
 [macOS application](https://docs.ollama.com/macos) requires a GUI install/consent
-handoff. Model storage stays under Ollama's own platform-specific location. This
-checkout's live verification used Fedora 44 on WSL2 only; Windows and macOS
-installation behavior remains documented, not natively validated.
+handoff. Model storage stays under Ollama's own platform-specific location.
+Windows and macOS installation behavior requires verification on those platforms.
 
 Agent Evals uses the shared installed CLI and Paseo run service. Static audit
 needs no model; LLM-dependent runs require the prepared local Spark tag
@@ -258,20 +256,20 @@ that fails its fallback stops the run before later cases or repetitions. Each
 attempt uses an independent workspace, requests copy-on-write copies where
 supported, and releases disposable state after its diagnostics are preserved.
 
-Pi's existing context compaction remains enabled for the pinned 8,192-token
-model, reserving 2,048 tokens and keeping 1,024 recent tokens. Summary calls use
-the same isolated model and provider state. Diagnostics record compaction timing,
-reported usage and failures, while excluding summary text.
-Pi sends the full instructions using the `system` message role supported by the
-Spark template, with `supportsDeveloperRole: false` in its isolated model state.
-Execution and compaction requests explicitly send `max_tokens: 2048`, the field
-accepted by Ollama. Pi's generic 4,096-token safety margin would otherwise reduce
-this 8,192-token model's requested output to one token; the isolated model's
-sampling override restores the intended output cap while Pi retains its existing
-compaction and overflow handling. This does not guarantee that every input fits.
-A failed summary aborts that disposable agent turn and ends its attempt. A later
-model request cannot clear the failure and repeat compaction until the safeguard;
-the run still permits only its single configured low-reasoning fallback.
+The local Spark model has an 8,192-token context. Pi compaction reserves 2,048
+tokens and keeps 1,024 recent tokens. Summary calls use the same isolated model
+and provider state; diagnostics record timing, usage, and failures without summary
+text.
+
+Pi sends full instructions in the Spark-supported `system` role, with
+`supportsDeveloperRole: false`. Execution and compaction requests use Ollama's
+`max_tokens: 2048`. Without this override, Pi's generic 4,096-token safety
+margin would reduce the requested output to one token. The override preserves
+Pi's compaction and overflow handling but cannot guarantee every input fits.
+
+A failed summary ends the disposable agent turn and attempt. Later requests do
+not clear the failure or repeat compaction until the safeguard. The run may still
+make its single configured low-reasoning fallback.
 
 The Leader scheduling handoff names the native `ltcook_team` operations and
 required fields. Scheduled execution reports use `report.create` with an explicit
@@ -361,11 +359,10 @@ provider, configured credentials, and the actual Compose assets. Live research
 requires reachable services and a working model provider. Browser verification
 requires the separately installed browser executable and browser files.
 
-The source declares platform preparation code, but this pass has not established
-native Windows/macOS behavior, live web research, or model-backed workflows.
-Linux-only release automation does not establish those behaviors. Native platform
-checks need the respective native environment; do not launch Windows verification
-executables from WSL.
+Linux-only release automation does not establish native Windows/macOS behavior,
+live web research, or model-backed workflows. Native platform checks need the
+respective native environment; do not launch Windows verification executables
+from WSL.
 
 ## Releases
 

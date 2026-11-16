@@ -169,6 +169,10 @@ guidance under local Spark, or **Synthetic Setup** for the packaged scenarios.
 Current Setup uses the selected registered workspace when available, otherwise
 global configuration. It does not measure the team's normal cloud model.
 
+The Synthetic read-only case has a [known unresolved failure](../BACKLOG.md);
+a successful full Synthetic run has not been established. Failed runs retain
+diagnostics for investigation.
+
 ```shell
 ltcook eval audit --static-only
 ltcook eval audit --setup current
