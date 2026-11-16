@@ -1,1 +1,1 @@
-{"revision":"agent-evals-v5","scenarios":["read-only","no-op","targeted-fix"],"fixture":{"prices":[12,7,5],"discount":4,"expectedTotal":20}}
+{"revision":"agent-evals-v6","scenarios":["read-only","no-op","targeted-fix"],"fixture":{"prices":[12,7,5],"discount":4,"expectedTotal":20}}

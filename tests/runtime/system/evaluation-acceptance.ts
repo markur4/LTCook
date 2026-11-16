@@ -211,7 +211,12 @@ const server = createServer(async (request, response) => {
           summary: 'Registered tasks',
           evidence: 'Scheduling graph',
         });
-      if (scenario !== 'no-scheduled-work' && !delayedTask && index === 2)
+      if (
+        scenario !== 'no-scheduled-work' &&
+        scenario !== 'unfinished-handoff' &&
+        !delayedTask &&
+        index === 2
+      )
         command({ type: 'task.update', taskId, status: 'completed' });
       if (delayedTask && index === 4) command({ type: 'task.update', taskId, status: 'completed' });
     } else if (text.includes('Correct only')) {
@@ -374,6 +379,7 @@ try {
                 'validation-recovery',
                 'fallback-success',
                 'no-scheduled-work',
+                'unfinished-handoff',
                 'settlement-recovery',
                 'compaction-error',
               ].includes(scenario)
@@ -443,7 +449,8 @@ try {
       scenario === 'masked-verification-failure' ||
       scenario === 'no-delegation' ||
       scenario === 'compaction-error' ||
-      scenario === 'no-scheduled-work'
+      scenario === 'no-scheduled-work' ||
+      scenario === 'unfinished-handoff'
     ) {
       await assert.rejects(engine(input), /failed after its low-reasoning fallback/);
       assert(checkpoint, 'Failed attempts must be checkpointed before the run rejects');
@@ -567,6 +574,7 @@ try {
             'no-delegation',
             'compaction-error',
             'no-scheduled-work',
+            'unfinished-handoff',
           ].includes(scenario),
       ),
       JSON.stringify(
@@ -584,7 +592,8 @@ try {
       scenario === 'no-delegation' ||
       scenario === 'bad-verification' ||
       scenario === 'masked-verification-failure' ||
-      scenario === 'no-scheduled-work'
+      scenario === 'no-scheduled-work' ||
+      scenario === 'unfinished-handoff'
     )
       assert(
         tasks.every((task) =>
@@ -629,10 +638,21 @@ try {
           ),
         ),
       );
+    if (scenario === 'unfinished-handoff')
+      assert(
+        tasks.every((task) =>
+          task.attempts.every((attempt) =>
+            attempt.failure?.includes(
+              'Scheduling handoff was reported but its Task was not completed',
+            ),
+          ),
+        ),
+      );
     if (
       scenario !== 'no-delegation' &&
       scenario !== 'compaction-error' &&
-      scenario !== 'no-scheduled-work'
+      scenario !== 'no-scheduled-work' &&
+      scenario !== 'unfinished-handoff'
     )
       assert(tasks.some((task) => task.attempts.some((attempt) => (attempt.delegations ?? 0) > 0)));
     assert(calls.includes('ltcook_team'));
@@ -651,7 +671,11 @@ try {
         'Recovery must occur after agent end and before settlement',
       );
     }
-    if (scenario !== 'compaction-error' && scenario !== 'no-scheduled-work') {
+    if (
+      scenario !== 'compaction-error' &&
+      scenario !== 'no-scheduled-work' &&
+      scenario !== 'unfinished-handoff'
+    ) {
       assert(calls.includes('read'));
       assert(calls.includes('write'));
       assert(calls.includes('bash'));

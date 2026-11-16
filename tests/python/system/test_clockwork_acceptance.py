@@ -49,6 +49,7 @@ def test_native_paseo_leader_adoption(tmp_path: Path) -> None:
         "compaction-error",
         "fallback-success",
         "no-scheduled-work",
+        "unfinished-handoff",
         "settlement-recovery",
     ],
 )

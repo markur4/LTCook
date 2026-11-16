@@ -7,9 +7,9 @@ import type { EvalEnvironmentOverrides, EvalSetup } from './contracts.js';
 
 export const EVAL_MODEL = 'ltcook-bonsai-2-27b-ctx65536:latest';
 export const EVAL_CONTEXT_WINDOW = 65536;
-export const FIXTURE_REVISION = 'agent-evals-v5';
-export const EVAL_COMPACTION = { enabled: true, reserveTokens: 2048, keepRecentTokens: 1024 };
-export const EVAL_MAX_OUTPUT_TOKENS = 2048;
+export const FIXTURE_REVISION = 'agent-evals-v6';
+export const EVAL_COMPACTION = { enabled: true, reserveTokens: 4096, keepRecentTokens: 1024 };
+export const EVAL_MAX_OUTPUT_TOKENS = 4096;
 export const EVAL_MODEL_COMPAT = {
   supportsDeveloperRole: false,
   maxTokensField: 'max_tokens' as const,
