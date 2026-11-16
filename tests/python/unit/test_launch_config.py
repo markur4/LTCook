@@ -2,13 +2,101 @@ import errno
 import json
 import os
 import urllib.error
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
 from ltcook import launch
 from ltcook.config.pi_config import pi_documents, write_pi_config
+
+
+def test_native_preparation_reports_configuration_inputs_and_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from ltcook.config.app import APP_RC
+
+    project = tmp_path / "project"
+    project.mkdir()
+    shell = {
+        "HOME": str(tmp_path / "home"),
+        "USERPROFILE": str(tmp_path / "home"),
+        "APPDATA": str(tmp_path / "config"),
+        "LOCALAPPDATA": str(tmp_path / "data"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "LTCOOK_MODEL_SMART": "fixture-model",
+    }
+    monkeypatch.setenv("LTCOOK_SHELL_PROVENANCE", json.dumps(shell))
+    config = APP_RC.paths(environment=shell).require("config")
+    launch.prepare_native_command(project)
+    result = json.loads(capsys.readouterr().out)
+    inputs = set(result["dependencies"])
+    assert str(project) in result["identityPaths"]
+    assert result["reusable"] is False
+    marker = project / APP_RC.schema.workspace_dotenv_filename
+    assert str(marker) in inputs
+    assert str(marker.with_name(f"{marker.stem}.secret{marker.suffix}")) in inputs
+    assert str(config / APP_RC.schema.user_dotenv_filename) in inputs
+    assert str(config / APP_RC.schema.apprc_toml_filename) in inputs
+    assert result["environment"]["LTCOOK_MODEL_SMART"] == "fixture-model"
+    pi_home = Path(result["environment"]["PI_CODING_AGENT_DIR"])
+    for filename in ("models.json", "web-search.json"):
+        assert str(pi_home / filename) in inputs
+        assert (pi_home / filename).is_file()
+
+
+def test_native_preparation_tracks_installed_authority_and_disables_unknown_guards(
+    tmp_path: Path,
+) -> None:
+    shell = {
+        "HOME": str(tmp_path / "home"),
+        "USERPROFILE": str(tmp_path / "home"),
+        "APPDATA": str(tmp_path / "config"),
+        "LOCALAPPDATA": str(tmp_path / "data"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
+    snapshot = launch.resolve_global_config(environment=shell)
+    installed = replace(
+        snapshot,
+        paths=replace(
+            snapshot.paths,
+            source="installation",
+            installation=replace(
+                snapshot.paths.installation,
+                revision="fixture-revision",
+                generation_id=uuid4(),
+            ),
+        ),
+    )
+    inputs = launch.NativePreparationInputs()
+    inputs.capture(installed)
+    inputs.guard_ancestors()
+    assert inputs.reusable is (os.name == "posix")
+    assert (
+        installed.paths.installation.directory / "installation.json"
+        in inputs.dependencies
+    )
+    for kind in ("config", "appdata", "cache", "state"):
+        root = installed.paths.require(kind)
+        assert root / ".apprc-owner.json" in inputs.dependencies
+        assert root in inputs.identity_paths
+        assert root.parent in inputs.identity_paths
+
+    fallback = launch.NativePreparationInputs()
+    fallback.capture(snapshot)
+    assert fallback.reusable is False
+    resource = replace(installed.layers[0], path=None, resource=("fixture", "defaults"))
+    inaccessible = launch.NativePreparationInputs()
+    inaccessible.capture(replace(installed, layers=(resource,)))
+    assert inaccessible.reusable is False
 
 
 def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
@@ -630,7 +718,7 @@ def test_explicit_global_runtime_reuses_ready_owner_without_session_or_spawn(
         "start_runtime",
         lambda *_args, **_kwargs: pytest.fail("ready owner must not be spawned again"),
     )
-    assert launch.runtime_command(None) is None
+    assert launch.launch_runtime(None) is None
 
 
 @pytest.fixture
@@ -695,7 +783,7 @@ def test_start_persists_missing_secrets_before_the_child_uses_them(
 
     def start():
         if command == "runtime":
-            launch.runtime_command(None)
+            launch.launch_runtime(None)
         elif command == "desktop":
             assert launch.desktop_command() == 0
         else:
@@ -912,3 +1000,115 @@ def test_evaluation_context_rejects_unregistered_workspace_before_launch(
     monkeypatch.setattr(launch, "resolve_launch", unexpected_resolution)
     with pytest.raises(ValueError, match="registered with AppRC"):
         launch.evaluation_context(tmp_path)
+
+
+def test_runtime_requests_never_forward_credentials_across_redirects(
+    monkeypatch, tmp_path
+):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    from types import SimpleNamespace
+
+    import ltcook.cli.eval as eval_cli
+    from ltcook._runtime_client import RuntimeClientError
+
+    seen = []
+    source_tokens = []
+
+    class Destination(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_args):
+            pass
+
+    destination = ThreadingHTTPServer(("127.0.0.1", 0), Destination)
+
+    class Source(BaseHTTPRequestHandler):
+        def do_POST(self):
+            source_tokens.append(self.headers.get("Authorization"))
+            if self.path == "/success":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"ok": true}')
+                return
+            if self.path == "/unauthorized":
+                self.send_response(401)
+                self.end_headers()
+                return
+            if self.path == "/echo-token":
+                self.send_response(401, "private-test-token")
+                self.end_headers()
+                return
+            if self.path == "/v1/command":
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b'{"error":"echo private-test-token"}')
+                return
+            if self.path == "/malformed":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"not JSON")
+                return
+            self.send_response(302)
+            self.send_header(
+                "Location", f"http://127.0.0.1:{destination.server_port}/stolen"
+            )
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    source = ThreadingHTTPServer(("127.0.0.1", 0), Source)
+    threads = [
+        Thread(target=server.serve_forever, daemon=True)
+        for server in (source, destination)
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        environment = {
+            "LTCOOK_API_LISTEN": f"127.0.0.1:{source.server_port}",
+            "LTCOOK_API_TOKEN": "private-test-token",
+            "LTCOOK_SESSION": "session",
+            "LTCOOK_TEAM": "default",
+        }
+        assert eval_cli._call(environment, "/success") == {"ok": True}
+        with pytest.raises(RuntimeClientError, match="401"):
+            eval_cli._call(environment, "/unauthorized")
+        with pytest.raises(RuntimeClientError) as failure:
+            eval_cli._call(environment, "/echo-token")
+        assert "private-test-token" not in str(failure.value)
+        assert "<redacted>" in str(failure.value)
+        with pytest.raises(
+            RuntimeClientError, match="Agent Evals runtime request failed"
+        ):
+            eval_cli._call(environment, "/malformed")
+        with pytest.raises(RuntimeClientError, match="redirect"):
+            eval_cli._call(environment, "/v1/evals/list")
+        monkeypatch.setattr(launch, "probe_runtime", lambda _environment: object())
+        config = SimpleNamespace(environment=environment, workspace_root=tmp_path)
+        with pytest.raises(RuntimeClientError, match="redirect"):
+            launch._open_existing_runtime(config, {})
+        from ltcook import _runtime_client
+
+        monkeypatch.setattr(
+            _runtime_client, "probe_runtime", lambda _environment: object()
+        )
+        with pytest.raises(RuntimeClientError) as failure:
+            _runtime_client.send_runtime_command(
+                environment, "session", {"type": "fixture"}
+            )
+        assert "private-test-token" not in str(failure.value)
+        assert "<redacted>" in str(failure.value)
+        assert seen == []
+        assert source_tokens == ["Bearer private-test-token"] * 7
+    finally:
+        for server in (source, destination):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join()

@@ -37,6 +37,8 @@ REQUIRED_PASEO_PLUGIN_ASSETS = (
     "client/use-team-catalog.ts",
     "client/components/PanelChrome.tsx",
     "client/components/StatusBadge.tsx",
+    "client/screens/Diagnostics.tsx",
+    "client/screens/TeamStatus.tsx",
     "client/screens/TeamOverview.tsx",
     "client/screens/TeamsBrowser.tsx",
     "client/components/TeamComposerItem.tsx",

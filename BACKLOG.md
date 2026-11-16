@@ -94,7 +94,7 @@ Treat this as the parking lot for actionable problems discovered while working b
 - **Area:** `runtime/src/evals/` and `runtime/src/integrations/pi-extension.ts`
 - **Observed while:** Verifying Agent Evals diagnostics in PR #4.
 - **Why not fixed now:** Merge the verified diagnostic repairs while retaining the existing live failure for a focused follow-up.
-- **Evidence:** The latest live Synthetic read-only run failed in 115.34 seconds: the off attempt ended without `finish_reason`; the low attempt failed because context summarization hit its output token cap. This preceded the Team Leader reconciliation and has not been rerun on that combined tree. Tests, including scripted process tests, passed.
+- **Evidence:** The latest live Synthetic read-only run failed in 115.34 seconds: the off attempt ended without `finish_reason`; the low attempt failed because context summarization hit its output token cap. A later live Synthetic read-only run on 16 November 2026 failed after 154.53 seconds: reasoning-off reached its 120-second safeguard and the low-reasoning fallback hit the compaction summary output cap. Tests, including scripted process tests, passed.
 - **Context:** Live Spark task completion remains unproven despite improved diagnostics. No live success is claimed for read-only, no-op, targeted-fix, or the complete Synthetic run.
 - **Suggested next step:** Run only Synthetic read-only through the canonical CLI, inspect the retained diagnostics, fix the demonstrated cause, then verify the remaining cases individually before one complete Synthetic run. See [PR #4](https://github.com/markur4/LTCook/pull/4) for retained evidence.
 

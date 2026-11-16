@@ -87,53 +87,55 @@ const expectedRoutes = new Map([
   ],
 ]);
 
-describe.each(packages)('team API contract: %s', (team) => {
-  test('declares v3 routing and keeps member identities and model settings', () => {
-    expect(team.apiVersion).toBe(3);
-    expect(
-      team.definition.members.filter((member) => member.key === team.definition.leaderKey),
-    ).toHaveLength(1);
+for (const team of packages) {
+  describe(`team API contract: ${team.definition.id}`, () => {
+    test('declares v3 routing and keeps member identities and model settings', () => {
+      expect(team.apiVersion).toBe(3);
+      expect(
+        team.definition.members.filter((member) => member.key === team.definition.leaderKey),
+      ).toHaveLength(1);
 
-    expect(team.definition.routing).toEqual(expectedRoutes.get(team.definition.id));
-    const members = team.definition.members.map(
-      ({ key, lifetime, modelAlias, thinking, readOnly, roles, workTypes }) => [
-        key,
-        lifetime,
-        modelAlias,
-        thinking,
-        readOnly,
-        roles,
-        workTypes,
-      ],
-    );
-    expect(members).toEqual(expectedMembers.get(team.definition.id));
+      expect(team.definition.routing).toEqual(expectedRoutes.get(team.definition.id));
+      const members = team.definition.members.map(
+        ({ key, lifetime, modelAlias, thinking, readOnly, roles, workTypes }) => [
+          key,
+          lifetime,
+          modelAlias,
+          thinking,
+          readOnly,
+          roles,
+          workTypes,
+        ],
+      );
+      expect(members).toEqual(expectedMembers.get(team.definition.id));
 
-    for (const [workType, memberKey] of Object.entries(team.definition.routing)) {
-      const assignee = team.definition.members.find((member) => member.key === memberKey);
-      expect(assignee?.workTypes).toContain(workType);
-    }
+      for (const [workType, memberKey] of Object.entries(team.definition.routing)) {
+        const assignee = team.definition.members.find((member) => member.key === memberKey);
+        expect(assignee?.workTypes).toContain(workType);
+      }
+    });
+
+    test('uses separate Team rule and skill references backed by required local resources', () => {
+      const resourceByPath = new Map(
+        team.definition.resources.map((resource) => [resource.path, resource]),
+      );
+      expect(resourceByPath.size).toBe(team.definition.resources.length);
+      expect(resourceByPath.has('rules/clear-writing.md')).toBe(false);
+
+      for (const resource of team.definition.resources) {
+        expect(resource.scope).toBe('team');
+        expect(resource.required).toBe(true);
+        expect(existsSync(fileURLToPath(resource.url))).toBe(true);
+      }
+
+      for (const member of team.definition.members) {
+        expect(member.roles.length).toBeGreaterThan(0);
+        for (const path of member.rules) expect(resourceByPath.get(path)?.kind).toBe('rule');
+        for (const path of member.skills) expect(resourceByPath.get(path)?.kind).toBe('skill');
+      }
+    });
   });
-
-  test('uses separate Team rule and skill references backed by required local resources', () => {
-    const resourceByPath = new Map(
-      team.definition.resources.map((resource) => [resource.path, resource]),
-    );
-    expect(resourceByPath.size).toBe(team.definition.resources.length);
-    expect(resourceByPath.has('rules/clear-writing.md')).toBe(false);
-
-    for (const resource of team.definition.resources) {
-      expect(resource.scope).toBe('team');
-      expect(resource.required).toBe(true);
-      expect(existsSync(fileURLToPath(resource.url))).toBe(true);
-    }
-
-    for (const member of team.definition.members) {
-      expect(member.roles.length).toBeGreaterThan(0);
-      for (const path of member.rules) expect(resourceByPath.get(path)?.kind).toBe('rule');
-      for (const path of member.skills) expect(resourceByPath.get(path)?.kind).toBe('skill');
-    }
-  });
-});
+}
 
 test('Core guidance catalog keeps functional resources required', () => {
   const resourcesRoot = resolve(import.meta.dir, '../../../runtime/resources');

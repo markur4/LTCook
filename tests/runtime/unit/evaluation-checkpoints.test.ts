@@ -28,9 +28,8 @@ async function finished(instance: EvalRunService, id: string) {
   throw new Error('Checkpoint test did not complete');
 }
 
-test.each(['failure', 'cancellation'] as const)(
-  'retains sanitized results and trace after %s and restart',
-  async (mode) => {
+for (const mode of ['failure', 'cancellation'] as const) {
+  test(`retains sanitized results and trace after ${mode} and restart`, async () => {
     let ready!: () => void;
     const checkpointed = new Promise<void>((resolve) => {
       ready = resolve;
@@ -70,8 +69,120 @@ test.each(['failure', 'cancellation'] as const)(
     });
     await restarted.initialize();
     expect(restarted.report(id)).toEqual(report);
-  },
-);
+  });
+}
+
+test('terminal status is not visible before its summary is persisted', async () => {
+  let fail!: () => void;
+  const continueEngine = new Promise<void>((resolve) => {
+    fail = resolve;
+  });
+  const { root, instance } = await service(async () => {
+    await continueEngine;
+    throw new Error('Fixture failure');
+  });
+  const id = await instance.start({ preset: 'behavior', setup: 'synthetic' });
+  let release!: () => void;
+  let reached!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const saving = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const rename = fileSystem.rename;
+  const intercept = spyOn(fileSystem, 'rename').mockImplementation(async (from, to) => {
+    if (to === path.join(root, 'evals/runs', id, 'run.json')) {
+      reached();
+      await blocked;
+    }
+    return rename(from, to);
+  });
+  try {
+    fail();
+    await saving;
+    expect((await instance.status(id)).summary.status).toBe('running');
+    release();
+    await finished(instance, id);
+    expect(
+      JSON.parse(await readFile(path.join(root, 'evals/runs', id, 'run.json'), 'utf8')).status,
+    ).toBe('failed');
+  } finally {
+    release();
+    intercept.mockRestore();
+  }
+});
+
+test('terminal persistence failure reports a failed run instead of leaving it running', async () => {
+  let fail!: () => void;
+  const continueEngine = new Promise<void>((resolve) => {
+    fail = resolve;
+  });
+  const { root, instance } = await service(async () => {
+    await continueEngine;
+    throw new Error('Provider failed');
+  });
+  const id = await instance.start({ preset: 'behavior', setup: 'synthetic' });
+  const rename = fileSystem.rename;
+  const intercept = spyOn(fileSystem, 'rename').mockImplementation(async (from, to) => {
+    if (to === path.join(root, 'evals/runs', id, 'run.json'))
+      throw new Error('fixture disk failure');
+    return rename(from, to);
+  });
+  try {
+    fail();
+    await finished(instance, id);
+    expect(instance.report(id).summary).toMatchObject({
+      status: 'failed',
+      error:
+        'Provider failed; could not persist the terminal evaluation result: fixture disk failure',
+    });
+  } finally {
+    intercept.mockRestore();
+  }
+});
+
+test('a run cannot be deleted before its terminal event is written', async () => {
+  let finish!: () => void;
+  const continueEngine = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const { root, instance } = await service(async () => {
+    await continueEngine;
+    throw new Error('Provider failed');
+  });
+  const id = await instance.start({ preset: 'behavior', setup: 'synthetic' });
+  let release!: () => void;
+  let reached!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const writing = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const append = fileSystem.appendFile;
+  const intercept = spyOn(fileSystem, 'appendFile').mockImplementation(
+    async (file, data, options) => {
+      if (file === path.join(root, 'evals/runs', id, 'events.jsonl')) {
+        reached();
+        await blocked;
+      }
+      return append(file, data, options);
+    },
+  );
+  try {
+    finish();
+    await writing;
+    await expect(instance.delete(id)).rejects.toThrow('Cancel the active');
+    release();
+    await finished(instance, id);
+    await instance.delete(id);
+    expect(instance.list()).toEqual([]);
+  } finally {
+    release();
+    intercept.mockRestore();
+  }
+});
 
 test('restart does not count progress newer than the last complete evidence checkpoint', async () => {
   const { root, instance } = await service(async ({ progress, checkpoint }) => {

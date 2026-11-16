@@ -200,7 +200,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       node: process.execPath,
       home: path.join(deployment, 'paseo'),
       deploymentRoot: deployment,
-      listen: `127.0.0.1:${await freePort()}`,
+      listen: '127.0.0.1:0',
       runtimeApiUrl: endpoint,
       userToken: secret,
       pluginDirectory: path.join(job.appRoot, 'runtime/dist/paseo-plugin'),
