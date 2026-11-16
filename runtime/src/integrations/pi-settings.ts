@@ -63,22 +63,22 @@ const pendingConfigurations = new Map<string, Promise<void>>();
 async function writePiExtensions(
   settingsPath: string,
   ownedPaths: readonly string[],
-  legacyPaths: readonly string[],
 ): Promise<void> {
   const ownershipPath = `${settingsPath}.ltcook-extensions.json`;
   const rawSettings = await readJsonFile(settingsPath);
   const settings = validateSettings(rawSettings === undefined ? {} : rawSettings);
   const rawOwnership = await readJsonFile(ownershipPath);
-  const previousOwnership =
-    rawOwnership === undefined ? [...new Set(legacyPaths)] : validateOwnership(rawOwnership).paths;
-  const nextOwnership = [...new Set(ownedPaths)];
+  const previousOwnership = rawOwnership === undefined ? [] : validateOwnership(rawOwnership).paths;
+  const existing = (settings.extensions as string[] | undefined) ?? [];
+  // > Existing entries without a prior ownership record remain user-managed.
+  const nextOwnership = [...new Set(ownedPaths)].filter(
+    (extension) => !existing.includes(extension) || previousOwnership.includes(extension),
+  );
   const transitioningOwnership = [...new Set([...previousOwnership, ...nextOwnership])];
   const extensions = [
     ...new Set([
-      ...((settings.extensions as string[] | undefined) ?? []).filter(
-        (extension) => !previousOwnership.includes(extension),
-      ),
-      ...nextOwnership,
+      ...existing.filter((extension) => !previousOwnership.includes(extension)),
+      ...ownedPaths,
     ]),
   ];
 
@@ -93,12 +93,11 @@ async function writePiExtensions(
 export async function configurePiExtensions(
   settingsPath: string,
   ownedPaths: readonly string[],
-  legacyPaths: readonly string[],
 ): Promise<void> {
   const previous = pendingConfigurations.get(settingsPath) ?? Promise.resolve();
   const pending = previous
     .catch(() => undefined)
-    .then(() => writePiExtensions(settingsPath, ownedPaths, legacyPaths));
+    .then(() => writePiExtensions(settingsPath, ownedPaths));
   pendingConfigurations.set(settingsPath, pending);
   try {
     await pending;

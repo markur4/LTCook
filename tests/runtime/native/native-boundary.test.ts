@@ -144,11 +144,7 @@ describe('native runtime boundary', () => {
       }),
     );
 
-    await configurePiExtensions(
-      settingsPath,
-      [appExtension, webAccess, codeSearch],
-      [appExtension, webAccess, codeSearch],
-    );
+    await configurePiExtensions(settingsPath, [appExtension, webAccess, codeSearch]);
     expect(JSON.parse(readFileSync(settingsPath, 'utf8'))).toEqual({
       theme: 'dark',
       extensions: [
@@ -161,7 +157,7 @@ describe('native runtime boundary', () => {
       ],
     });
 
-    await configurePiExtensions(settingsPath, [appExtension, webAccess], [appExtension, webAccess]);
+    await configurePiExtensions(settingsPath, [appExtension, webAccess]);
     expect(JSON.parse(readFileSync(settingsPath, 'utf8')).extensions).toEqual([
       independent,
       unrelatedIntegration,
@@ -169,11 +165,7 @@ describe('native runtime boundary', () => {
       appExtension,
       webAccess,
     ]);
-    await configurePiExtensions(
-      settingsPath,
-      [appExtension, webAccess, codeSearch],
-      [appExtension, webAccess, codeSearch],
-    );
+    await configurePiExtensions(settingsPath, [appExtension, webAccess, codeSearch]);
     expect(JSON.parse(readFileSync(settingsPath, 'utf8')).extensions).toEqual([
       independent,
       unrelatedIntegration,
@@ -201,7 +193,7 @@ describe('native runtime boundary', () => {
       return rename(from, to);
     });
     try {
-      await expect(configurePiExtensions(settingsPath, [newExtension], [])).rejects.toThrow(
+      await expect(configurePiExtensions(settingsPath, [newExtension])).rejects.toThrow(
         'simulated settings replacement failure',
       );
       expect(readFileSync(settingsPath, 'utf8')).toBe(original);
@@ -212,7 +204,7 @@ describe('native runtime boundary', () => {
     } finally {
       failure.mockRestore();
     }
-    await configurePiExtensions(settingsPath, [], []);
+    await configurePiExtensions(settingsPath, []);
     expect(JSON.parse(readFileSync(settingsPath, 'utf8')).extensions).toEqual([independent]);
   });
 
@@ -221,13 +213,13 @@ describe('native runtime boundary', () => {
     directories.push(directory);
     const settingsPath = join(directory, 'settings.json');
     writeFileSync(settingsPath, 'null\n');
-    await expect(configurePiExtensions(settingsPath, ['/owned.js'], [])).rejects.toThrow(
+    await expect(configurePiExtensions(settingsPath, ['/owned.js'])).rejects.toThrow(
       'Pi settings must contain a JSON object.',
     );
     expect(readFileSync(settingsPath, 'utf8')).toBe('null\n');
   });
 
-  test('seeds only explicitly supplied current-app paths for a pre-marker settings file', async () => {
+  test('preserves unowned paths even if they match desired extensions', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-pi-legacy-'));
     directories.push(directory);
     const settingsPath = join(directory, 'settings.json');
@@ -241,14 +233,16 @@ describe('native runtime boundary', () => {
       }),
     );
 
-    await configurePiExtensions(
-      settingsPath,
-      ['/current-app/runtime/dist/integrations/pi-extension.js'],
-      [currentAppPath],
-    );
+    await configurePiExtensions(settingsPath, [currentAppPath]);
     expect(new Set(JSON.parse(readFileSync(settingsPath, 'utf8')).extensions)).toEqual(
       new Set([currentAppPath, unrelatedIntegration, unrelatedPackage]),
     );
+    await configurePiExtensions(settingsPath, []);
+    expect(JSON.parse(readFileSync(settingsPath, 'utf8')).extensions).toEqual([
+      currentAppPath,
+      unrelatedIntegration,
+      unrelatedPackage,
+    ]);
   });
 
   test('preserves wrong-element Pi settings and rejects malformed ownership', async () => {
@@ -258,7 +252,7 @@ describe('native runtime boundary', () => {
     const ownershipPath = `${settingsPath}.ltcook-extensions.json`;
     const malformed = '{"extensions":["ok",12]}\n';
     writeFileSync(settingsPath, malformed);
-    await expect(configurePiExtensions(settingsPath, ['/owned.js'], [])).rejects.toThrow(
+    await expect(configurePiExtensions(settingsPath, ['/owned.js'])).rejects.toThrow(
       'Pi settings extensions must be an array of strings.',
     );
     expect(readFileSync(settingsPath, 'utf8')).toBe(malformed);
@@ -267,7 +261,7 @@ describe('native runtime boundary', () => {
     writeFileSync(ownershipPath, '{"version":1,"paths":["/old.js",7]}');
     const settingsBefore = readFileSync(settingsPath, 'utf8');
     const ownershipBefore = readFileSync(ownershipPath, 'utf8');
-    await expect(configurePiExtensions(settingsPath, ['/owned.js'], [])).rejects.toThrow(
+    await expect(configurePiExtensions(settingsPath, ['/owned.js'])).rejects.toThrow(
       'Pi extension ownership record is malformed.',
     );
     expect(readFileSync(settingsPath, 'utf8')).toBe(settingsBefore);
@@ -280,7 +274,7 @@ describe('native runtime boundary', () => {
     const settingsPath = join(directory, 'settings.json');
     const malformed = '{ invalid json\n';
     writeFileSync(settingsPath, malformed);
-    await expect(configurePiExtensions(settingsPath, ['/owned.js'], [])).rejects.toThrow();
+    await expect(configurePiExtensions(settingsPath, ['/owned.js'])).rejects.toThrow();
     expect(readFileSync(settingsPath, 'utf8')).toBe(malformed);
     expect(() => readFileSync(`${settingsPath}.ltcook-extensions.json`, 'utf8')).toThrow();
   });

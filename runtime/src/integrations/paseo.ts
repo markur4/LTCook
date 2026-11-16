@@ -343,8 +343,7 @@ export async function createPaseoAgentBackend(input: {
       ...webAccessExtensions,
       ...(codeSearchEnabled ? codeSearchExtensions : []),
     ];
-    const legacyExtensions = [extensionPath, ...webAccessExtensions, ...codeSearchExtensions];
-    await configurePiExtensions(settingsPath, ownedExtensions, legacyExtensions);
+    await configurePiExtensions(settingsPath, ownedExtensions);
     const model =
       workspaceEnv[`LTCOOK_MODEL_${options.member.modelAlias.toUpperCase()}`] ||
       workspaceEnv.LTCOOK_MODEL_SMART;
