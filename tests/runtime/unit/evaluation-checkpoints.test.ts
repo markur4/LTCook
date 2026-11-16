@@ -72,6 +72,47 @@ for (const mode of ['failure', 'cancellation'] as const) {
   });
 }
 
+test('terminal status is not visible before its summary is persisted', async () => {
+  let fail!: () => void;
+  const continueEngine = new Promise<void>((resolve) => {
+    fail = resolve;
+  });
+  const { root, instance } = await service(async () => {
+    await continueEngine;
+    throw new Error('Fixture failure');
+  });
+  const id = await instance.start({ preset: 'behavior', setup: 'synthetic' });
+  let release!: () => void;
+  let reached!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const saving = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const rename = fileSystem.rename;
+  const intercept = spyOn(fileSystem, 'rename').mockImplementation(async (from, to) => {
+    if (to === path.join(root, 'evals/runs', id, 'run.json')) {
+      reached();
+      await blocked;
+    }
+    return rename(from, to);
+  });
+  try {
+    fail();
+    await saving;
+    expect((await instance.status(id)).summary.status).toBe('running');
+    release();
+    await finished(instance, id);
+    expect(
+      JSON.parse(await readFile(path.join(root, 'evals/runs', id, 'run.json'), 'utf8')).status,
+    ).toBe('failed');
+  } finally {
+    release();
+    intercept.mockRestore();
+  }
+});
+
 test('restart does not count progress newer than the last complete evidence checkpoint', async () => {
   const { root, instance } = await service(async ({ progress, checkpoint }) => {
     progress({ event: 'case.completed', suite: 'behavior', completed: 1, total: 3 });

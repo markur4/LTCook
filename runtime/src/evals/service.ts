@@ -345,19 +345,27 @@ export class EvalRunService {
       });
       await this.writes;
       await this.saveOutput(summary, output);
-      summary.status = controller.signal.aborted ? 'cancelled' : 'completed';
-      summary.completed = summary.total;
-      summary.updatedAt = new Date().toISOString();
-      await this.saveSummary(summary);
+      const terminal: EvalSummary = {
+        ...summary,
+        status: controller.signal.aborted ? 'cancelled' : 'completed',
+        completed: summary.total,
+        updatedAt: new Date().toISOString(),
+      };
+      await this.saveSummary(terminal);
+      Object.assign(summary, terminal);
       await this.emit(summary, summary.status === 'cancelled' ? 'run.cancelled' : 'run.completed', {
         elapsedMs: Date.now() - started,
       });
     } catch (error) {
       await this.writes.catch(() => undefined);
-      summary.status = controller.signal.aborted ? 'cancelled' : 'failed';
-      summary.error = safeError(error);
-      summary.updatedAt = new Date().toISOString();
-      await this.saveSummary(summary);
+      const terminal: EvalSummary = {
+        ...summary,
+        status: controller.signal.aborted ? 'cancelled' : 'failed',
+        error: safeError(error),
+        updatedAt: new Date().toISOString(),
+      };
+      await this.saveSummary(terminal);
+      Object.assign(summary, terminal);
       await this.emit(summary, summary.status === 'cancelled' ? 'run.cancelled' : 'run.failed', {
         elapsedMs: Date.now() - started,
         message: summary.error,
