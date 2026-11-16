@@ -4,7 +4,7 @@ import { lstat, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/pr
 import path from 'node:path';
 import type { EvalSetup } from './contracts.js';
 
-export const EVAL_MODEL = 'ltcook-ornith-1.5-9b-ctx65536:latest';
+export const EVAL_MODEL = 'ltcook-bonsai-2-27b-ctx65536:latest';
 export const EVAL_CONTEXT_WINDOW = 65536;
 export const FIXTURE_REVISION = 'agent-evals-v4';
 export const EVAL_COMPACTION = { enabled: true, reserveTokens: 2048, keepRecentTokens: 1024 };

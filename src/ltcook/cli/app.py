@@ -214,7 +214,7 @@ def _ollama_resource_diagnostics(appdata: Path) -> dict[str, object]:
             and version == data.get("version")
         )
         if not ready:
-            raise ValueError("Ollama service or required Ornith model is not ready.")
+            raise ValueError("Ollama service or required Bonsai model is not ready.")
         return {
             "ollama": {
                 "ready": True,

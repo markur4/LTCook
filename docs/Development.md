@@ -195,7 +195,7 @@ model prompt loop to quick checks.
 
 Normal LTCook application setup detects a local Ollama installation or uses the
 official platform installer when missing, then ensures
-`ornith-1.5:9b` (about 6.6 GB). This is separate from `just sync`,
+`bonsai-2:27b` (about 8.3 GB). This is separate from `just sync`,
 editable registration, tests, and CI. Setup records readiness
 under AppRC ownership and reuses a healthy user-managed service. It does not bind
 Ollama beyond loopback or stop a user-owned service.
@@ -208,12 +208,12 @@ checkout's live verification used Fedora 44 on WSL2 only; Windows and macOS
 installation behavior remains documented, not natively validated.
 
 Agent Evals uses the shared installed CLI and Paseo run service. Static audit
-needs no model; LLM-dependent runs require the prepared local Ornith model
-`ltcook-ornith-1.5-9b-ctx65536:latest` and do not install or pull models.
-Setup derives that model from `ornith-1.5:9b` with `num_ctx` set to 65,536.
+needs no model; LLM-dependent runs require the prepared local Bonsai model
+`ltcook-bonsai-2-27b-ctx65536:latest` and do not install or pull models.
+Setup derives that model from `bonsai-2:27b` with `num_ctx` set to 65,536.
 The run checks the saved model configuration; use `ollama ps` while it is loaded
-to inspect the context and GPU allocation actually provided by Ollama. Existing
-Spark setup receipts need the normal setup or repair flow to prepare Ornith.
+to inspect the context and GPU allocation actually provided by Ollama. Previous
+model setup receipts need the normal setup or repair flow to prepare Bonsai.
 
 ```shell
 ltcook eval audit --static-only
@@ -254,7 +254,7 @@ estimate; overlapping trace categories must not be added into another total.
 
 Keep diagnosis focused: start Synthetic Setup with `--case read-only`, then
 verify no-op and targeted-fix individually. Each case starts with reasoning off
-and may fall back once to low reasoning on the same pinned Ornith model. A case
+and may fall back once to low reasoning on the same pinned Bonsai model. A case
 that fails its fallback stops the run before later cases or repetitions. Each
 attempt uses an independent workspace, requests copy-on-write copies where
 supported, and releases disposable state after its diagnostics are preserved.

@@ -570,7 +570,7 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
     const compactionOffset = observed.length;
     const pinned = {
       model: {
-        id: 'ltcook-ornith-1.5-9b-ctx65536:latest',
+        id: 'ltcook-bonsai-2-27b-ctx65536:latest',
         provider: 'ollama',
         baseUrl: `${process.env.LTCOOK_EVAL_ENDPOINT}/v1`,
       },

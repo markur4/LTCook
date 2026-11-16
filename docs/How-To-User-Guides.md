@@ -165,7 +165,7 @@ The contextual **Team** panel is secondary to the Leader chat:
 Agent Evals provides **Instruction Audit**, **Behavior Evaluation**, and
 **Bottleneck Attribution** through the CLI and the Paseo diagnostics panel.
 Choose **Current Setup** (the default) to evaluate the active team and installed
-guidance under local Ornith, or **Synthetic Setup** for the packaged scenarios.
+guidance under local Bonsai, or **Synthetic Setup** for the packaged scenarios.
 Current Setup uses the selected registered workspace when available, otherwise
 global configuration. It does not measure the team's normal cloud model.
 
@@ -187,13 +187,13 @@ ltcook eval delete RUN_ID
 ```
 
 Static Instruction Audit works without Ollama. LLM-dependent evaluations require
-local Ollama and the prepared Ornith model; they never select another model when
-it is unavailable. Existing installations prepared for Spark need the normal
-setup or repair flow to prepare Ornith. `ollama ps` shows the context and GPU
+local Ollama and the prepared Bonsai model; they never select another model when
+it is unavailable. Existing installations prepared for another model need the normal
+setup or repair flow to prepare Bonsai. `ollama ps` shows the context and GPU
 allocation while the model is loaded. Behavior Evaluation uses full instructions in the selected setup. It runs the
 read-only, no-op and targeted-fix cases once each unless `--case` selects one or
 `--repetitions N` requests more executions. Cases start with reasoning off and
-may fall back once to low reasoning on the same Ornith model. If the fallback
+may fall back once to low reasoning on the same Bonsai model. If the fallback
 also fails, the run stops and preserves the evidence.
 
 Bottleneck Attribution uses the timings and traces from the same executions;

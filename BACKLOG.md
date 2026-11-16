@@ -90,13 +90,13 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 # 2026-11-16
 
-## P1 / E1 [Tooling] - *Model-backed Synthetic Agent Evals do not complete reliably*
+## P1 / E1 [Tooling] - *Verify complete Agent Evals with the configured model*
 - **Area:** `runtime/src/evals/` and `runtime/src/integrations/pi-extension.ts`
 - **Observed while:** Verifying Agent Evals diagnostics in PR #4.
-- **Why not fixed now:** Merge the verified diagnostic repairs while retaining the existing live failure for a focused follow-up.
-- **Evidence:** Three isolated Spark scheduling trials with 65,536 tokens allocated failed to complete the handoff. After switching to Ornith 1.5 9B at the same context, one live Synthetic read-only run also failed: both attempts exceeded the 64-call limit while repeatedly updating the handoff instead of registering the scenario Task. Traditional Tests, including scripted process tests, passed.
-- **Context:** The model switch and larger context do not establish live task completion. No live success is claimed for read-only, no-op, targeted-fix, or the complete Synthetic run.
-- **Suggested next step:** Investigate the shared scheduling handoff and tool interaction, then verify the remaining cases individually before one complete Synthetic run. See [PR #6](https://github.com/markur4/LTCook/pull/6) for retained evidence.
+- **Why not fixed now:** The selected model has been validated in an isolated source copy, but its default configuration and both setups need verification together.
+- **Evidence:** Bonsai 2 27B completed the full Synthetic Agent Evals in 83.1 seconds with one repetition per case. The targeted-fix case included delegation. Traditional Tests, including scripted process tests, passed on the earlier configuration.
+- **Context:** Current Setup and the final integrated configuration have not yet been checked with the selected model.
+- **Suggested next step:** Run both full setups on the final configuration, record their elapsed times and review the results. See [PR #6](https://github.com/markur4/LTCook/pull/6) for retained evidence.
 
 <br>
 

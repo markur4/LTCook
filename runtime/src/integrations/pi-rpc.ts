@@ -118,7 +118,7 @@ export function guardEvaluationModelRuntime(
       model.baseUrl !== `${endpoint}/v1`
     )
       throw new Error(
-        'Evaluation model pin violation: model, provider and endpoint must match the prepared local Ornith configuration',
+        'Evaluation model pin violation: model, provider and endpoint must match the prepared local Bonsai configuration',
       );
   };
   // > SDK complete methods delegate here; default compaction also uses streamSimple directly.

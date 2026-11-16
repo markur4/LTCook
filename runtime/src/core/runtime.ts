@@ -123,7 +123,7 @@ Use the native ltcook_team tool directly for the following coordination calls. T
         .join(', ')}. task.create schedules execution by default; do not set scheduled=false.
 2. Call ltcook_team with command.type="report.create", command.assignmentId equal to the scheduling Assignment ID shown above, and nonempty command.summary and command.evidence describing the scheduling result. Do not use the new Task ID as assignmentId.
 3. Call ltcook_team with command.type="task.update", command.taskId="${task.id}" and command.status="completed".
-The production scheduler dispatches the registered Task. Do not perform the business scenario in this scheduling assignment, create another Pass, or manually complete the scheduled execution Task.
+The production scheduler dispatches the registered Task and manages Pass status. Do not update the Pass status, perform the business scenario in this scheduling assignment, create another Pass, or manually complete the scheduled execution Task.
 Task to register: ${input.description}`,
     });
     await this.deliverAssignment(assignment);

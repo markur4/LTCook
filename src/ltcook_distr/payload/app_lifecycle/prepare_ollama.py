@@ -16,8 +16,8 @@ from urllib.request import Request, urlopen
 
 from ._common import SetupError, download, no_links, run, write_json
 
-MODEL = "ornith-1.5:9b"
-EVAL_MODEL = "ltcook-ornith-1.5-9b-ctx65536:latest"
+MODEL = "bonsai-2:27b"
+EVAL_MODEL = "ltcook-bonsai-2-27b-ctx65536:latest"
 CONTEXT_TOKENS = 65536
 ENDPOINT = "http://127.0.0.1:11434"
 
@@ -116,7 +116,7 @@ def _wait_for_server(
 
 
 def prepare_ollama(appdata: Path, *, environment: dict[str, str] | None = None) -> Path:
-    """Reuse/install Ollama, ensure Ornith, and record private readiness."""
+    """Reuse/install Ollama, ensure Bonsai, and record private readiness."""
     env = dict(os.environ if environment is None else environment)
     deployment = appdata / "deployment"
     deployment.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -144,7 +144,7 @@ def prepare_ollama(appdata: Path, *, environment: dict[str, str] | None = None) 
     model = next((item for item in tags if item.get("name") == MODEL), None)
     if model is None:
         if executable is None:
-            raise SetupError(f"The exact Ornith model is missing: {MODEL}")
+            raise SetupError(f"The exact Bonsai model is missing: {MODEL}")
         run([executable, "pull", MODEL], environment=env)
         tags = _json(f"{ENDPOINT}/api/tags").get("models", [])
         model = next((item for item in tags if item.get("name") == MODEL), None)
@@ -154,7 +154,7 @@ def prepare_ollama(appdata: Path, *, environment: dict[str, str] | None = None) 
     if derived is None:
         if executable is None:
             raise SetupError(f"The LTCook 65536 context model is missing: {EVAL_MODEL}")
-        modelfile = deployment / "ornith-65536.Modelfile"
+        modelfile = deployment / "bonsai-65536.Modelfile"
         modelfile.write_text(
             f"FROM {MODEL}\nPARAMETER num_ctx {CONTEXT_TOKENS}\n", encoding="utf-8"
         )
@@ -162,10 +162,10 @@ def prepare_ollama(appdata: Path, *, environment: dict[str, str] | None = None) 
         tags = _json(f"{ENDPOINT}/api/tags").get("models", [])
         derived = next((item for item in tags if item.get("name") == EVAL_MODEL), None)
     if derived is None:
-        raise SetupError("Ollama did not create the LTCook 65536-token Ornith model.")
+        raise SetupError("Ollama did not create the LTCook 65536-token Bonsai model.")
     show = _json(f"{ENDPOINT}/api/show", data={"name": EVAL_MODEL, "verbose": False})
     if not _has_expected_context(show.get("modelfile")):
-        raise SetupError("Ollama did not confirm the 65536-token Ornith configuration.")
+        raise SetupError("Ollama did not confirm the 65536-token Bonsai configuration.")
     write_json(
         receipt_path,
         {

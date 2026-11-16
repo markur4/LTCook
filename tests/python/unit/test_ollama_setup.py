@@ -45,7 +45,7 @@ def test_context_configuration_must_match_exactly(value):
     assert prepare_ollama._has_expected_context("FROM model\nPARAMETER num_ctx 65536\n")
 
 
-def test_missing_derived_model_is_created_from_exact_ornith_source(
+def test_missing_derived_model_is_created_from_exact_bonsai_source(
     tmp_path, monkeypatch
 ):
     base = {"name": prepare_ollama.MODEL, "digest": "base-digest"}
@@ -83,10 +83,10 @@ def test_missing_derived_model_is_created_from_exact_ornith_source(
             "create",
             prepare_ollama.EVAL_MODEL,
             "-f",
-            str(tmp_path / "deployment/ornith-65536.Modelfile"),
+            str(tmp_path / "deployment/bonsai-65536.Modelfile"),
         ]
     ]
-    assert (tmp_path / "deployment/ornith-65536.Modelfile").read_text() == (
+    assert (tmp_path / "deployment/bonsai-65536.Modelfile").read_text() == (
         f"FROM {prepare_ollama.MODEL}\nPARAMETER num_ctx 65536\n"
     )
     assert json.loads(receipt.read_text())["eval_model"] == prepare_ollama.EVAL_MODEL

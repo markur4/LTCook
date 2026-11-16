@@ -105,7 +105,7 @@ def pi_documents(
                 "models": [
                     {
                         "id": EVAL_MODEL,
-                        "name": "LTCook Ornith 1.5 9B (65536 context)",
+                        "name": "LTCook Bonsai 2 27B (65536 context)",
                         "contextWindow": CONTEXT_TOKENS,
                         "maxTokens": 2048,
                         "reasoning": True,

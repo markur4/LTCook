@@ -590,12 +590,25 @@ try {
       );
     if (scenario === 'no-delegation') {
       assert(tasks.every((task) => task.attempts.every((attempt) => attempt.delegations === 0)));
+      assert(
+        tasks.every((task) =>
+          task.attempts.every((attempt) => attempt.failure?.includes('not delegated')),
+        ),
+      );
       assert.equal(
         verifiedCalls.size,
         tasks.reduce((count, task) => count + task.attempts.length, 0),
         'Every non-delegating attempt must successfully verify the corrected fixture',
       );
     }
+    if (scenario === 'bad-verification')
+      assert(
+        tasks.every((task) =>
+          task.attempts.every((attempt) =>
+            attempt.failure?.includes('No successful fixture verification'),
+          ),
+        ),
+      );
     if (scenario === 'no-scheduled-work')
       assert(
         tasks.every((task) =>

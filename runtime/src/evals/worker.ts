@@ -126,7 +126,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
           models: [
             {
               id: EVAL_MODEL,
-              name: 'Local Ornith evaluation',
+              name: 'Local Bonsai evaluation',
               contextWindow,
               maxTokens,
               compat: EVAL_MODEL_COMPAT,
@@ -444,18 +444,29 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       job.scenario === 'targeted-fix'
         ? changed.every((file) => file === '.ltcook-evals/answer.json')
         : changed.length === 0;
-    const success =
-      allowedChanges &&
-      (job.scenario === 'read-only'
-        ? writeCalls === 0 && reportsAnswer
-        : (finalAnswer as { total?: number })?.total === expectedTotal &&
-          (job.scenario !== 'no-op' || writeCalls === 0) &&
-          (job.scenario !== 'targeted-fix' ||
-            (verificationCalls > 0 &&
-              (!delegate ||
-                snapshot.assignments.some(
-                  (assignment) => assignment.memberKey !== team.definition.leaderKey,
-                )))));
+    const failures: string[] = [];
+    if (!allowedChanges) failures.push('Workspace contained disallowed changes');
+    if (job.scenario === 'read-only') {
+      if (writeCalls !== 0) failures.push('Read-only task used a write or edit tool');
+      if (!reportsAnswer) failures.push('No report contained the expected result');
+    } else {
+      if ((finalAnswer as { total?: number })?.total !== expectedTotal)
+        failures.push('Answer file was missing or incorrect');
+      if (job.scenario === 'no-op' && writeCalls !== 0)
+        failures.push('No-op task used a write or edit tool');
+      if (job.scenario === 'targeted-fix') {
+        if (verificationCalls === 0)
+          failures.push('No successful fixture verification was observed');
+        if (
+          delegate &&
+          !snapshot.assignments.some(
+            (assignment) => assignment.memberKey !== team.definition.leaderKey,
+          )
+        )
+          failures.push('Task was not delegated to an eligible collaborator');
+      }
+    }
+    const success = failures.length === 0;
     const resources = await loadedResourceEvidence(
       runtime,
       sessionId,
@@ -464,9 +475,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     );
     result = {
       success,
-      ...(!success
-        ? { failureCategory: 'criteria', failure: 'Objective fixture checks did not pass' }
-        : {}),
+      ...(!success ? { failureCategory: 'criteria', failure: failures.join('; ') } : {}),
       toolCalls,
       delegations: snapshot.assignments.filter(
         (assignment) => assignment.memberKey !== team.definition.leaderKey,

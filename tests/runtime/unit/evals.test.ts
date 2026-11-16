@@ -242,7 +242,7 @@ describe('Agent Evals run service', () => {
   });
 });
 
-test('missing Ornith is a hard failure and never invokes another provider', async () => {
+test('missing Bonsai is a hard failure and never invokes another provider', async () => {
   const root = await stateRoot();
   const engine = createEvalEngine({
     resources: root,
@@ -279,7 +279,7 @@ test('missing Ornith is a hard failure and never invokes another provider', asyn
   }
 });
 
-test('an incorrectly configured Ornith context fails before inference', async () => {
+test('an incorrectly configured Bonsai context fails before inference', async () => {
   const root = await stateRoot();
   const engine = createEvalEngine({
     resources: root,

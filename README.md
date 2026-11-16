@@ -152,7 +152,7 @@ it installs the official user-scoped `uv` executable and lets `uv` provision a
 compatible Python; no system Python or administrator access is required.
 
 Application setup also prepares Node, selected web-service prerequisites, and
-local Ollama with Ornith 1.5 9B (about 6.6 GB) for Agent Evals. `just sync` does
+local Ollama with Bonsai 2 27B (about 8.3 GB) for Agent Evals. `just sync` does
 not provision these application services.
 Installing a missing Podman may require the host's normal elevation or package
 manager. Merely entering this repository or inspecting status must not install
