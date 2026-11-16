@@ -59,7 +59,7 @@ commands provide launch operations and diagnostics:
 | `ltcook stop` | Gracefully stop the matching local runtime; does not stop Compose containers or close browser tabs. |
 | `ltcook --help` | Show application and mounted AppRC command help. |
 | `ltcook --version`, `ltcook -V` | Print the installed package version before runtime preparation. |
-| `ltcook diagnose --json` | Report package, interpreter, and AppRC paths without writing files. |
+| `ltcook app doctor --verbose --json` | Include package/interpreter metadata, paths, configuration and resource diagnostics. |
 | `ltcook config setup --yes` | Initialize declared configuration files; it does not install Node or prepare services. |
 | `ltcook config show --json` | Show app settings, paths, and selected workspace. |
 | `ltcook app paths` | Show recorded AppRC resource paths. |
@@ -134,11 +134,18 @@ PATH without modifying shell profiles or overwriting unrelated commands.
 ## Uninstaller reference
 
 AppRC lifecycle management owns installation records and supported removal.
+`app uninstall` removes the program and managed resource directories by default;
+`--keep-data` retains resources. Editable repositories remain unless selected
+with `--remove-repository`, which cannot be combined with `--keep-data`.
+Hooks are declared once in `[tool.apprc.distribution.hooks]`: initialization
+prepares prerequisites; cleanup stops the recorded LTCook Compose project before
+AppRC removes directories, including their contents and symbolic links without
+following link targets. No application file inventory is required.
 LTCook's application-specific maintenance actions are limited to its deployment,
 cache, logs, and coordination state. Removing the program does not authorize
 purging unrelated Podman data, an external workspace, or an existing `lcook`
 installation. Inspect the installed AppRC help and removal preview before
-choosing resources to purge; malformed ownership records should preserve data
+confirming removal; malformed ownership records should preserve data
 for recovery rather than broaden cleanup.
 
 ## Installation placement
@@ -170,7 +177,7 @@ directories, even inside staged package directories.
 
 `just sync` and `just build` prepare the archive. `just build-native` exports a
 committed tree, builds assets inside that private tree and invokes AppRC's native
-builder with the locked application graph. Authoring needs uv 0.13.6, Rust and
+builder with the locked application graph. Authoring needs uv >=0.11.6, Rust and
 LLVM; editable registration does not.
 
 The Linux workflow emits wheel, sdist, `ltcook-setup-linux-x86_64` and
@@ -440,7 +447,7 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just test-system` | Run system checks, including required Linux real Pi/Paseo scripted acceptance. |
 | `just build` | Build/stage runtime, team, and service production assets and the Python wheel/source distribution. |
 | `just sync`, `just install` | Prepare the checkout-local uv environment, install frozen locks, build, stage assets, and register the Python application. Does not provision Ollama. |
-| `just build-native` | Build committed-source Linux setup and SDK checksums with uv 0.13.6 and Rust/LLVM. |
+| `just build-native` | Build committed-source Linux setup and SDK checksums with uv >=0.11.6 and Rust/LLVM. |
 | `just format`, `just format-check` | Format authored TypeScript/Python or check the existing formatting. |
 | `just run -- COMMAND ...` | Run a command with preserved arguments in the locked uv environment. |
 

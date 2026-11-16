@@ -11,8 +11,8 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
-    "apprc-core @ git+https://github.com/HisQu/apprc.git@ae99f240568bb1ef6890dfa5db677a686834d609",
-    "apprc @ git+https://github.com/HisQu/apprc.git@ae99f240568bb1ef6890dfa5db677a686834d609#subdirectory=src/apprc_dev/packaging/terminal",
+    "apprc-core @ git+https://github.com/HisQu/apprc.git@4e337080b2644025ba53ae6987be77bbb203f098",
+    "apprc @ git+https://github.com/HisQu/apprc.git@4e337080b2644025ba53ae6987be77bbb203f098#subdirectory=src/apprc_dev/packaging/terminal",
     "filelock>=3.18",
     "typer",
     "rich>=13.9",
@@ -23,7 +23,7 @@ Repository = "https://github.com/markur4/LTCook.git"
 
 [dependency-groups]
 dev = [
-    "apprc-core[distribution] @ git+https://github.com/HisQu/apprc.git@ae99f240568bb1ef6890dfa5db677a686834d609",
+    "apprc-core[distribution] @ git+https://github.com/HisQu/apprc.git@4e337080b2644025ba53ae6987be77bbb203f098",
     "setuptools>=68",
     "pytest>=8.2",
     "ruff>=0.4",
@@ -64,6 +64,7 @@ workspace-registry = true
 
 [tool.apprc.distribution.hooks]
 initialize = "ltcook_distr.payload.app_lifecycle.actions:initialize"
+cleanup = "ltcook_distr.payload.app_lifecycle.actions:cleanup"
 
 [project.scripts]
 ltcook = "ltcook.main:main"

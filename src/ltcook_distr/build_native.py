@@ -63,7 +63,7 @@ def build(revision: str, root: Path, uv_path: Path | None = None) -> tuple[Path,
     )
     uv = str(uv_path) if uv_path is not None else shutil.which("uv")
     if uv is None:
-        raise FileNotFoundError("Native build requires uv 0.13.6 on PATH.")
+        raise FileNotFoundError("Native build requires uv >=0.11.6 on PATH.")
     artifact_workspace = invocation / "native-workspace"
     distribution = build_native_distribution(
         spec,
@@ -84,7 +84,7 @@ def main() -> int:
     parser.add_argument("--revision", default="HEAD")
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument(
-        "--uv", type=Path, help="Absolute uv 0.13.6 executable for native authoring."
+        "--uv", type=Path, help="Absolute uv >=0.11.6 executable for native authoring."
     )
     arguments = parser.parse_args()
     print("\n".join(map(str, build(arguments.revision, arguments.root, arguments.uv))))

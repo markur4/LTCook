@@ -876,8 +876,6 @@ def test_inspection_and_authenticated_stop_do_not_initialize_secrets(monkeypatch
     import typer
 
     app_module = importlib.import_module("ltcook.cli.app")
-    monkeypatch.setattr(app_module, "_diagnose_payload", lambda: {"package": "ltcook"})
-    monkeypatch.setattr(app_module.rc.cli, "dump_json", lambda _payload: None)
     monkeypatch.setattr(
         app_module, "resolve_launch", lambda *_args: SimpleNamespace(environment={})
     )
@@ -888,7 +886,7 @@ def test_inspection_and_authenticated_stop_do_not_initialize_secrets(monkeypatch
         lambda *_args: pytest.fail("read-only commands must not create secrets"),
     )
 
-    app_module.diagnose_cmd(json_output=True)
+    assert app_module._host_diagnostics()["package"] == "ltcook"
     with pytest.raises(typer.Exit):
         app_module.stop_cmd()
 

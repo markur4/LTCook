@@ -12,7 +12,6 @@ from typing import Annotated
 
 import apprc as rc
 import typer
-from apprc.definition.installation import InstallationHooks
 
 import ltcook
 from ltcook._runtime_client import RuntimeClientError, stop_runtime
@@ -70,68 +69,14 @@ def _version_callback(value: bool, ctx: typer.Context) -> bool:
     return value
 
 
-def _diagnose_payload() -> dict[str, object]:
-    """Inspect package and installation authority without requiring business settings.
-
-    :return: JSON-compatible package, installation, and component paths.
-    """
-    schema = APP_RC.schema
-    inspection = APP_RC.installation().inspect()
-    path_error = None
-    try:
-        paths = APP_RC.paths()
-    except rc.InstallationError as error:
-        paths = None
-        path_error = str(error)
-    ollama_readiness = None
-    if paths is not None and paths.appdata_dir is not None:
-        receipt = paths.appdata_dir / "deployment" / "ollama.json"
-        if receipt.is_file():
-            try:
-                data = json.loads(receipt.read_text(encoding="utf-8"))
-                ollama_readiness = {
-                    "ready": data.get("ready") is True,
-                    "version": data.get("version"),
-                    "endpoint": data.get("endpoint"),
-                    "model": data.get("model"),
-                    "model_digest": data.get("model_digest"),
-                    "eval_model": data.get("eval_model"),
-                }
-            except (OSError, json.JSONDecodeError):
-                ollama_readiness = {
-                    "ready": False,
-                    "diagnostic": "Invalid Ollama receipt",
-                }
+def _host_diagnostics() -> dict[str, object]:
+    """Supply package metadata for AppRC's verbose application doctor."""
     return {
-        "cwd": str(Path.cwd()),
-        "installation_directory": str(inspection.directory),
-        "installation_status": inspection.status,
-        "installation_diagnostics": [
-            diagnostic.message for diagnostic in inspection.diagnostics
-        ],
-        "path_error": path_error,
-        "paths": (
-            {
-                kind: str(path) if path is not None else None
-                for kind, path in (
-                    ("config", paths.config_dir),
-                    ("appdata", paths.appdata_dir),
-                    ("cache", paths.cache_dir),
-                    ("state", paths.state_dir),
-                    ("logs", paths.logs_dir),
-                )
-            }
-            if paths is not None
-            else None
-        ),
-        "layout_env_key": schema.layout_env_key,
-        "root_env_key": schema.root_env_key,
         "package": PACKAGE_NAME,
         "package_file": str(Path(ltcook.__file__).resolve()),
         "python_executable": sys.executable,
         "python_version": sys.version,
         "version": _package_version(),
-        "ollama": ollama_readiness,
     }
 
 
@@ -254,7 +199,6 @@ runtime = rc.cli.CliRuntime(
                 action_prefixes={("start",), ("stop",), ("status",), ("logs",)},
                 skip_empty=True,
             ),
-            "diagnose": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "eval": rc.cli.RuntimeIndependentCommand(skip_empty=True),
         },
         extra_cli_flag_options={"--json"},
@@ -266,9 +210,7 @@ runtime.mount_app_groups(
     app,
     handlers=maintenance_handlers(),
     installation_management=True,
-    installation_hooks=InstallationHooks(
-        initialize="ltcook_distr.payload.app_lifecycle.actions:initialize",
-    ),
+    host_diagnostics=_host_diagnostics,
     resource_diagnostics={"appdata": _ollama_resource_diagnostics},
 )
 
@@ -329,21 +271,6 @@ def stop_cmd() -> None:
         raise typer.Exit(stop_runtime(resolve_launch(None).environment))
     except RuntimeClientError as error:
         raise typer.BadParameter(str(error)) from error
-
-
-@app.command("diagnose")
-def diagnose_cmd(
-    json_output: Annotated[
-        bool, typer.Option("--json", help="Emit machine-readable JSON.")
-    ] = False,
-) -> None:
-    """Print package, interpreter, and AppRC paths without changing files."""
-    payload = _diagnose_payload()
-    if json_output:
-        rc.cli.dump_json(payload)
-        return
-    for key in sorted(payload):
-        typer.echo(f"{key}: {payload[key]}")
 
 
 def main(argv: list[str] | None = None) -> None:

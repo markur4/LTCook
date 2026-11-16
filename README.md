@@ -224,11 +224,12 @@ ltcook app uninstall --dry-run
 ltcook app uninstall --yes
 ```
 
-Program-only removal retains declared resources, external Pi authentication,
-and the editable checkout/environment. Inspect `ltcook app paths` and
-`ltcook app doctor --json` for placement and installation health. Complete
-resource removal is a separate destructive action requiring explicit categories
-and ownership-safe inventory; never infer permission to remove user data.
+Uninstall removes the program and AppRC-managed configuration, appdata, cache
+and state by default. Preview the selected paths first. Use `--keep-data` for
+program-only removal. The editable checkout and its environment remain unless
+`--remove-repository` explicitly selects them; that option cannot be combined
+with `--keep-data`. Shared Pi authentication and external workspaces remain
+outside this removal. See the [removal guide](docs/How-To-User-Guides.md#remove-an-installation).
 
 <br>
 
@@ -244,7 +245,7 @@ setup. Run these commands from the installed application environment:
 
 ```shell
 ltcook --version
-ltcook diagnose --json
+ltcook app doctor --verbose --json
 ltcook app doctor --json
 ltcook config show --json
 ltcook

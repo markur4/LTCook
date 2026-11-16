@@ -46,6 +46,13 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 💥 Breaking changes
 
+- Breaking: LTCook now uses AppRC commit `4e3370`. Uninstall removes managed
+  data by default; use `app uninstall --keep-data` for program-only removal.
+  Editable repositories remain unless `--remove-repository` selects them.
+  Replace `ltcook diagnose --json` with `ltcook app doctor --verbose --json`.
+  Lifecycle hooks are declared only in `pyproject.toml`; cleanup stops the
+  owned Compose project before AppRC removes managed directories.
+
 - Breaking: Team API v3 uses `leaderKey` and the canonical `leader` member.
   Custom Teams must replace coordinator/Main identities and declare API v3.
   Coordination schema 4 rejects older stores unchanged: stop the runtime,

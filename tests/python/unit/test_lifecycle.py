@@ -536,3 +536,66 @@ def test_cache_clear_removes_only_ltcook_cache(tmp_path: Path) -> None:
     result = operation.apply(operation.plan(root))
     assert result.removed == (owned,)
     assert (unrelated / "keep").read_text() == "preserve"
+
+
+def test_uninstall_cleanup_stops_owned_services_without_removing_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uuid import uuid4
+
+    from apprc.definition.installation import InstallationPlacement, OperationContext
+    from apprc.definition.paths import Layout
+
+    from ltcook_distr.payload.app_lifecycle import actions
+
+    appdata = tmp_path / "appdata"
+    deployment = appdata / "deployment"
+    deployment.mkdir(parents=True)
+    sentinel = deployment / "keep-until-sdk-removal"
+    sentinel.write_text("owned")
+    stopped = []
+    monkeypatch.setattr(actions, "_stop_owned_services", stopped.append)
+    context = OperationContext(
+        tmp_path / "installation",
+        uuid4(),
+        uuid4(),
+        InstallationPlacement(
+            layout=Layout(), appdata_dir=appdata, capabilities=frozenset({"appdata"})
+        ),
+    )
+
+    actions.cleanup(context)
+
+    assert stopped == [deployment]
+    assert sentinel.read_text() == "owned"
+
+
+def test_uninstall_cleanup_preserves_data_when_services_cannot_be_stopped(
+    tmp_path: Path,
+) -> None:
+    from uuid import uuid4
+
+    from apprc.definition.installation import InstallationPlacement, OperationContext
+    from apprc.definition.paths import Layout
+
+    from ltcook_distr.payload.app_lifecycle.actions import cleanup
+
+    deployment = tmp_path / "appdata" / "deployment"
+    deployment.mkdir(parents=True)
+    receipt = deployment / "services.json"
+    receipt.write_text("invalid receipt")
+    context = OperationContext(
+        tmp_path / "installation",
+        uuid4(),
+        uuid4(),
+        InstallationPlacement(
+            layout=Layout(),
+            appdata_dir=deployment.parent,
+            capabilities=frozenset({"appdata"}),
+        ),
+    )
+
+    with pytest.raises(SetupError, match="invalid LTCook receipt"):
+        cleanup(context)
+
+    assert receipt.read_text() == "invalid receipt"

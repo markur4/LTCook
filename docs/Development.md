@@ -336,8 +336,8 @@ new generated `dist` directory, including nested staged package assets.
 `just build-native` uses the exact committed tree and `uv.lock`, builds assets
 inside its private export and calls the SDK snapshot/native APIs. It emits
 `dist/ltcook-setup-linux-x86_64` and `dist/SHA256SUMS`, with intermediates under
-ignored `.cache/apprc/`. Native compilation requires uv 0.13.6 and Rust/LLVM;
-use a cache-scoped uv version rather than replacing a global installation.
+ignored `.cache/apprc/`. Native compilation requires uv >=0.11.6 and Rust/LLVM;
+the SDK accepts supported newer uv versions as well.
 Editable registration uses the existing checkout `.venv` and needs no Rust.
 
 Explicit registration/setup prepares private Node and configured service

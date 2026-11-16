@@ -91,7 +91,7 @@ def test_root_help_orders_panels_and_lists_host_commands(
     ]
     positions = [result.output.index(title) for title in panel_titles]
     assert positions == sorted(positions)
-    for command_name in ("stop", "diagnose", "launch", "auth", "services", "app"):
+    for command_name in ("stop", "launch", "auth", "services", "app"):
         assert command_name in result.output
     assert "--version" in result.output
     assert "-V" in result.output
@@ -167,7 +167,7 @@ def test_root_verbose_is_documented_and_rejects_command_combinations(monkeypatch
 
     cli_module = importlib.import_module("ltcook.cli.app")
     with pytest.raises(SystemExit, match="only without a command"):
-        cli_module.main(["--verbose", "diagnose"])
+        cli_module.main(["--verbose", "app", "doctor"])
 
 
 @pytest.mark.parametrize(
@@ -277,3 +277,48 @@ def test_planning_show_reads_current_team_document_without_versioning(
     unreadable = RUNNER.invoke(app, arguments, color=False)
     assert unreadable.exit_code != 0
     assert "Cannot read the registered Plan" in unreadable.output
+
+
+def test_fresh_process_help_and_shared_doctor_surface() -> None:
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "ltcook.main", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "doctor" in result.stdout
+    command = get_command(app)
+    assert "diagnose" not in command.commands
+    uninstall = RUNNER.invoke(app, ["app", "uninstall", "--help"], color=False)
+    assert uninstall.exit_code == 0, uninstall.output
+    assert "--keep-data" in uninstall.output
+    assert "--remove-repository" in uninstall.output
+    assert "--complete" not in uninstall.output
+
+
+def test_shared_doctor_includes_host_metadata_without_creating_resources(tmp_path):
+    import json
+
+    root = tmp_path / "uninitialized"
+    result = RUNNER.invoke(
+        app,
+        [
+            "--layout",
+            "single-root",
+            "--app-root",
+            str(root),
+            "app",
+            "doctor",
+            "--verbose",
+            "--json",
+        ],
+        color=False,
+    )
+    payload = json.loads(result.output)
+    assert {"status", "checks", "installation"} <= payload.keys()
+    assert payload["details"]["host"]["package"] == "ltcook"
+    assert payload["details"]["host"]["version"] == _package_version()
+    assert not root.exists()

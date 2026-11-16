@@ -55,6 +55,17 @@ def initialize(context: OperationContext) -> None:
     prepare_ollama(appdata, environment=environment)
 
 
+def cleanup(context: OperationContext) -> None:
+    """Stop the owned Compose project before AppRC removes managed data.
+
+    :param context: Saved operation authority and recorded resource placement.
+    :return: None. AppRC owns filesystem removal after this callback succeeds.
+    """
+    appdata = context.placement.appdata_dir
+    if appdata is not None:
+        _stop_owned_services(appdata / "deployment")
+
+
 def ensure_service_secrets(environment: Mapping[str, str]) -> None:
     """Create missing service secrets through registered AppRC secret fields.
 

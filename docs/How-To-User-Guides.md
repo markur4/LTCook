@@ -96,7 +96,7 @@ Inspect the application without starting agents:
 ```shell
 ltcook --help
 ltcook --version
-ltcook diagnose --json
+ltcook app doctor --verbose --json
 ltcook app paths
 ltcook app doctor --json
 ltcook config show --json
@@ -254,13 +254,16 @@ use bare `ltcook` for Paseo and `ltcook app ...` for maintenance.
 ## Remove an installation
 
 Preview with `ltcook app uninstall --dry-run`, then use
-`ltcook app uninstall --yes` for program-only removal. Declared resources,
-external shared Pi auth and editable checkout/environment remain intact.
+`ltcook app uninstall --yes` to remove the program and its managed configuration,
+appdata, cache and state. Use `--keep-data` for program-only removal. External
+shared Pi authentication remains intact. The editable checkout and environment
+remain unless you explicitly add `--remove-repository`; that option cannot be
+combined with `--keep-data`.
 
 > [!CAUTION]
-> Explicit appdata removal deletes LTCook's deployment; state removal deletes
-> runtime documents and coordination data.
-> Select categories deliberately; program removal is not permission to erase data.
+> Default uninstall deletes LTCook-owned credentials, deployment, sessions,
+> runtime documents and coordination data. Review the dry-run paths before
+> confirming. Use `--keep-data` when retaining managed data is intentional.
 
 The [uninstaller reference](References.md#uninstaller-reference) explains complete
 removal. LTCook cleanup is scoped to its recorded deployment and Compose project;
