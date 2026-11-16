@@ -329,88 +329,7 @@ export class RuntimeApi {
           response.writeHead(403).end('{"error":"user authentication required"}');
           return;
         }
-        if (!this.evals) {
-          response.writeHead(503).end('{"error":"Agent Evals service is not ready"}');
-          return;
-        }
-        let value: unknown;
-        switch (request.url) {
-          case '/v1/evals/start': {
-            const request = EvalStartRequestSchema.parse(parsed);
-            let teamSelection: string | undefined;
-            const limitations: string[] = [];
-            const requestedTeam = request.environmentOverrides?.LTCOOK_TEAM;
-            const requestedEntry =
-              requestedTeam === undefined
-                ? undefined
-                : this.runtime
-                    ?.teamCatalog()
-                    .find(
-                      (entry) =>
-                        entry.status === 'installed' &&
-                        (entry.selection === requestedTeam || entry.teamId === requestedTeam),
-                    );
-            if (requestedTeam !== undefined && !requestedEntry)
-              throw new Error('The requested evaluation Team is not installed');
-            if (request.sessionId) {
-              if (request.setup !== 'current' || !request.workspaceRoot || !this.runtime)
-                throw new Error('A Current Setup workspace and active Session are required');
-              const session = this.runtime.snapshot(request.sessionId).session;
-              if (
-                canonicalWorkspace(session.workspaceRoot) !==
-                  canonicalWorkspace(request.workspaceRoot) ||
-                this.sessions.get(request.sessionId) !== canonicalWorkspace(request.workspaceRoot)
-              )
-                throw new Error('Evaluation Session does not match the registered workspace');
-              const team = this.runtime
-                .teamCatalog()
-                .find((entry) => entry.teamId === session.teamId && entry.status === 'installed');
-              if (!team) throw new Error('The Session Team is not installed');
-              if (requestedEntry && requestedEntry.teamId !== team.teamId)
-                throw new Error('Evaluation Team does not match the selected Session');
-              teamSelection = requestedTeam ?? team.selection;
-            } else if (request.setup === 'current' && request.workspaceRoot && this.runtime) {
-              const teamIds = new Set(
-                this.runtime.listSessions(request.workspaceRoot).map((session) => session.teamId),
-              );
-              if (teamIds.size > 1 && !requestedEntry)
-                limitations.push(
-                  'Multiple Teams have Sessions in this workspace; using the configured runtime Team.',
-                );
-            }
-            if (!teamSelection && requestedEntry) teamSelection = requestedTeam;
-            value = { runId: await this.evals.start(request, teamSelection, limitations) };
-            break;
-          }
-          case '/v1/evals/status': {
-            const { runId, after } = EvalStatusRequestSchema.parse(parsed);
-            value = await this.evals.status(runId, after);
-            break;
-          }
-          case '/v1/evals/list':
-            value = { runs: this.evals.list() };
-            break;
-          case '/v1/evals/report': {
-            const { runId } = EvalRunIdSchema.parse(parsed);
-            value = this.evals.report(runId);
-            break;
-          }
-          case '/v1/evals/cancel': {
-            const { runId } = EvalRunIdSchema.parse(parsed);
-            value = { summary: await this.evals.cancel(runId) };
-            break;
-          }
-          case '/v1/evals/delete': {
-            const { runId } = EvalDeleteRequestSchema.parse(parsed);
-            await this.evals.delete(runId);
-            value = { deleted: true };
-            break;
-          }
-          default:
-            response.writeHead(404).end('{}');
-            return;
-        }
-        response.writeHead(200).end(JSON.stringify(value));
+        await this.handleEvals(request.url!, parsed, response);
         return;
       }
       if (request.url === '/v1/session/open' && actor.kind !== 'user') {
@@ -422,115 +341,8 @@ export class RuntimeApi {
         return;
       }
       const runtime = this.runtime;
-      const openWorkspace = this.openWorkspace;
       if (request.url === '/v1/session/open') {
-        if (!runtime || !openWorkspace) {
-          response.writeHead(503).end('{"error":"Runtime session activation is not ready"}');
-          return;
-        }
-        const shell = input.shellEnvironment;
-        if (
-          typeof input.workspaceRoot !== 'string' ||
-          !input.workspaceRoot ||
-          typeof input.sessionId !== 'string' ||
-          !input.sessionId ||
-          typeof input.teamSelection !== 'string' ||
-          !input.teamSelection ||
-          (shell !== undefined &&
-            (!shell ||
-              typeof shell !== 'object' ||
-              Array.isArray(shell) ||
-              !Object.values(shell).every((value) => typeof value === 'string')))
-        ) {
-          response
-            .writeHead(400)
-            .end(
-              '{"error":"workspaceRoot, sessionId and teamSelection are required; shellEnvironment must be a string mapping when supplied"}',
-            );
-          return;
-        }
-        const workspaceRoot = canonicalWorkspace(input.workspaceRoot);
-        const registeredWorkspace = this.sessions.get(input.sessionId);
-        if (registeredWorkspace && registeredWorkspace !== workspaceRoot) {
-          response
-            .writeHead(409)
-            .end('{"error":"Session is already bound to a different workspace"}');
-          return;
-        }
-        let snapshot: SessionSnapshot | undefined;
-        if (registeredWorkspace) {
-          const existing = runtime.snapshot(input.sessionId);
-          if (
-            existing.session.teamId !==
-            runtime
-              .teamCatalog()
-              .find(
-                (team) =>
-                  team.selection === input.teamSelection || team.teamId === input.teamSelection,
-              )?.teamId
-          )
-            throw new Error('Session Team is immutable');
-          if (!input.leaderAgentId) snapshot = existing;
-        }
-        if (!snapshot) {
-          let entry = input.leaderAgentId ? undefined : this.pendingSessions.get(input.sessionId);
-          if (entry && entry.workspaceRoot !== workspaceRoot) {
-            response
-              .writeHead(409)
-              .end(
-                '{"error":"Session initialization is already requested for a different workspace"}',
-              );
-            return;
-          }
-          if (!entry) {
-            const pending = openWorkspace({
-              workspaceRoot,
-              sessionId: input.sessionId,
-              teamSelection: input.teamSelection,
-              ...(input.leaderAgentId ? { leaderAgentId: input.leaderAgentId } : {}),
-              shellEnvironment: captureShellEnvironment(
-                shell === undefined
-                  ? this.startupShellEnvironment
-                  : (shell as Record<string, string>),
-              ),
-            });
-            entry = { workspaceRoot, pending };
-            if (!input.leaderAgentId) this.pendingSessions.set(input.sessionId, entry);
-          }
-          try {
-            snapshot = await entry.pending;
-          } finally {
-            if (this.pendingSessions.get(input.sessionId) === entry)
-              this.pendingSessions.delete(input.sessionId);
-          }
-          if (
-            snapshot.session.id !== input.sessionId ||
-            canonicalWorkspace(snapshot.session.workspaceRoot) !== workspaceRoot
-          ) {
-            response.writeHead(409).end('{"error":"Runtime opened a different workspace session"}');
-            return;
-          }
-          const selected = runtime
-            .teamCatalog()
-            .find(
-              (team) =>
-                team.selection === input.teamSelection || team.teamId === input.teamSelection,
-            );
-          if (!selected || snapshot.session.teamId !== selected.teamId)
-            throw new Error('Session Team is immutable');
-          this.setSession(workspaceRoot, snapshot.session.id);
-        }
-        response.writeHead(200).end(
-          JSON.stringify({
-            sessionId: snapshot.session.id,
-            workspaceRoot: snapshot.session.workspaceRoot,
-            teamId: snapshot.session.teamId,
-            teamInstanceId: snapshot.session.teamInstanceId,
-            leaderAgentId:
-              snapshot.members.find((item) => item.member.key === snapshot.definition.leaderKey)
-                ?.binding?.nativeAgentId ?? null,
-          }),
-        );
+        await this.handleSessionOpen(input, response);
         return;
       }
       if (!runtime) {
@@ -778,6 +590,208 @@ export class RuntimeApi {
         .writeHead(400)
         .end(JSON.stringify({ error: error instanceof Error ? error.message : 'request failed' }));
     }
+  }
+  private async handleSessionOpen(
+    input: {
+      workspaceRoot?: string;
+      sessionId?: string;
+      teamSelection?: string;
+      leaderAgentId?: string;
+      shellEnvironment?: unknown;
+    },
+    response: import('node:http').ServerResponse,
+  ): Promise<void> {
+    const runtime = this.runtime;
+    const openWorkspace = this.openWorkspace;
+    if (!runtime || !openWorkspace) {
+      response.writeHead(503).end('{"error":"Runtime session activation is not ready"}');
+      return;
+    }
+    const shell = input.shellEnvironment;
+    if (
+      typeof input.workspaceRoot !== 'string' ||
+      !input.workspaceRoot ||
+      typeof input.sessionId !== 'string' ||
+      !input.sessionId ||
+      typeof input.teamSelection !== 'string' ||
+      !input.teamSelection ||
+      (shell !== undefined &&
+        (!shell ||
+          typeof shell !== 'object' ||
+          Array.isArray(shell) ||
+          !Object.values(shell).every((value) => typeof value === 'string')))
+    ) {
+      response
+        .writeHead(400)
+        .end(
+          '{"error":"workspaceRoot, sessionId and teamSelection are required; shellEnvironment must be a string mapping when supplied"}',
+        );
+      return;
+    }
+    const workspaceRoot = canonicalWorkspace(input.workspaceRoot);
+    const registeredWorkspace = this.sessions.get(input.sessionId);
+    if (registeredWorkspace && registeredWorkspace !== workspaceRoot) {
+      response.writeHead(409).end('{"error":"Session is already bound to a different workspace"}');
+      return;
+    }
+    let snapshot: SessionSnapshot | undefined;
+    if (registeredWorkspace) {
+      const existing = runtime.snapshot(input.sessionId);
+      if (
+        existing.session.teamId !==
+        runtime
+          .teamCatalog()
+          .find(
+            (team) => team.selection === input.teamSelection || team.teamId === input.teamSelection,
+          )?.teamId
+      )
+        throw new Error('Session Team is immutable');
+      if (!input.leaderAgentId) snapshot = existing;
+    }
+    if (!snapshot) {
+      let entry = input.leaderAgentId ? undefined : this.pendingSessions.get(input.sessionId);
+      if (entry && entry.workspaceRoot !== workspaceRoot) {
+        response
+          .writeHead(409)
+          .end('{"error":"Session initialization is already requested for a different workspace"}');
+        return;
+      }
+      if (!entry) {
+        const pending = openWorkspace({
+          workspaceRoot,
+          sessionId: input.sessionId,
+          teamSelection: input.teamSelection,
+          ...(input.leaderAgentId ? { leaderAgentId: input.leaderAgentId } : {}),
+          shellEnvironment: captureShellEnvironment(
+            shell === undefined ? this.startupShellEnvironment : (shell as Record<string, string>),
+          ),
+        });
+        entry = { workspaceRoot, pending };
+        if (!input.leaderAgentId) this.pendingSessions.set(input.sessionId, entry);
+      }
+      try {
+        snapshot = await entry.pending;
+      } finally {
+        if (this.pendingSessions.get(input.sessionId) === entry)
+          this.pendingSessions.delete(input.sessionId);
+      }
+      if (
+        snapshot.session.id !== input.sessionId ||
+        canonicalWorkspace(snapshot.session.workspaceRoot) !== workspaceRoot
+      ) {
+        response.writeHead(409).end('{"error":"Runtime opened a different workspace session"}');
+        return;
+      }
+      const selected = runtime
+        .teamCatalog()
+        .find(
+          (team) => team.selection === input.teamSelection || team.teamId === input.teamSelection,
+        );
+      if (!selected || snapshot.session.teamId !== selected.teamId)
+        throw new Error('Session Team is immutable');
+      this.setSession(workspaceRoot, snapshot.session.id);
+    }
+    response.writeHead(200).end(
+      JSON.stringify({
+        sessionId: snapshot.session.id,
+        workspaceRoot: snapshot.session.workspaceRoot,
+        teamId: snapshot.session.teamId,
+        teamInstanceId: snapshot.session.teamInstanceId,
+        leaderAgentId:
+          snapshot.members.find((item) => item.member.key === snapshot.definition.leaderKey)
+            ?.binding?.nativeAgentId ?? null,
+      }),
+    );
+    return;
+  }
+  private async handleEvals(
+    url: string,
+    parsed: object,
+    response: import('node:http').ServerResponse,
+  ): Promise<void> {
+    if (!this.evals) {
+      response.writeHead(503).end('{"error":"Agent Evals service is not ready"}');
+      return;
+    }
+    let value: unknown;
+    switch (url) {
+      case '/v1/evals/start': {
+        const request = EvalStartRequestSchema.parse(parsed);
+        let teamSelection: string | undefined;
+        const limitations: string[] = [];
+        const requestedTeam = request.environmentOverrides?.LTCOOK_TEAM;
+        const requestedEntry =
+          requestedTeam === undefined
+            ? undefined
+            : this.runtime
+                ?.teamCatalog()
+                .find(
+                  (entry) =>
+                    entry.status === 'installed' &&
+                    (entry.selection === requestedTeam || entry.teamId === requestedTeam),
+                );
+        if (requestedTeam !== undefined && !requestedEntry)
+          throw new Error('The requested evaluation Team is not installed');
+        if (request.sessionId) {
+          if (request.setup !== 'current' || !request.workspaceRoot || !this.runtime)
+            throw new Error('A Current Setup workspace and active Session are required');
+          const session = this.runtime.snapshot(request.sessionId).session;
+          if (
+            canonicalWorkspace(session.workspaceRoot) !==
+              canonicalWorkspace(request.workspaceRoot) ||
+            this.sessions.get(request.sessionId) !== canonicalWorkspace(request.workspaceRoot)
+          )
+            throw new Error('Evaluation Session does not match the registered workspace');
+          const team = this.runtime
+            .teamCatalog()
+            .find((entry) => entry.teamId === session.teamId && entry.status === 'installed');
+          if (!team) throw new Error('The Session Team is not installed');
+          if (requestedEntry && requestedEntry.teamId !== team.teamId)
+            throw new Error('Evaluation Team does not match the selected Session');
+          teamSelection = requestedTeam ?? team.selection;
+        } else if (request.setup === 'current' && request.workspaceRoot && this.runtime) {
+          const teamIds = new Set(
+            this.runtime.listSessions(request.workspaceRoot).map((session) => session.teamId),
+          );
+          if (teamIds.size > 1 && !requestedEntry)
+            limitations.push(
+              'Multiple Teams have Sessions in this workspace; using the configured runtime Team.',
+            );
+        }
+        if (!teamSelection && requestedEntry) teamSelection = requestedTeam;
+        value = { runId: await this.evals.start(request, teamSelection, limitations) };
+        break;
+      }
+      case '/v1/evals/status': {
+        const { runId, after } = EvalStatusRequestSchema.parse(parsed);
+        value = await this.evals.status(runId, after);
+        break;
+      }
+      case '/v1/evals/list':
+        value = { runs: this.evals.list() };
+        break;
+      case '/v1/evals/report': {
+        const { runId } = EvalRunIdSchema.parse(parsed);
+        value = this.evals.report(runId);
+        break;
+      }
+      case '/v1/evals/cancel': {
+        const { runId } = EvalRunIdSchema.parse(parsed);
+        value = { summary: await this.evals.cancel(runId) };
+        break;
+      }
+      case '/v1/evals/delete': {
+        const { runId } = EvalDeleteRequestSchema.parse(parsed);
+        await this.evals.delete(runId);
+        value = { deleted: true };
+        break;
+      }
+      default:
+        response.writeHead(404).end('{}');
+        return;
+    }
+    response.writeHead(200).end(JSON.stringify(value));
+    return;
   }
   async close(): Promise<void> {
     if (this.server)
