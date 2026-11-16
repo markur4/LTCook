@@ -107,7 +107,7 @@ export function Diagnostics({
         Agent Evals
       </Label>
       <Label theme={theme} muted>
-        Local Spark evaluations. Interactive Plan approval is outside evaluation coverage.
+        Local Bonsai evaluations. Interactive Plan approval is outside evaluation coverage.
       </Label>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {(['current', 'synthetic'] as const).map((value) => (

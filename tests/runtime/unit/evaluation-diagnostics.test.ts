@@ -140,6 +140,23 @@ test('length is a terminal model failure without guessing which length limit end
   expect(state.activeModels).toEqual([]);
 });
 
+test('request diagnostics retain bounded settings without request content', () => {
+  const collector = new EvaluationDiagnosticCollector();
+  collector.observe('agent', {
+    kind: 'model.start',
+    reasoningEffort: 'none',
+    outputLimit: 2048,
+    toolCount: 6,
+    messageCount: 2,
+    prompt: 'private prompt',
+  });
+  const events = collector.snapshot().recentEvents;
+  expect(events).toMatchObject([
+    { reasoningEffort: 'none', outputLimit: 2048, toolCount: 6, messageCount: 2 },
+  ]);
+  expect(JSON.stringify(events)).not.toContain('private prompt');
+});
+
 test('diagnostics retain failure causes and live work without copying prompts or task content', () => {
   const collector = new EvaluationDiagnosticCollector();
   collector.observe('agent-1', { kind: 'agent.start' });
@@ -178,6 +195,13 @@ test('diagnostics retain failure causes and live work without copying prompts or
     passId: 'private-pass-reference',
     error: 'Task has unmet dependencies',
   });
+  collector.observe('agent-1', {
+    kind: 'runtime.command',
+    commandType: 'task.update',
+    taskStatus: 'completed',
+    status: 200,
+    taskId: 'private-task-reference',
+  });
   collector.observe('agent-1', { kind: 'model.start' });
   collector.observe('agent-1', { kind: 'tool.start', tool: 'read', callId: 'call-2' });
   const state = collector.snapshot({
@@ -207,6 +231,14 @@ test('diagnostics retain failure causes and live work without copying prompts or
       error: 'Task has unmet dependencies',
     },
   ]);
+  expect(state.recentEvents).toContainEqual(
+    expect.objectContaining({
+      event: 'runtime.command',
+      commandType: 'task.update',
+      taskStatus: 'completed',
+      status: 200,
+    }),
+  );
   expect(state.activeAgents).toEqual(['agent-1']);
   expect(state.activeModels).toEqual(['agent-1']);
   expect(state.activeTools).toEqual([{ agentId: 'agent-1', callId: 'call-2', tool: 'read' }]);
@@ -391,14 +423,17 @@ test('forced termination recovery keeps available active-attempt evidence explic
 test('Pi evaluation observations publish actual sanitized errors and agent lifecycle', async () => {
   const observed: Array<Record<string, unknown>> = [];
   let rejectObservation = false;
+  let acceptCommand = false;
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
-      if (new URL(request.url).pathname === '/v1/command')
+      if (new URL(request.url).pathname === '/v1/command') {
+        if (acceptCommand) return Response.json({ value: {} });
         return Response.json(
           { error: 'Task has unmet dependencies token=fixture-secret' },
           { status: 400 },
         );
+      }
       if (rejectObservation) return new Response('Unavailable', { status: 503 });
       observed.push((await request.json()) as Record<string, unknown>);
       return Response.json({});
@@ -486,7 +521,16 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
     ).rejects.toThrow(
       'Coordination request failed (400): Task has unmet dependencies token=<redacted>',
     );
+    acceptCommand = true;
+    await tool.execute(
+      'command-2',
+      { command: { type: 'task.update', taskId: 'private-task', status: 'completed' } },
+      undefined,
+      undefined,
+      {} as never,
+    );
     await handlers.get('agent_end')!({});
+    await handlers.get('agent_settled')!({});
     expect(observed.filter(({ kind }) => kind !== 'prompt')).toMatchObject([
       { kind: 'agent.start' },
       {
@@ -497,13 +541,28 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
       },
       { kind: 'tool.end', error: 'Command exited with code 1', isError: true },
       {
+        kind: 'runtime.command',
+        commandType: 'task.update',
+        status: 400,
+        hasPassId: false,
+        taskStatus: 'completed',
+      },
+      {
         kind: 'runtime.error',
         status: 400,
         commandType: 'task.update',
         hasPassId: false,
         error: 'Task has unmet dependencies token=<redacted>',
       },
+      {
+        kind: 'runtime.command',
+        commandType: 'task.update',
+        status: 200,
+        hasPassId: false,
+        taskStatus: 'completed',
+      },
       { kind: 'agent.end' },
+      { kind: 'agent.settled' },
     ]);
     expect(JSON.stringify(observed.filter(({ kind }) => kind !== 'prompt'))).not.toContain(
       'private',
@@ -511,12 +570,22 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
     const compactionOffset = observed.length;
     const pinned = {
       model: {
-        id: 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest',
+        id: 'ltcook-bonsai-2-27b-ctx65536:latest',
         provider: 'ollama',
         baseUrl: `${process.env.LTCOOK_EVAL_ENDPOINT}/v1`,
       },
     };
-    await handlers.get('before_provider_request')!({}, pinned);
+    await handlers.get('before_provider_request')!(
+      {
+        payload: {
+          reasoning_effort: 'none',
+          max_tokens: 2048,
+          tools: [{}],
+          messages: [{ content: 'private payload' }],
+        },
+      },
+      pinned,
+    );
     await handlers.get('session_before_compact')!({
       reason: 'overflow',
       willRetry: true,
@@ -574,6 +643,12 @@ test('Pi evaluation observations publish actual sanitized errors and agent lifec
     expect(aborted).toBe(true);
     const lifecycle = observed.slice(compactionOffset);
     expect(lifecycle.filter(({ kind }) => kind === 'model.start')).toHaveLength(2);
+    expect(lifecycle.find(({ kind }) => kind === 'model.start')).toMatchObject({
+      reasoningEffort: 'none',
+      outputLimit: 2048,
+      toolCount: 1,
+      messageCount: 1,
+    });
     expect(
       lifecycle.filter(({ kind }) => typeof kind === 'string' && kind.startsWith('compaction.')),
     ).toMatchObject([

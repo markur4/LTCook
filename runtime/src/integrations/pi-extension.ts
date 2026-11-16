@@ -12,6 +12,7 @@ import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
 import { evaluationToolError, sanitizeEvaluationText } from '../evals/diagnostics.js';
 import { EVAL_MODEL, EVALUATION_EXECUTION_CONTEXT } from '../evals/setup.js';
+import { ollamaCoordinationPayload } from '../evals/ollama-schema.js';
 const require = createRequire(import.meta.url);
 async function activateOptionalBrowser(pi: ExtensionAPI): Promise<void> {
   if (process.env.LTCOOK_BROWSER_ENABLED !== 'true') return;
@@ -138,14 +139,38 @@ export default async function activate(
     pi.on('agent_end', async () => {
       await observe({ kind: 'agent.end' });
     });
-    pi.on('before_provider_request', async (_event, context) => {
+    pi.on('agent_settled', async () => {
+      await observe({ kind: 'agent.settled' });
+    });
+    pi.on('before_provider_request', async (event, context) => {
       if (
         context.model?.id !== EVAL_MODEL ||
         context.model.provider !== 'ollama' ||
         context.model.baseUrl !== `${process.env.LTCOOK_EVAL_ENDPOINT}/v1`
       )
         throw new Error('Evaluation model pin violation');
-      if (!compacting) await observe({ kind: 'model.start' });
+      if (!compacting) {
+        const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+        const effort = 'reasoning_effort' in payload ? payload.reasoning_effort : undefined;
+        const outputLimit = 'max_tokens' in payload ? payload.max_tokens : undefined;
+        const tools =
+          'tools' in payload && Array.isArray(payload.tools) ? payload.tools : undefined;
+        const messages =
+          'messages' in payload && Array.isArray(payload.messages) ? payload.messages : undefined;
+        await observe({
+          kind: 'model.start',
+          reasoningEffort:
+            effort === 'none' || effort === 'low' || effort === 'high'
+              ? effort
+              : effort === undefined
+                ? 'omitted'
+                : 'other',
+          ...(typeof outputLimit === 'number' ? { outputLimit } : {}),
+          ...(tools ? { toolCount: tools.length } : {}),
+          ...(messages ? { messageCount: messages.length } : {}),
+        });
+      }
+      return ollamaCoordinationPayload(event.payload);
     });
     pi.on('before_provider_headers', (event) => {
       providerStreamError = undefined;
@@ -357,6 +382,17 @@ export default async function activate(
       // > Native Pi validates the narrower projection of the shared command schema.
       const command = input.command;
       const response = await rpc('/v1/command', { command });
+      if (evaluation)
+        await observe({
+          kind: 'runtime.command',
+          commandType: command.type,
+          status: response.status,
+          ...(command.type === 'task.update' && command.status
+            ? { taskStatus: command.status }
+            : {}),
+          hasPassId:
+            'passId' in command && typeof command.passId === 'string' && command.passId.length > 0,
+        });
       if (!response.ok) {
         let reason: string | undefined;
         if (evaluation) {

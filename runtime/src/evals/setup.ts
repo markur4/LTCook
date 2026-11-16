@@ -5,7 +5,8 @@ import path from 'node:path';
 import { captureShellEnvironment } from '../integrations/shell-environment.js';
 import type { EvalEnvironmentOverrides, EvalSetup } from './contracts.js';
 
-export const EVAL_MODEL = 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest';
+export const EVAL_MODEL = 'ltcook-bonsai-2-27b-ctx65536:latest';
+export const EVAL_CONTEXT_WINDOW = 65536;
 export const FIXTURE_REVISION = 'agent-evals-v4';
 export const EVAL_COMPACTION = { enabled: true, reserveTokens: 2048, keepRecentTokens: 1024 };
 export const EVAL_MAX_OUTPUT_TOKENS = 2048;

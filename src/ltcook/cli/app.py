@@ -189,9 +189,11 @@ def _ollama_resource_diagnostics(appdata: Path) -> dict[str, object]:
     try:
         data = json.loads(receipt.read_text(encoding="utf-8"))
         from ltcook_distr.payload.app_lifecycle.prepare_ollama import (
+            CONTEXT_TOKENS,
             ENDPOINT,
             EVAL_MODEL,
             MODEL,
+            _has_expected_context,
             _json,
         )
 
@@ -203,13 +205,16 @@ def _ollama_resource_diagnostics(appdata: Path) -> dict[str, object]:
         names = {item.get("name") for item in models if isinstance(item, dict)}
         ready = (
             data.get("ready") is True
+            and data.get("model") == MODEL
+            and data.get("eval_model") == EVAL_MODEL
+            and data.get("context_tokens") == CONTEXT_TOKENS
             and MODEL in names
             and EVAL_MODEL in names
-            and "PARAMETER num_ctx 8192" in str(model_details.get("modelfile", ""))
+            and _has_expected_context(model_details.get("modelfile"))
             and version == data.get("version")
         )
         if not ready:
-            raise ValueError("Ollama service or required Spark model is not ready.")
+            raise ValueError("Ollama service or required Bonsai model is not ready.")
         return {
             "ollama": {
                 "ready": True,
@@ -218,7 +223,7 @@ def _ollama_resource_diagnostics(appdata: Path) -> dict[str, object]:
                 "model_present": True,
                 "eval_model": EVAL_MODEL,
                 "eval_model_present": True,
-                "context_tokens": 8192,
+                "context_tokens": CONTEXT_TOKENS,
                 "endpoint": ENDPOINT,
             }
         }

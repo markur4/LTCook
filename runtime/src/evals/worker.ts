@@ -12,6 +12,7 @@ import { Telemetry } from '../diagnostics/telemetry.js';
 import type { GuidanceInspection } from '../guidance-api/index.js';
 import {
   EVAL_MODEL,
+  EVAL_CONTEXT_WINDOW,
   EVAL_COMPACTION,
   EVAL_MAX_OUTPUT_TOKENS,
   EVAL_MODEL_COMPAT,
@@ -47,7 +48,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   const sessionId = randomUUID();
   const secret = randomUUID();
   const team = await loadTeam(job.teamSelection);
-  const contextWindow = 8192;
+  const contextWindow = EVAL_CONTEXT_WINDOW;
   const maxTokens = EVAL_MAX_OUTPUT_TOKENS;
   const telemetry = new Telemetry(path.join(state, 'events.jsonl'), path.join(state, 'trace.json'));
   const diagnostics = new EvaluationDiagnosticCollector();
@@ -57,12 +58,13 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   const modelSpans = new Map<string, ReturnType<Telemetry['begin']>>();
   const prompts = new Map<string, string>();
   const operationSpans = new Map<string, ReturnType<Telemetry['begin']>>();
+  const finishedAgentTurns = new Set<string>();
   let toolCalls = 0;
   const pendingToolAttempts = new Map<string, number>();
   let writeCalls = 0;
   let verificationCalls = 0;
   let inferenceFailed = false;
-  let inferenceFailedAt = 0;
+  let failedAgentId: string | undefined;
   let compactionFailure: string | undefined;
   let scopeFailed = false;
   let toolErrors = 0;
@@ -124,12 +126,11 @@ export async function executeEvaluationJob(job: EvaluationJob) {
           models: [
             {
               id: EVAL_MODEL,
-              name: 'Local Spark evaluation',
+              name: 'Local Bonsai evaluation',
               contextWindow,
               maxTokens,
               compat: EVAL_MODEL_COMPAT,
-              // > Pi's generic 4K reserve collapses this 8K model to one token. Use its explicit
-              // > request override with the 2K reserve maintained by evaluation compaction.
+              // > Keep the evaluation output cap explicit for ordinary and summary requests.
               samplingParams: { max_tokens: maxTokens },
               reasoning: true,
               thinkingLevelMap: { off: 'none', low: 'low' },
@@ -283,6 +284,8 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       if (value.kind === 'runtime.error' && value.operation === 'evaluation.scope')
         scopeFailed = true;
       const diagnostic = diagnostics.observe(agentId, value);
+      if (value.kind === 'agent.start') finishedAgentTurns.delete(agentId);
+      if (value.kind === 'agent.settled') finishedAgentTurns.add(agentId);
       if (diagnostic) {
         telemetry.instant(`evaluation.${value.kind}`, diagnostic, agentId);
         diagnosticWrites = diagnosticWrites.then(() =>
@@ -292,7 +295,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       if (value.kind === 'prompt' && typeof value.prompt === 'string')
         prompts.set(agentId, value.prompt);
       if (value.kind === 'compaction.start') {
-        inferenceFailed = false;
+        if (failedAgentId === agentId) inferenceFailed = false;
         operationSpans.set(
           `compaction:${agentId}`,
           telemetry.begin('model.compaction', randomUUID(), agentId),
@@ -310,13 +313,13 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         if (usage) tokenUsage.push(usage);
       }
       if (value.kind === 'model.start') {
-        inferenceFailed = false;
+        if (failedAgentId === agentId) inferenceFailed = false;
         modelSpans.set(agentId, telemetry.begin(`model.${agentId}`, randomUUID(), agentId));
       }
       if (value.kind === 'model.end') {
         if (evaluationModelFailed(value.stopReason)) {
           inferenceFailed = true;
-          inferenceFailedAt = performance.now();
+          failedAgentId = agentId;
         }
         modelSpans.get(agentId)?.end();
         modelSpans.delete(agentId);
@@ -383,13 +386,30 @@ export async function executeEvaluationJob(job: EvaluationJob) {
         throw new Error(`Local model context compaction failed: ${compactionFailure}`);
       }
       if (snapshot.passes[0]?.status === 'completed') break;
-      // > Let Pi announce its existing overflow/compaction recovery before ending the case.
-      if (inferenceFailed && performance.now() - inferenceFailedAt >= 250) {
+      // > Pi settles only after its automatic recovery and any queued continuation.
+      if (inferenceFailed && failedAgentId && finishedAgentTurns.has(failedAgentId)) {
         failureCategory = 'inference';
         const failure = diagnostics.snapshot().modelFailures.at(-1);
         throw new Error(
           `Local model ${failure?.stopReason ?? 'request failed'}${failure?.error ? `: ${failure.error}` : ''}`,
         );
+      }
+      const handoff = snapshot.tasks.find((task) => task.requestId?.endsWith(':execution-handoff'));
+      const leaderId = snapshot.members.find(
+        (member) => member.member.key === team.definition.leaderKey,
+      )?.binding?.nativeAgentId;
+      if (
+        !inferenceFailed &&
+        handoff &&
+        leaderId &&
+        finishedAgentTurns.has(leaderId) &&
+        snapshot.assignments.some(
+          (assignment) => assignment.taskId === handoff.id && assignment.status === 'reported',
+        ) &&
+        !snapshot.tasks.some((task) => task.passId === handoff.passId && task.scheduled)
+      ) {
+        failureCategory = 'criteria';
+        throw new Error('Scheduling handoff finished without registering a scenario Task');
       }
       if (performance.now() >= deadline) {
         failureCategory = 'limits';
@@ -424,18 +444,29 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       job.scenario === 'targeted-fix'
         ? changed.every((file) => file === '.ltcook-evals/answer.json')
         : changed.length === 0;
-    const success =
-      allowedChanges &&
-      (job.scenario === 'read-only'
-        ? writeCalls === 0 && reportsAnswer
-        : (finalAnswer as { total?: number })?.total === expectedTotal &&
-          (job.scenario !== 'no-op' || writeCalls === 0) &&
-          (job.scenario !== 'targeted-fix' ||
-            (verificationCalls > 0 &&
-              (!delegate ||
-                snapshot.assignments.some(
-                  (assignment) => assignment.memberKey !== team.definition.leaderKey,
-                )))));
+    const failures: string[] = [];
+    if (!allowedChanges) failures.push('Workspace contained disallowed changes');
+    if (job.scenario === 'read-only') {
+      if (writeCalls !== 0) failures.push('Read-only task used a write or edit tool');
+      if (!reportsAnswer) failures.push('No report contained the expected result');
+    } else {
+      if ((finalAnswer as { total?: number })?.total !== expectedTotal)
+        failures.push('Answer file was missing or incorrect');
+      if (job.scenario === 'no-op' && writeCalls !== 0)
+        failures.push('No-op task used a write or edit tool');
+      if (job.scenario === 'targeted-fix') {
+        if (verificationCalls === 0)
+          failures.push('No successful fixture verification was observed');
+        if (
+          delegate &&
+          !snapshot.assignments.some(
+            (assignment) => assignment.memberKey !== team.definition.leaderKey,
+          )
+        )
+          failures.push('Task was not delegated to an eligible collaborator');
+      }
+    }
+    const success = failures.length === 0;
     const resources = await loadedResourceEvidence(
       runtime,
       sessionId,
@@ -444,9 +475,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     );
     result = {
       success,
-      ...(!success
-        ? { failureCategory: 'criteria', failure: 'Objective fixture checks did not pass' }
-        : {}),
+      ...(!success ? { failureCategory: 'criteria', failure: failures.join('; ') } : {}),
       toolCalls,
       delegations: snapshot.assignments.filter(
         (assignment) => assignment.memberKey !== team.definition.leaderKey,

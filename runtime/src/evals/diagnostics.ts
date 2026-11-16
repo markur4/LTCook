@@ -76,7 +76,66 @@ export function evaluationToolError(result: unknown): string | undefined {
       failures.push(`[${field}] ${reason}`);
       if (failures.length === 6) break;
     }
-    return [header, ...failures].join(' ').slice(0, 1024);
+    let commandType: string | undefined;
+    let knownFields: string[] = [];
+    let status: string | undefined;
+    let statusShape: string | undefined;
+    if (lines[0] === 'Validation failed for tool "ltcook_team":') {
+      const marker = lines.findIndex((line: string) => /^\s*Received arguments:/.test(line));
+      if (marker >= 0) {
+        try {
+          const args: unknown = JSON.parse(lines.slice(marker + 1).join('\n'));
+          if (args && typeof args === 'object' && 'command' in args) {
+            const command = args.command;
+            if (
+              command &&
+              typeof command === 'object' &&
+              'type' in command &&
+              (command.type === 'task.create' || command.type === 'task.update')
+            ) {
+              commandType = command.type;
+              knownFields = [
+                'taskId',
+                'passId',
+                'workType',
+                'status',
+                'title',
+                'description',
+                'acceptance',
+                'assigneeKey',
+              ].filter((field) => field in command);
+              if ('status' in command)
+                statusShape =
+                  command.status === null
+                    ? 'null'
+                    : Array.isArray(command.status)
+                      ? 'array'
+                      : typeof command.status;
+              if (
+                'status' in command &&
+                typeof command.status === 'string' &&
+                ['pending', 'running', 'blocked', 'completed', 'failed', 'cancelled'].includes(
+                  command.status,
+                )
+              )
+                status = command.status;
+            }
+          }
+        } catch {
+          // > A malformed error must never expose the original argument text.
+        }
+      }
+    }
+    return [
+      header,
+      ...(commandType ? [`Command type: ${commandType}.`] : []),
+      ...(commandType ? [`Present fields: ${knownFields.join(', ') || '(none)'}.`] : []),
+      ...(status ? [`Status: ${status}.`] : []),
+      ...(statusShape ? [`Status value type: ${statusShape}.`] : []),
+      ...failures,
+    ]
+      .join(' ')
+      .slice(0, 1024);
   }
   return undefined;
 }
@@ -131,11 +190,16 @@ type DiagnosticEvent = {
   aborted?: boolean;
   tokensBefore?: number;
   commandType?: string;
+  taskStatus?: string;
   hasPassId?: boolean;
   durationMs?: number;
   taskId?: string;
   assignmentId?: string;
   memberKey?: string;
+  reasoningEffort?: string;
+  outputLimit?: number;
+  toolCount?: number;
+  messageCount?: number;
   usage?: Record<string, number>;
 };
 export type EvaluationDiagnostics = {
@@ -183,6 +247,7 @@ export class EvaluationDiagnosticCollector {
       ![
         'agent.start',
         'agent.end',
+        'agent.settled',
         'model.start',
         'model.end',
         'model.response',
@@ -192,6 +257,7 @@ export class EvaluationDiagnosticCollector {
         'compaction.failed',
         'tool.start',
         'tool.end',
+        'runtime.command',
         'runtime.error',
       ].includes(value.kind)
     )
@@ -213,7 +279,22 @@ export class EvaluationDiagnosticCollector {
       'commandType',
     ] as const)
       if (typeof value[key] === 'string') event[key] = sanitizeEvaluationText(value[key]);
-    for (const key of ['durationMs', 'status', 'tokensBefore'] as const)
+    if (['none', 'low', 'high', 'omitted', 'other'].includes(String(value.reasoningEffort)))
+      event.reasoningEffort = String(value.reasoningEffort);
+    if (
+      ['pending', 'running', 'blocked', 'completed', 'failed', 'cancelled'].includes(
+        String(value.taskStatus),
+      )
+    )
+      event.taskStatus = String(value.taskStatus);
+    for (const key of [
+      'durationMs',
+      'status',
+      'tokensBefore',
+      'outputLimit',
+      'toolCount',
+      'messageCount',
+    ] as const)
       if (typeof value[key] === 'number' && Number.isFinite(value[key])) event[key] = value[key];
     for (const key of ['willRetry', 'fromExtension', 'aborted'] as const)
       if (typeof value[key] === 'boolean') event[key] = value[key];

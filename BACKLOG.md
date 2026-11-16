@@ -90,13 +90,13 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 # 2026-11-16
 
-## P1 / E1 [Tooling] - *Model-backed Synthetic Agent Evals do not complete reliably*
+## P1 / E1 [Tooling] - *Verify complete Agent Evals with the configured model*
 - **Area:** `runtime/src/evals/` and `runtime/src/integrations/pi-extension.ts`
 - **Observed while:** Verifying Agent Evals diagnostics in PR #4.
-- **Why not fixed now:** Merge the verified diagnostic repairs while retaining the existing live failure for a focused follow-up.
-- **Evidence:** The latest live Synthetic read-only run failed in 115.34 seconds: the off attempt ended without `finish_reason`; the low attempt failed because context summarization hit its output token cap. A later live Synthetic read-only run on 16 November 2026 failed after 154.53 seconds: reasoning-off reached its 120-second safeguard and the low-reasoning fallback hit the compaction summary output cap. Tests, including scripted process tests, passed.
-- **Context:** Live Spark task completion remains unproven despite improved diagnostics. No live success is claimed for read-only, no-op, targeted-fix, or the complete Synthetic run.
-- **Suggested next step:** Run only Synthetic read-only through the canonical CLI, inspect the retained diagnostics, fix the demonstrated cause, then verify the remaining cases individually before one complete Synthetic run. See [PR #4](https://github.com/markur4/LTCook/pull/4) for retained evidence.
+- **Why not fixed now:** The user requested merging the reconciled progress before live evaluation work is complete.
+- **Evidence:** Bonsai 2 27B completed the full Synthetic Agent Evals in 83.1 seconds in an isolated source copy. A later run passed read-only and no-op, but targeted-fix failed after a timeout and an unmet fixture check. A focused diagnostic captured a shell command that attempted the verifier with a trailing status echo; the evaluation did not recognize it, and its output was not retained, so its success is unproven.
+- **Context:** The selected model's reliability, verifier detection, and Current Setup remain incompletely verified. Preserve the existing success criteria and authorization.
+- **Suggested next step:** Investigate verification-command detection and the targeted-fix failures; then run both full setups on the integrated configuration and record their elapsed times. See [PR #6](https://github.com/markur4/LTCook/pull/6) for retained evidence.
 
 <br>
 

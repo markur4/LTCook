@@ -5,7 +5,11 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { Model } from '@earendil-works/pi-ai';
 import activate from '../../../runtime/src/integrations/pi-extension.js';
 import { guardEvaluationModelRuntime } from '../../../runtime/src/integrations/pi-rpc.js';
-import { EVALUATION_EXECUTION_CONTEXT } from '../../../runtime/src/evals/setup.js';
+import {
+  EVAL_CONTEXT_WINDOW,
+  EVAL_MODEL,
+  EVALUATION_EXECUTION_CONTEXT,
+} from '../../../runtime/src/evals/setup.js';
 const original = { ...process.env };
 afterEach(() => {
   process.env = { ...original };
@@ -23,14 +27,14 @@ test('evaluation stream guard rejects wrong model/provider/endpoint before SDK p
   };
   const endpoint = 'http://127.0.0.1:11434';
   const model: Model<'openai-completions'> = {
-    id: 'ltcook-spark-x2.6-4b-q8_0-ctx8192:latest',
+    id: EVAL_MODEL,
     name: 'Evaluation fixture',
     api: 'openai-completions',
     provider: 'ollama',
     baseUrl: `${endpoint}/v1`,
     input: ['text'],
     reasoning: false,
-    contextWindow: 8192,
+    contextWindow: EVAL_CONTEXT_WINDOW,
     maxTokens: 2048,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   };

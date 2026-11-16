@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import { createEvalEngine } from '../../../runtime/src/evals/engine.js';
+import { EVAL_MODEL } from '../../../runtime/src/evals/setup.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 
 const roots: string[] = [];
@@ -241,7 +242,7 @@ describe('Agent Evals run service', () => {
   });
 });
 
-test('missing Spark is a hard failure and never invokes another provider', async () => {
+test('missing Bonsai is a hard failure and never invokes another provider', async () => {
   const root = await stateRoot();
   const engine = createEvalEngine({
     resources: root,
@@ -273,6 +274,37 @@ test('missing Spark is a hard failure and never invokes another provider', async
         .readdir(root)
         .then((entries) => entries.filter((entry) => entry.startsWith('.execution-'))),
     ).resolves.toEqual([]);
+  } finally {
+    fetchSpy.mockRestore();
+  }
+});
+
+test('an incorrectly configured Bonsai context fails before inference', async () => {
+  const root = await stateRoot();
+  const engine = createEvalEngine({
+    resources: root,
+    context: {
+      teamSelection: 'default-minimal',
+      guidanceDirectory: '',
+      webConfiguration: {},
+      limitations: [],
+    },
+  });
+  const fetchSpy = spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ name: EVAL_MODEL }] })))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ modelfile: 'PARAMETER num_ctx 8192' })));
+  try {
+    await expect(
+      engine({
+        preset: 'behavior',
+        setup: 'synthetic',
+        staticOnly: false,
+        runDirectory: root,
+        signal: new AbortController().signal,
+        progress: () => {},
+      }),
+    ).rejects.toThrow('65536 context tokens');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   } finally {
     fetchSpy.mockRestore();
   }

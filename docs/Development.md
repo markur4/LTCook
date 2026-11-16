@@ -195,7 +195,7 @@ model prompt loop to quick checks.
 
 Normal LTCook application setup detects a local Ollama installation or uses the
 official platform installer when missing, then ensures
-`SparkLLM/Spark-X2.6-4B:q8_0` (about 4.4 GB). This is separate from `just sync`,
+`bonsai-2:27b` (about 8.3 GB). This is separate from `just sync`,
 editable registration, tests, and CI. Setup records readiness
 under AppRC ownership and reuses a healthy user-managed service. It does not bind
 Ollama beyond loopback or stop a user-owned service.
@@ -207,8 +207,12 @@ handoff. Model storage stays under Ollama's own platform-specific location.
 Windows and macOS installation behavior requires verification on those platforms.
 
 Agent Evals uses the shared installed CLI and Paseo run service. Static audit
-needs no model; LLM-dependent runs require the prepared local Spark tag
-`ltcook-spark-x2.6-4b-q8_0-ctx8192:latest` and do not install or pull models.
+needs no model; LLM-dependent runs require the prepared local Bonsai model
+`ltcook-bonsai-2-27b-ctx65536:latest` and do not install or pull models.
+Setup derives that model from `bonsai-2:27b` with `num_ctx` set to 65,536.
+The run checks the saved model configuration; use `ollama ps` while it is loaded
+to inspect the context and GPU allocation actually provided by Ollama. Previous
+model setup receipts need the normal setup or repair flow to prepare Bonsai.
 
 ```shell
 ltcook eval audit --static-only
@@ -251,31 +255,35 @@ estimate; overlapping trace categories must not be added into another total.
 
 Keep diagnosis focused: start Synthetic Setup with `--case read-only`, then
 verify no-op and targeted-fix individually. Each case starts with reasoning off
-and may fall back once to low reasoning on the same pinned Spark model. A case
+and may fall back once to low reasoning on the same pinned Bonsai model. A case
 that fails its fallback stops the run before later cases or repetitions. Each
 attempt uses an independent workspace, requests copy-on-write copies where
 supported, and releases disposable state after its diagnostics are preserved.
 
-The local Spark model has an 8,192-token context. Pi compaction reserves 2,048
-tokens and keeps 1,024 recent tokens. Summary calls use the same isolated model
-and provider state; diagnostics record timing, usage, and failures without summary
-text.
-
-Pi sends full instructions in the Spark-supported `system` role, with
-`supportsDeveloperRole: false`. Execution and compaction requests use Ollama's
-`max_tokens: 2048`. Without this override, Pi's generic 4,096-token safety
-margin would reduce the requested output to one token. The override preserves
-Pi's compaction and overflow handling but cannot guarantee every input fits.
-
-A failed summary ends the disposable agent turn and attempt. Later requests do
-not clear the failure or repeat compaction until the safeguard. The run may still
-make its single configured low-reasoning fallback.
+Pi's existing context compaction remains enabled for the pinned 65,536-token
+model, reserving 2,048 tokens and keeping 1,024 recent tokens. Summary calls use
+the same isolated model and provider state. Diagnostics record compaction timing,
+reported usage and failures, while excluding summary text.
+Pi sends the full instructions using the `system` message role supported by the
+Ollama provider, with `supportsDeveloperRole: false` in its isolated model state.
+Execution and compaction requests explicitly send `max_tokens: 2048`, the field
+accepted by Ollama. The isolated model's sampling override retains that output
+cap while Pi uses its existing compaction and overflow handling. The configured
+context does not guarantee that every input fits.
+A failed summary aborts that disposable agent turn and ends its attempt. A later
+model request cannot clear the failure and repeat compaction until the safeguard;
+the run still permits only its single configured low-reasoning fallback.
 
 The Leader scheduling handoff names the native `ltcook_team` operations and
 required fields. Scheduled execution reports use `report.create` with an explicit
 success or failure outcome; the runtime owns scheduled Task status. Command
 validation selects errors by command type, so unrelated Task fields do not hide
 invalid report fields.
+Evaluation requests encode coordination command names and Pass requirements in
+forms Ollama retains; Pi and the runtime still validate the original schema. If
+the Leader finishes and reports the scheduling handoff without registering any
+scheduled Task, the case fails with that reason instead of waiting for its time
+limit.
 Tool counts and the existing tool budget include rejected validation attempts,
 counted once per attempt even when a provider reuses call IDs. Provider diagnostics retain HTTP status,
 reported stop reasons, usage and sanitized stream errors; ordinary content chunks

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { createEvalEngine } from '../../../runtime/src/evals/engine.js';
 import {
   EVAL_MODEL,
+  EVAL_CONTEXT_WINDOW,
   EVAL_MAX_OUTPUT_TOKENS,
   EVALUATION_EXECUTION_CONTEXT,
   hash,
@@ -28,15 +29,23 @@ const effectivePrompts = new Map<string, Map<string, string>>();
 let semanticRequests = 0;
 let failure: unknown;
 const scenario = process.argv[2] ?? 'behavior';
-const compactionScenario = ['compaction', 'compaction-cancel', 'compaction-error'].includes(
-  scenario,
-);
+const compactionScenario = [
+  'compaction',
+  'compaction-cancel',
+  'compaction-error',
+  'settlement-recovery',
+].includes(scenario);
 const controller = new AbortController();
 const server = createServer(async (request, response) => {
   try {
     if (request.url === '/api/tags') {
       response.setHeader('content-type', 'application/json');
       response.end(JSON.stringify({ models: [{ name: EVAL_MODEL }] }));
+      return;
+    }
+    if (request.url === '/api/show') {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ modelfile: `PARAMETER num_ctx ${EVAL_CONTEXT_WINDOW}` }));
       return;
     }
     assert(['/v1/chat/completions', '/api/chat'].includes(request.url ?? ''));
@@ -48,7 +57,18 @@ const server = createServer(async (request, response) => {
       reasoning_effort?: string;
       max_tokens?: number;
       max_completion_tokens?: number;
-      tools?: Array<{ function?: { name?: string } }>;
+      tools?: Array<{
+        function?: {
+          name?: string;
+          parameters?: {
+            properties?: {
+              command?: {
+                anyOf?: Array<{ properties?: { type?: { enum?: string[] } }; anyOf?: unknown[] }>;
+              };
+            };
+          };
+        };
+      }>;
       messages: Array<{ role: string; content: unknown; tool_call_id?: string }>;
     };
     assert.equal(input.model, EVAL_MODEL);
@@ -56,6 +76,23 @@ const server = createServer(async (request, response) => {
     const tokenLimit = input.max_tokens ?? input.max_completion_tokens;
     if (typeof tokenLimit === 'number') requestTokenLimits.push(tokenLimit);
     if (request.url === '/v1/chat/completions') {
+      const coordination = input.tools?.find((tool) => tool.function?.name === 'ltcook_team');
+      if (coordination) {
+        const commands = coordination.function?.parameters?.properties?.command?.anyOf;
+        assert(commands?.length, 'Coordination commands must reach the provider');
+        assert(
+          commands.every((command) => command.properties?.type?.enum?.length === 1),
+          'Command names must survive Ollama schema conversion',
+        );
+        const create = commands.find(
+          (command) => command.properties?.type?.enum?.[0] === 'task.create',
+        );
+        assert.equal(
+          create?.anyOf?.length,
+          2,
+          'Execution Pass condition must use Ollama-compatible alternatives',
+        );
+      }
       assert.equal(
         input.max_tokens,
         EVAL_MAX_OUTPUT_TOKENS,
@@ -68,7 +105,7 @@ const server = createServer(async (request, response) => {
       );
       assert(
         !input.messages.some((message) => message.role === 'developer'),
-        'Spark template does not support developer-role instructions',
+        'The evaluation model uses system-role instructions',
       );
     }
     if (request.url === '/api/chat') {
@@ -144,7 +181,17 @@ const server = createServer(async (request, response) => {
       const passId = /scope for Pass ([a-f0-9-]+)/.exec(text)?.[1];
       assert(passId);
       assert.equal(passScope, passId, 'Standing context must name the runtime-assigned Pass');
-      if (index === 0)
+      const delayedTask = scenario === 'settlement-recovery';
+      if ((scenario === 'no-scheduled-work' || delayedTask) && index === 0)
+        command({
+          type: 'report.create',
+          assignmentId,
+          summary: 'Handoff finished',
+          evidence: 'No task registered',
+        });
+      else if ((scenario === 'no-scheduled-work' || delayedTask) && index === 1)
+        command({ type: 'task.update', taskId, status: 'completed' });
+      else if (scenario !== 'no-scheduled-work' && index === (delayedTask ? 3 : 0))
         command({
           type: 'task.create',
           passId,
@@ -157,14 +204,16 @@ const server = createServer(async (request, response) => {
           acceptance: 'Fixture correct',
           assigneeKey: scenario === 'no-delegation' ? 'leader' : 'adjutant',
         });
-      if (index === 1)
+      if (scenario !== 'no-scheduled-work' && !delayedTask && index === 1)
         command({
           type: 'report.create',
           assignmentId,
           summary: 'Registered tasks',
           evidence: 'Scheduling graph',
         });
-      if (index === 2) command({ type: 'task.update', taskId, status: 'completed' });
+      if (scenario !== 'no-scheduled-work' && !delayedTask && index === 2)
+        command({ type: 'task.update', taskId, status: 'completed' });
+      if (delayedTask && index === 4) command({ type: 'task.update', taskId, status: 'completed' });
     } else if (text.includes('Correct only')) {
       if (index === 0) {
         name = 'read';
@@ -224,6 +273,7 @@ const server = createServer(async (request, response) => {
         : `fixture-${requests}`;
     const triggerCompaction =
       compactionScenario &&
+      scenario !== 'settlement-recovery' &&
       bootstrap &&
       index === 0 &&
       (requests === 1 || scenario === 'compaction-error');
@@ -232,7 +282,8 @@ const server = createServer(async (request, response) => {
       response.write(
         `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: 1, model: EVAL_MODEL, choices: [{ index: 0, delta, finish_reason: reason }] })}\n\n`,
       );
-    if (triggerCompaction) {
+    const recoverableLength = scenario === 'settlement-recovery' && bootstrap && index === 2;
+    if (triggerCompaction || (scenario === 'settlement-recovery' && bootstrap && index === 0)) {
       send({
         role: 'assistant',
         content: 'Discardable context for the maintained compaction boundary. '.repeat(200),
@@ -254,12 +305,19 @@ const server = createServer(async (request, response) => {
       send({}, 'tool_calls');
     } else {
       send({ role: 'assistant', content: 'Done.' });
-      send({}, 'stop');
+      send({}, recoverableLength ? 'length' : 'stop');
     }
-    if (triggerCompaction)
+    if (
+      triggerCompaction ||
+      recoverableLength ||
+      (scenario === 'settlement-recovery' && bootstrap && index < 2)
+    ) {
+      const promptTokens =
+        scenario === 'settlement-recovery' && index < 2 ? 500 : EVAL_CONTEXT_WINDOW - 1024;
       response.write(
-        `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', model: EVAL_MODEL, choices: [], usage: { prompt_tokens: 7000, completion_tokens: 1, total_tokens: 7001 } })}\n\n`,
+        `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', model: EVAL_MODEL, choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: 1, total_tokens: promptTokens + 1 } })}\n\n`,
       );
+    }
     response.end('data: [DONE]\n\n');
   } catch (error) {
     failure = error;
@@ -309,6 +367,8 @@ try {
                 'compaction-cancel',
                 'validation-recovery',
                 'fallback-success',
+                'no-scheduled-work',
+                'settlement-recovery',
                 'compaction-error',
               ].includes(scenario)
             ? 'quick'
@@ -375,7 +435,8 @@ try {
     if (
       scenario === 'bad-verification' ||
       scenario === 'no-delegation' ||
-      scenario === 'compaction-error'
+      scenario === 'compaction-error' ||
+      scenario === 'no-scheduled-work'
     ) {
       await assert.rejects(engine(input), /failed after its low-reasoning fallback/);
       assert(checkpoint, 'Failed attempts must be checkpointed before the run rejects');
@@ -493,7 +554,9 @@ try {
       tasks.every(
         (task) =>
           task.success ===
-          !['bad-verification', 'no-delegation', 'compaction-error'].includes(scenario),
+          !['bad-verification', 'no-delegation', 'compaction-error', 'no-scheduled-work'].includes(
+            scenario,
+          ),
       ),
       JSON.stringify(
         tasks.map((task) =>
@@ -506,7 +569,11 @@ try {
         ),
       ),
     );
-    if (scenario === 'no-delegation' || scenario === 'bad-verification')
+    if (
+      scenario === 'no-delegation' ||
+      scenario === 'bad-verification' ||
+      scenario === 'no-scheduled-work'
+    )
       assert(
         tasks.every((task) =>
           task.attempts.every((attempt) => attempt.failureCategory === 'criteria'),
@@ -523,16 +590,56 @@ try {
       );
     if (scenario === 'no-delegation') {
       assert(tasks.every((task) => task.attempts.every((attempt) => attempt.delegations === 0)));
+      assert(
+        tasks.every((task) =>
+          task.attempts.every((attempt) => attempt.failure?.includes('not delegated')),
+        ),
+      );
       assert.equal(
         verifiedCalls.size,
         tasks.reduce((count, task) => count + task.attempts.length, 0),
         'Every non-delegating attempt must successfully verify the corrected fixture',
       );
     }
-    if (scenario !== 'no-delegation' && scenario !== 'compaction-error')
+    if (scenario === 'bad-verification')
+      assert(
+        tasks.every((task) =>
+          task.attempts.every((attempt) =>
+            attempt.failure?.includes('No successful fixture verification'),
+          ),
+        ),
+      );
+    if (scenario === 'no-scheduled-work')
+      assert(
+        tasks.every((task) =>
+          task.attempts.every((attempt) =>
+            attempt.failure?.includes('without registering a scenario Task'),
+          ),
+        ),
+      );
+    if (
+      scenario !== 'no-delegation' &&
+      scenario !== 'compaction-error' &&
+      scenario !== 'no-scheduled-work'
+    )
       assert(tasks.some((task) => task.attempts.some((attempt) => (attempt.delegations ?? 0) > 0)));
     assert(calls.includes('ltcook_team'));
-    if (scenario !== 'compaction-error') {
+    if (scenario === 'settlement-recovery') {
+      assert(compactions > 0, 'Recover the completed handoff before declaring it settled');
+      const events = (
+        result.trace as { traceEvents: Array<{ name: string; args?: Record<string, unknown> }> }
+      ).traceEvents;
+      const ended = events.findIndex((event) => event.name === 'evaluation.agent.end');
+      const compacted = events.findIndex(
+        (event) => event.name === 'evaluation.compaction.start' && event.args?.willRetry === true,
+      );
+      const settled = events.findIndex((event) => event.name === 'evaluation.agent.settled');
+      assert(
+        ended >= 0 && compacted > ended && settled > compacted,
+        'Recovery must occur after agent end and before settlement',
+      );
+    }
+    if (scenario !== 'compaction-error' && scenario !== 'no-scheduled-work') {
       assert(calls.includes('read'));
       assert(calls.includes('write'));
       assert(calls.includes('bash'));
