@@ -82,9 +82,8 @@ test('snapshots uncommitted inputs and selected ignored guidance, excluding cred
   expect(await readdir(source)).toContain('outside');
 });
 
-test.each([1, 2])(
-  'unsupported schema %s saved records remain unchanged and are never restarted',
-  async (schema) => {
+for (const schema of [1, 2]) {
+  test(`unsupported schema ${schema} saved records remain unchanged and are never restarted`, async () => {
     const root = await temporary();
     const id = 'b9c2c440-a86a-43c2-9672-2030cf391de4';
     const folder = path.join(root, 'evals/runs', id);
@@ -103,5 +102,5 @@ test.each([1, 2])(
     expect(await readFile(path.join(oldExecution, 'output.json'), 'utf8')).toBe(
       'preserve unsupported state',
     );
-  },
-);
+  });
+}

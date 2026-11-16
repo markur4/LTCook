@@ -1160,9 +1160,8 @@ describe('authoritative planning workflow', () => {
       await f.runtime.close();
     }
   });
-  test.each([false, true])(
-    'CLI approval persists one Leader handoff without replay (uncertain=%s)',
-    async (uncertain) => {
+  for (const uncertain of [false, true]) {
+    test(`CLI approval persists one Leader handoff without replay (uncertain=${uncertain})`, async () => {
       const f = await fixture();
       await finishStages(f);
       await answerMandatory(f);
@@ -1257,8 +1256,8 @@ describe('authoritative planning workflow', () => {
       } finally {
         await reopened.close();
       }
-    },
-  );
+    });
+  }
   test('specific mandatory questions replace unasked placeholders while genuine blockers remain', async () => {
     const f = await fixture();
     try {

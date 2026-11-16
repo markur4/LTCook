@@ -28,9 +28,8 @@ async function finished(instance: EvalRunService, id: string) {
   throw new Error('Checkpoint test did not complete');
 }
 
-test.each(['failure', 'cancellation'] as const)(
-  'retains sanitized results and trace after %s and restart',
-  async (mode) => {
+for (const mode of ['failure', 'cancellation'] as const) {
+  test(`retains sanitized results and trace after ${mode} and restart`, async () => {
     let ready!: () => void;
     const checkpointed = new Promise<void>((resolve) => {
       ready = resolve;
@@ -70,8 +69,8 @@ test.each(['failure', 'cancellation'] as const)(
     });
     await restarted.initialize();
     expect(restarted.report(id)).toEqual(report);
-  },
-);
+  });
+}
 
 test('restart does not count progress newer than the last complete evidence checkpoint', async () => {
   const { root, instance } = await service(async ({ progress, checkpoint }) => {
