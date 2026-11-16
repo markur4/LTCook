@@ -355,7 +355,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     const delegate = team.definition.members.some(
       (member) =>
         member.key !== team.definition.leaderKey &&
-        !member.readOnly &&
+        (job.scenario !== 'targeted-fix' || !member.readOnly) &&
         member.workTypes.includes('task.execute'),
     );
     const descriptions = {
