@@ -2,7 +2,7 @@ import type { Telemetry } from '../diagnostics/telemetry.js';
 import type { PlanningDialogEvent } from './planning-dialogs.js';
 import { createHostClient } from '@getpaseo/client/node';
 import { createPaseoApi, type PaseoApi } from '@getpaseo/client';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { chmod, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
@@ -11,6 +11,7 @@ import type { AgentBackend, CreateAgentOptions, NativeAgent } from '../workflow-
 import { agentEnvironment } from './native-policy.js';
 import { configurePiExtensions } from './pi-settings.js';
 import { isWithin } from '../path-containment.js';
+import { WorkspacePreparationCache } from './workspace-preparation.js';
 export interface PaseoHost {
   api: PaseoApi;
   listen: string;
@@ -287,43 +288,44 @@ export async function createPaseoAgentBackend(input: {
     const shell = input.originalShellEnvironment?.(path.resolve(workspaceRoot), sessionId);
     return shell ? { ...process.env, LTCOOK_SHELL_PROVENANCE: JSON.stringify(shell) } : process.env;
   };
-  const resolveWorkspaceEnvironment = (
-    workspaceRoot: string,
-    sessionId: string,
-  ): Record<string, string> => {
-    const result = spawnSync(
-      input.python,
-      ['-m', 'ltcook.launch', 'environment', '--workspace', workspaceRoot],
-      { encoding: 'utf8', env: helperEnvironment(workspaceRoot, sessionId), windowsHide: true },
-    );
-    if (result.status !== 0)
-      throw new Error('AppRC could not resolve the selected workspace environment');
-    const response = JSON.parse(result.stdout) as {
-      workspaceRoot: string;
-      environment: Record<string, string>;
-    };
-    if (path.resolve(response.workspaceRoot) !== path.resolve(workspaceRoot))
-      throw new Error('AppRC resolved a different native-agent workspace');
-    return response.environment;
-  };
+  const preparations = new WorkspacePreparationCache();
   const prepare = async (options: CreateAgentOptions, nativeAgentId: string) => {
+    const helperEnv = helperEnvironment(options.workspaceRoot, options.sessionId);
+    const shellIdentity = createHash('sha256')
+      .update(JSON.stringify(helperEnv.LTCOOK_SHELL_PROVENANCE ?? helperEnv))
+      .digest('hex');
+    const cacheKey = JSON.stringify([
+      path.resolve(options.workspaceRoot),
+      options.sessionId,
+      shellIdentity,
+    ]);
     const workspaceEnv =
       input.preparedEnvironment ??
-      resolveWorkspaceEnvironment(options.workspaceRoot, options.sessionId);
+      (
+        await preparations.get(cacheKey, () => {
+          const result = spawnSync(
+            input.python,
+            ['-m', 'ltcook.launch', 'prepare-native', '--workspace', options.workspaceRoot],
+            { encoding: 'utf8', env: helperEnv, windowsHide: true },
+          );
+          if (result.status !== 0)
+            throw new Error('AppRC could not prepare the selected native-agent workspace');
+          const response = JSON.parse(result.stdout) as {
+            workspaceRoot: string;
+            environment: Record<string, string>;
+            dependencies: string[];
+          };
+          if (path.resolve(response.workspaceRoot) !== path.resolve(options.workspaceRoot))
+            throw new Error('AppRC resolved a different native-agent workspace');
+          if (
+            !Array.isArray(response.dependencies) ||
+            !response.dependencies.every((file) => typeof file === 'string')
+          )
+            throw new Error('AppRC did not report workspace preparation dependencies');
+          return { environment: response.environment, dependencies: response.dependencies };
+        })
+      ).environment;
     const identity = input.identity(nativeAgentId);
-    const configResult = input.preparedEnvironment
-      ? { status: 0 }
-      : spawnSync(
-          input.python,
-          ['-m', 'ltcook.launch', 'write-native-config', '--workspace', options.workspaceRoot],
-          {
-            encoding: 'utf8',
-            env: helperEnvironment(options.workspaceRoot, options.sessionId),
-            windowsHide: true,
-          },
-        );
-    if (configResult.status !== 0)
-      throw new Error('AppRC could not write LTCook-owned native configuration');
     const agentHome = workspaceEnv.PI_CODING_AGENT_DIR || input.piHome;
     await mkdir(agentHome, { recursive: true, mode: 0o700 });
     const settingsPath = path.join(agentHome, 'settings.json');

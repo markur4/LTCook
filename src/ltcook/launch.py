@@ -82,11 +82,13 @@ def resolve_launch(
     workspace_root: str | Path | None = None,
     *,
     original_environment: Mapping[str, str] | None = None,
+    input_paths: set[Path] | None = None,
 ) -> LaunchConfig:
     """Resolve global runtime settings and optional project overlays.
 
     :param workspace_root: Explicit project directory, or None for global startup.
     :param original_environment: Captured shell variables before AppRC overlays.
+    :param input_paths: Optional set receiving configuration paths used for reuse.
     :return: Settings and child environment for this invocation.
     """
     shell = _shell_environment(
@@ -102,6 +104,19 @@ def resolve_launch(
         else resolve_global_config(environment=shell)
     )
     global_config = global_resolved.build(LtcookConfig)
+    if input_paths is not None:
+        for snapshot in (resolved, global_resolved):
+            input_paths.update(layer.path for layer in snapshot.layers if layer.path)
+            input_paths.add(
+                snapshot.paths.require("config") / snapshot.schema.apprc_toml_filename
+            )
+        if workspace_root is not None:
+            marker = (
+                Path(workspace_root).expanduser().resolve()
+                / resolved.schema.workspace_dotenv_filename
+            )
+            input_paths.add(marker)
+            input_paths.add(marker.with_name(f"{marker.stem}.secret{marker.suffix}"))
     environment = dict(shell)
     for section in config.__dict__.values():
         environment.update(
@@ -533,6 +548,34 @@ def write_native_command(
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(json.dumps([str(path) for path in paths]))
+
+
+@launch_cli.command("prepare-native")
+def prepare_native_command(
+    workspace: Annotated[Path, typer.Option("--workspace")],
+) -> None:
+    """Resolve one workspace and write its owned native configuration together."""
+    inputs: set[Path] = set()
+    launch = resolve_launch(
+        workspace, original_environment=os.environ, input_paths=inputs
+    )
+    try:
+        outputs = write_pi_config(
+            launch.configuration,
+            owned_dir=Path(launch.environment["LTCOOK_DEPLOYMENT_DIR"]) / "app",
+            pi_home=launch.environment["PI_CODING_AGENT_DIR"],
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(
+        json.dumps(
+            {
+                "workspaceRoot": str(launch.workspace_root),
+                "environment": launch.environment,
+                "dependencies": sorted(map(str, inputs.union(outputs))),
+            }
+        )
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> None:

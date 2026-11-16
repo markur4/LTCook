@@ -11,6 +11,41 @@ from ltcook import launch
 from ltcook.config.pi_config import pi_documents, write_pi_config
 
 
+def test_native_preparation_reports_configuration_inputs_and_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from ltcook.config.app import APP_RC
+
+    project = tmp_path / "project"
+    project.mkdir()
+    shell = {
+        "HOME": str(tmp_path / "home"),
+        "USERPROFILE": str(tmp_path / "home"),
+        "APPDATA": str(tmp_path / "config"),
+        "LOCALAPPDATA": str(tmp_path / "data"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "LTCOOK_MODEL_SMART": "fixture-model",
+    }
+    monkeypatch.setenv("LTCOOK_SHELL_PROVENANCE", json.dumps(shell))
+    config = APP_RC.paths(environment=shell).require("config")
+    launch.prepare_native_command(project)
+    result = json.loads(capsys.readouterr().out)
+    inputs = set(result["dependencies"])
+    marker = project / APP_RC.schema.workspace_dotenv_filename
+    assert str(marker) in inputs
+    assert str(marker.with_name(f"{marker.stem}.secret{marker.suffix}")) in inputs
+    assert str(config / APP_RC.schema.user_dotenv_filename) in inputs
+    assert str(config / APP_RC.schema.apprc_toml_filename) in inputs
+    assert result["environment"]["LTCOOK_MODEL_SMART"] == "fixture-model"
+    pi_home = Path(result["environment"]["PI_CODING_AGENT_DIR"])
+    for filename in ("models.json", "web-search.json"):
+        assert str(pi_home / filename) in inputs
+        assert (pi_home / filename).is_file()
+
+
 def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
     tmp_path,
 ):
