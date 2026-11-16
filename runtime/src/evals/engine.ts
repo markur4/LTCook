@@ -78,7 +78,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         teamSelection:
           teamSelection ?? options.teamSelection ?? process.env.LTCOOK_TEAM ?? 'default-minimal',
       });
-    const team = await loadTeam(context.teamSelection);
+    const team = await loadTeam(context.teamSelection, options.appRoot);
     const appRoot = options.appRoot ?? path.resolve(options.resources, '../..');
     const endpoint = options.endpoint ?? ENDPOINT;
     const metadata = {

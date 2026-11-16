@@ -376,8 +376,8 @@ A restart does not mint approvals or silently replace the selected team.
 
 Coordination schema version 4 is a prototype breaking replacement. The runtime
 creates its schema only in a new empty store and rejects incompatible
-databases before modifying them. Preserve an old database and explicitly select a
-fresh `runtime.database` under AppRC state. No conversion, compatibility layer or
+databases before modifying them. Select a fresh `runtime.database` under AppRC
+state when starting a new store. No conversion, compatibility layer or
 chat-history import is performed. Native Pi/Paseo histories and authentication
 remain separate from coordination state.
 

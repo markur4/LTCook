@@ -13,6 +13,11 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
   [repository layout](docs/Development.md#repository-routing).
 - Apply the prototype breaking-change rule in Contributing to every new format,
   cache, API and installer path. Do not add migration code or compatibility layers.
+- Reinstall local LTCook instances as clean prototype installations: remove the
+  old instance's LTCook-owned program, configuration, credentials, sessions,
+  histories, caches and records before installing the current version. Do not
+  retain, archive, migrate or keep references to old versions or their data.
+  Leave independent installations, shared services and external workspaces alone.
 - Inspect the existing owner and shared helpers before adding an implementation;
   warn the user when documented paths appear stale.
 - Check [BACKLOG.md](BACKLOG.md) and assess related durable work for the pass.

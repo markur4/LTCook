@@ -90,6 +90,14 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 # 2026-11-16
 
+## P1 / E1 [Tooling] - *Enable clean local reinstall through the installation manager*
+- **Area:** `src/ltcook_distr/payload/app_lifecycle/` and the AppRC installation inventory contract.
+- **Observed while:** Preparing a clean editable reinstall.
+- **Why not fixed now:** The pinned installation manager cannot represent every owned target in a safe removal inventory.
+- **Evidence:** Complete-uninstall preview reports that the recorded runtime has no cleanup hook. The installed dependency tree contains symbolic links, but the manager's inventory accepts only files and directories, rejects links, and removes directories only when empty.
+- **Context:** Clean prototype reinstalls must remove LTCook-owned data without following links into shared services, independent installations or external workspaces. Removing unlisted targets inside a cleanup hook would bypass the manager's exact-inventory check.
+- **Suggested next step:** Add explicitly inventoried symbolic-link support to the installation manager, including identity checks and removal without following targets. Then provide LTCook's cleanup inventory and hook, and verify complete reinstall through the supported lifecycle.
+
 ## P1 / E1 [Tooling] - *Investigate intermittent Agent Evals retries*
 - **Area:** `runtime/src/evals/` and `runtime/src/integrations/pi-extension.ts`
 - **Observed while:** Verifying Agent Evals diagnostics in PR #4.
