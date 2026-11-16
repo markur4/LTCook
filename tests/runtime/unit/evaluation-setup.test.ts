@@ -9,6 +9,8 @@ import {
   snapshotWorkspace,
 } from '../../../runtime/src/evals/setup.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
+import { staticAudit } from '../../../runtime/src/evals/instruction-audit.js';
+import minimal from '../../../teams/default-minimal/src/index.js';
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
@@ -134,4 +136,55 @@ test('Current Setup snapshots shared skill inputs and Synthetic Setup excludes h
     resolveEvaluationContext({ python: 'unused', setup: 'synthetic', teamSelection: 'default' })
       .sharedSkillsDirectory,
   ).toBe('');
+});
+
+test('Instruction Audit uses captured shared and project skills without discovering live host skills', async () => {
+  const root = await temporary();
+  const home = path.join(root, 'host-home');
+  const guidance = path.join(root, 'guidance');
+  const workspace = path.join(root, 'workspace');
+  const core = path.join(root, 'core');
+  const syntheticGuidance = path.join(root, 'synthetic-guidance');
+  const syntheticWorkspace = path.join(root, 'synthetic-workspace');
+  for (const directory of [core, syntheticGuidance, syntheticWorkspace])
+    await mkdir(directory, { recursive: true });
+  await writeFile(path.join(core, 'catalog.json'), '[]');
+  for (const [directory, name, description] of [
+    [path.join(home, '.agents/skills/shared-method'), 'shared-method', 'Live host method'],
+    [path.join(guidance, 'shared-skills/shared-method'), 'shared-method', 'Captured method'],
+    [path.join(workspace, '.agents/skills/project-method'), 'project-method', 'Captured project'],
+  ] as const) {
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      path.join(directory, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: ${description}\n---\nMethod.`,
+    );
+  }
+  const team = {
+    ...minimal,
+    definition: { ...minimal.definition, resources: [] },
+  };
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const current = await staticAudit({ team, workspace, guidance, resources: core });
+    expect(current.findings.some((finding) => finding.kind === 'resource-load-error')).toBe(false);
+    expect(
+      current.resources.some((resource) => resource.name === 'shared-method' && resource.loaded),
+    ).toBe(true);
+    expect(
+      current.resources.some((resource) => resource.name === 'project-method' && resource.loaded),
+    ).toBe(true);
+    expect(JSON.stringify(current)).not.toContain(home);
+    const synthetic = await staticAudit({
+      team,
+      workspace: syntheticWorkspace,
+      guidance: syntheticGuidance,
+      resources: core,
+    });
+    expect(synthetic.resources).toEqual([]);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  }
 });

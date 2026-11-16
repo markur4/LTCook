@@ -309,3 +309,19 @@ test('shared discovery rejects a relative global root', () => {
     () => new NativeGuidance(minimal, 'leader', f.user, f.core, false, 'relative-skills'),
   ).toThrow('Shared skills directory must be an absolute user path');
 });
+
+test('a skill directory linked from the shared root remains User guidance', async () => {
+  const f = fixture();
+  const skill = f.file(
+    'separate-library/linked-method/SKILL.md',
+    '---\nname: linked-method\ndescription: Linked user method\n---\nMethod.',
+  );
+  mkdirSync(f.shared, { recursive: true });
+  symlinkSync(path.dirname(skill), path.join(f.shared, 'linked-method'));
+  const managed = f.guidance();
+  const loader = await f.load(managed);
+  expect(loader.getSkills().skills.some((item) => item.name === 'linked-method')).toBe(true);
+  expect(managed.inspection.resources.find((item) => item.name === 'linked-method')?.scope).toBe(
+    'user',
+  );
+});

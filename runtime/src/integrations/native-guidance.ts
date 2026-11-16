@@ -161,8 +161,9 @@ export class NativeGuidance {
             resource?.scope ??
             ((this.userDirectory && file.startsWith(this.userDirectory + path.sep)) ||
             (this.sharedSkillsDirectory &&
-              existsSync(this.sharedSkillsDirectory) &&
-              file.startsWith(realpathSync(this.sharedSkillsDirectory) + path.sep))
+              (skill.filePath.startsWith(this.sharedSkillsDirectory + path.sep) ||
+                (existsSync(this.sharedSkillsDirectory) &&
+                  file.startsWith(realpathSync(this.sharedSkillsDirectory) + path.sep))))
               ? 'user'
               : 'project'),
           kind: 'skill',
