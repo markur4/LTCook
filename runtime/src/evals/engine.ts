@@ -127,6 +127,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
       const guidanceFiles = await copyGuidance(
         setup === 'current' ? context.guidanceDirectory : '',
         guidance,
+        setup === 'current' ? context.sharedSkillsDirectory : '',
       );
       metadata.provenance = {
         workspace:

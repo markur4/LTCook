@@ -23,9 +23,12 @@ export class NativeGuidance {
     userDirectory: string,
     coreDirectory: string,
     private readonly reduced = false,
+    private readonly sharedSkillsDirectory = '',
   ) {
     if (!path.isAbsolute(userDirectory))
       throw new NativeGuidanceError('User guidance directory must be an absolute AppRC path');
+    if (sharedSkillsDirectory && !path.isAbsolute(sharedSkillsDirectory))
+      throw new NativeGuidanceError('Shared skills directory must be an absolute user path');
     this.userDirectory = userDirectory;
     const member = team.definition.members.find((item) => item.key === memberKey);
     if (!member)
@@ -94,6 +97,8 @@ export class NativeGuidance {
     }
     const userSkills = path.join(userDirectory, 'skills');
     if (!this.reduced && existsSync(userSkills)) this.skillPaths.push(userSkills);
+    if (!this.reduced && sharedSkillsDirectory && existsSync(sharedSkillsDirectory))
+      this.skillPaths.push(sharedSkillsDirectory);
     this.resourceDiagnostics.push(...this.inspection.diagnostics);
   }
 
@@ -154,7 +159,10 @@ export class NativeGuidance {
           path: file,
           scope:
             resource?.scope ??
-            (this.userDirectory && file.startsWith(this.userDirectory + path.sep)
+            ((this.userDirectory && file.startsWith(this.userDirectory + path.sep)) ||
+            (this.sharedSkillsDirectory &&
+              existsSync(this.sharedSkillsDirectory) &&
+              file.startsWith(realpathSync(this.sharedSkillsDirectory) + path.sep))
               ? 'user'
               : 'project'),
           kind: 'skill',

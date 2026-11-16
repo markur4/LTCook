@@ -17,7 +17,14 @@ export async function staticAudit(input: {
   for (const member of input.team.definition.members) {
     let guidance: NativeGuidance;
     try {
-      guidance = new NativeGuidance(input.team, member.key, input.guidance, input.resources);
+      guidance = new NativeGuidance(
+        input.team,
+        member.key,
+        input.guidance,
+        input.resources,
+        false,
+        path.join(input.guidance, 'shared-skills'),
+      );
     } catch (error) {
       findings.push({
         kind: 'resource-load-error',

@@ -197,6 +197,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
     process.env.PI_CODING_AGENT_DIR = piHome;
     process.env.LTCOOK_JS_ROOT = job.appRoot;
     process.env.LTCOOK_GUIDANCE_DIR = path.join(job.directory, 'guidance');
+    process.env.LTCOOK_SHARED_SKILLS_DIR = path.join(job.directory, 'guidance', 'shared-skills');
     host = await startPaseoHost({
       node: process.execPath,
       home: path.join(deployment, 'paseo'),
@@ -216,6 +217,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       LTCOOK_PI_AUTH_DIR: path.join(deployment, 'auth'),
       LTCOOK_TEAM: job.teamSelection,
       LTCOOK_GUIDANCE_DIR: path.join(job.directory, 'guidance'),
+      LTCOOK_SHARED_SKILLS_DIR: path.join(job.directory, 'guidance', 'shared-skills'),
       LTCOOK_JS_ROOT: job.appRoot,
       LTCOOK_MODEL_SMART: `ollama/${EVAL_MODEL}`,
       LTCOOK_MODEL_SMOL: `ollama/${EVAL_MODEL}`,

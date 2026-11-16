@@ -3,7 +3,11 @@ import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveEvaluationContext, snapshotWorkspace } from '../../../runtime/src/evals/setup.js';
+import {
+  copyGuidance,
+  resolveEvaluationContext,
+  snapshotWorkspace,
+} from '../../../runtime/src/evals/setup.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 const roots: string[] = [];
 afterEach(async () => {
@@ -49,6 +53,7 @@ test('Current Setup applies explicit non-secret overrides through the real AppRC
       },
     });
     expect(context.teamSelection).toBe('default');
+    expect(context.sharedSkillsDirectory).toBe(path.join(root, '.agents', 'skills'));
     expect(context.webConfiguration.searxngBaseUrl).toBe('http://127.0.0.1:8123');
     expect(context.limitations).not.toContain(
       'Workspace team selection differs from the active runtime; using the active runtime team.',
@@ -110,3 +115,23 @@ for (const schema of [1, 2]) {
     );
   });
 }
+
+test('Current Setup snapshots shared skill inputs and Synthetic Setup excludes host skill roots', async () => {
+  const root = await temporary();
+  const shared = path.join(root, 'shared');
+  const destination = path.join(root, 'snapshot');
+  await mkdir(path.join(shared, 'example'), { recursive: true });
+  await writeFile(path.join(shared, 'example', 'SKILL.md'), 'Shared skill body.');
+  await writeFile(path.join(shared, 'auth.json'), 'private');
+  await symlink('/etc/passwd', path.join(shared, 'outside'));
+  const entries = await copyGuidance('', destination, shared);
+  expect(await readFile(path.join(destination, 'shared-skills/example/SKILL.md'), 'utf8')).toBe(
+    'Shared skill body.',
+  );
+  expect(entries.find((entry) => entry.path === 'shared-skills/auth.json')?.included).toBe(false);
+  expect(entries.find((entry) => entry.path === 'shared-skills/outside')?.included).toBe(false);
+  expect(
+    resolveEvaluationContext({ python: 'unused', setup: 'synthetic', teamSelection: 'default' })
+      .sharedSkillsDirectory,
+  ).toBe('');
+});

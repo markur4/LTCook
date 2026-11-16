@@ -356,6 +356,7 @@ try {
     context: {
       teamSelection: 'default-minimal',
       guidanceDirectory: '',
+      sharedSkillsDirectory: '',
       webConfiguration: {},
       limitations: [],
     },
