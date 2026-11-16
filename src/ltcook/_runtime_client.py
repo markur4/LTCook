@@ -117,7 +117,7 @@ def _canonical(path: str) -> str:
     return str(Path(path).expanduser().resolve())
 
 
-def runtime_command(
+def send_runtime_command(
     environment: Mapping[str, str], session_id: str, command: Mapping[str, object]
 ) -> object:
     """Send a user-authenticated command to this installation's ready owner.

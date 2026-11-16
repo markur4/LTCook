@@ -630,7 +630,7 @@ def test_explicit_global_runtime_reuses_ready_owner_without_session_or_spawn(
         "start_runtime",
         lambda *_args, **_kwargs: pytest.fail("ready owner must not be spawned again"),
     )
-    assert launch.runtime_command(None) is None
+    assert launch.launch_runtime(None) is None
 
 
 @pytest.fixture
@@ -695,7 +695,7 @@ def test_start_persists_missing_secrets_before_the_child_uses_them(
 
     def start():
         if command == "runtime":
-            launch.runtime_command(None)
+            launch.launch_runtime(None)
         elif command == "desktop":
             assert launch.desktop_command() == 0
         else:

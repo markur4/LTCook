@@ -8,7 +8,7 @@ from typing import Annotated
 
 import typer
 
-from ltcook._runtime_client import RuntimeClientError, runtime_command
+from ltcook._runtime_client import RuntimeClientError, send_runtime_command
 from ltcook.launch import resolve_launch
 
 planning_cli = typer.Typer(no_args_is_help=True)
@@ -25,7 +25,7 @@ Plan = Annotated[
 
 def _result(session: str, command: dict[str, object]) -> object:
     try:
-        return runtime_command(resolve_launch(None).environment, session, command)
+        return send_runtime_command(resolve_launch(None).environment, session, command)
     except (RuntimeClientError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
 

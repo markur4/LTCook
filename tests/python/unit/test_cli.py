@@ -204,7 +204,7 @@ def test_planning_answer_uses_authenticated_user_command(monkeypatch):
         seen.append((environment, session, command))
         return {"answered": True}
 
-    monkeypatch.setattr(module, "runtime_command", send)
+    monkeypatch.setattr(module, "send_runtime_command", send)
     result = RUNNER.invoke(
         app,
         [
@@ -251,7 +251,7 @@ def test_planning_show_reads_current_team_document_without_versioning(
     document.write_text("# Proposed Plan\n\nReview this content.\n")
     monkeypatch.setattr(
         module,
-        "runtime_command",
+        "send_runtime_command",
         lambda *_: {
             "value": {
                 "id": plan,

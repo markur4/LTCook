@@ -362,7 +362,7 @@ def _run_foreground_runtime(
 
 
 @launch_cli.command("runtime")
-def runtime_command(
+def launch_runtime(
     workspace: Annotated[Path | None, typer.Option("--workspace")] = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", help="Show complete runtime diagnostics.")
