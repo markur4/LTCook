@@ -90,13 +90,13 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 # 2026-11-16
 
-## P1 / E1 [Tooling] - *Verify complete Agent Evals with the configured model*
+## P1 / E1 [Tooling] - *Investigate intermittent Agent Evals retries*
 - **Area:** `runtime/src/evals/` and `runtime/src/integrations/pi-extension.ts`
 - **Observed while:** Verifying Agent Evals diagnostics in PR #4.
-- **Why not fixed now:** Current Setup did not complete with the configured model.
-- **Evidence:** A complete Synthetic run passed in 129.5 seconds, with one attempt per behavior case, before the fixture revision was updated to record the changed verifier contract. A Current Setup run failed after 293.2 seconds: read-only passed on retry, but no-op timed out after the agent reported its scheduling assignment without completing the scheduling Task. The low-thinking retry then reached the 2,048-token output limit before a tool call.
-- **Context:** The verifier now identifies its own successful output even when a shell command follows it with a status echo; a scripted check also rejects a masked verifier failure. Current Setup reliability remains unverified. Preserve the existing success criteria and authorization.
-- **Suggested next step:** Investigate the unfinished scheduling handoff and the low-thinking output limit in Current Setup, then rerun the complete Agent Evals and record the result and elapsed time. See [PR #6](https://github.com/markur4/LTCook/pull/6) for earlier evidence.
+- **Why not fixed now:** Both setups completed, but the local model's behavior varied between runs.
+- **Evidence:** With fixture v6, complete Synthetic and Current runs passed in 86.1 and 133.4 seconds respectively, with one attempt per behavior case. An earlier Current run took 308.0 seconds and required a read-only retry after a 120-second timeout. An earlier Synthetic targeted-fix attempt exceeded its tool budget before its retry failed to delegate. The subsequent scheduling instruction separates the Leader's delegation requirement from the execution Task.
+- **Context:** A single passing run is an elapsed-time estimate, not evidence of consistent model behavior. Preserve actual delegation, success criteria and runtime authorization.
+- **Suggested next step:** Use retained sanitized diagnostics to investigate recurring timeouts or tool loops if they continue to affect routine Agent Evals; avoid increasing repetitions by default. See [PR #10](https://github.com/markur4/LTCook/pull/10) for the current changes and verification.
 
 <br>
 
