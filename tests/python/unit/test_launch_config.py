@@ -912,3 +912,91 @@ def test_evaluation_context_rejects_unregistered_workspace_before_launch(
     monkeypatch.setattr(launch, "resolve_launch", unexpected_resolution)
     with pytest.raises(ValueError, match="registered with AppRC"):
         launch.evaluation_context(tmp_path)
+
+
+def test_runtime_requests_never_forward_credentials_across_redirects(
+    monkeypatch, tmp_path
+):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    from types import SimpleNamespace
+
+    import ltcook.cli.eval as eval_cli
+    from ltcook._runtime_client import RuntimeClientError
+
+    seen = []
+    source_tokens = []
+
+    class Destination(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_args):
+            pass
+
+    destination = ThreadingHTTPServer(("127.0.0.1", 0), Destination)
+
+    class Source(BaseHTTPRequestHandler):
+        def do_POST(self):
+            source_tokens.append(self.headers.get("Authorization"))
+            if self.path == "/success":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"ok": true}')
+                return
+            if self.path == "/unauthorized":
+                self.send_response(401)
+                self.end_headers()
+                return
+            if self.path == "/malformed":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"not JSON")
+                return
+            self.send_response(302)
+            self.send_header(
+                "Location", f"http://127.0.0.1:{destination.server_port}/stolen"
+            )
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    source = ThreadingHTTPServer(("127.0.0.1", 0), Source)
+    threads = [
+        Thread(target=server.serve_forever, daemon=True)
+        for server in (source, destination)
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        environment = {
+            "LTCOOK_API_LISTEN": f"127.0.0.1:{source.server_port}",
+            "LTCOOK_API_TOKEN": "private-test-token",
+            "LTCOOK_SESSION": "session",
+            "LTCOOK_TEAM": "default",
+        }
+        assert eval_cli._call(environment, "/success") == {"ok": True}
+        with pytest.raises(RuntimeClientError, match="401"):
+            eval_cli._call(environment, "/unauthorized")
+        with pytest.raises(
+            RuntimeClientError, match="Agent Evals runtime request failed"
+        ):
+            eval_cli._call(environment, "/malformed")
+        with pytest.raises(RuntimeClientError, match="redirect"):
+            eval_cli._call(environment, "/v1/evals/list")
+        monkeypatch.setattr(launch, "probe_runtime", lambda _environment: object())
+        config = SimpleNamespace(environment=environment, workspace_root=tmp_path)
+        with pytest.raises(RuntimeClientError, match="redirect"):
+            launch._open_existing_runtime(config, {})
+        assert seen == []
+        assert source_tokens == ["Bearer private-test-token"] * 5
+    finally:
+        for server in (source, destination):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join()

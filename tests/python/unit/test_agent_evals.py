@@ -235,3 +235,47 @@ def test_cli_all_selects_combined_execution(monkeypatch):
     assert result.exit_code == 0, result.output
     assert requests[0]["preset"] == "full"
     assert requests[0]["scenario"] == "no-op"
+
+
+def test_eval_runtime_preserves_shell_provenance_on_cold_start_and_reuse(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    import ltcook.cli.eval as cli
+
+    original = {"LTCOOK_TEAM": "default", "PATH": "/original/bin"}
+    monkeypatch.setenv("LTCOOK_SHELL_PROVENANCE", json.dumps(original))
+    monkeypatch.setenv("LTCOOK_TEAM", "overlay-must-not-win")
+    resolved = []
+    started = []
+    status = object()
+    monkeypatch.setattr(
+        cli,
+        "resolve_launch",
+        lambda workspace, *, original_environment: (
+            resolved.append((workspace, dict(original_environment)))
+            or SimpleNamespace(
+                environment={"LTCOOK_TEAM": original_environment["LTCOOK_TEAM"]}
+            )
+        ),
+    )
+    monkeypatch.setattr(cli, "probe_runtime", lambda _environment: None)
+    monkeypatch.setattr(
+        cli,
+        "start_runtime",
+        lambda environment, **kwargs: started.append(kwargs) or object(),
+    )
+    monkeypatch.setattr(cli, "wait_for_runtime", lambda *_args, **_kwargs: status)
+
+    environment, actual = cli._runtime()
+    assert environment["LTCOOK_TEAM"] == "default"
+    assert actual is status
+    assert resolved == [(None, original)]
+    assert started[0]["shell_environment"] == original
+    assert started[0]["workspace_root"] is None
+
+    monkeypatch.setattr(cli, "probe_runtime", lambda _environment: status)
+    environment, actual = cli._runtime()
+    assert environment["LTCOOK_TEAM"] == "default"
+    assert actual is status
+    assert len(started) == 1

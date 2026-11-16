@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
-import urllib.request
 from enum import StrEnum
 from typing import Annotated
 
@@ -22,13 +22,13 @@ from rich.table import Table
 
 from ltcook._runtime_client import (
     RuntimeClientError,
+    open_runtime_request,
     probe_runtime,
-    runtime_api_url,
     start_runtime,
     wait_for_runtime,
 )
 from ltcook.config.app import APP_RC
-from ltcook.launch import resolve_launch
+from ltcook.launch import _shell_environment, resolve_launch
 
 eval_cli = typer.Typer(help="Run and inspect Agent Evals.", no_args_is_help=True)
 console = Console()
@@ -61,12 +61,16 @@ class EvalSetup(StrEnum):
 
 
 def _runtime():
-    launch = resolve_launch(None)
+    shell = _shell_environment(os.environ)
+    launch = resolve_launch(None, original_environment=shell)
     status = probe_runtime(launch.environment)
     child = None
     if status is None:
         child = start_runtime(
-            launch.environment, workspace_root=None, shell_environment={}, detached=True
+            launch.environment,
+            workspace_root=None,
+            shell_environment=shell,
+            detached=True,
         )
         status = wait_for_runtime(launch.environment, child)
     elif status == "starting":
@@ -75,19 +79,9 @@ def _runtime():
 
 
 def _call(environment, route: str, payload: object = None):
-    url = runtime_api_url(environment["LTCOOK_API_LISTEN"]) + route
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload or {}).encode(),
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {environment['LTCOOK_API_TOKEN']}",
-            "Content-Type": "application/json",
-        },
-    )
     try:
-        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
-            request, timeout=30
+        with open_runtime_request(
+            environment, route, payload or {}, timeout=30
         ) as response:
             return json.loads(response.read().decode())
     except (

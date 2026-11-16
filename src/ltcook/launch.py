@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,8 +22,8 @@ from ltcook._runtime_client import (
     RuntimeClientError,
     RuntimeStatus,
     follow_runtime_logs,
+    open_runtime_request,
     probe_runtime,
-    runtime_api_url,
     start_runtime,
     wait_for_runtime,
 )
@@ -283,27 +282,20 @@ def _open_existing_runtime(
         return False
     if status == "starting":
         status = wait_for_runtime(environment, None, timeout=60)
-    request = urllib.request.Request(
-        f"{runtime_api_url(environment['LTCOOK_API_LISTEN'])}/v1/session/open",
-        data=json.dumps(
-            {
-                "workspaceRoot": str(workspace_root),
-                "sessionId": environment["LTCOOK_SESSION"],
-                "teamSelection": environment["LTCOOK_TEAM"],
-                "shellEnvironment": dict(shell_environment),
-            }
-        ).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {environment['LTCOOK_API_TOKEN']}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+    request = {
+        "workspaceRoot": str(workspace_root),
+        "sessionId": environment["LTCOOK_SESSION"],
+        "teamSelection": environment["LTCOOK_TEAM"],
+        "shellEnvironment": dict(shell_environment),
+    }
     deadline = time.monotonic() + 60
     while True:
         try:
-            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
-                request, timeout=max(0.1, deadline - time.monotonic())
+            with open_runtime_request(
+                environment,
+                "/v1/session/open",
+                request,
+                timeout=max(0.1, deadline - time.monotonic()),
             ) as response:
                 if response.status != 200:
                     raise RuntimeClientError(
