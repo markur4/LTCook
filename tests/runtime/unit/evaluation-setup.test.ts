@@ -18,6 +18,10 @@ async function temporary() {
 test('Current Setup applies explicit non-secret overrides through the real AppRC resolver', async () => {
   const root = await temporary();
   const previous = process.env.LTCOOK_SHELL_PROVENANCE;
+  const previousPythonPath = process.env.PYTHONPATH;
+  process.env.PYTHONPATH = [path.resolve(import.meta.dir, '../../../src'), previousPythonPath]
+    .filter(Boolean)
+    .join(path.delimiter);
   process.env.LTCOOK_SHELL_PROVENANCE = JSON.stringify({
     HOME: root,
     USERPROFILE: root,
@@ -53,6 +57,8 @@ test('Current Setup applies explicit non-secret overrides through the real AppRC
   } finally {
     if (previous === undefined) delete process.env.LTCOOK_SHELL_PROVENANCE;
     else process.env.LTCOOK_SHELL_PROVENANCE = previous;
+    if (previousPythonPath === undefined) delete process.env.PYTHONPATH;
+    else process.env.PYTHONPATH = previousPythonPath;
   }
 });
 
