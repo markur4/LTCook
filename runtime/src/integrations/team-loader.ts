@@ -193,6 +193,6 @@ export class TeamRegistry {
 }
 
 /** Resolve an explicitly selected local Team for a native agent process. */
-export async function loadTeam(selection: string): Promise<TeamPackage> {
-  return (await TeamRegistry.load()).resolve(selection);
+export async function loadTeam(selection: string, root?: string): Promise<TeamPackage> {
+  return (await TeamRegistry.load(root)).resolve(selection);
 }

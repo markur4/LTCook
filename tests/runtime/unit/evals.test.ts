@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,6 +34,11 @@ async function finish(service: EvalRunService, runId: string) {
 describe('Agent Evals run service', () => {
   test('runs static audit without accessing Ollama', async () => {
     const root = await stateRoot();
+    await mkdir(path.join(root, 'teams', 'fixture-selected'), { recursive: true });
+    await writeFile(
+      path.join(root, 'teams', 'fixture-selected', 'package.json'),
+      JSON.stringify({ name: '@ltcook/team-default-minimal' }),
+    );
     await writeFile(path.join(root, 'guide.md'), 'guidance '.repeat(3001));
     await writeFile(
       path.join(root, 'catalog.json'),
@@ -47,8 +52,9 @@ describe('Agent Evals run service', () => {
         root,
         createEvalEngine({
           resources: root,
+          appRoot: root,
           context: {
-            teamSelection: 'default-minimal',
+            teamSelection: 'fixture-selected',
             guidanceDirectory: root,
             webConfiguration: {},
             limitations: [],
