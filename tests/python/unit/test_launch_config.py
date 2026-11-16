@@ -297,7 +297,7 @@ def test_pi_documents_keep_secrets_out_of_json_and_write_private_files(tmp_path)
         documents[pi_home / "models.json"]["providers"]["ollama"]["models"][0][
             "contextWindow"
         ]
-        == 8192
+        == 65536
     )
     assert documents[pi_home / "models.json"]["providers"]["ollama"]["models"][0][
         "thinkingLevelMap"

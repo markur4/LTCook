@@ -187,7 +187,7 @@ model prompt loop to quick checks.
 
 Normal LTCook application setup detects a local Ollama installation or uses the
 official platform installer when missing, then ensures
-`SparkLLM/Spark-X2.6-4B:q8_0` (about 4.4 GB). This is separate from `just sync`,
+`ornith-1.5:9b` (about 6.6 GB). This is separate from `just sync`,
 editable registration, deterministic tests, and CI. Setup records readiness
 under AppRC ownership and reuses a healthy user-managed service. It does not bind
 Ollama beyond loopback or stop a user-owned service.
@@ -200,8 +200,12 @@ checkout's live verification used Fedora 44 on WSL2 only; Windows and macOS
 installation behavior remains documented, not natively validated.
 
 Agent Evals uses the shared installed CLI and Paseo run service. Static audit
-needs no model; LLM-dependent runs require the prepared local Spark tag
-`ltcook-spark-x2.6-4b-q8_0-ctx8192:latest` and do not install or pull models.
+needs no model; LLM-dependent runs require the prepared local Ornith model
+`ltcook-ornith-1.5-9b-ctx65536:latest` and do not install or pull models.
+Setup derives that model from `ornith-1.5:9b` with `num_ctx` set to 65,536.
+The run checks the saved model configuration; use `ollama ps` while it is loaded
+to inspect the context and GPU allocation actually provided by Ollama. Existing
+Spark setup receipts need the normal setup or repair flow to prepare Ornith.
 
 ```shell
 ltcook eval audit --static-only
@@ -242,22 +246,21 @@ estimate; overlapping trace categories must not be added into another total.
 
 Keep diagnosis focused: start Synthetic Setup with `--case read-only`, then
 verify no-op and targeted-fix individually. Each case starts with reasoning off
-and may fall back once to low reasoning on the same pinned Spark model. A case
+and may fall back once to low reasoning on the same pinned Ornith model. A case
 that fails its fallback stops the run before later cases or repetitions. Each
 attempt uses an independent workspace, requests copy-on-write copies where
 supported, and releases disposable state after its diagnostics are preserved.
 
-Pi's existing context compaction remains enabled for the pinned 8,192-token
+Pi's existing context compaction remains enabled for the pinned 65,536-token
 model, reserving 2,048 tokens and keeping 1,024 recent tokens. Summary calls use
 the same isolated model and provider state. Diagnostics record compaction timing,
 reported usage and failures, while excluding summary text.
 Pi sends the full instructions using the `system` message role supported by the
-Spark template, with `supportsDeveloperRole: false` in its isolated model state.
+Ollama provider, with `supportsDeveloperRole: false` in its isolated model state.
 Execution and compaction requests explicitly send `max_tokens: 2048`, the field
-accepted by Ollama. Pi's generic 4,096-token safety margin would otherwise reduce
-this 8,192-token model's requested output to one token; the isolated model's
-sampling override restores the intended output cap while Pi retains its existing
-compaction and overflow handling. This does not guarantee that every input fits.
+accepted by Ollama. The isolated model's sampling override retains that output
+cap while Pi uses its existing compaction and overflow handling. The configured
+context does not guarantee that every input fits.
 A failed summary aborts that disposable agent turn and ends its attempt. A later
 model request cannot clear the failure and repeat compaction until the safeguard;
 the run still permits only its single configured low-reasoning fallback.

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { createEvalEngine } from '../../../runtime/src/evals/engine.js';
 import {
   EVAL_MODEL,
+  EVAL_CONTEXT_WINDOW,
   EVAL_MAX_OUTPUT_TOKENS,
   EVALUATION_EXECUTION_CONTEXT,
   hash,
@@ -40,6 +41,11 @@ const server = createServer(async (request, response) => {
     if (request.url === '/api/tags') {
       response.setHeader('content-type', 'application/json');
       response.end(JSON.stringify({ models: [{ name: EVAL_MODEL }] }));
+      return;
+    }
+    if (request.url === '/api/show') {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ modelfile: `PARAMETER num_ctx ${EVAL_CONTEXT_WINDOW}` }));
       return;
     }
     assert(['/v1/chat/completions', '/api/chat'].includes(request.url ?? ''));
@@ -99,7 +105,7 @@ const server = createServer(async (request, response) => {
       );
       assert(
         !input.messages.some((message) => message.role === 'developer'),
-        'Spark template does not support developer-role instructions',
+        'The evaluation model uses system-role instructions',
       );
     }
     if (request.url === '/api/chat') {
@@ -207,6 +213,7 @@ const server = createServer(async (request, response) => {
         });
       if (scenario !== 'no-scheduled-work' && !delayedTask && index === 2)
         command({ type: 'task.update', taskId, status: 'completed' });
+      if (delayedTask && index === 4) command({ type: 'task.update', taskId, status: 'completed' });
     } else if (text.includes('Correct only')) {
       if (index === 0) {
         name = 'read';
@@ -279,9 +286,7 @@ const server = createServer(async (request, response) => {
     if (triggerCompaction || (scenario === 'settlement-recovery' && bootstrap && index === 0)) {
       send({
         role: 'assistant',
-        content: 'Discardable context for the maintained compaction boundary. '.repeat(
-          scenario === 'settlement-recovery' ? 55 : 200,
-        ),
+        content: 'Discardable context for the maintained compaction boundary. '.repeat(200),
       });
     }
     if (name) {
@@ -302,10 +307,17 @@ const server = createServer(async (request, response) => {
       send({ role: 'assistant', content: 'Done.' });
       send({}, recoverableLength ? 'length' : 'stop');
     }
-    if (triggerCompaction || recoverableLength)
+    if (
+      triggerCompaction ||
+      recoverableLength ||
+      (scenario === 'settlement-recovery' && bootstrap && index < 2)
+    ) {
+      const promptTokens =
+        scenario === 'settlement-recovery' && index < 2 ? 500 : EVAL_CONTEXT_WINDOW - 1024;
       response.write(
-        `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', model: EVAL_MODEL, choices: [], usage: { prompt_tokens: 7000, completion_tokens: 1, total_tokens: 7001 } })}\n\n`,
+        `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', model: EVAL_MODEL, choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: 1, total_tokens: promptTokens + 1 } })}\n\n`,
       );
+    }
     response.end('data: [DONE]\n\n');
   } catch (error) {
     failure = error;

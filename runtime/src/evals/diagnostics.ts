@@ -190,6 +190,7 @@ type DiagnosticEvent = {
   aborted?: boolean;
   tokensBefore?: number;
   commandType?: string;
+  taskStatus?: string;
   hasPassId?: boolean;
   durationMs?: number;
   taskId?: string;
@@ -256,6 +257,7 @@ export class EvaluationDiagnosticCollector {
         'compaction.failed',
         'tool.start',
         'tool.end',
+        'runtime.command',
         'runtime.error',
       ].includes(value.kind)
     )
@@ -279,6 +281,12 @@ export class EvaluationDiagnosticCollector {
       if (typeof value[key] === 'string') event[key] = sanitizeEvaluationText(value[key]);
     if (['none', 'low', 'high', 'omitted', 'other'].includes(String(value.reasoningEffort)))
       event.reasoningEffort = String(value.reasoningEffort);
+    if (
+      ['pending', 'running', 'blocked', 'completed', 'failed', 'cancelled'].includes(
+        String(value.taskStatus),
+      )
+    )
+      event.taskStatus = String(value.taskStatus);
     for (const key of [
       'durationMs',
       'status',

@@ -18,6 +18,7 @@ import {
 import {
   copyGuidance,
   EVAL_MODEL,
+  EVAL_CONTEXT_WINDOW,
   EVAL_COMPACTION,
   EVAL_MODEL_COMPAT,
   EVAL_MAX_OUTPUT_TOKENS,
@@ -88,8 +89,8 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         ...context.limitations,
         'Interactive Plan approval is outside evaluation coverage.',
         setup === 'current'
-          ? 'Current Setup evaluates the selected configuration under local Spark; results do not describe another model.'
-          : 'Synthetic Setup uses the packaged fixture under local Spark.',
+          ? 'Current Setup evaluates the selected configuration under local Ornith; results do not describe another model.'
+          : 'Synthetic Setup uses the packaged fixture under local Ornith.',
         'Filesystem confinement preserves configured network behavior and does not prevent network side effects.',
         'User executable Pi extensions and authenticated integrations are not exercised.',
         'The snapshot has an independent Git index without original history, remotes or hooks.',
@@ -182,7 +183,26 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
       };
       if (!catalog.models?.some(({ name }) => name === EVAL_MODEL))
         throw new Error(
-          `Local Spark model ${EVAL_MODEL} is not installed; no fallback was attempted.`,
+          `Local Ornith model ${EVAL_MODEL} is not installed; no fallback was attempted.`,
+        );
+      const modelInfo = await fetch(`${endpoint}/api/show`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: EVAL_MODEL }),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) as NonNullable<
+          Parameters<typeof fetch>[1]
+        >['signal'],
+      });
+      if (!modelInfo.ok) throw new Error('Could not inspect the local Ornith model configuration.');
+      const info = (await modelInfo.json()) as { modelfile?: unknown };
+      if (
+        typeof info.modelfile !== 'string' ||
+        !new RegExp(`^\\s*PARAMETER\\s+num_ctx\\s+${EVAL_CONTEXT_WINDOW}\\s*$`, 'm').test(
+          info.modelfile,
+        )
+      )
+        throw new Error(
+          `The local Ornith model must be configured for ${EVAL_CONTEXT_WINDOW} context tokens.`,
         );
       assertEvaluationSandbox();
       const nodeExecutable =
@@ -384,7 +404,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
                 model: EVAL_MODEL,
                 stream: false,
                 think: false,
-                options: { num_ctx: 8192 },
+                options: { num_ctx: EVAL_CONTEXT_WINDOW },
                 format: 'json',
                 messages: [
                   {

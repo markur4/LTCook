@@ -94,9 +94,9 @@ Treat this as the parking lot for actionable problems discovered while working b
 - **Area:** `runtime/src/evals/` and `runtime/src/integrations/pi-extension.ts`
 - **Observed while:** Verifying Agent Evals diagnostics in PR #4.
 - **Why not fixed now:** Merge the verified diagnostic repairs while retaining the existing live failure for a focused follow-up.
-- **Evidence:** The latest live Synthetic read-only run failed in 115.34 seconds: the off attempt ended without `finish_reason`; the low attempt failed because context summarization hit its output token cap. This preceded the Team Leader reconciliation and has not been rerun on that combined tree. Symbolic and scripted process checks passed.
-- **Context:** Live Spark task completion remains unproven despite improved diagnostics. No live success is claimed for read-only, no-op, targeted-fix, or the complete Synthetic run.
-- **Suggested next step:** Run only Synthetic read-only through the canonical CLI, inspect the retained diagnostics, fix the demonstrated cause, then verify the remaining cases individually before one complete Synthetic run. See [PR #4](https://github.com/markur4/LTCook/pull/4) for retained evidence.
+- **Evidence:** Three isolated Spark scheduling trials with 65,536 tokens allocated failed to complete the handoff. After switching to Ornith 1.5 9B at the same context, one live Synthetic read-only run also failed: both attempts exceeded the 64-call limit while repeatedly updating the handoff instead of registering the scenario Task. Symbolic and scripted process checks passed.
+- **Context:** The model switch and larger context do not establish live task completion. No live success is claimed for read-only, no-op, targeted-fix, or the complete Synthetic run.
+- **Suggested next step:** Investigate the shared scheduling handoff and tool interaction, then verify the remaining cases individually before one complete Synthetic run. See [PR #6](https://github.com/markur4/LTCook/pull/6) for retained evidence.
 
 <br>
 

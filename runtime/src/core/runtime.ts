@@ -508,6 +508,17 @@ Task to register: ${input.description}`,
         return this.store.retryTask(sessionId, command);
       case 'task.update': {
         const task = this.store.getTask(sessionId, command.taskId);
+        if (
+          sessionId === this.evaluationSessionId &&
+          command.status === 'completed' &&
+          task.requestId === `evaluation:${task.passId}:execution-handoff` &&
+          !this.store
+            .listTasks(sessionId)
+            .some((item) => item.passId === task.passId && item.scheduled)
+        )
+          throw new Error(
+            'Create a scheduled scenario Task with task.create before completing the scheduling handoff',
+          );
         if (task.scheduled && command.status !== undefined && command.status !== task.status)
           throw new Error(
             'Scheduled Task status is owned by the runtime; report a result or retry it',

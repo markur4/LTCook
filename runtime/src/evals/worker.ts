@@ -12,6 +12,7 @@ import { Telemetry } from '../diagnostics/telemetry.js';
 import type { GuidanceInspection } from '../guidance-api/index.js';
 import {
   EVAL_MODEL,
+  EVAL_CONTEXT_WINDOW,
   EVAL_COMPACTION,
   EVAL_MAX_OUTPUT_TOKENS,
   EVAL_MODEL_COMPAT,
@@ -47,7 +48,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   const sessionId = randomUUID();
   const secret = randomUUID();
   const team = await loadTeam(job.teamSelection);
-  const contextWindow = 8192;
+  const contextWindow = EVAL_CONTEXT_WINDOW;
   const maxTokens = EVAL_MAX_OUTPUT_TOKENS;
   const telemetry = new Telemetry(path.join(state, 'events.jsonl'), path.join(state, 'trace.json'));
   const diagnostics = new EvaluationDiagnosticCollector();
@@ -125,12 +126,11 @@ export async function executeEvaluationJob(job: EvaluationJob) {
           models: [
             {
               id: EVAL_MODEL,
-              name: 'Local Spark evaluation',
+              name: 'Local Ornith evaluation',
               contextWindow,
               maxTokens,
               compat: EVAL_MODEL_COMPAT,
-              // > Pi's generic 4K reserve collapses this 8K model to one token. Use its explicit
-              // > request override with the 2K reserve maintained by evaluation compaction.
+              // > Keep the evaluation output cap explicit for ordinary and summary requests.
               samplingParams: { max_tokens: maxTokens },
               reasoning: true,
               thinkingLevelMap: { off: 'none', low: 'low' },
@@ -400,7 +400,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       )?.binding?.nativeAgentId;
       if (
         !inferenceFailed &&
-        handoff?.status === 'completed' &&
+        handoff &&
         leaderId &&
         finishedAgentTurns.has(leaderId) &&
         snapshot.assignments.some(

@@ -382,6 +382,17 @@ export default async function activate(
       // > Native Pi validates the narrower projection of the shared command schema.
       const command = input.command;
       const response = await rpc('/v1/command', { command });
+      if (evaluation)
+        await observe({
+          kind: 'runtime.command',
+          commandType: command.type,
+          status: response.status,
+          ...(command.type === 'task.update' && command.status
+            ? { taskStatus: command.status }
+            : {}),
+          hasPassId:
+            'passId' in command && typeof command.passId === 'string' && command.passId.length > 0,
+        });
       if (!response.ok) {
         let reason: string | undefined;
         if (evaluation) {

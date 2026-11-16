@@ -129,20 +129,21 @@ All notable changes to `ltcook` will be documented in this file.
 
 - Agent Evals supports Current Setup and Synthetic Setup selection in the CLI and Paseo panel, a model-free `eval audit --static-only`, full-instruction Behavior Evaluation by default, `--case` selection, and `--repetitions` defaulting to one. Bottleneck Attribution uses the same executions and traces; `eval run --all` also performs Instruction Audit. Failed cases stop after their low-reasoning fallback, with saved partial results and safeguard history.
   Evaluation attempts use independent copy-on-write workspace copies where supported, release disposable state between attempts, and avoid duplicate runtime-state polling.
+  Local inference uses Ornith 1.5 9B with a 65,536-token context; existing Spark installations need the normal setup or repair flow to prepare the new model.
   Pi context compaction uses the same pinned local model; sanitized diagnostics and traces include summary-call timing, usage and failures.
-  Agents receive an authenticated disposable execution-scope clarification alongside full instructions, using the Spark-supported system role. Restart removes temporary execution state for supported run records and reports cleanup failures.
+  Agents receive an authenticated disposable execution-scope clarification alongside full instructions, using the system role. Restart removes temporary execution state for supported run records and reports cleanup failures.
   Evaluation output caps use Ollama's supported `max_tokens` field, including compaction. Leader handoffs explain native scheduling operations, and command validation reports errors for the selected command type.
   Rejected tool attempts count toward the existing budget; sanitized provider metadata preserves stream failures without saving stream text or headers.
   Failed context summaries end the attempt instead of repeating compaction until timeout.
 
 <br>
-- Added normal-install Ollama/Spark provisioning and opt-in local Agent Evals with private Perfetto-compatible traces and safeguards derived from comparable successful runs.
+- Added normal-install Ollama/Ornith provisioning and opt-in local Agent Evals with private Perfetto-compatible traces and safeguards derived from comparable successful runs.
 - Added runtime dispatch of eligible approved Pass Tasks, persisted dependencies,
   verification and user approval gates, same-member serialization, correction and
   explicit retry, restart delivery handling, and one current-revision Pass review.
 - Added required Linux real Pi/Paseo system acceptance using a scripted local
   endpoint, plus local Pi guidance benchmarks for read-only, no-op, and targeted
-  fixes. Benchmarks use Spark-X2.6-4B Q8 with thinking off, retry failed behavior
+  fixes. Benchmarks use Ornith 1.5 9B with thinking off, retry failed behavior
   cases once at low thinking, and record total task time, provider usage,
   tool/delegation counts, and action candidates.
 - Added Core/Team/Project/User guidance with required standing Core rules, native

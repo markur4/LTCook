@@ -47,6 +47,16 @@ describe('evaluation execution scope', () => {
       const pass = initial.passes[0]!;
       const bootstrap = initial.assignments[0]!;
       const leader = { kind: 'agent' as const, nativeAgentId: 'leader' };
+      await expect(
+        runtime.execute('evaluation', leader, {
+          type: 'task.update',
+          taskId: bootstrap.taskId,
+          status: 'completed',
+        }),
+      ).rejects.toThrow('Create a scheduled scenario Task with task.create');
+      expect(
+        runtime.snapshot('evaluation').tasks.find((item) => item.id === bootstrap.taskId)?.status,
+      ).not.toBe('completed');
       const task = (await runtime.execute('evaluation', leader, {
         type: 'task.create',
         passId: pass.id,

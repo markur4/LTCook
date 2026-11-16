@@ -428,12 +428,12 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just runtime test` | Run runtime unit/native/integration and team contract tests. |
 | `just runtime test-integration` | Run runtime integration tests. |
 | `just runtime build` | Compile the runtime, Pi SDK/RPC launcher, Pi extension, and Paseo plugin. |
-| `just eval probe` | Run the opt-in local Spark/Pi probe; requires normal app setup and the exact local model. |
+| `just eval probe` | Run the opt-in local Ornith/Pi probe; requires normal app setup and the exact local model. |
 | `just eval audit-static` | Run model-free instruction inventory checks. |
-| `just eval audit` | Run the local Spark semantic Instruction Audit. |
+| `just eval audit` | Run the local Ornith semantic Instruction Audit. |
 | `just eval behavior` | Run read-only, no-op and targeted-fix Behavior Evaluation once with full instructions; fall back once to low reasoning on failure. |
 | `just eval bottlenecks` | Run full-instruction cases once by default and report Bottleneck Attribution from their Perfetto-compatible traces. |
-| `ltcook app doctor --verbose --json` | Inspect AppRC paths and local Ollama/Spark readiness. |
+| `ltcook app doctor --verbose --json` | Inspect AppRC paths and local Ollama/Ornith readiness. |
 | `just check` | Enforce Prettier/Ruff formatting, TypeScript types, Python lint, and Pyright. |
 | `just test` | Run Bun unit/native/integration and team contract tests, plus Python tests excluding `integration` and `system`. |
 | `just test-integration` | Run marked Python and TypeScript integration tests. |

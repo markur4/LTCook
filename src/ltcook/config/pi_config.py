@@ -11,6 +11,7 @@ from apprc import ResolveOptions
 
 from ltcook.config.app import APP_RC
 from ltcook.config.bundle import LtcookConfig
+from ltcook_distr.payload.app_lifecycle.prepare_ollama import CONTEXT_TOKENS, EVAL_MODEL
 
 
 def resolve_global_config(*, environment: Mapping[str, str] | None = None):
@@ -103,9 +104,9 @@ def pi_documents(
                 "apiKey": "ollama",
                 "models": [
                     {
-                        "id": "ltcook-spark-x2.6-4b-q8_0-ctx8192:latest",
-                        "name": "LTCook Spark Q8_0 (8192 context)",
-                        "contextWindow": 8192,
+                        "id": EVAL_MODEL,
+                        "name": "LTCook Ornith 1.5 9B (65536 context)",
+                        "contextWindow": CONTEXT_TOKENS,
                         "maxTokens": 2048,
                         "reasoning": True,
                         "thinkingLevelMap": {
