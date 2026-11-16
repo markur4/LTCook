@@ -34,6 +34,7 @@ def test_native_preparation_reports_configuration_inputs_and_outputs(
     launch.prepare_native_command(project)
     result = json.loads(capsys.readouterr().out)
     inputs = set(result["dependencies"])
+    assert str(project) in inputs
     marker = project / APP_RC.schema.workspace_dotenv_filename
     assert str(marker) in inputs
     assert str(marker.with_name(f"{marker.stem}.secret{marker.suffix}")) in inputs

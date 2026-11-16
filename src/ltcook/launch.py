@@ -111,10 +111,9 @@ def resolve_launch(
                 snapshot.paths.require("config") / snapshot.schema.apprc_toml_filename
             )
         if workspace_root is not None:
-            marker = (
-                Path(workspace_root).expanduser().resolve()
-                / resolved.schema.workspace_dotenv_filename
-            )
+            workspace_path = Path(workspace_root).expanduser().resolve()
+            input_paths.add(workspace_path)
+            marker = workspace_path / resolved.schema.workspace_dotenv_filename
             input_paths.add(marker)
             input_paths.add(marker.with_name(f"{marker.stem}.secret{marker.suffix}"))
     environment = dict(shell)

@@ -12,13 +12,15 @@ test('workspace preparation is shared concurrently and invalidated by input and 
     const config = path.join(root, 'workspace.env');
     const generated = path.join(root, 'models.json');
     const optional = path.join(root, 'workspace.secret.env');
+    const workspace = path.join(root, 'workspace');
+    mkdirSync(workspace);
     writeFileSync(config, 'first');
     writeFileSync(generated, 'generated');
     const cache = new WorkspacePreparationCache();
     let calls = 0;
     const prepare = () => ({
       environment: { MODEL: String(++calls) },
-      dependencies: [config, optional, generated],
+      dependencies: [workspace, config, optional, generated],
     });
     const [one, two] = await Promise.all([
       cache.get('session-a', prepare),
@@ -34,6 +36,8 @@ test('workspace preparation is shared concurrently and invalidated by input and 
     expect((await cache.get('session-a', prepare)).environment.MODEL).toBe('4');
     writeFileSync(generated, 'changed by user');
     expect((await cache.get('session-a', prepare)).environment.MODEL).toBe('5');
+    rmSync(workspace, { recursive: true });
+    expect((await cache.get('session-a', prepare)).environment.MODEL).toBe('6');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

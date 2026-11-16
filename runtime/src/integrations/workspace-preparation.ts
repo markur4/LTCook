@@ -12,9 +12,9 @@ function fingerprint(paths: string[]): string {
     hash.update(JSON.stringify(file));
     try {
       const stat = lstatSync(file);
-      hash.update(JSON.stringify([stat.mode, stat.size]));
+      hash.update(JSON.stringify([stat.mode, stat.size, stat.dev, stat.ino]));
       if (stat.isSymbolicLink()) hash.update(readlinkSync(file));
-      hash.update(readFileSync(file));
+      if (!stat.isDirectory()) hash.update(readFileSync(file));
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
       hash.update('missing');
