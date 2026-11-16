@@ -142,6 +142,48 @@ test('terminal persistence failure reports a failed run instead of leaving it ru
   }
 });
 
+test('a run cannot be deleted before its terminal event is written', async () => {
+  let finish!: () => void;
+  const continueEngine = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const { root, instance } = await service(async () => {
+    await continueEngine;
+    throw new Error('Provider failed');
+  });
+  const id = await instance.start({ preset: 'behavior', setup: 'synthetic' });
+  let release!: () => void;
+  let reached!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const writing = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const append = fileSystem.appendFile;
+  const intercept = spyOn(fileSystem, 'appendFile').mockImplementation(
+    async (file, data, options) => {
+      if (file === path.join(root, 'evals/runs', id, 'events.jsonl')) {
+        reached();
+        await blocked;
+      }
+      return append(file, data, options);
+    },
+  );
+  try {
+    finish();
+    await writing;
+    await expect(instance.delete(id)).rejects.toThrow('Cancel the active');
+    release();
+    await finished(instance, id);
+    await instance.delete(id);
+    expect(instance.list()).toEqual([]);
+  } finally {
+    release();
+    intercept.mockRestore();
+  }
+});
+
 test('restart does not count progress newer than the last complete evidence checkpoint', async () => {
   const { root, instance } = await service(async ({ progress, checkpoint }) => {
     progress({ event: 'case.completed', suite: 'behavior', completed: 1, total: 3 });

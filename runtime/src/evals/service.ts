@@ -352,10 +352,14 @@ export class EvalRunService {
         updatedAt: new Date().toISOString(),
       };
       await this.saveSummary(terminal);
+      await this.emit(
+        terminal,
+        terminal.status === 'cancelled' ? 'run.cancelled' : 'run.completed',
+        {
+          elapsedMs: Date.now() - started,
+        },
+      );
       Object.assign(summary, terminal);
-      await this.emit(summary, summary.status === 'cancelled' ? 'run.cancelled' : 'run.completed', {
-        elapsedMs: Date.now() - started,
-      });
     } catch (error) {
       await this.writes.catch(() => undefined);
       const terminal: EvalSummary = {
@@ -366,6 +370,14 @@ export class EvalRunService {
       };
       try {
         await this.saveSummary(terminal);
+        await this.emit(
+          terminal,
+          terminal.status === 'cancelled' ? 'run.cancelled' : 'run.failed',
+          {
+            elapsedMs: Date.now() - started,
+            message: terminal.error,
+          },
+        );
       } catch (storageError) {
         Object.assign(summary, terminal, {
           status: 'failed',
@@ -374,10 +386,6 @@ export class EvalRunService {
         return;
       }
       Object.assign(summary, terminal);
-      await this.emit(summary, summary.status === 'cancelled' ? 'run.cancelled' : 'run.failed', {
-        elapsedMs: Date.now() - started,
-        message: summary.error,
-      });
     } finally {
       this.active = undefined;
     }
