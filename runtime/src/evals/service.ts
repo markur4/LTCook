@@ -364,7 +364,15 @@ export class EvalRunService {
         error: safeError(error),
         updatedAt: new Date().toISOString(),
       };
-      await this.saveSummary(terminal);
+      try {
+        await this.saveSummary(terminal);
+      } catch (storageError) {
+        Object.assign(summary, terminal, {
+          status: 'failed',
+          error: `${terminal.error}; could not persist the terminal evaluation result: ${safeError(storageError)}`,
+        });
+        return;
+      }
       Object.assign(summary, terminal);
       await this.emit(summary, summary.status === 'cancelled' ? 'run.cancelled' : 'run.failed', {
         elapsedMs: Date.now() - started,

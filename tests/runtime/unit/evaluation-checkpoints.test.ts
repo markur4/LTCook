@@ -113,6 +113,35 @@ test('terminal status is not visible before its summary is persisted', async () 
   }
 });
 
+test('terminal persistence failure reports a failed run instead of leaving it running', async () => {
+  let fail!: () => void;
+  const continueEngine = new Promise<void>((resolve) => {
+    fail = resolve;
+  });
+  const { root, instance } = await service(async () => {
+    await continueEngine;
+    throw new Error('Provider failed');
+  });
+  const id = await instance.start({ preset: 'behavior', setup: 'synthetic' });
+  const rename = fileSystem.rename;
+  const intercept = spyOn(fileSystem, 'rename').mockImplementation(async (from, to) => {
+    if (to === path.join(root, 'evals/runs', id, 'run.json'))
+      throw new Error('fixture disk failure');
+    return rename(from, to);
+  });
+  try {
+    fail();
+    await finished(instance, id);
+    expect(instance.report(id).summary).toMatchObject({
+      status: 'failed',
+      error:
+        'Provider failed; could not persist the terminal evaluation result: fixture disk failure',
+    });
+  } finally {
+    intercept.mockRestore();
+  }
+});
+
 test('restart does not count progress newer than the last complete evidence checkpoint', async () => {
   const { root, instance } = await service(async ({ progress, checkpoint }) => {
     progress({ event: 'case.completed', suite: 'behavior', completed: 1, total: 3 });
