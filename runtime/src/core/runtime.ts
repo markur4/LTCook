@@ -543,52 +543,8 @@ Task to register: ${input.description}`,
       case 'step.create':
         this.requireLeader(actor, leader);
         return this.store.createStep(sessionId, command);
-      case 'assignment.create': {
-        this.requireLeader(actor, leader);
-        const task = this.store.getTask(sessionId, command.taskId);
-        if (task.scheduled) throw new Error('Scheduled Tasks are assigned by the runtime');
-        const workType = task.workType === 'design' ? 'design' : 'task.execute';
-        const eligible = this.teamFor(sessionId).definition.members.filter((member) =>
-          member.workTypes.includes(workType),
-        );
-        const selected =
-          command.memberKey ??
-          (await this.teamFor(sessionId).selectAssignee?.(
-            Object.freeze({
-              workType,
-              sessionId,
-              workspaceRoot: session.workspaceRoot,
-            }),
-            Object.freeze(eligible.map((member) => Object.freeze({ ...member }))),
-          )) ??
-          this.teamFor(sessionId).definition.routing[workType];
-        if (!eligible.some((member) => member.key === selected))
-          throw new Error(`Selected member is not eligible for ${workType}`);
-        const member = this.member(session, selected);
-        const binding =
-          member.lifetime === 'temporary'
-            ? this.store.listBindings(sessionId).find((item) => item.memberKey === member.key)
-            : await this.ensureMember(session, member.key);
-        if (binding === undefined || binding.state !== 'bound' || binding.nativeAgentId === null)
-          throw new Error(
-            `Member ${member.key} is unavailable: ${binding?.blocker ?? binding?.state ?? 'temporary member has not been explicitly spawned'}`,
-          );
-        if (
-          this.store
-            .listAssignments(sessionId)
-            .some((item) => item.taskId === command.taskId && item.memberKey === member.key)
-        )
-          throw new Error(
-            'This task already has an assignment to that member; the handoff will not be replayed',
-          );
-        const assignment = this.store.createAssignment(sessionId, {
-          ...command,
-          memberKey: member.key,
-          nativeAgentId: binding.nativeAgentId,
-        });
-        await this.deliverAssignment(assignment);
-        return this.store.getAssignment(sessionId, assignment.id);
-      }
+      case 'assignment.create':
+        return this.createAssignment(session, actor, leader, command);
       case 'report.create': {
         const assignment = this.store.getAssignment(sessionId, command.assignmentId);
         if (actor.kind !== 'agent' || assignment.nativeAgentId !== actor.nativeAgentId)
@@ -634,78 +590,8 @@ Task to register: ${input.description}`,
           throw new Error('Agents may update only Steps belonging to their assigned tasks');
         return this.store.updateStep(sessionId, command);
       }
-      case 'review.create': {
-        if (actor.kind !== 'agent' || identity === undefined)
-          throw new Error('Review requires a bound agent');
-        const reviewPolicy = this.teamFor(sessionId).definition.reviewPolicy;
-        const selfReview =
-          reviewPolicy.mode === 'self' &&
-          identity.memberKey === this.teamFor(sessionId).definition.leaderKey;
-        if (reviewPolicy.mode === 'self' && !selfReview)
-          throw new Error('This team permits leader self-inspection only');
-        if (
-          reviewPolicy.mode === 'independent' &&
-          (!reviewPolicy.reviewerKeys.includes(identity.memberKey) ||
-            identity.memberKey === this.teamFor(sessionId).definition.leaderKey)
-        )
-          throw new Error('This member is not an independent reviewer');
-        const gate = this.store
-          .listTasks(sessionId)
-          .find(
-            (task) => task.passId === command.passId && task.scheduled && task.phase === 'review',
-          );
-        if (
-          !gate &&
-          this.store
-            .listTasks(sessionId)
-            .some((task) => task.passId === command.passId && task.scheduled)
-        )
-          throw new Error('Scheduled Pass review awaits its runtime review gate');
-        if (gate) {
-          if (!command.assignmentId || command.revision === undefined)
-            throw new Error('Scheduled review requires its assignmentId and current Pass revision');
-          const assignment = this.store.getAssignment(sessionId, command.assignmentId);
-          if (assignment.taskId !== gate.id || assignment.nativeAgentId !== actor.nativeAgentId)
-            throw new Error('Only the assigned Pass reviewer may submit this review');
-          if (command.outcome === 'accepted' && this.taskGates(sessionId, gate).length)
-            throw new Error('Pass review has unmet dependencies or approval gates');
-          if (
-            this.store
-              .listTasks(sessionId)
-              .some(
-                (task) =>
-                  task.passId === command.passId &&
-                  task.id !== gate.id &&
-                  task.status !== 'completed',
-              )
-          )
-            throw new Error('Pass review requires all non-review Tasks to be completed');
-        }
-        if (reviewPolicy.mode === 'independent') {
-          const assignments = this.store.listAssignments(sessionId);
-          const assignedToPass = this.store
-            .listTasks(sessionId)
-            .filter(
-              (task) =>
-                task.passId === command.passId &&
-                task.phase !== 'review' &&
-                task.correctionOfTaskId !== gate?.id,
-            )
-            .some((task) =>
-              assignments.some(
-                (assignment) =>
-                  assignment.taskId === task.id && assignment.memberKey === identity.memberKey,
-              ),
-            );
-          if (assignedToPass)
-            throw new Error('A member assigned to this Pass cannot independently review it');
-        }
-        return this.store.createReview(sessionId, {
-          ...command,
-          nativeAgentId: actor.nativeAgentId,
-          kind: selfReview ? 'self' : 'independent',
-        });
-      }
+      case 'review.create':
+        return this.createReview(sessionId, actor, identity, command);
       case 'approval.create':
         if (actor.kind !== 'user')
           throw new Error('Only the trusted user route can create approvals');
@@ -748,6 +634,133 @@ Task to register: ${input.description}`,
         return { submitted: true, recipientAgentId: binding.nativeAgentId };
       }
     }
+  }
+
+  private async createAssignment(
+    session: Session,
+    actor: RuntimeActor,
+    leader: boolean,
+    command: Extract<RuntimeCommand, { type: 'assignment.create' }>,
+  ) {
+    const sessionId = session.id;
+    this.requireLeader(actor, leader);
+    const task = this.store.getTask(sessionId, command.taskId);
+    if (task.scheduled) throw new Error('Scheduled Tasks are assigned by the runtime');
+    const workType = task.workType === 'design' ? 'design' : 'task.execute';
+    const eligible = this.teamFor(sessionId).definition.members.filter((member) =>
+      member.workTypes.includes(workType),
+    );
+    const selected =
+      command.memberKey ??
+      (await this.teamFor(sessionId).selectAssignee?.(
+        Object.freeze({
+          workType,
+          sessionId,
+          workspaceRoot: session.workspaceRoot,
+        }),
+        Object.freeze(eligible.map((member) => Object.freeze({ ...member }))),
+      )) ??
+      this.teamFor(sessionId).definition.routing[workType];
+    if (!eligible.some((member) => member.key === selected))
+      throw new Error(`Selected member is not eligible for ${workType}`);
+    const member = this.member(session, selected);
+    const binding =
+      member.lifetime === 'temporary'
+        ? this.store.listBindings(sessionId).find((item) => item.memberKey === member.key)
+        : await this.ensureMember(session, member.key);
+    if (binding === undefined || binding.state !== 'bound' || binding.nativeAgentId === null)
+      throw new Error(
+        `Member ${member.key} is unavailable: ${binding?.blocker ?? binding?.state ?? 'temporary member has not been explicitly spawned'}`,
+      );
+    if (
+      this.store
+        .listAssignments(sessionId)
+        .some((item) => item.taskId === command.taskId && item.memberKey === member.key)
+    )
+      throw new Error(
+        'This task already has an assignment to that member; the handoff will not be replayed',
+      );
+    const assignment = this.store.createAssignment(sessionId, {
+      ...command,
+      memberKey: member.key,
+      nativeAgentId: binding.nativeAgentId,
+    });
+    await this.deliverAssignment(assignment);
+    return this.store.getAssignment(sessionId, assignment.id);
+  }
+
+  private createReview(
+    sessionId: string,
+    actor: RuntimeActor,
+    identity: NativeBinding | undefined,
+    command: Extract<RuntimeCommand, { type: 'review.create' }>,
+  ) {
+    if (actor.kind !== 'agent' || identity === undefined)
+      throw new Error('Review requires a bound agent');
+    const reviewPolicy = this.teamFor(sessionId).definition.reviewPolicy;
+    const selfReview =
+      reviewPolicy.mode === 'self' &&
+      identity.memberKey === this.teamFor(sessionId).definition.leaderKey;
+    if (reviewPolicy.mode === 'self' && !selfReview)
+      throw new Error('This team permits leader self-inspection only');
+    if (
+      reviewPolicy.mode === 'independent' &&
+      (!reviewPolicy.reviewerKeys.includes(identity.memberKey) ||
+        identity.memberKey === this.teamFor(sessionId).definition.leaderKey)
+    )
+      throw new Error('This member is not an independent reviewer');
+    const gate = this.store
+      .listTasks(sessionId)
+      .find((task) => task.passId === command.passId && task.scheduled && task.phase === 'review');
+    if (
+      !gate &&
+      this.store
+        .listTasks(sessionId)
+        .some((task) => task.passId === command.passId && task.scheduled)
+    )
+      throw new Error('Scheduled Pass review awaits its runtime review gate');
+    if (gate) {
+      if (!command.assignmentId || command.revision === undefined)
+        throw new Error('Scheduled review requires its assignmentId and current Pass revision');
+      const assignment = this.store.getAssignment(sessionId, command.assignmentId);
+      if (assignment.taskId !== gate.id || assignment.nativeAgentId !== actor.nativeAgentId)
+        throw new Error('Only the assigned Pass reviewer may submit this review');
+      if (command.outcome === 'accepted' && this.taskGates(sessionId, gate).length)
+        throw new Error('Pass review has unmet dependencies or approval gates');
+      if (
+        this.store
+          .listTasks(sessionId)
+          .some(
+            (task) =>
+              task.passId === command.passId && task.id !== gate.id && task.status !== 'completed',
+          )
+      )
+        throw new Error('Pass review requires all non-review Tasks to be completed');
+    }
+    if (reviewPolicy.mode === 'independent') {
+      const assignments = this.store.listAssignments(sessionId);
+      const assignedToPass = this.store
+        .listTasks(sessionId)
+        .filter(
+          (task) =>
+            task.passId === command.passId &&
+            task.phase !== 'review' &&
+            task.correctionOfTaskId !== gate?.id,
+        )
+        .some((task) =>
+          assignments.some(
+            (assignment) =>
+              assignment.taskId === task.id && assignment.memberKey === identity.memberKey,
+          ),
+        );
+      if (assignedToPass)
+        throw new Error('A member assigned to this Pass cannot independently review it');
+    }
+    return this.store.createReview(sessionId, {
+      ...command,
+      nativeAgentId: actor.nativeAgentId,
+      kind: selfReview ? 'self' : 'independent',
+    });
   }
 
   /** Serializes dispatch decisions while native members perform their work concurrently. */
