@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import { createEvalEngine } from '../../../runtime/src/evals/engine.js';
 import { EVAL_MODEL } from '../../../runtime/src/evals/setup.js';
@@ -39,6 +40,19 @@ describe('Agent Evals run service', () => {
       path.join(root, 'teams', 'fixture-selected', 'package.json'),
       JSON.stringify({ name: '@ltcook/team-default-minimal' }),
     );
+    const projectRoot = path.resolve(import.meta.dir, '../../..');
+    await symlink(path.join(projectRoot, 'node_modules'), path.join(root, 'node_modules'), 'dir');
+    const bundle = await Bun.build({
+      entrypoints: [path.join(projectRoot, 'runtime/src/evals/engine.ts')],
+      outdir: path.join(root, 'runtime/dist'),
+      naming: 'engine.js',
+      target: 'node',
+      packages: 'external',
+    });
+    expect(bundle.success).toBe(true);
+    const compiled = (await import(
+      pathToFileURL(bundle.outputs[0]!.path).href
+    )) as typeof import('../../../runtime/src/evals/engine.js');
     await writeFile(path.join(root, 'guide.md'), 'guidance '.repeat(3001));
     await writeFile(
       path.join(root, 'catalog.json'),
@@ -50,7 +64,7 @@ describe('Agent Evals run service', () => {
     try {
       const service = new EvalRunService(
         root,
-        createEvalEngine({
+        compiled.createEvalEngine({
           resources: root,
           appRoot: root,
           context: {
