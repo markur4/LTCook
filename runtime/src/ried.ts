@@ -10,7 +10,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { arch, platform } from 'node:os';
-import { basename, delimiter, isAbsolute, join, sep } from 'node:path';
+import { basename, delimiter, isAbsolute, join } from 'node:path';
+import { isWithin } from './path-containment.js';
 
 export interface RiedContext {
   id: string;
@@ -67,10 +68,6 @@ function safeString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length <= 512 ? value : undefined;
 }
 
-function within(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}${sep}`);
-}
-
 function executable(name: string, pathValue: string, workspace: string): string | undefined {
   const extensions = platform() === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
   for (const entry of pathValue.split(delimiter)) {
@@ -79,7 +76,7 @@ function executable(name: string, pathValue: string, workspace: string): string 
       const candidate = join(entry, `${name}${extension}`);
       try {
         const actual = realpathSync(candidate);
-        if (statSync(actual).isFile() && !within(workspace, actual)) return actual;
+        if (statSync(actual).isFile() && !isWithin(workspace, actual, true)) return actual;
       } catch {
         // > An unavailable PATH entry is an observation, not a scan failure.
       }

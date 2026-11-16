@@ -10,6 +10,7 @@ import path from 'node:path';
 import type { AgentBackend, CreateAgentOptions, NativeAgent } from '../workflow-api/index.js';
 import { agentEnvironment } from './native-policy.js';
 import { configurePiExtensions } from './pi-settings.js';
+import { isWithin } from '../path-containment.js';
 export interface PaseoHost {
   api: PaseoApi;
   listen: string;
@@ -38,16 +39,6 @@ async function resolvedPath(candidate: string): Promise<string> {
       current = parent;
     }
   }
-}
-
-function isWithin(root: string, candidate: string, allowEqual = false): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    (allowEqual || relative !== '') &&
-    relative !== '..' &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
 }
 
 async function piPackageExtensions(appNodeModules: string, packageName: string): Promise<string[]> {

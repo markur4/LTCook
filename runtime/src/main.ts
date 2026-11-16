@@ -4,6 +4,7 @@ import process from 'node:process';
 import type { SessionSnapshot } from './workflow-api/index.js';
 import { TeamRegistry } from './integrations/team-loader.js';
 import { RiedService } from './ried.js';
+import { isWithin } from './path-containment.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
 import { EvalRunService } from './evals/service.js';
 import { createEvalEngine } from './evals/engine.js';
@@ -364,15 +365,11 @@ async function run(): Promise<void> {
       }
       const candidate = path.resolve(capturePath);
       const parent = await fs.realpath(path.dirname(candidate));
-      const relativeParent = path.relative(canonicalDeploymentRoot, parent);
       const file = await fs.lstat(candidate);
       if (
         file.isSymbolicLink() ||
         !file.isFile() ||
-        (relativeParent !== '' &&
-          (relativeParent === '..' ||
-            relativeParent.startsWith(`..${path.sep}`) ||
-            path.isAbsolute(relativeParent)))
+        !isWithin(canonicalDeploymentRoot, parent, true)
       ) {
         throw new Error('LTCOOK_BACKEND_LOG_PATH must be a regular file inside the deployment.');
       }
