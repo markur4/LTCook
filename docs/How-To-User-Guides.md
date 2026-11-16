@@ -63,15 +63,10 @@ host elevation; this preparation does not start containers. `--skip-setup`
 skips only optional configuration, not required initialization.
 
 > [!WARNING]
-> Existing schema-2 installations need their matching old retirement tools
-> before schema-3 registration. Program-only old uninstall leaves an incompatible
-> retained record. The old application CLI's `--complete` without categories
-> selects all resources: do not use it for a retention-preserving cutover.
-> Preview the matching old controller with an explicitly empty category set,
-> `complete=True, forget_retained=True`, retaining every resource root and marker.
-> Only recorded program/support outputs may be removed. Apply that reviewed
-> revision/inventory through its supported handoff, wait for finalization, then
-> register the original checkout. Never hand-edit/delete authority or reset Pi auth.
+> A clean prototype reinstall removes the previous LTCook-owned configuration,
+> credentials, sessions, histories, caches and installation records. Use the
+> installation manager's removal preview before reinstalling. If it cannot
+> establish the cleanup inventory, it reports the problem and stops.
 
 Configuration inspection and directory entry do not provision prerequisites.
 Use `ltcook app doctor --json` for diagnostics; repeat the supported editable
@@ -169,9 +164,9 @@ guidance under local Bonsai, or **Synthetic Setup** for the packaged scenarios.
 Current Setup uses the selected registered workspace when available, otherwise
 global configuration. It does not measure the team's normal cloud model.
 
-The Synthetic read-only case has a [known unresolved failure](../BACKLOG.md);
-a successful full Synthetic run has not been established. Failed runs retain
-diagnostics for investigation.
+Both setups have completed with Bonsai. Results vary between runs; failed
+attempts retain diagnostics for investigation. See the [backlog](../BACKLOG.md)
+for the remaining reliability work.
 
 ```shell
 ltcook eval audit --static-only
@@ -414,16 +409,16 @@ choosing further action. Restarting is not renewed permission to repeat an
 external operation. [Coordination and recovery](Explanations.md#coordination-and-recovery)
 explains the ownership boundary.
 
-For an incompatible prototype coordination database, stop its owning runtime,
-preserve the old database, and select a new empty store before restarting:
+To start with a new coordination database, stop its owning runtime and select
+an empty store before restarting:
 
 ```shell
 ltcook config set runtime.database /absolute/path/to/new-coordination.sqlite --scope user
 ```
 
-The new store starts new coordination Sessions. Existing Pi/Paseo histories and
-shared authentication remain with their native owners; selecting a fresh store
-does not import them or authorize replay of an uncertain action.
+The new store starts new coordination Sessions. Pi/Paseo histories and shared
+authentication remain with their native owners; selecting a fresh store does
+not authorize replay of an uncertain action.
 
 ## Plan work and answer decisions
 
