@@ -19,7 +19,7 @@ const steps = new Map<string, number>();
 const calls: string[] = [];
 const verificationCalls = new Set<string>();
 const verifiedCalls = new Set<string>();
-const verificationMarker = 'LTCook fixture verified';
+const verificationMarker = 'LTCook fixture verification passed';
 let requests = 0;
 let compactions = 0;
 const requestTokenLimits: number[] = [];
@@ -221,7 +221,10 @@ const server = createServer(async (request, response) => {
       }
       if (index === 1) {
         name = 'write';
-        args = { path: '.ltcook-evals/answer.json', content: '{"total":20}' };
+        args = {
+          path: '.ltcook-evals/answer.json',
+          content: scenario === 'masked-verification-failure' ? '{"total":19}' : '{"total":20}',
+        };
       }
       if (index === 2) {
         name = 'bash';
@@ -230,7 +233,9 @@ const server = createServer(async (request, response) => {
             scenario === 'bad-verification' ||
             (scenario === 'fallback-success' && input.reasoning_effort === 'none')
               ? 'true'
-              : 'test -z "$OPENAI_API_KEY" && test -z "$ANTHROPIC_API_KEY" && ! touch /usr/ltcook-evaluation-write-denied 2>/dev/null && node .ltcook-evals/verify.cjs && printf \'LTCook fixture verified\'',
+              : scenario === 'masked-verification-failure'
+                ? 'node .ltcook-evals/verify.cjs; echo "EXIT=$?"; printf \'{"total":20}\' > .ltcook-evals/answer.json'
+                : 'test -z "$OPENAI_API_KEY" && test -z "$ANTHROPIC_API_KEY" && ! touch /usr/ltcook-evaluation-write-denied 2>/dev/null || exit 1; node .ltcook-evals/verify.cjs; echo "EXIT=$?"',
         };
       }
       if (index === 3 || (scenario === 'validation-recovery' && index === 4))
@@ -362,6 +367,7 @@ try {
                 'quick',
                 'current',
                 'bad-verification',
+                'masked-verification-failure',
                 'no-delegation',
                 'compaction',
                 'compaction-cancel',
@@ -434,6 +440,7 @@ try {
     let result: Awaited<ReturnType<typeof engine>>;
     if (
       scenario === 'bad-verification' ||
+      scenario === 'masked-verification-failure' ||
       scenario === 'no-delegation' ||
       scenario === 'compaction-error' ||
       scenario === 'no-scheduled-work'
@@ -554,9 +561,13 @@ try {
       tasks.every(
         (task) =>
           task.success ===
-          !['bad-verification', 'no-delegation', 'compaction-error', 'no-scheduled-work'].includes(
-            scenario,
-          ),
+          ![
+            'bad-verification',
+            'masked-verification-failure',
+            'no-delegation',
+            'compaction-error',
+            'no-scheduled-work',
+          ].includes(scenario),
       ),
       JSON.stringify(
         tasks.map((task) =>
@@ -572,6 +583,7 @@ try {
     if (
       scenario === 'no-delegation' ||
       scenario === 'bad-verification' ||
+      scenario === 'masked-verification-failure' ||
       scenario === 'no-scheduled-work'
     )
       assert(
@@ -601,7 +613,7 @@ try {
         'Every non-delegating attempt must successfully verify the corrected fixture',
       );
     }
-    if (scenario === 'bad-verification')
+    if (scenario === 'bad-verification' || scenario === 'masked-verification-failure')
       assert(
         tasks.every((task) =>
           task.attempts.every((attempt) =>

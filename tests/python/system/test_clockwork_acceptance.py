@@ -38,6 +38,7 @@ def test_native_paseo_leader_adoption(tmp_path: Path) -> None:
         "current",
         "cancel",
         "bad-verification",
+        "masked-verification-failure",
         "no-delegation",
         "repeated",
         "full",
