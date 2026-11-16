@@ -93,10 +93,10 @@ Treat this as the parking lot for actionable problems discovered while working b
 ## P1 / E1 [Tooling] - *Verify complete Agent Evals with the configured model*
 - **Area:** `runtime/src/evals/` and `runtime/src/integrations/pi-extension.ts`
 - **Observed while:** Verifying Agent Evals diagnostics in PR #4.
-- **Why not fixed now:** The user requested merging the reconciled progress before live evaluation work is complete.
-- **Evidence:** Bonsai 2 27B completed the full Synthetic Agent Evals in 83.1 seconds in an isolated source copy. A later run passed read-only and no-op, but targeted-fix failed after a timeout and an unmet fixture check. A focused diagnostic captured a shell command that attempted the verifier with a trailing status echo; the evaluation did not recognize it, and its output was not retained, so its success is unproven.
-- **Context:** The selected model's reliability, verifier detection, and Current Setup remain incompletely verified. Preserve the existing success criteria and authorization.
-- **Suggested next step:** Investigate verification-command detection and the targeted-fix failures; then run both full setups on the integrated configuration and record their elapsed times. See [PR #6](https://github.com/markur4/LTCook/pull/6) for retained evidence.
+- **Why not fixed now:** Current Setup did not complete with the configured model.
+- **Evidence:** A complete Synthetic run passed in 129.5 seconds, with one attempt per behavior case, before the fixture revision was updated to record the changed verifier contract. A Current Setup run failed after 293.2 seconds: read-only passed on retry, but no-op timed out after the agent reported its scheduling assignment without completing the scheduling Task. The low-thinking retry then reached the 2,048-token output limit before a tool call.
+- **Context:** The verifier now identifies its own successful output even when a shell command follows it with a status echo; a scripted check also rejects a masked verifier failure. Current Setup reliability remains unverified. Preserve the existing success criteria and authorization.
+- **Suggested next step:** Investigate the unfinished scheduling handoff and the low-thinking output limit in Current Setup, then rerun the complete Agent Evals and record the result and elapsed time. See [PR #6](https://github.com/markur4/LTCook/pull/6) for earlier evidence.
 
 <br>
 

@@ -242,7 +242,7 @@ export default async function activate(
       if (
         event.toolName === 'bash' &&
         typeof event.args?.command === 'string' &&
-        /(?:^|&&|;)\s*node\s+\.ltcook-evals\/verify\.cjs(?:\s|$)/.test(event.args.command)
+        /(?:^|&&|;)\s*node\s+\.ltcook-evals\/verify\.cjs(?=\s|;|$)/.test(event.args.command)
       )
         fixtureVerifications.add(event.toolCallId);
       await observe({ kind: 'tool.start', tool: event.toolName, callId: event.toolCallId });
@@ -253,7 +253,19 @@ export default async function activate(
         tool: event.toolName,
         callId: event.toolCallId,
         durationMs: event.durationMs,
-        fixtureVerification: fixtureVerifications.delete(event.toolCallId),
+        fixtureVerification:
+          fixtureVerifications.delete(event.toolCallId) &&
+          Array.isArray(event.result.content) &&
+          event.result.content.some(
+            (block: unknown) =>
+              typeof block === 'object' &&
+              block !== null &&
+              'type' in block &&
+              block.type === 'text' &&
+              'text' in block &&
+              typeof block.text === 'string' &&
+              block.text.includes('LTCook fixture verification passed'),
+          ),
         isError: event.isError,
         ...(event.isError ? { error: evaluationToolError(event.result) } : {}),
       });
