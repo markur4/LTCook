@@ -253,6 +253,13 @@ use bare `ltcook` for Paseo and `ltcook app ...` for maintenance.
 
 ## Remove an installation
 
+If this installation has been started, run `ltcook stop` and
+`ltcook services stop` before previewing removal. Confirm both succeed; stop
+and resolve failures before uninstalling. AppRC's runtime locks do not stop
+LTCook's detached Node process, which must release its database and deployment
+before those directories are removed. A never-started installation needs no
+service credentials for its uninstall cleanup.
+
 Preview with `ltcook app uninstall --dry-run`, then use
 `ltcook app uninstall --yes` to remove the program and its managed configuration,
 appdata, cache and state. Use `--keep-data` for program-only removal. External

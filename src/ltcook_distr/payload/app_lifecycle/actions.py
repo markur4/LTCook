@@ -145,24 +145,11 @@ def _stop_owned_services(deployment: Path) -> None:
         raise SetupError(
             "Refusing to remove services outside the recorded LTCook project."
         )
-    try:
-        from ltcook.config.app import APP_RC
-        from ltcook.config.bundle import LtcookConfig
-
-        configuration = (
-            APP_RC.manage(environment=dict(os.environ)).resolve().build(LtcookConfig)
-        )
-    except Exception as exc:
-        raise SetupError(
-            "Cannot resolve AppRC service credentials for explicit purge."
-        ) from exc
-    if not configuration.crawl4ai.api_token or not configuration.searxng.secret:
-        raise SetupError(
-            "AppRC service credentials are required to safely evaluate the Compose project."
-        )
     environment = dict(os.environ)
-    environment["CRAWL4AI_API_TOKEN"] = configuration.crawl4ai.api_token
-    environment["SEARXNG_SECRET"] = configuration.searxng.secret
+    # > Compose parses required values even for down, which never starts services.
+    # > Use disposable subprocess-only values so cleanup needs no business config.
+    environment["CRAWL4AI_API_TOKEN"] = secrets.token_urlsafe(48)
+    environment["SEARXNG_SECRET"] = secrets.token_urlsafe(48)
     environment["PODMAN_COMPOSE_PROVIDER"] = str(provider)
     run(
         [

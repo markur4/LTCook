@@ -599,3 +599,87 @@ def test_uninstall_cleanup_preserves_data_when_services_cannot_be_stopped(
         cleanup(context)
 
     assert receipt.read_text() == "invalid receipt"
+
+
+def test_uninstall_cleanup_needs_no_business_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uuid import uuid4
+
+    from apprc.definition.installation import InstallationPlacement, OperationContext
+    from apprc.definition.paths import Layout
+
+    from ltcook.config.app import APP_RC
+    from ltcook_distr.payload.app_lifecycle import actions
+
+    deployment = tmp_path / "appdata" / "deployment"
+    compose = deployment / "app" / "services" / "compose.yaml"
+    compose.parent.mkdir(parents=True)
+    compose.write_text("services: {}")
+    podman = tmp_path / "podman"
+    provider = tmp_path / "compose-provider"
+    podman.touch()
+    provider.touch()
+    project = "ltcook-0123456789ab"
+    (deployment / ".ltcook-compose-project").write_text(project)
+    receipt = deployment / "services.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "connection": "local",
+                "compose_project": project,
+                "podman_executable": str(podman),
+                "compose_provider": str(provider),
+                "compose_file": str(compose),
+            }
+        )
+    )
+    monkeypatch.delenv("CRAWL4AI_API_TOKEN", raising=False)
+    monkeypatch.delenv("SEARXNG_SECRET", raising=False)
+    monkeypatch.setattr(
+        APP_RC,
+        "manage",
+        lambda **_kwargs: pytest.fail("cleanup must not resolve business config"),
+    )
+    calls = []
+    monkeypatch.setattr(
+        actions, "run", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+    context = OperationContext(
+        tmp_path / "installation",
+        uuid4(),
+        uuid4(),
+        InstallationPlacement(
+            layout=Layout(),
+            appdata_dir=deployment.parent,
+            capabilities=frozenset({"appdata"}),
+        ),
+    )
+
+    actions.cleanup(context)
+
+    assert len(calls) == 1
+    arguments, options = calls[0]
+    assert arguments == (
+        [
+            str(podman),
+            "compose",
+            "--project-name",
+            project,
+            "-f",
+            str(compose),
+            "down",
+            "--remove-orphans",
+        ],
+    )
+    environment = options["environment"]
+    assert environment["CRAWL4AI_API_TOKEN"]
+    assert environment["SEARXNG_SECRET"]
+    assert environment["PODMAN_COMPOSE_PROVIDER"] == str(provider)
+    assert options["cwd"] == compose.parent
+    assert "CRAWL4AI_API_TOKEN" not in os.environ
+    assert "SEARXNG_SECRET" not in os.environ
+    assert not (tmp_path / "config").exists()
+    assert receipt.is_file()
+    assert compose.is_file()

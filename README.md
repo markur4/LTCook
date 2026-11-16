@@ -208,14 +208,19 @@ Use Git and `just sync` to update; repeat registration to refresh provisioning.
 Rust/PyApp compilation is not needed for an editable installation.
 
 > [!WARNING]
-> Schema-2 AppRC installations must first be retired using their matching old
-> tools while retaining all resources. Do not delete `installation.json` or use
-> a complete-removal default that selects user data. See the
-> [migration procedure](docs/How-To-User-Guides.md#install-from-a-checkout).
+> Schema-2 AppRC records are unsupported. Retire an old installation with its
+> matching tools and review the owned targets before a clean prototype reinstall.
+> Do not delete `installation.json` to bypass ownership checks. If the old tools
+> cannot establish safe removal, stop and resolve that inventory first. See the
+> [clean reinstall guidance](docs/How-To-User-Guides.md#install-from-a-checkout).
 
 <br>
 
 ## Uninstall
+
+If this installation has been started, first run `ltcook stop` and
+`ltcook services stop` and confirm both succeed. Uninstall does not automatically
+stop the detached Node runtime; do not remove its live database or deployment.
 
 Preview and remove the registered program through its lifecycle CLI:
 

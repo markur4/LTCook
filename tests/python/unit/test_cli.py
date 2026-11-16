@@ -284,7 +284,22 @@ def test_fresh_process_help_and_shared_doctor_surface() -> None:
     import sys
 
     result = subprocess.run(
-        [sys.executable, "-m", "ltcook.main", "--help"],
+        [
+            sys.executable,
+            "-c",
+            """
+import sys
+
+class BlockOptionalEditors:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".")[0] in {"textual", "prompt_toolkit"}:
+            raise AssertionError(f"Help attempted to import optional editor: {fullname}")
+
+sys.meta_path.insert(0, BlockOptionalEditors())
+from ltcook.main import main
+main(["--help"])
+""",
+        ],
         check=True,
         capture_output=True,
         text=True,

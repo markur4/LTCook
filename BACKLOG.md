@@ -90,6 +90,14 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 # 2026-11-16
 
+## P1 / E1 [Tooling] - *Quiesce the detached runtime during uninstall*
+- **Area:** `src/ltcook_distr/payload/app_lifecycle/actions.py`, `src/ltcook/_runtime_client.py`, and AppRC uninstall authority.
+- **Observed while:** Aligning LTCook with the current AppRC lifecycle.
+- **Why not fixed now:** Safe automatic shutdown needs the saved installation's listener, authentication and runtime identity under pending uninstall authority. This dependency update keeps the explicit stopped-process prerequisite instead of adding another configuration path.
+- **Evidence:** The cleanup hook stops the owned Compose project but not Node. `start_runtime()` launches Node with `close_fds=True`, and the TypeScript runtime does not hold an AppRC runtime lease. AppRC's managed Python runtime quiescence therefore does not establish that the detached runtime has stopped.
+- **Context:** Default uninstall removes managed state and appdata. A running Node owner can still hold its database or recreate files during removal. The removal guide now requires successful `ltcook stop` and `ltcook services stop` before removing an installation that has been started.
+- **Suggested next step:** Reuse authenticated `stop_runtime()` with configuration captured from the saved uninstall placement, and fail safely before removal if the recorded runtime cannot be confirmed stopped. Extend existing lifecycle tests to cover stopped, running, unreachable and mismatched runtime identities without introducing live model calls.
+
 ## P1 / E1 [Tooling] - *Investigate intermittent Agent Evals retries*
 - **Area:** `runtime/src/evals/` and `runtime/src/integrations/pi-extension.ts`
 - **Observed while:** Verifying Agent Evals diagnostics in PR #4.
