@@ -180,6 +180,7 @@ runtime = rc.cli.CliRuntime(
     APP_RC,
     runtime_policy=rc.cli.CliRuntimePolicy(
         runtime_independent_commands={
+            "serve": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "stop": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "planning": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "guidance": rc.cli.RuntimeIndependentCommand(skip_empty=True),
@@ -273,21 +274,27 @@ def stop_cmd() -> None:
         raise typer.BadParameter(str(error)) from error
 
 
+@app.command("serve")
+def serve_cmd() -> None:
+    """Start or reuse the desktop runtime, matching bare ``ltcook``."""
+    raise typer.Exit(desktop_command())
+
+
 def main(argv: list[str] | None = None) -> None:
     """Dispatch bare startup separately while preserving all Typer argument routing."""
     arguments = sys.argv[1:] if argv is None else argv
-    if not arguments:
-        if any(
-            key.startswith("_") and key.endswith("_COMPLETE") and value
-            for key, value in os.environ.items()
-        ):
-            app()
-            return
-        raise SystemExit(desktop_command())
     completion_requested = any(
         key.startswith("_") and key.endswith("_COMPLETE") and value
         for key, value in os.environ.items()
     )
+    if not arguments or arguments == ["serve"]:
+        if completion_requested:
+            if arguments:
+                app(args=arguments)
+            else:
+                app()
+            return
+        raise SystemExit(desktop_command())
     if arguments and arguments[0] == "--verbose":
         if completion_requested or any(
             argument in {"--help", "--version", "-V"} for argument in arguments

@@ -102,10 +102,11 @@ ltcook app doctor --json
 ltcook config show --json
 ```
 
-Open the server and bundled UI without choosing a project:
+Run `ltcook` or its `ltcook serve` alias to open the server and bundled UI
+without choosing a project:
 
 ```shell
-ltcook
+ltcook serve
 ```
 
 This starts or reuses this installation's runtime, requests Paseo in the default

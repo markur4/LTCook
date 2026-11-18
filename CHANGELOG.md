@@ -127,6 +127,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ➕ Added
 
+- Added 🚀 `ltcook serve` as a no-argument alias for bare `ltcook`; both start
+  or reuse the desktop runtime, open Paseo, and follow backend logs.
+
 - Native agents discover the real user's shared `~/.agents/skills` directory even when LTCook gives them a private HOME. Required Core/Team guidance, project trust, explicit-only skills and conflict checks remain active. Current evaluation snapshots include shared skills; synthetic setups remain isolated from the live user library.
 
 - Added a native LTCook Paseo provider with per-Session Team selection, direct
