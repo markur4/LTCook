@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import { createPiRpcRuntime } from '../../../runtime/src/integrations/pi-rpc.js';
-import { RiedService } from '../../../runtime/src/ried.js';
+import { RiedService } from '../../../runtime/src/tools/ried.js';
 
 const environment = { ...process.env };
 const originalCwd = process.cwd();

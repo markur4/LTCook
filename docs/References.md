@@ -209,6 +209,9 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_DATABASE` | Global `runtime.database`; defaults to `<LTCOOK_RUNTIME_STATE_DIR>/coordination.sqlite`. Incompatible schemas are rejected unchanged. |
 | `LTCOOK_GUIDANCE_DIR` | Global `runtime.guidance_dir`; defaults to `<AppRC config>/guidance` with `rules/` and `skills/`. |
 | `LTCOOK_RIED_CACHE_DIR` | Launch-derived `<AppRC cache>/projects`, holding the single versioned RIED cache. |
+| `LTCOOK_OLLAMA_ENDPOINT` | Global `runtime.ollama_endpoint`. Ollama loopback HTTP URL with a port, default `http://127.0.0.1:11434`. Used for summarization, readiness, and the setup CLI pull. |
+| `LTCOOK_SUMMARIZER_MODEL` | Global `runtime.summarizer_model`. Defaults to `LiquidAI/lfm2.5-1.2b-instruct:q4_k_m`. |
+| `LTCOOK_SUMMARIZER_KEEP_ALIVE` | Global `runtime.summarizer_keep_alive`. Default `-1` keeps the loaded model resident. Use `0` to unload or a positive number of seconds. |
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
 | `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |
@@ -368,7 +371,7 @@ RIED is a separate runtime service. `POST /v1/ried` accepts an authenticated
 Session and `operation` of `summary`, `section` or `refresh`; `section` requires
 `repository`, `git`, `host` or `recipes`. The `ltcook_ried` native tool exposes
 these operations to bound agents, including read-only members. Standalone Pi
-chats in LTCook also expose the tool when AppRC inventory paths are resolved;
+chats outside the Paseo MCP connection expose the native tool when AppRC inventory paths are resolved;
 they use the same discovery service and AppRC cache directly, with the native
 Pi runtime workspace as the scan root and no Team Session or bearer. New, resumed
 and forked Pi sessions rebind that workspace. The managed runtime derives its
@@ -377,6 +380,21 @@ provenance, capture time, partial or stale status and diagnostics. The `host`
 section and the summary report the operating system and a `wsl` flag. On WSL,
 `os` is `linux` and `wsl` is `true`. Neither Team API v3 nor coordination
 snapshots carry the full inventory.
+
+Ordinary Paseo Pi and Codex calls use local Streamable HTTP at `/mcp`.
+LTCook issues a workspace-scoped bearer during an authenticated launch or
+resume. A warm reopen in the same workspace reuses the grant. Archiving the
+chat or changing its authorized workspace revokes the grant. Restarting the
+runtime clears in-memory credentials, and reopening a chat configures a new
+connection. The shared tool schemas use the names `ltcook_ried` and
+`ltcook_summarize`. Clients may qualify them with the server name
+`ltcook_workspace`.
+
+`ltcook_summarize` takes one of `text` or `path` plus an optional `focus`.
+Pi's workspace grant allows regular UTF-8 files within its resolved workspace.
+Codex uses text input. The result includes `summary`, `model`, and
+`incomplete`, which is true if generation was cut off. The local request
+has a two-minute timeout.
 
 The local authenticated command endpoint accepts
 `POST /v1/command` with `{"sessionId":"SESSION","command":{"type":"..."}}`

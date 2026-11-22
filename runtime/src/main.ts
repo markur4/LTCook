@@ -3,7 +3,9 @@ import path from 'node:path';
 import process from 'node:process';
 import type { SessionSnapshot } from './workflow-api/index.js';
 import { TeamRegistry } from './integrations/team-loader.js';
-import { RiedService } from './ried.js';
+import { RiedService } from './tools/ried.js';
+import { createTools } from './tools/catalog.js';
+import { WorkspaceMcp } from './integrations/mcp.js';
 import { isWithin } from './path-containment.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
 import { EvalRunService } from './evals/service.js';
@@ -82,7 +84,7 @@ async function run(): Promise<void> {
   const python = process.env.LTCOOK_PYTHON;
   const logs = process.env.LTCOOK_LOGS;
   const traces = process.env.LTCOOK_TRACES;
-  const teamSelection = process.env.LTCOOK_TEAM;
+  const teamSelection = process.env.LTCOOK_TEAM ?? '';
   const serviceConnection = process.env.LTCOOK_SERVICE_CONNECTION;
   const stateDirectory = process.env.LTCOOK_RUNTIME_STATE_DIR;
   const riedCacheDirectory = process.env.LTCOOK_RIED_CACHE_DIR;
@@ -92,7 +94,7 @@ async function run(): Promise<void> {
     !python ||
     !logs ||
     !traces ||
-    !teamSelection ||
+    (workspace && !teamSelection) ||
     !serviceConnection ||
     !stateDirectory ||
     !riedCacheDirectory
@@ -219,7 +221,21 @@ async function run(): Promise<void> {
       }),
     );
     await evals.initialize();
+    const workspaceShellEnvironments = new Map<string, Record<string, string>>();
+    const ried = new RiedService(riedCacheDirectory, process.env.LTCOOK_BRIEF_EXECUTABLE, (id) =>
+      workspaceShellEnvironments.get(id),
+    );
     api = new RuntimeApi(undefined, apiToken, apiListen, process.env, telemetry);
+    api.setWorkspaceMcp(
+      new WorkspaceMcp(
+        createTools(ried, {
+          endpoint: process.env.LTCOOK_OLLAMA_ENDPOINT ?? '',
+          model: process.env.LTCOOK_SUMMARIZER_MODEL ?? '',
+          keepAlive: Number(process.env.LTCOOK_SUMMARIZER_KEEP_ALIVE ?? '-1'),
+        }),
+        apiListen,
+      ),
+    );
     api.setEval(evals);
     const apiUrl = await api.listen();
     apiListening = true;
@@ -264,7 +280,6 @@ async function run(): Promise<void> {
       host = undefined;
       return;
     }
-    const workspaceShellEnvironments = new Map<string, Record<string, string>>();
     const receipt = JSON.parse(
       await fs
         .readFile(path.join(canonicalDeploymentRoot, 'runtime.json'), 'utf8')
@@ -293,9 +308,7 @@ async function run(): Promise<void> {
     const runtimeController = createRuntime({
       databasePath: canonicalDatabasePath,
       stateDirectory,
-      ried: new RiedService(riedCacheDirectory, process.env.LTCOOK_BRIEF_EXECUTABLE, (id) =>
-        workspaceShellEnvironments.get(id),
-      ),
+      ried,
       ...(team ? { team } : {}),
       teams,
       agents: backend,
@@ -397,7 +410,9 @@ async function run(): Promise<void> {
             ({ member, binding }) => member.lifetime === 'persistent' && binding?.state === 'bound',
           ).length
         } persistent native agents connected, ${initialSnapshot.blockers.length} blockers; `
-      : `${teamSelection}, no project session; `;
+      : teamSelection
+        ? `${teamSelection}, no project session; `
+        : 'no project session; ';
     process.stdout.write(`LTCook runtime ready: ${summary}Paseo ${host.listen}\n`);
     startup.end();
     await telemetry.log('info', 'runtime.ready', {

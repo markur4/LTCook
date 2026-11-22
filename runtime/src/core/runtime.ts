@@ -23,7 +23,7 @@ import type {
 } from '../workflow-api/index.js';
 import { CoordinationStore } from '../storage/coordination.js';
 import { canonicalWorkspace } from './workspace.js';
-import { RiedService, type RiedRequest } from '../ried.js';
+import { RiedService, type RiedRequest } from '../tools/ried.js';
 
 type RuntimeOptions = {
   databasePath: string;

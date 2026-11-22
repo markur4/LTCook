@@ -3,6 +3,7 @@ import type { PaseoApi } from '@getpaseo/client';
 import { z } from 'zod';
 import { defineRpc } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
+import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import {
   PanelDetailSourceSchema,
@@ -213,7 +214,35 @@ export default function contribute(server: PluginServerContext) {
       return request;
     }),
     server.addHook('agent.open.before', async ({ request }) => {
-      if (request.provider !== 'ltcook' || request.purpose === 'history') return;
+      if (request.purpose !== 'interactive') return;
+      if (request.provider !== 'ltcook') {
+        if (!['pi', 'codex'].includes(request.provider) || request.labels['ltcook.session']) return;
+        const { token } = z.object({ token: z.string() }).parse(
+          await runtimeJson('/v1/mcp/grant', {
+            nativeAgentId: request.agentId,
+            workspaceRoot: request.cwd,
+            provider: request.provider,
+          }),
+        );
+        const { endpoint } = runtimeConfig();
+        return {
+          ...request,
+          env: {
+            ...request.env,
+            LTCOOK_WORKSPACE_MCP: WORKSPACE_MCP_SERVER,
+            LTCOOK_RUNTIME_USER_TOKEN: '',
+            LTCOOK_API_TOKEN: '',
+          },
+          mcpServers: {
+            ...request.mcpServers,
+            [WORKSPACE_MCP_SERVER]: {
+              type: 'http',
+              url: `${endpoint}/mcp`,
+              headers: { Authorization: `Bearer ${token}` },
+            },
+          },
+        };
+      }
       const teamSelection = request.metadata['ltcook.team'];
       if (typeof teamSelection !== 'string' || !teamSelection)
         throw new Error(
@@ -232,6 +261,10 @@ export default function contribute(server: PluginServerContext) {
         env: { ...request.env, ...prepared.env },
         mcpServers: { ...request.mcpServers, ...prepared.mcpServers },
       };
+    }),
+    server.addHook('agent.archive.after', async ({ agent }) => {
+      if (!['pi', 'codex'].includes(agent.provider)) return;
+      await runtimeJson('/v1/mcp/revoke', { nativeAgentId: agent.id });
     }),
   ];
   server.handle(teamCatalog, async () =>

@@ -5,8 +5,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
-import { Type } from 'typebox';
-import { RiedService, type RiedRequest } from '../ried.js';
+import { RiedService, riedToolDefinition, type RiedRequest } from '../tools/ried.js';
 import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
@@ -475,24 +474,10 @@ function registerRiedTool(
   read: (request: RiedRequest) => Promise<unknown>,
 ): void {
   pi.registerTool({
-    name: 'ltcook_ried',
+    name: riedToolDefinition.name,
     label: 'Repository and environment inventory',
-    description: 'Read a bounded inventory of this chat workspace or refresh it.',
-    parameters: Type.Object({
-      operation: Type.Union([
-        Type.Literal('summary'),
-        Type.Literal('section'),
-        Type.Literal('refresh'),
-      ]),
-      section: Type.Optional(
-        Type.Union([
-          Type.Literal('repository'),
-          Type.Literal('git'),
-          Type.Literal('host'),
-          Type.Literal('recipes'),
-        ]),
-      ),
-    }),
+    description: riedToolDefinition.description,
+    parameters: riedToolDefinition.inputSchema,
     async execute(_id, input) {
       const result = await read(input);
       return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };

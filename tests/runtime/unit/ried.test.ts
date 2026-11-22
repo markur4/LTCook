@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import * as os from 'node:os';
 import { delimiter, join } from 'node:path';
-import { RiedService, type RiedSnapshot } from '../../../runtime/src/ried.js';
+import { RiedService, type RiedSnapshot } from '../../../runtime/src/tools/ried.js';
 import type { Session } from '../../../runtime/src/workflow-api/index.js';
 
 const directories: string[] = [];

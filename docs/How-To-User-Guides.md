@@ -6,6 +6,7 @@
   - [Install a release](#install-a-release)
   - [Install from a checkout](#install-from-a-checkout)
   - [Run the first command](#run-the-first-command)
+  - [Use workspace tools in Pi or Codex](#use-workspace-tools-in-pi-or-codex)
   - [Run Agent Evals](#run-agent-evals)
   - [Remove an installation](#remove-an-installation)
 - [Configure settings and paths](#configure-settings-and-paths)
@@ -157,6 +158,30 @@ The contextual **Team** panel is secondary to the Leader chat:
 - **Agent Focus** shows role settings, current assignments, recorded handoff and
   report, plus native model/activity when available. **Open conversation** uses
   Paseo's existing chat and is unavailable for disconnected members.
+
+## Use workspace tools in Pi or Codex
+
+Open an ordinary Pi or Codex chat in a workspace through LTCook's Paseo host.
+Paseo attaches the local tool connection when it opens or resumes the chat.
+Pi shows the LTCook tools directly, and Codex may discover them through tool
+search. Some Codex modes ask for permission before calling an MCP tool.
+
+- Ask for a repository and environment inventory to use `ltcook_ried`. It can
+  return a summary, inspect one section, or refresh the inventory.
+- Ask for a summary using `ltcook_summarize`. Supply text or ask Pi to summarize
+  one regular UTF-8 file from the selected workspace, up to 24 KiB. An optional
+  focus tells the summarizer what to emphasize. Codex accepts text because its
+  file-read policy is outside the workspace connection's authority. The default
+  model can omit details, including identifiers and negated actions.
+
+LTCook initialization and repair that reruns initialization prepare
+`LiquidAI/lfm2.5-1.2b-instruct:q4_k_m` in the configured local Ollama instance.
+Run `ltcook app doctor --verbose --json` for the summarizer's readiness alongside
+Bonsai. RIED and ordinary chats are available if the summarizer model is missing.
+Set the global [summarizer settings](References.md#environment-variables) in
+AppRC and restart the runtime to apply them. A keep-alive of `-1` keeps the model
+resident after use. Set it to `0` to unload after a request or to a positive
+number of seconds for timed residency.
 
 ## Run Agent Evals
 
