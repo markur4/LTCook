@@ -186,9 +186,9 @@ commands import the declaration and bundle directly from their modules. The
 [project paths](References.md#project-paths) table identifies each source file,
 and [Development](Development.md#repository-routing) explains where to add code.
 
-The application uses matching published AppRC core and terminal packages.
-The local `dev` group supplies authoring and verification tools; it is not
-required by the installed application. Runtime and team JavaScript packages
+The application uses AppRC core and terminal packages from the same pinned Git
+commit. The local `dev` group supplies authoring and verification tools; it is
+not required by the installed application. Runtime and team JavaScript packages
 are separate workspaces, with versions resolved in the root dependency locks.
 
 <br>

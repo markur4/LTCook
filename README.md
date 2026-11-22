@@ -196,8 +196,9 @@ prepares Node and service prerequisites without starting containers.
 `--skip-setup` skips only the optional configuration offer, not initialization.
 Editable registration neither copies nor owns the checkout or `.venv`.
 Use Git and `just sync` to update; repeat registration to refresh provisioning.
-The generic AppRC updater skips the runtime bundle build. Add `--desktop` to
-editable registration to create a desktop shortcut with the LTCook icon.
+The generic AppRC updater skips the runtime bundle build. On Linux or Windows,
+add `--desktop` to editable registration to request a shortcut with the LTCook
+icon.
 Rust/PyApp compilation is not needed for an editable installation.
 
 > [!WARNING]
@@ -223,7 +224,8 @@ ltcook app uninstall --yes
 ```
 
 Unattended uninstall removes the program, configuration, appdata, cache, and
-state. Add `--keep-config` to both commands to retain settings and secrets.
+state. Add `--keep-config` to both commands to retain the configuration directory,
+including settings and secrets.
 Use `--remove-repository` to also remove the editable checkout and its local
 environment. AppRC rejects removal of a checkout containing configuration
 selected for retention. The [removal guide](docs/How-To-User-Guides.md#remove-an-installation)
