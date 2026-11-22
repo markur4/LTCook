@@ -69,9 +69,27 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
     const one = await client(firstToken);
     const two = await client(secondToken);
     expect((await one.sdk.listTools()).tools.map(({ name }) => name)).toContain('ltcook_ried');
+    const previousSession = one.transport.sessionId;
+    const reconnected = await client(firstToken);
+    expect(reconnected.transport.sessionId).not.toBe(previousSession);
     expect(
-      (await one.sdk.callTool({ name: 'ltcook_ried', arguments: { operation: 'summary' } }))
-        .structuredContent,
+      (
+        await fetch(`${base}/mcp`, {
+          headers: {
+            authorization: `Bearer ${firstToken}`,
+            'mcp-session-id': previousSession!,
+            accept: 'text/event-stream',
+          },
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await reconnected.sdk.callTool({
+          name: 'ltcook_ried',
+          arguments: { operation: 'summary' },
+        })
+      ).structuredContent,
     ).toMatchObject({ value: { workspaceRoot: first } });
     expect(
       (
@@ -83,7 +101,7 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
     ).toMatchObject({ value: { workspaceRoot: second, section: 'host' } });
     expect(
       (
-        await one.sdk.callTool({
+        await reconnected.sdk.callTool({
           name: 'ltcook_ried',
           arguments: { operation: 'summary', workspaceRoot: second },
         })
@@ -94,7 +112,7 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
         await fetch(`${base}/mcp`, {
           headers: {
             authorization: `Bearer ${secondToken}`,
-            'mcp-session-id': one.transport.sessionId!,
+            'mcp-session-id': reconnected.transport.sessionId!,
             accept: 'text/event-stream',
           },
         })
@@ -135,8 +153,8 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
   await writeFile(path.join(root, 'outside.txt'), 'outside');
   await symlink(path.join(root, 'outside.txt'), path.join(workspace, 'escape.txt'));
   await writeFile(path.join(workspace, 'binary'), Buffer.from([0x78, 0, 0xff]));
-  const started = Promise.withResolvers<void>();
-  const canceled = Promise.withResolvers<void>();
+  let started = Promise.withResolvers<void>();
+  let canceled = Promise.withResolvers<void>();
   const requests: Array<{
     model: string;
     messages: Array<{ role: string; content: string }>;
@@ -185,18 +203,21 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
   async function session(agentId: string, workspaceFileAccess: boolean) {
     const token = await mcp.grant(agentId, workspace, workspaceFileAccess);
     const client = new Client({ name: agentId, version: '1.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL(`http://${authority}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${token}` } },
+    });
     clients.push(client);
-    await client.connect(
-      new StreamableHTTPClientTransport(new URL(`http://${authority}/mcp`), {
-        requestInit: { headers: { authorization: `Bearer ${token}` } },
-      }),
-    );
-    return client;
+    await client.connect(transport);
+    return { client, transport, token };
   }
   try {
     await api.listen();
-    const pi = await session('pi', true);
-    const codex = await session('codex', false);
+    const { client: pi } = await session('pi', true);
+    const {
+      client: codex,
+      transport: codexTransport,
+      token: codexToken,
+    } = await session('codex', false);
     expect((await pi.listTools()).tools.map(({ name }) => name)).toEqual([
       'ltcook_ried',
       'ltcook_summarize',
@@ -258,6 +279,38 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
     expect(
       await Promise.race([canceled.promise.then(() => true), Bun.sleep(1000).then(() => false)]),
     ).toBe(true);
+
+    started = Promise.withResolvers<void>();
+    canceled = Promise.withResolvers<void>();
+    const pendingResponse = fetch(`http://${authority}/mcp`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${codexToken}`,
+        'mcp-session-id': codexTransport.sessionId!,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'in-flight-revocation',
+        method: 'tools/call',
+        params: { name: 'ltcook_summarize', arguments: { text: material } },
+      }),
+      signal: AbortSignal.timeout(5000),
+    })
+      .then((response) => response.text())
+      .then(
+        () => true,
+        () => true,
+      );
+    expect(
+      await Promise.race([started.promise.then(() => true), Bun.sleep(1000).then(() => false)]),
+    ).toBe(true);
+    await mcp.revoke('codex');
+    expect(
+      await Promise.race([canceled.promise.then(() => true), Bun.sleep(1000).then(() => false)]),
+    ).toBe(true);
+    expect(await Promise.race([pendingResponse, Bun.sleep(1000).then(() => false)])).toBe(true);
   } finally {
     await Promise.all(clients.map((client) => client.close()));
     ollama.closeAllConnections();

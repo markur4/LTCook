@@ -119,7 +119,7 @@ def test_summarizer_pull_targets_the_resolved_endpoint_and_is_optional(
     def json_response(url, **_):
         if url == f"{endpoint}/api/tags":
             polls.append(url)
-            return {"models": [{"name": model}] if installed else []}
+            return {"models": [{"name": f"{model}:latest"}] if installed else []}
         if url == f"{prepare_ollama.ENDPOINT}/api/version":
             return {"version": "test"}
         if url == f"{prepare_ollama.ENDPOINT}/api/show":

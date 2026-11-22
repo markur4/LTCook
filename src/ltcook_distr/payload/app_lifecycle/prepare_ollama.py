@@ -94,13 +94,19 @@ def summarizer_readiness(
             )
         endpoint = f"{parsed.scheme}://{parsed.netloc}"
         status.update(endpoint=endpoint, model=model)
+        installed_names = {model}
+        if ":" not in model.rsplit("/", 1)[-1]:
+            installed_names.add(f"{model}:latest")
 
         def model_available() -> bool:
             models = _json(f"{endpoint}/api/tags").get("models")
             if not isinstance(models, list):
                 raise SetupError("Ollama returned an invalid model inventory.")
             return any(
-                isinstance(item, dict) and item.get("name") == model for item in models
+                isinstance(item, dict)
+                and isinstance(name := item.get("name"), str)
+                and name in installed_names
+                for item in models
             )
 
         ready = model_available()

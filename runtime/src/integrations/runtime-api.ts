@@ -303,15 +303,15 @@ export class RuntimeApi {
           response.writeHead(403).end('{}');
           return;
         }
-        if (!this.workspaceMcp || this.stopping) {
-          response.writeHead(503).end('{}');
-          return;
-        }
         if (typeof input.nativeAgentId !== 'string' || !input.nativeAgentId)
           throw new Error('A native agent identity is required.');
         if (request.url === '/v1/mcp/revoke') {
-          await this.workspaceMcp.revoke(input.nativeAgentId);
+          await this.workspaceMcp?.revoke(input.nativeAgentId);
           response.writeHead(200).end('{}');
+          return;
+        }
+        if (!this.workspaceMcp || this.stopping) {
+          response.writeHead(503).end('{}');
           return;
         }
         if (typeof input.workspaceRoot !== 'string')

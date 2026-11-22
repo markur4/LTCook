@@ -363,7 +363,7 @@ try {
     deploymentRoot: deployment,
     listen: '127.0.0.1:0',
     runtimeApiUrl: endpoint,
-    userToken: 'fake-user-token',
+    userToken: secret,
     pluginDirectory: path.join(root, 'runtime/src/paseo-plugin'),
   });
   assert.match(host.listen, /^127\.0\.0\.1:[1-9]\d*$/);
@@ -403,6 +403,12 @@ try {
           LTCOOK_API_TOKEN: '',
           LTCOOK_READONLY: options.member.readOnly ? '1' : '0',
           LTCOOK_BROWSER_ENABLED: 'false',
+        },
+        labels: {
+          'ltcook.session': sessionId,
+          'ltcook.team-instance': options.teamInstanceId,
+          'ltcook.team': team.definition.id,
+          'ltcook.member': options.member.key,
         },
       });
       return { id: agent.id, status: agent.status ?? 'unknown' };

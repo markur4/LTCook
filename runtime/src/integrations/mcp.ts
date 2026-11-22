@@ -22,6 +22,7 @@ type Grant = {
 };
 
 type Connection = {
+  id: string;
   grant: Grant;
   server: Server;
   transport: StreamableHTTPServerTransport;
@@ -102,20 +103,17 @@ export class WorkspaceMcp {
     await Promise.all([...this.connections.values()].map(({ server }) => server.close()));
   }
 
-  private async connect(grant: Grant): Promise<Connection> {
+  private createConnection(grant: Grant): Connection {
+    const id = randomUUID();
     const server = new Server(
       { name: 'ltcook', version: '0.1.0' },
       { capabilities: { tools: {} } },
     );
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: randomUUID,
-      enableJsonResponse: true,
-      onsessioninitialized: (id) => {
-        this.connections.set(id, { grant, server, transport });
-      },
+      sessionIdGenerator: () => id,
     });
     transport.onclose = () => {
-      if (transport.sessionId) this.connections.delete(transport.sessionId);
+      this.connections.delete(id);
     };
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: this.catalog }));
     server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal }) => {
@@ -144,8 +142,7 @@ export class WorkspaceMcp {
         return { isError: true, content: [{ type: 'text', text: message }] };
       }
     });
-    await server.connect(transport);
-    return { server, transport, grant };
+    return { id, server, transport, grant };
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -189,12 +186,25 @@ export class WorkspaceMcp {
         isInitializeRequest(body) &&
         this.tokens.get(grant.token) === grant
       ) {
-        if (this.connections.size >= MAX_CONNECTIONS) {
+        const previous = [...this.connections.values()].find(
+          (connection) => connection.grant === grant,
+        );
+        if (!previous && this.connections.size >= MAX_CONNECTIONS) {
           response.writeHead(503).end();
           return;
         }
-        const connection = await this.connect(grant);
+        const connection = this.createConnection(grant);
+        this.connections.set(connection.id, connection);
         try {
+          // > Paseo runs one provider session per agent. A reconnect replaces its old transport.
+          await Promise.all([
+            connection.server.connect(connection.transport),
+            previous?.server.close(),
+          ]);
+          if (this.connections.get(connection.id) !== connection) {
+            response.writeHead(404).end();
+            return;
+          }
           await connection.transport.handleRequest(request, response, body);
         } finally {
           if (!connection.transport.sessionId) await connection.server.close();
