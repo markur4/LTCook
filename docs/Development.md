@@ -195,8 +195,8 @@ model prompt loop to quick checks.
 ## Local Ollama and Agent Evals
 
 Normal LTCook application setup detects a local Ollama installation or uses the
-official platform installer when missing, then ensures
-`bonsai-2:27b` (about 8.3 GB). This is separate from `just sync`,
+official platform installer when missing, then prepares
+`ltcook-bonsai-2-27b-ctx65536:latest` (about 8.3 GB). This is separate from `just sync`,
 editable registration, tests, and CI. Setup records readiness
 under AppRC ownership and reuses a healthy user-managed service. It does not bind
 Ollama beyond loopback or stop a user-owned service.
@@ -210,7 +210,9 @@ Windows and macOS installation behavior requires verification on those platforms
 Agent Evals uses the shared installed CLI and Paseo run service. Static audit
 needs no model; LLM-dependent runs require the prepared local Bonsai model
 `ltcook-bonsai-2-27b-ctx65536:latest` and do not install or pull models.
-Setup derives that model from `bonsai-2:27b` with `num_ctx` set to 65,536.
+If the configured model is missing, setup uses `bonsai-2:27b` to create it with
+`num_ctx` set to 65,536, pulling the base tag if needed. Once the configured model
+exists, setup and `ltcook app doctor` work with that tag alone.
 The run checks the saved model configuration; use `ollama ps` while it is loaded
 to inspect the context and GPU allocation actually provided by Ollama. Previous
 model setup receipts need the normal setup or repair flow to prepare Bonsai.

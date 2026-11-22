@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 from ._common import SetupError, download, no_links, run, write_json
 
-MODEL = "bonsai-2:27b"
+BASE_MODEL = "bonsai-2:27b"
 EVAL_MODEL = "ltcook-bonsai-2-27b-ctx65536:latest"
 CONTEXT_TOKENS = 65536
 ENDPOINT = "http://127.0.0.1:11434"
@@ -222,22 +222,15 @@ def prepare_ollama(appdata: Path, *, environment: dict[str, str] | None = None) 
     tags = _json(f"{ENDPOINT}/api/tags").get("models", [])
     if not isinstance(tags, list):
         raise SetupError("Ollama returned an invalid model inventory.")
-    model = next((item for item in tags if item.get("name") == MODEL), None)
-    if model is None:
-        if executable is None:
-            raise SetupError(f"The exact Bonsai model is missing: {MODEL}")
-        run([executable, "pull", MODEL], environment=env)
-        tags = _json(f"{ENDPOINT}/api/tags").get("models", [])
-        model = next((item for item in tags if item.get("name") == MODEL), None)
-    if model is None:
-        raise SetupError(f"Ollama did not make the required model available: {MODEL}")
     derived = next((item for item in tags if item.get("name") == EVAL_MODEL), None)
     if derived is None:
         if executable is None:
             raise SetupError(f"The LTCook 65536 context model is missing: {EVAL_MODEL}")
+        if not any(item.get("name") == BASE_MODEL for item in tags):
+            run([executable, "pull", BASE_MODEL], environment=env)
         modelfile = deployment / "bonsai-65536.Modelfile"
         modelfile.write_text(
-            f"FROM {MODEL}\nPARAMETER num_ctx {CONTEXT_TOKENS}\n", encoding="utf-8"
+            f"FROM {BASE_MODEL}\nPARAMETER num_ctx {CONTEXT_TOKENS}\n", encoding="utf-8"
         )
         run([executable, "create", EVAL_MODEL, "-f", str(modelfile)], environment=env)
         tags = _json(f"{ENDPOINT}/api/tags").get("models", [])
@@ -257,8 +250,6 @@ def prepare_ollama(appdata: Path, *, environment: dict[str, str] | None = None) 
             "endpoint": ENDPOINT,
             "executable": str(Path(executable).resolve()) if executable else None,
             "version": version,
-            "model": MODEL,
-            "model_digest": model.get("digest"),
             "eval_model": EVAL_MODEL,
             "eval_model_digest": derived.get("digest"),
             "context_tokens": CONTEXT_TOKENS,

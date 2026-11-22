@@ -11,8 +11,7 @@ from ltcook_distr.payload.app_lifecycle import prepare_ollama
 from ltcook_distr.payload.app_lifecycle._common import SetupError
 
 
-def test_existing_server_and_models_are_reused_without_mutation(tmp_path, monkeypatch):
-    base = {"name": prepare_ollama.MODEL, "digest": "base-digest"}
+def test_existing_eval_model_is_reused_without_the_base_tag(tmp_path, monkeypatch):
     derived = {"name": prepare_ollama.EVAL_MODEL, "digest": "derived-digest"}
     calls = []
 
@@ -21,7 +20,7 @@ def test_existing_server_and_models_are_reused_without_mutation(tmp_path, monkey
             return {"version": "test"}
         if url.endswith("/api/show"):
             return {"modelfile": "PARAMETER num_ctx 65536"}
-        return {"models": [base, derived]}
+        return {"models": [derived]}
 
     def run(arguments, *, environment, cwd=None, required=True):
         calls.append(list(arguments))
@@ -46,14 +45,15 @@ def test_context_configuration_must_match_exactly(value):
     assert prepare_ollama._has_expected_context("FROM model\nPARAMETER num_ctx 65536\n")
 
 
+@pytest.mark.parametrize("base_installed", [True, False])
 def test_missing_derived_model_is_created_from_exact_bonsai_source(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, base_installed
 ):
-    base = {"name": prepare_ollama.MODEL, "digest": "base-digest"}
+    base = {"name": prepare_ollama.BASE_MODEL}
     summary_model = "test-summary"
     responses = iter(
         [
-            [base],
+            [base] if base_installed else [],
             [base, {"name": prepare_ollama.EVAL_MODEL, "digest": "ctx-digest"}],
             [{"name": summary_model}],
         ]
@@ -85,17 +85,21 @@ def test_missing_derived_model_is_created_from_exact_bonsai_source(
         tmp_path, environment={"PATH": "", "LTCOOK_SUMMARIZER_MODEL": summary_model}
     )
 
+    pull = (
+        [] if base_installed else [[str(executable), "pull", prepare_ollama.BASE_MODEL]]
+    )
     assert calls == [
+        *pull,
         [
             str(executable),
             "create",
             prepare_ollama.EVAL_MODEL,
             "-f",
             str(tmp_path / "deployment/bonsai-65536.Modelfile"),
-        ]
+        ],
     ]
     assert (tmp_path / "deployment/bonsai-65536.Modelfile").read_text() == (
-        f"FROM {prepare_ollama.MODEL}\nPARAMETER num_ctx 65536\n"
+        f"FROM {prepare_ollama.BASE_MODEL}\nPARAMETER num_ctx 65536\n"
     )
     assert json.loads(receipt.read_text())["eval_model"] == prepare_ollama.EVAL_MODEL
 
@@ -125,12 +129,7 @@ def test_summarizer_pull_targets_the_resolved_endpoint_and_is_optional(
         if url == f"{prepare_ollama.ENDPOINT}/api/show":
             return {"modelfile": "PARAMETER num_ctx 65536"}
         assert url == f"{prepare_ollama.ENDPOINT}/api/tags"
-        return {
-            "models": [
-                {"name": prepare_ollama.MODEL},
-                {"name": prepare_ollama.EVAL_MODEL},
-            ]
-        }
+        return {"models": [{"name": prepare_ollama.EVAL_MODEL}]}
 
     def fail_summary_pull(arguments, *, environment):
         pulls.append((arguments, environment["OLLAMA_HOST"]))
@@ -166,28 +165,28 @@ def test_doctor_requires_the_current_model_and_context_receipt(tmp_path, monkeyp
     data = {
         "ready": True,
         "version": "test",
-        "model": prepare_ollama.MODEL,
+        "model": prepare_ollama.BASE_MODEL,
         "eval_model": prepare_ollama.EVAL_MODEL,
         "context_tokens": prepare_ollama.CONTEXT_TOKENS,
     }
+    models = [{"name": prepare_ollama.EVAL_MODEL}]
 
     def json_response(url, **_):
         if url.endswith("/api/version"):
             return {"version": "test"}
         if url.endswith("/api/show"):
             return {"modelfile": model_context}
-        return {
-            "models": [
-                {"name": prepare_ollama.MODEL},
-                {"name": prepare_ollama.EVAL_MODEL},
-            ]
-        }
+        return {"models": models}
 
     monkeypatch.setattr(prepare_ollama, "_json", json_response)
     receipt.write_text(json.dumps(data))
     status = _ollama_resource_diagnostics(tmp_path)["ollama"]
     assert isinstance(status, dict)
     assert status["context_tokens"] == 65536
+    models.clear()
+    with pytest.raises(ValueError, match="not ready"):
+        _ollama_resource_diagnostics(tmp_path)
+    models.append({"name": prepare_ollama.EVAL_MODEL})
     model_context = "PARAMETER num_ctx 655360"
     with pytest.raises(ValueError, match="not ready"):
         _ollama_resource_diagnostics(tmp_path)
