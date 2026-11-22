@@ -127,7 +127,7 @@ test('grade evidence permits absent text for omissions and inventions and reject
       example.document,
       example.summary,
     ),
-  ).toThrow('invalid evidence');
+  ).toThrow('material claim (1, source) · "Deletion was approved."');
   expect(() =>
     validateSummaryGrade(
       { ...grade, facts: grade.facts.slice(1) },
@@ -158,6 +158,41 @@ test('grade evidence permits absent text for omissions and inventions and reject
       example.summary,
     ),
   ).toThrow('invalid evidence');
+});
+
+test('citations with Markdown, wrapping and typographic spacing retain the exact summary excerpt', () => {
+  const [scope, decision] = DOWNSTREAM_CASE.facts;
+  const formattedScope = scope!.sourceQuote.replace(
+    'read-only smoke checks',
+    '**read-only\nsmoke\u202fchecks**',
+  );
+  const decisionQuote = decision!.sourceQuote;
+  const wrapped = decisionQuote.replace('. Inez', '.  \n3. Inez');
+  const summary = '1. ' + formattedScope + '  \n2. ' + wrapped;
+  const grade = {
+    facts: [
+      {
+        id: scope!.id,
+        verdict: 'preserved',
+        sourceQuote: scope!.sourceQuote,
+        summaryQuote: scope!.sourceQuote,
+      },
+      {
+        id: decision!.id,
+        verdict: 'preserved',
+        sourceQuote: decisionQuote,
+        summaryQuote: decisionQuote,
+      },
+    ],
+    claims: [{ verdict: 'supported', sourceQuote: decisionQuote, summaryQuote: decisionQuote }],
+  };
+  const result = validateSummaryGrade(grade, DOWNSTREAM_CASE, summary);
+  expect(result.facts[0]?.summaryQuote).toBe(formattedScope);
+  expect(result.facts[1]?.summaryQuote).toBe(wrapped);
+  expect(result.claims[0]?.summaryQuote).toBe(wrapped);
+  expect(() =>
+    validateSummaryGrade(grade, DOWNSTREAM_CASE, summary.replace('declined', 'approved')),
+  ).toThrow('invalid summary evidence for a required fact (decision)');
 });
 
 test('held-out calibration requires finding the actual unsupported claim', () => {

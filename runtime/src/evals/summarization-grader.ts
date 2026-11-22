@@ -58,6 +58,54 @@ const gradeSchema = z.object({
 
 export type SummaryGrade = z.infer<typeof gradeSchema>;
 
+function invalidCitation(message: string, evidence: string | undefined): Error {
+  const detail = evidence === undefined ? 'no quotation' : JSON.stringify(evidence.slice(0, 120));
+  return new Error(message + ' · ' + detail);
+}
+
+function quoteLayout(text: string) {
+  const blocks = /(?:[\p{Zs}\t]*\r?\n[\p{Zs}\t]*(?:(?:[-+*]|\d+[.)])[\p{Zs}\t]+)?)+|[\p{Zs}\t]+/gu;
+  const delimiters = new Set<number>();
+  for (const match of text.matchAll(
+    /(\*\*|[`])(?=\S)(?:[^\r\n]|\r?\n(?![ \t]*(?:\r?\n|(?:[-+*]|\d+[.)])[ \t]+)))*?\S\1/g,
+  )) {
+    const width = match[1]!.length;
+    for (let offset = 0; offset < width; offset++) {
+      delimiters.add(match.index + offset);
+      delimiters.add(match.index + match[0].length - width + offset);
+    }
+  }
+  let normalized = '';
+  const offsets: number[] = [];
+  let cursor = 0;
+  const copyUntil = (end: number) => {
+    for (; cursor < end; cursor++) {
+      if (delimiters.has(cursor)) continue;
+      normalized += text[cursor];
+      offsets.push(cursor);
+    }
+  };
+  for (const match of text.matchAll(blocks)) {
+    copyUntil(match.index);
+    normalized += ' ';
+    offsets.push(cursor);
+    cursor += match[0].length;
+  }
+  copyUntil(text.length);
+  return { normalized, offsets };
+}
+
+/** Match contiguous text through typographic spacing, line wrapping and Markdown formatting. */
+function existingSummaryQuote(text: string, evidence: string | undefined): string | undefined {
+  if (!evidence) return undefined;
+  if (text.includes(evidence)) return evidence;
+  const layout = quoteLayout(text);
+  const needle = quoteLayout(evidence).normalized;
+  const start = layout.normalized.indexOf(needle);
+  if (start < 0) return undefined;
+  return text.slice(layout.offsets[start], layout.offsets[start + needle.length - 1]! + 1);
+}
+
 export function validateSummaryGrade(
   value: unknown,
   fixture: SummarizationCase,
@@ -69,26 +117,41 @@ export function validateSummaryGrade(
   const expected = new Map(fixture.facts.map(({ id, sourceQuote }) => [id, sourceQuote]));
   for (const item of grade.facts) {
     if (expected.get(item.id) !== item.sourceQuote || !hasQuoted(fixture.source, item.sourceQuote))
-      throw new Error('Grader returned an unknown, duplicate, or unsupported fact citation.');
+      throw invalidCitation(
+        'Grader returned an unknown, duplicate, or unsupported fact citation for ' + item.id,
+        item.sourceQuote,
+      );
     expected.delete(item.id);
     const requiresSummaryQuote = item.verdict === 'preserved' || item.verdict === 'contradicted';
-    if (
-      (requiresSummaryQuote || item.summaryQuote !== undefined) &&
-      !hasQuoted(summary, item.summaryQuote)
-    )
-      throw new Error('Grader returned invalid summary evidence for a required fact.');
+    const summaryQuote = existingSummaryQuote(summary, item.summaryQuote);
+    if ((requiresSummaryQuote || item.summaryQuote !== undefined) && !summaryQuote)
+      throw invalidCitation(
+        'Grader returned invalid summary evidence for a required fact (' + item.id + ')',
+        item.summaryQuote,
+      );
+    item.summaryQuote = summaryQuote;
   }
   if (expected.size || !grade.claims.length)
     throw new Error('Grader omitted a required fact or returned no material claims.');
-  for (const claim of grade.claims) {
+  for (const [index, claim] of grade.claims.entries()) {
+    const claimNumber = index + 1;
     const requiresSourceQuote = claim.verdict === 'supported' || claim.verdict === 'contradicted';
+    const summaryQuote = existingSummaryQuote(summary, claim.summaryQuote);
+    if (!summaryQuote)
+      throw invalidCitation(
+        'Grader returned invalid evidence for a material claim (' + claimNumber + ', summary)',
+        claim.summaryQuote,
+      );
+    claim.summaryQuote = summaryQuote;
     if (
-      !hasQuoted(summary, claim.summaryQuote) ||
       (claim.verdict === 'unsupported' && claim.sourceQuote !== undefined) ||
       ((requiresSourceQuote || claim.sourceQuote !== undefined) &&
         !hasQuoted(fixture.source, claim.sourceQuote))
     )
-      throw new Error('Grader returned invalid evidence for a material claim.');
+      throw invalidCitation(
+        'Grader returned invalid evidence for a material claim (' + claimNumber + ', source)',
+        claim.sourceQuote,
+      );
   }
   return grade;
 }

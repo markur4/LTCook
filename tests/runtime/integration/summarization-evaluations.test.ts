@@ -291,6 +291,10 @@ test('existing Behavior Evaluation service returns a passing verdict with option
     total: 1,
   });
   expect(report).toMatchObject({ scope: 'core', verdict: 'passed', complete: true, blockers: [] });
+  expect(report.code).toMatchObject({
+    kind: 'source',
+    sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+  });
   expect(sources).toEqual(CORE_SUMMARIZATION_CASES.map(({ id }) => id));
   expect(graderCalls).toBe(sources.length + SUMMARIZATION_CALIBRATION.length);
   expect(report.calibration.every(({ verdict }) => verdict === 'passed')).toBe(true);

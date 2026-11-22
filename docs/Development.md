@@ -265,10 +265,14 @@ deterministic evidence validation, file access, and Ollama failures.
 Run `ltcook eval run --all --setup synthetic --case summarization` for changes
 to the recommended summarizer, its prompt, generation settings, or preparation
 of input. The report identifies the configured model and Bonsai grader by
-their resolved tags and digests. It includes fixture and prompt hashes,
-effective settings, individual results, fixed-fixture summaries and quotations,
-latency, and token counts when available. Concision and readability are separate
-from the required-fact verdict.
+their resolved tags and digests. It includes a code fingerprint, hashes for
+the fixtures and prompts, effective settings, individual results, fixed-fixture
+summaries and quotations, latency, and token counts when available. Concision
+and readability are separate from the required-fact verdict.
+
+The engine fingerprints its runtime bundle at startup. Source checkouts
+fingerprint the evaluation and summarizer source files and the Bun lockfile
+at engine creation.
 
 Set the global AppRC model and generation options before starting the evaluation
 runtime to compare a candidate. For the LFM3 baseline, the settings were
@@ -282,10 +286,13 @@ The near-limit fixture measures the effective tool budget for the configured
 context and focus. Compare runs with different context settings using that budget
 and the recorded fixture hash. See the [first full LFM3 baseline](../evals/summarization-baseline.md).
 
-Each run checks Bonsai against development and held-out fixtures with reviewed
-labels. Keep the held-out cases separate when refining the grading prompt.
+Each run checks Bonsai against development and held-out fixtures with fixed
+expected judgments. Keep the held-out cases separate when refining the grading prompt.
 Calibration requires Bonsai to flag the expected claims and cite their wording.
 Evidence validation checks each required fact against its supplied quotation.
+Summary citations can span line wrapping, typographic spacing, and Markdown
+formatting such as lists, bold text, and inline code. The report retains the
+exact excerpt as it appeared in the candidate summary.
 Critical disagreements can be adjudicated manually against the fixed source and
 candidate. An unavailable, uncalibrated, or self-grading model blocks semantic
 checks while deterministic checks continue. A changed summarizer identity blocks

@@ -273,7 +273,7 @@ export const SUMMARIZATION_CALIBRATION: CalibrationExample[] = [
     id: 'faithful-paraphrase',
     set: 'development',
     document: release,
-    summary: 'R-17 cleared all 42 checks. It was not deployed, and the reason is unknown.',
+    summary: 'R-17 cleared 42 checks. It was not deployed, and the reason is unknown.',
     expected: { checks: 'preserved', deployment: 'preserved', uncertainty: 'preserved' },
   },
   {

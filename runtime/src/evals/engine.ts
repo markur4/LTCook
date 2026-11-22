@@ -6,7 +6,7 @@ import { loadTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import type { EvalBudget, EvalEngine, EvalOutput } from './service.js';
 import { evaluationCaseCount, summarizationScope } from './contracts.js';
-import { evaluateSummarization } from './summarization.js';
+import { captureSummarizationCode, evaluateSummarization } from './summarization.js';
 import type { OllamaSettings } from '../integrations/ollama.js';
 import { staticAudit } from './instruction-audit.js';
 import { attributeEvaluationTrace } from './attribution.js';
@@ -53,6 +53,7 @@ type EvaluationAttempt = Omit<EvaluationResult, 'trace'> & {
 
 /** One engine shared by CLI and Paseo; setup preparation never selects a separate execution path. */
 export function createEvalEngine(options: EngineOptions): EvalEngine {
+  const summarizationCode = captureSummarizationCode();
   return async ({
     preset,
     setup,
@@ -102,6 +103,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         progress({ event: 'suite.started', suite, completed, total });
         const report = await evaluateSummarization({
           scope,
+          code: summarizationCode,
           settings: options.summarization,
           directory: path.join(temporary, 'summarization'),
           signal,

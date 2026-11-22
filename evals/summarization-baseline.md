@@ -43,3 +43,57 @@ migration attempts and loss of `AUTH-17` and `Nia` in the near-limit case.
 Those runs used the default 32,768-token context and 512-token output limit,
 and semantic checks were blocked during grader calibration. The fixed
 fixtures retain those failures as regression checks.
+
+## Local reasoning qualification
+
+The local follow-up used the same LFM3 model and a 4,096-token context at
+temperature 0.1. With reasoning enabled, 128 output tokens yielded 17 empty
+cutoffs. At 512 output tokens, 10 of 17 attempts passed and seven cut off.
+At 1,024 output tokens, 13 passed, two cut off, and two grades were blocked
+by invalid citations.
+
+The first 2,048-token runs completed all 17 summaries. Two formatting
+mismatches were diagnosed in successive runs. Bonsai quoted adjacent list
+items as one sentence and quoted a bold label without its Markdown markers.
+The validator now accepts those formatting differences while retaining
+the exact excerpt from the summary.
+
+A local full run `89de39bb-c791-43c4-980d-c34c725bb360` used
+`think: true`, `stream: false`, and `num_predict: 2048`. All 17 attempts
+and all five Bonsai calibration examples passed. Native Pi returned
+`HOLD`, and the CLI exited with status 0 after 99.2 seconds. This profile
+allows up to 1,391 source bytes without a focus. The focused near-limit
+fixture used 1,283 bytes and passed. The fixture hash was
+`5e5e94ade71ba6d861be14c01e0a52e014f1e8a9f36fb5a929da34c2c4cf0446`.
+
+A repeat with the same generation settings and code fingerprinting enabled
+passed 16 of 17 attempts. The near-limit case reached the output cap before
+preserving `AUTH-17` and `Nia`, so qualification failed. All five Bonsai
+calibration examples passed and native Pi returned `HOLD`. The report for run
+`24babf9b-d7fc-4ecc-8b0c-f60f0d1de5b1` recorded the runtime bundle hash
+`7e2a229d5eeffcc9c8b9e2f72c38852081a69ae29536ab0ae089bb488e729a92`.
+
+The startup-fingerprint follow-up passed all seven core cases and all five
+Bonsai calibration examples. The focused run
+`8d4dec10-44cd-4242-807a-f40ce66690de` exited with status 0 after 54.2 seconds.
+Its recorded bundle hash matched the freshly built runtime
+`bb7c24edbdb3bdb238218e6ff65c082531ac2f77f6ca38293e30236d5cfe40f8`.
+The full run `fc54805b-dd1a-4618-98f1-e03e1ccad0ae` used the same build and
+settings. It passed 16 of 17 attempts and all five calibration examples.
+Native Pi returned `HOLD`. Qualification was blocked because the dashboard
+summary used a narrow space in `14:30 UTC` and Bonsai cited it with a regular
+space. A Traditional Test now verifies that the citation validator accepts
+that spacing difference and preserves the original excerpt.
+
+With the citation fix and the same generation settings, the core run
+`b725b02e-838f-41c3-9050-cd63612336d3` passed all seven attempts in 57.9
+seconds. The full run `eb1c2ab5-03f2-4e0a-b522-758c90134494` passed all 17
+attempts in 108.6 seconds, including the near-limit case and file/inline
+comparison. Both passed all five Bonsai calibration examples and exited
+with status 0. Native Pi again returned `HOLD` in the full run.
+Both reports recorded the runtime bundle hash
+`82efc3ef1bceb3f24161d7f46d215b095215455c6f603d37bf5bbe11bf159a1d`.
+The full fixture hash was
+`7d4952238d8649a47cf9a0d98d7e0c0f31525824aeea0c4e8d405bd1eb3cd698`.
+
+Human review of the calibration labels is pending.

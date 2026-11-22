@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { URL } from 'node:url';
 import {
   summaryGeneration,
   type OllamaSettings,
@@ -85,6 +87,7 @@ export type SummarizationReport = {
   verdict: SummarizationQualification;
   complete: boolean;
   fixtureSha256: string;
+  code?: { kind: 'bundle' | 'source'; sha256: string };
   settings: {
     summarizer: {
       requestedModel?: string;
@@ -154,14 +157,41 @@ const errorReason = (error: unknown) =>
     error instanceof Error ? error.message : 'Local inference did not complete.',
   ).slice(0, 300);
 
+export function captureSummarizationCode(): SummarizationReport['code'] {
+  const module = new URL(import.meta.url);
+  try {
+    if (!module.pathname.endsWith('.ts'))
+      return { kind: 'bundle', sha256: hash(readFileSync(module)) };
+
+    const sources = [
+      './summarization.ts',
+      './summarization-fixtures.ts',
+      './summarization-grader.ts',
+      './summarization-decision.ts',
+      './engine.ts',
+      './contracts.ts',
+      './service.ts',
+      './setup.ts',
+      '../tools/summarize.ts',
+      '../integrations/ollama.ts',
+      '../../../bun.lock',
+    ];
+    const digests = sources.map((source) => [source, hash(readFileSync(new URL(source, module)))]);
+    return { kind: 'source', sha256: hash(JSON.stringify(digests)) };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function evaluateSummarization(input: {
   settings?: OllamaSettings;
   scope: 'core' | 'full';
   directory: string;
   signal: AbortSignal;
+  code: SummarizationReport['code'];
   onProgress?(report: SummarizationReport, current?: string): Promise<void>;
 }): Promise<SummarizationReport> {
-  const { settings, scope, directory, signal, onProgress } = input;
+  const { settings, scope, directory, signal, code, onProgress } = input;
   const full = scope === 'full';
   const started = performance.now();
   let generation: SummaryGeneration | undefined;
@@ -181,6 +211,7 @@ export async function evaluateSummarization(input: {
     scope,
     verdict: 'blocked',
     complete: false,
+    code,
     fixtureSha256: hash(
       JSON.stringify({
         core: CORE_SUMMARIZATION_CASES,
@@ -219,7 +250,7 @@ export async function evaluateSummarization(input: {
     },
     calibration: [],
     attempts: [],
-    blockers: [],
+    blockers: code ? [] : ['Evaluation code could not be fingerprinted at startup.'],
     elapsedMs: 0,
   };
   const update = async (current?: string) => {
