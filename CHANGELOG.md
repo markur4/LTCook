@@ -46,8 +46,10 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 💥 Breaking changes
 
-- Breaking: LTCook now uses AppRC commit `4e3370`. Uninstall removes managed
-  data by default; use `app uninstall --keep-data` for program-only removal.
+- **Breaking:** 💥 LTCook now uses AppRC 0.39.1b1 (commit `84b6b8`).
+  `app uninstall --keep-config` replaces `--keep-data` and retains only
+  settings and secrets. Uninstall removes appdata, cache, and state even when
+  configuration is retained. Review `app uninstall --dry-run` for selected paths.
   Editable repositories remain unless `--remove-repository` selects them.
   Replace `ltcook diagnose --json` with `ltcook app doctor --verbose --json`.
   Lifecycle hooks are declared only in `pyproject.toml`; cleanup stops the
@@ -126,6 +128,9 @@ All notable changes to `ltcook` will be documented in this file.
   and authentication checks remain read-only.
 
 ### ➕ Added
+
+- Display the Graffiti Jam artwork in the README and use LTCook icons for new
+  AppRC shortcuts on Linux and Windows and for Windows Installed apps.
 
 - Added 🚀 `ltcook serve` as a no-argument alias for bare `ltcook`; both start
   or reuse the desktop runtime, open Paseo, and follow backend logs.

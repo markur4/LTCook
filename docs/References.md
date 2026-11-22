@@ -128,15 +128,19 @@ For editable registration, synchronize the checkout and run
 `uv run --locked ltcook app install -e --yes --skip-setup`. Its `.venv` remains
 developer-owned. `--command-directory` selects an existing directory already on
 PATH without modifying shell profiles or overwriting unrelated commands.
-`--skip-setup` does not skip initialization. See the
-[installation guide](How-To-User-Guides.md#install-from-a-checkout).
+`--desktop` requests a shortcut with the LTCook icon on Linux or Windows.
+`--skip-setup` does not skip initialization. For checkout updates, run
+`just sync` before repeating registration so the deployment bundle is rebuilt.
+See the [installation guide](How-To-User-Guides.md#install-from-a-checkout).
 
 ## Uninstaller reference
 
 AppRC lifecycle management owns installation records and supported removal.
-`app uninstall` removes the program and managed resource directories by default;
-`--keep-data` retains resources. Editable repositories remain unless selected
-with `--remove-repository`, which cannot be combined with `--keep-data`.
+`app uninstall --yes` removes the program and managed configuration, appdata,
+cache, and state. `--keep-config` retains only the configuration directory,
+including settings and secrets. `--remove-repository` selects the editable
+checkout for removal. AppRC rejects that option if the checkout contains
+configuration selected for retention.
 Hooks are declared once in `[tool.apprc.distribution.hooks]`: initialization
 prepares prerequisites; cleanup stops the recorded LTCook Compose project before
 AppRC removes directories, including their contents and symbolic links without

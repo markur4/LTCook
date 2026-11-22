@@ -51,9 +51,10 @@ uv run --locked ltcook app install -e --yes --skip-setup
 ```
 
 This registers the checkout's existing `.venv` and publishes its command without
-copying or owning the developer environment. The exact unreleased AppRC commit
-is pinned in `pyproject.toml` and `uv.lock`; an index version alone is insufficient.
-No Rust/native compilation is needed for this route.
+copying or owning the developer environment. The Git commit for AppRC 0.39.1b1
+is pinned in `pyproject.toml` and `uv.lock`. The editable route needs no
+Rust/native compilation. On Linux or Windows, add `--desktop` to request a
+desktop shortcut with the LTCook icon.
 
 Registration initializes declared AppRC directories, extracts the canonical
 `bundle.zip`, and prepares private Node, production dependencies, optional
@@ -77,8 +78,9 @@ Runtime launches omit an unset or empty `CONTAINER_CONNECTION`, preserving Podma
 default engine selection. Set it to a configured Podman connection name only when
 a remote engine is intended.
 
-The private deployment is populated from the packaged archive; after changing
-runtime/team sources, rerun `just sync` and editable registration to refresh it.
+To update the checkout, use Git, run `just sync`, and repeat editable
+registration. `just sync` builds the deployment archive. AppRC's generic
+`app update` synchronizes Python dependencies and skips that build.
 See [installation placement](References.md#installation-placement) for recorded
 resource locations and explicit migration.
 
@@ -263,15 +265,16 @@ service credentials for its uninstall cleanup.
 
 Preview with `ltcook app uninstall --dry-run`, then use
 `ltcook app uninstall --yes` to remove the program and its managed configuration,
-appdata, cache and state. Use `--keep-data` for program-only removal. External
-shared Pi authentication remains intact. The editable checkout and environment
-remain unless you explicitly add `--remove-repository`; that option cannot be
-combined with `--keep-data`.
+appdata, cache, and state. Interactive uninstall offers to keep configuration.
+Add `--keep-config` to both commands to explicitly retain settings and secrets.
+Shared Pi authentication and external workspaces are excluded from removal.
+Use `--remove-repository` to also select the editable checkout and any environment
+inside it. AppRC rejects checkout removal if it contains configuration selected
+for retention.
 
 > [!CAUTION]
-> Default uninstall deletes LTCook-owned credentials, deployment, sessions,
-> runtime documents and coordination data. Review the dry-run paths before
-> confirming. Use `--keep-data` when retaining managed data is intentional.
+> Uninstall deletes deployment, sessions, runtime documents, and coordination
+> data even with `--keep-config`. Review the dry-run paths before confirming.
 
 The [uninstaller reference](References.md#uninstaller-reference) explains complete
 removal. LTCook cleanup is scoped to its recorded deployment and Compose project;

@@ -309,7 +309,8 @@ main(["--help"])
     assert "diagnose" not in command.commands
     uninstall = RUNNER.invoke(app, ["app", "uninstall", "--help"], color=False)
     assert uninstall.exit_code == 0, uninstall.output
-    assert "--keep-data" in uninstall.output
+    assert "--keep-config" in uninstall.output
+    assert "--keep-data" not in uninstall.output
     assert "--remove-repository" in uninstall.output
     assert "--complete" not in uninstall.output
 

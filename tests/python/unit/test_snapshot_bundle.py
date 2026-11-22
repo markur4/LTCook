@@ -19,6 +19,7 @@ from ltcook_dev.packaging.package_assets import (
 )
 
 ROOT = Path(__file__).resolve().parents[3]
+INSTALLATION_ICONS = ("assets/LTCook-Icon-Final.png", "assets/LTCook-Icon-Final.ico")
 
 
 def _committed_project(root: Path) -> str:
@@ -32,6 +33,10 @@ def _committed_project(root: Path) -> str:
         source = ROOT / name
         if source.is_file():
             shutil.copyfile(source, root / name)
+    for name in INSTALLATION_ICONS:
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, target)
     for package in ("ltcook", "ltcook_distr", "ltcook_dev"):
         shutil.copytree(
             ROOT / "src" / package,
@@ -203,6 +208,8 @@ def test_finished_snapshot_wheel_initializes_compiled_assets(tmp_path: Path) -> 
     finished = tmp_path / "finished"
     with zipfile.ZipFile(project.archive) as snapshot:
         assert "src/ltcook_distr/bundle.zip" in snapshot.namelist()
+        for name in INSTALLATION_ICONS:
+            assert snapshot.read(name) == (ROOT / name).read_bytes()
         assert not any("dist" in Path(name).parts for name in snapshot.namelist())
         snapshot.extractall(finished)
     wheel_directory = tmp_path / "wheels"
