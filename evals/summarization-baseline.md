@@ -96,4 +96,22 @@ Both reports recorded the runtime bundle hash
 The full fixture hash was
 `7d4952238d8649a47cf9a0d98d7e0c0f31525824aeea0c4e8d405bd1eb3cd698`.
 
-Human review of the calibration labels is pending.
+## Calibration fixture review
+
+Codex checked the expected judgments against the fixed source passages,
+sample summaries, and requested focus. The review confirmed the judgments
+for all five calibration examples and the downstream control.
+
+- `faithful-paraphrase` preserves all three required facts, including the
+  uncertainty about why deployment was skipped.
+- `wrong-event` contradicts the migration failure while preserving Inez's
+  decision to wait. The ID, exit code, and path all match, so this case checks
+  the outcome itself.
+- `negation-and-missing-fact` reverses the deletion status and omits `Q-11`.
+  Ada's move of three files to `reports/weekly` is preserved.
+- `irrelevant-omission` preserves the dashboard deadline, owner, and lack of
+  migration approval. The requested focus permits omitting queue recovery.
+- `unsupported-material-claim` preserves the ruled-out cause, the remaining
+  uncertainty, and the unapproved retry. The $50,000 cost is unsupported.
+- The downstream control preserves the scope of Ada's approval and Inez's
+  explicit refusal. The supported decision is `HOLD`.
