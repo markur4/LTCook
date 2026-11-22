@@ -40,6 +40,7 @@ EVAL_LABELS = {
     "semantic": "Instruction Audit · semantic",
     "behavior": "Behavior Evaluation",
     "bottlenecks": "Bottleneck Attribution",
+    "summarization": "Summarization evaluations",
 }
 EVAL_LABELS.update(
     {
@@ -63,6 +64,7 @@ class EvalCase(StrEnum):
     read_only = "read-only"
     no_op = "no-op"
     targeted_fix = "targeted-fix"
+    summarization = "summarization"
 
 
 class EvalSetup(StrEnum):
@@ -135,7 +137,11 @@ def _follow(environment, run_id: str) -> None:
             time.sleep(1)
     report = _call(environment, "/v1/evals/report", {"runId": run_id})
     _print_report(report)
-    if report["summary"]["status"] in {"failed", "cancelled"}:
+    if report["summary"]["status"] in {
+        "failed",
+        "cancelled",
+        "interrupted",
+    } or report["summary"].get("summarizationQualification") in {"failed", "blocked"}:
         raise typer.Exit(1)
 
 
@@ -157,6 +163,17 @@ def _print_report(report: dict) -> None:
     for name, raw_value in result.get("results", {}).items():
         value = raw_value if isinstance(raw_value, dict) else {}
         tasks = raw_value if isinstance(raw_value, list) else value.get("tasks", [])
+        if name == "summarization":
+            attempts = value.get("attempts", [])
+            passed = sum(attempt.get("verdict") == "passed" for attempt in attempts)
+            table.add_row(
+                labels[name],
+                str(value.get("verdict", "blocked")).upper()
+                if value.get("complete")
+                else "Partial",
+                f"{value.get('scope', '')} · {passed}/{len(attempts)} attempts passed",
+            )
+            continue
         if name == "bottlenecks":
             table.add_row(
                 labels[name],
@@ -185,6 +202,43 @@ def _print_report(report: dict) -> None:
             table.add_row(labels.get(name, name.replace("-", " ")), "Completed", "")
     if table.row_count:
         console.print(table)
+    qualification = result.get("results", {}).get("summarization", {})
+    for blocker in qualification.get("blockers", []):
+        console.print(blocker, markup=False)
+    for attempt in qualification.get("attempts", []):
+        if attempt.get("verdict") == "passed":
+            continue
+        label = f"{attempt['id']} · attempt {attempt['attempt']} · {attempt['input']}"
+        detail = attempt.get("reason") or attempt.get("verdict", "blocked")
+        console.print(f"{label} · {detail}", markup=False)
+        for missing in attempt.get("missingExact", []):
+            console.print(
+                f"  {missing['fact']} · missing {', '.join(missing['values'])}",
+                markup=False,
+            )
+        grade = attempt.get("grading", {}).get("grade", {})
+        for fact in grade.get("facts", []):
+            if fact["verdict"] != "preserved":
+                console.print(
+                    f"  {fact['id']} · {fact['verdict']} · {fact['sourceQuote']}",
+                    markup=False,
+                )
+        for claim in grade.get("claims", []):
+            if claim["verdict"] != "supported":
+                console.print(
+                    f"  {claim['verdict']} · {claim['summaryQuote']}", markup=False
+                )
+    if downstream := qualification.get("downstream"):
+        console.print(
+            "Behavior Evaluation · downstream decision · "
+            + downstream["verdict"]
+            + (
+                f" · {downstream['attribution']}"
+                if downstream.get("attribution")
+                else ""
+            ),
+            markup=False,
+        )
     for task in result.get("results", {}).get("behavior", {}).get("tasks", []):
         for attempt in task.get("attempts", []):
             budget = attempt.get("budget") or {}
@@ -269,7 +323,7 @@ def run(
     all_categories: bool = typer.Option(
         False,
         "--all",
-        help="Run Instruction Audit and all three behavior cases, sharing their timing evidence.",
+        help="Run all categories, or full qualification with --case summarization.",
     ),
     behavior_only: bool = typer.Option(
         False, "--behavior-only", help="Run only Behavior Evaluation."
@@ -327,6 +381,10 @@ def analyze(
     ] = None,
 ):
     """Report Bottleneck Attribution from the same full-instruction case executions."""
+    if case == EvalCase.summarization:
+        raise typer.BadParameter(
+            "Use eval run --case summarization for this evaluation."
+        )
     _start_and_follow(
         "bottlenecks", setup=setup, repetitions=repetitions, scenario=case
     )
@@ -373,9 +431,18 @@ def status(run_id: str):
 
 
 @eval_cli.command("report")
-def report(run_id: str):
+def report(
+    run_id: str,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print the structured Agent Evals report.")
+    ] = False,
+):
     environment, _ = _runtime()
-    _print_report(_call(environment, "/v1/evals/report", {"runId": run_id}))
+    result = _call(environment, "/v1/evals/report", {"runId": run_id})
+    if json_output:
+        typer.echo(json.dumps(result, indent=2))
+    else:
+        _print_report(result)
 
 
 @eval_cli.command("cancel")

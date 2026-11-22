@@ -210,6 +210,12 @@ async function run(): Promise<void> {
         'AppRC did not resolve required native runtime paths; launch through `ltcook launch runtime`.',
       );
     }
+    const summarization = {
+      endpoint: process.env.LTCOOK_OLLAMA_ENDPOINT ?? '',
+      model: process.env.LTCOOK_SUMMARIZER_MODEL ?? '',
+      keepAlive: Number(process.env.LTCOOK_SUMMARIZER_KEEP_ALIVE ?? '-1'),
+      generation: process.env.LTCOOK_SUMMARIZER_GENERATION,
+    };
     evals = new EvalRunService(
       stateDirectory,
       createEvalEngine({
@@ -218,6 +224,7 @@ async function run(): Promise<void> {
         nodeExecutable: node,
         python,
         teamSelection,
+        summarization,
       }),
     );
     await evals.initialize();
@@ -226,16 +233,7 @@ async function run(): Promise<void> {
       workspaceShellEnvironments.get(id),
     );
     api = new RuntimeApi(undefined, apiToken, apiListen, process.env, telemetry);
-    api.setWorkspaceMcp(
-      new WorkspaceMcp(
-        createTools(ried, {
-          endpoint: process.env.LTCOOK_OLLAMA_ENDPOINT ?? '',
-          model: process.env.LTCOOK_SUMMARIZER_MODEL ?? '',
-          keepAlive: Number(process.env.LTCOOK_SUMMARIZER_KEEP_ALIVE ?? '-1'),
-        }),
-        apiListen,
-      ),
-    );
+    api.setWorkspaceMcp(new WorkspaceMcp(createTools(ried, summarization), apiListen));
     api.setEval(evals);
     const apiUrl = await api.listen();
     apiListening = true;

@@ -88,6 +88,8 @@ commands provide launch operations and diagnostics:
 | `ltcook eval analyze [--setup current\|synthetic] [--case read-only\|no-op\|targeted-fix] [--repetitions N]` | Report Bottleneck Attribution from one set of full-instruction case executions by default. |
 | `ltcook eval report RUN_ID` | Show a persisted evaluation report. |
 | `ltcook eval list`, `watch`, `status`, `cancel`, `delete` | Manage shared Agent Evals runs and history. |
+| `ltcook eval run --all --setup synthetic --case summarization` | Run full summarization qualification for the configured local summarizer. A failed or blocked verdict exits with status 1. |
+| `ltcook eval report RUN_ID --json` | Print the structured Agent Evals report, including fixed-fixture summaries and evidence when summarization ran. |
 | `python -m ltcook.launch runtime [--workspace ROOT]` | Internal module entry point for the same global or project launch. |
 | `python -m ltcook.launch environment --workspace ROOT` | Emit raw workspace-specific child environment JSON; may contain secrets. |
 | `python -m ltcook.launch write-native-config --workspace ROOT` | Internal entry point for the private Pi-only `web-search.json` writer. |
@@ -212,6 +214,7 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_OLLAMA_ENDPOINT` | Global `runtime.ollama_endpoint`. Ollama loopback HTTP URL with a port, default `http://127.0.0.1:11434`. Used for summarization, readiness, and the setup CLI pull. |
 | `LTCOOK_SUMMARIZER_MODEL` | Global `runtime.summarizer_model`. Defaults to `LiquidAI/lfm2.5-1.2b-instruct:q4_k_m`. |
 | `LTCOOK_SUMMARIZER_KEEP_ALIVE` | Global `runtime.summarizer_keep_alive`. Default `-1` keeps the loaded model resident. Use `0` to unload or a positive number of seconds. |
+| `LTCOOK_SUMMARIZER_GENERATION` | Global `runtime.summarizer_generation`. Optional JSON object with `options` containing `num_ctx`, `num_predict`, and `temperature`. Supports optional `think`, `top_k`, and `repeat_penalty` (the latter two inside `options`). Streaming is disabled. An empty value uses the default generation settings. A smaller context reduces the supported source byte limit. |
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
 | `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |

@@ -91,11 +91,11 @@ Treat this as the parking lot for actionable problems discovered while working b
 # 2026-11-22
 
 ## P2 / E2 [Tools] - *Improve local summarizer fidelity on operational notes*
-- **Area:** `runtime/src/tools/summarize.ts` and the opt-in live MCP fixture.
+- **Area:** `runtime/src/tools/summarize.ts` and the summarization evaluations.
 - **Observed while:** Checking the default LFM2.5 1.2B summarizer alongside Bonsai.
 - **Evidence:** Both models remained loaded, but the summarizer sometimes omitted a filename, identifier, or negated action from the three fixed passages.
-- **Why not fixed now:** The model and prompt provide best-effort summaries. Choosing a different default model or adding a fact-verification stage needs its own evaluation.
-- **Suggested next step:** Use the existing passages and the same local settings to compare candidate prompts or models before changing the default.
+- **Qualification:** The first full LFM3 run passed 14 of 17 summary attempts. A cutoff and a reversed recovery decision failed. One semantic grade was blocked by invalid evidence. See the [baseline report](evals/summarization-baseline.md).
+- **Suggested next step:** Compare candidate prompts or generation settings against the full qualification suite before promoting a new default.
 
 <br>
 

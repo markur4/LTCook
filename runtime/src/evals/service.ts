@@ -24,8 +24,21 @@ import {
   type EvalSetup,
   type EvalEnvironmentOverrides,
   type EvalReportResponse,
+  type EvalScenario,
   type EvalSummary,
 } from './contracts.js';
+
+type EvalMetadata = Partial<
+  Pick<
+    EvalSummary,
+    | 'teamSelection'
+    | 'model'
+    | 'fixtureRevision'
+    | 'provenance'
+    | 'limitations'
+    | 'summarizationQualification'
+  >
+>;
 
 export type EvalProgress = {
   event: 'suite.started' | 'case.started' | 'case.completed' | 'case.failed';
@@ -34,16 +47,12 @@ export type EvalProgress = {
   completed?: number;
   total?: number;
   message?: string;
-  metadata?: Partial<
-    Pick<EvalSummary, 'teamSelection' | 'model' | 'fixtureRevision' | 'provenance' | 'limitations'>
-  >;
+  metadata?: EvalMetadata;
 };
 export type EvalOutput = {
   result: unknown;
   trace: unknown;
-  metadata?: Partial<
-    Pick<EvalSummary, 'teamSelection' | 'model' | 'fixtureRevision' | 'provenance' | 'limitations'>
-  >;
+  metadata?: EvalMetadata;
 };
 export type EvalTimingIdentity = {
   scenario: string;
@@ -99,7 +108,7 @@ export type EvalEngine = (input: {
   progress(event: EvalProgress): void;
   checkpoint?(output: EvalOutput): Promise<void>;
   repetitions?: number;
-  scenario?: 'read-only' | 'no-op' | 'targeted-fix';
+  scenario?: EvalScenario;
   timingHardware?: string;
   budget?(identity: EvalTimingIdentity): EvalBudget;
   learned?(

@@ -244,11 +244,65 @@ Reports, progress events and Perfetto traces live in runtime state under
 `evals/runs`, with prompts, transcripts, and credentials excluded. Instruction
 Audit records production loader provenance; semantic findings require review.
 Routine `eval run` performs Behavior Evaluation with full instructions in the
-selected setup. It runs the read-only, no-op and targeted-fix cases once each.
+selected setup. It runs the mandatory core summarization evaluations and the
+read-only, no-op and targeted-fix agent cases once each.
 `--case` selects one case, and `--repetitions N` explicitly repeats the selected
-cases. The default is one repetition. `eval run --all` adds Instruction Audit;
-when the categories run together, semantic audit uses the prompt already
+agent cases. The default is one repetition. `eval run --all` adds Instruction
+Audit and full summarization qualification.
+When the categories run together, semantic audit uses the prompt already
 captured during Behavior Evaluation rather than launching another agent task.
+
+### Summarization qualification
+
+The core evaluates fixed, focus-specific facts for status, negation, migration
+failures, ownership, corrections, and text that contains instructions. Full
+qualification adds a near-limit case, a file/inline comparison, and three
+attempts for selected high-risk cases. It also runs a native Pi downstream
+decision and uses a reviewed correct-summary control if that decision fails.
+Repetitions expose instability on the selected cases. Traditional Tests cover
+deterministic evidence validation, file access, and Ollama failures.
+
+Run `ltcook eval run --all --setup synthetic --case summarization` for changes
+to the recommended summarizer, its prompt, generation settings, or preparation
+of input. The report identifies the configured model and Bonsai grader by
+their resolved tags and digests. It includes a code fingerprint, hashes for
+the fixtures and prompts, effective settings, individual results, fixed-fixture
+summaries and quotations, latency, and token counts when available. Concision
+and readability are separate from the required-fact verdict.
+
+The engine fingerprints its runtime bundle at startup. Source checkouts
+fingerprint the evaluation and summarizer source files and the Bun lockfile
+at engine creation.
+
+Set the global AppRC model and generation options before starting the evaluation
+runtime to compare a candidate. For the LFM3 baseline, the settings were
+`LTCOOK_SUMMARIZER_MODEL=lfm3:1.7b-q8_0` and the following generation value.
+
+```shell
+export LTCOOK_SUMMARIZER_GENERATION='{"think":false,"stream":false,"options":{"temperature":0.1,"num_ctx":4096,"num_predict":128}}'
+```
+
+The near-limit fixture measures the effective tool budget for the configured
+context and focus. Compare runs with different context settings using that budget
+and the recorded fixture hash. See the [first full LFM3 baseline](../evals/summarization-baseline.md).
+
+Each run checks Bonsai against development and held-out fixtures with fixed
+expected judgments. Keep the held-out cases separate when refining the grading prompt.
+Calibration requires Bonsai to flag the expected claims and cite their wording.
+Evidence validation checks each required fact against its supplied quotation.
+Summary citations can span line wrapping, typographic spacing, and Markdown
+formatting such as lists, bold text, and inline code. The report retains the
+exact excerpt as it appeared in the candidate summary.
+Critical disagreements can be adjudicated manually against the fixed source and
+candidate. An unavailable, uncalibrated, or self-grading model blocks semantic
+checks while deterministic checks continue. A changed summarizer identity blocks
+attribution of its outputs to the candidate. A confirmed failure takes precedence
+over a blocker. Qualification passes only when every required check passes.
+
+The quick preset and focused runs for other agent cases provide partial coverage.
+The qualification verdict belongs to the summarization report, independently
+of whether the runner completed. Existing elapsed-time history and fallback for
+the three agent cases still use their original attempts.
 
 Bottleneck Attribution reports timings from those same executions and their
 Perfetto traces. `eval analyze` starts one set of full-instruction cases by

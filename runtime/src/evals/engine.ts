@@ -4,8 +4,10 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { loadTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
-import type { EvalBudget, EvalEngine } from './service.js';
-import { evaluationCaseCount } from './contracts.js';
+import type { EvalBudget, EvalEngine, EvalOutput } from './service.js';
+import { evaluationCaseCount, summarizationScope } from './contracts.js';
+import { captureSummarizationCode, evaluateSummarization } from './summarization.js';
+import type { OllamaSettings } from '../integrations/ollama.js';
 import { staticAudit } from './instruction-audit.js';
 import { attributeEvaluationTrace } from './attribution.js';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
@@ -40,6 +42,7 @@ type EngineOptions = {
   teamSelection?: string;
   context?: EvaluationContext;
   endpoint?: string;
+  summarization?: OllamaSettings;
 };
 
 type EvaluationAttempt = Omit<EvaluationResult, 'trace'> & {
@@ -50,6 +53,7 @@ type EvaluationAttempt = Omit<EvaluationResult, 'trace'> & {
 
 /** One engine shared by CLI and Paseo; setup preparation never selects a separate execution path. */
 export function createEvalEngine(options: EngineOptions): EvalEngine {
+  const summarizationCode = captureSummarizationCode();
   return async ({
     preset,
     setup,
@@ -68,41 +72,14 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
     learned,
     timingHardware,
   }) => {
-    const context =
-      options.context ??
-      resolveEvaluationContext({
-        python: options.python ?? process.env.LTCOOK_PYTHON ?? '',
-        setup,
-        workspaceRoot,
-        environmentOverrides,
-        teamSelection:
-          teamSelection ?? options.teamSelection ?? process.env.LTCOOK_TEAM ?? 'default-minimal',
-      });
-    const team = await loadTeam(context.teamSelection, options.appRoot);
-    const appRoot = options.appRoot ?? path.resolve(options.resources, '../..');
-    const endpoint = options.endpoint ?? ENDPOINT;
-    const metadata = {
-      teamSelection: context.teamSelection,
-      model: EVAL_MODEL,
-      fixtureRevision: FIXTURE_REVISION,
-      limitations: [
-        ...limitations,
-        ...context.limitations,
-        'Interactive Plan approval is outside evaluation coverage.',
-        setup === 'current'
-          ? 'Current Setup evaluates the selected configuration under local Bonsai; results do not describe another model.'
-          : 'Synthetic Setup uses the packaged fixture under local Bonsai.',
-        'Filesystem confinement preserves configured network behavior and does not prevent network side effects.',
-        'User executable Pi extensions and authenticated integrations are not exercised.',
-        'The snapshot has an independent Git index without original history, remotes or hooks.',
-        'Nested repositories/submodules and symbolic links are excluded from snapshots.',
-      ],
-      provenance: {} as Record<string, unknown>,
-    };
     const temporary = await mkdtemp(path.join(runDirectory, '.execution-'));
     const source = path.join(temporary, 'source');
     const guidance = path.join(temporary, 'guidance');
     const results: Record<string, unknown> = {};
+    const metadata: NonNullable<EvalOutput['metadata']> & {
+      limitations: string[];
+      provenance: Record<string, unknown>;
+    } = { limitations: [...limitations], provenance: {} };
     const traceEvents: unknown[] = [];
     let completed = 0;
     const total = evaluationCaseCount({
@@ -120,6 +97,69 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
       });
     try {
       signal.throwIfAborted();
+      const suite = 'summarization';
+      const scope = summarizationScope({ preset, scenario: selectedScenario });
+      if (scope) {
+        progress({ event: 'suite.started', suite, completed, total });
+        const report = await evaluateSummarization({
+          scope,
+          code: summarizationCode,
+          settings: options.summarization,
+          directory: path.join(temporary, 'summarization'),
+          signal,
+          async onProgress(candidate, current) {
+            results.summarization = candidate;
+            if (current)
+              progress({ event: 'case.started', suite, case: current, completed, total });
+            await flush();
+          },
+        });
+        results.summarization = report;
+        metadata.summarizationQualification = report.verdict;
+        completed++;
+        progress({
+          event: report.verdict === 'failed' ? 'case.failed' : 'case.completed',
+          suite,
+          case: 'Qualification · ' + report.verdict,
+          completed,
+          total,
+          metadata,
+        });
+        await flush();
+        if (selectedScenario === 'summarization')
+          return { result: { preset, setup, results }, trace: { traceEvents }, metadata };
+      }
+      const context =
+        options.context ??
+        resolveEvaluationContext({
+          python: options.python ?? process.env.LTCOOK_PYTHON ?? '',
+          setup,
+          workspaceRoot,
+          environmentOverrides,
+          teamSelection:
+            teamSelection ?? options.teamSelection ?? process.env.LTCOOK_TEAM ?? 'default-minimal',
+        });
+      const team = await loadTeam(context.teamSelection, options.appRoot);
+      const appRoot = options.appRoot ?? path.resolve(options.resources, '../..');
+      const endpoint = options.endpoint ?? ENDPOINT;
+      Object.assign(metadata, {
+        teamSelection: context.teamSelection,
+        model: EVAL_MODEL,
+        fixtureRevision: FIXTURE_REVISION,
+        limitations: [
+          ...limitations,
+          ...context.limitations,
+          'Interactive Plan approval is outside evaluation coverage.',
+          setup === 'current'
+            ? 'Current Setup evaluates the selected configuration under local Bonsai; results do not describe another model.'
+            : 'Synthetic Setup uses the packaged fixture under local Bonsai.',
+          'Filesystem confinement preserves configured network behavior and does not prevent network side effects.',
+          'User executable Pi extensions and authenticated integrations are not exercised.',
+          'The snapshot has an independent Git index without original history, remotes or hooks.',
+          'Nested repositories/submodules and symbolic links are excluded from snapshots.',
+        ],
+        provenance: {} as Record<string, unknown>,
+      });
       const files = await snapshotWorkspace(
         setup === 'current' ? workspaceRoot : undefined,
         source,
@@ -518,11 +558,12 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         };
       };
       if (preset !== 'audit') {
-        const scenarios = selectedScenario
-          ? [selectedScenario]
-          : preset === 'quick'
-            ? ['targeted-fix' as const]
-            : SCENARIOS;
+        const scenarios =
+          selectedScenario && selectedScenario !== 'summarization'
+            ? [selectedScenario]
+            : preset === 'quick'
+              ? ['targeted-fix' as const]
+              : SCENARIOS;
         for (let repetition = 0; repetition < repetitions; repetition++) {
           for (const scenario of scenarios) {
             progress({

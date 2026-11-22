@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,7 +34,7 @@ async function finish(service: EvalRunService, runId: string) {
 }
 
 describe('Agent Evals run service', () => {
-  test('runs static audit without accessing Ollama', async () => {
+  test('runs static audit offline and retains the engine startup bundle fingerprint', async () => {
     const root = await stateRoot();
     await mkdir(path.join(root, 'teams', 'fixture-selected'), { recursive: true });
     await writeFile(
@@ -54,8 +55,12 @@ describe('Agent Evals run service', () => {
       packages: 'external',
     });
     expect(bundle.success).toBe(true);
+    const bundlePath = bundle.outputs[0]!.path;
+    const startupHash = createHash('sha256')
+      .update(await readFile(bundlePath))
+      .digest('hex');
     const compiled = (await import(
-      pathToFileURL(bundle.outputs[0]!.path).href
+      pathToFileURL(bundlePath).href
     )) as typeof import('../../../runtime/src/evals/engine.js');
     await writeFile(path.join(root, 'guide.md'), 'guidance '.repeat(3001));
     await writeFile(
@@ -97,6 +102,16 @@ describe('Agent Evals run service', () => {
           },
         },
       });
+      await writeFile(bundlePath, '// Replacement bundle written while the engine was live.\n');
+      const summarizationRun = await service.start({
+        preset: 'behavior',
+        setup: 'synthetic',
+        scenario: 'summarization',
+      });
+      await finish(service, summarizationRun);
+      expect(service.report(summarizationRun).result).toMatchObject({
+        results: { summarization: { code: { kind: 'bundle', sha256: startupHash } } },
+      });
       expect(fetchSpy).not.toHaveBeenCalled();
       await expect(
         service.start({ preset: 'quick', setup: 'current', staticOnly: true }),
@@ -111,9 +126,9 @@ describe('Agent Evals run service', () => {
     for (const [preset, total] of [
       ['quick', 2],
       ['audit', 2],
-      ['behavior', 3],
+      ['behavior', 4],
       ['bottlenecks', 3],
-      ['full', 5],
+      ['full', 6],
     ] as const) {
       const runId = await service.start({ preset, setup: 'current' });
       expect((await service.status(runId)).summary.total).toBe(total);

@@ -4,13 +4,16 @@ import {
   EvalPresetSchema,
   EvalSetupSchema,
   EvalScenarioSchema,
+  summarizationScope,
+  type EvalScenario,
 } from '../runtime/src/evals/contracts.js';
 import { createEvalEngine } from '../runtime/src/evals/engine.js';
 import { EvalRunService } from '../runtime/src/evals/service.js';
+import { resolveEvaluationContext } from '../runtime/src/evals/setup.js';
 
 const [setupInput, presetInput, stateInput, ...argumentsInput] = process.argv.slice(2);
 let workspaceRoot: string | undefined;
-let scenario: 'read-only' | 'no-op' | 'targeted-fix' | undefined;
+let scenario: EvalScenario | undefined;
 let repetitions = 1;
 for (let index = 0; index < argumentsInput.length; index++) {
   const argument = argumentsInput[index]!;
@@ -25,19 +28,25 @@ for (let index = 0; index < argumentsInput.length; index++) {
 }
 if (!setupInput || !presetInput || !stateInput)
   throw new Error(
-    'Usage: bun evals/evaluation-live.ts current|synthetic quick|audit|behavior|bottlenecks|full PRIVATE_STATE_DIRECTORY [REGISTERED_WORKSPACE] [--case read-only|no-op|targeted-fix] [--repetitions N]',
+    'Usage: bun evals/evaluation-live.ts current|synthetic quick|audit|behavior|bottlenecks|full PRIVATE_STATE_DIRECTORY [REGISTERED_WORKSPACE] [--case read-only|no-op|targeted-fix|summarization] [--repetitions N]',
   );
 const setup = EvalSetupSchema.parse(setupInput);
 const preset = EvalPresetSchema.parse(presetInput);
 const root = path.resolve(import.meta.dir, '..');
 const state = path.resolve(stateInput);
+const python = path.join(root, '.venv/bin/python');
+const teamSelection = process.env.LTCOOK_TEAM ?? 'default-minimal';
+const summarization = summarizationScope({ preset, scenario })
+  ? resolveEvaluationContext({ python, setup: 'current', teamSelection }).summarization
+  : undefined;
 const service = new EvalRunService(
   state,
   createEvalEngine({
     resources: path.join(root, 'runtime/resources'),
     appRoot: root,
-    python: path.join(root, '.venv/bin/python'),
-    teamSelection: process.env.LTCOOK_TEAM ?? 'default-minimal',
+    python,
+    teamSelection,
+    summarization,
   }),
 );
 await service.initialize();
@@ -61,7 +70,11 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 500));
   } while (current.summary.status === 'running');
   console.log(JSON.stringify(service.report(id)));
-  if (current.summary.status !== 'completed') process.exitCode = 1;
+  if (
+    current.summary.status !== 'completed' ||
+    ['failed', 'blocked'].includes(current.summary.summarizationQualification ?? '')
+  )
+    process.exitCode = 1;
 } finally {
   await service.close();
   process.off('SIGINT', cancel);

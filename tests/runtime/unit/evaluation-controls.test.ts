@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   EvalStartRequestSchema,
   evaluationCaseCount,
+  summarizationScope,
 } from '../../../runtime/src/evals/contracts.js';
 
 import { attributeEvaluationTrace } from '../../../runtime/src/evals/attribution.js';
@@ -10,9 +11,9 @@ describe('evaluation execution controls', () => {
   test('defaults to one repetition and counts shared execution only once', () => {
     const request = EvalStartRequestSchema.parse({ preset: 'behavior', setup: 'synthetic' });
     expect(request.repetitions).toBe(1);
-    expect(evaluationCaseCount(request)).toBe(3);
+    expect(evaluationCaseCount(request)).toBe(4);
     expect(evaluationCaseCount({ ...request, preset: 'bottlenecks' })).toBe(3);
-    expect(evaluationCaseCount({ ...request, preset: 'full' })).toBe(5);
+    expect(evaluationCaseCount({ ...request, preset: 'full' })).toBe(6);
   });
 
   test('selects and repeats a case without multiplying by instruction variants', () => {
@@ -25,6 +26,17 @@ describe('evaluation execution controls', () => {
     expect(evaluationCaseCount(request)).toBe(4);
     expect(evaluationCaseCount({ ...request, preset: 'quick', scenario: undefined })).toBe(5);
     expect(evaluationCaseCount({ ...request, preset: 'audit', staticOnly: true })).toBe(1);
+  });
+
+  test('runs the required summarization scope and supports narrow qualification', () => {
+    expect(summarizationScope({ preset: 'behavior' })).toBe('core');
+    expect(summarizationScope({ preset: 'full' })).toBe('full');
+    expect(summarizationScope({ preset: 'behavior', scenario: 'no-op' })).toBeUndefined();
+    expect(summarizationScope({ preset: 'audit' })).toBeUndefined();
+    expect(evaluationCaseCount({ preset: 'full', scenario: 'summarization' })).toBe(1);
+    expect(() =>
+      EvalStartRequestSchema.parse({ preset: 'bottlenecks', scenario: 'summarization' }),
+    ).toThrow();
   });
 
   test('rejects invalid repetitions and incompatible case selection before execution', () => {
