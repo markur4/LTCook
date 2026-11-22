@@ -176,6 +176,11 @@ def resolve_launch(
     environment["LTCOOK_PI_AUTH_DIR"] = str(
         _user_path(global_config.runtime.pi_auth_dir, home)
     )
+    environment["LTCOOK_OLLAMA_ENDPOINT"] = global_config.runtime.ollama_endpoint
+    environment["LTCOOK_SUMMARIZER_MODEL"] = global_config.runtime.summarizer_model
+    environment["LTCOOK_SUMMARIZER_KEEP_ALIVE"] = str(
+        global_config.runtime.summarizer_keep_alive
+    )
     runtime_state = (
         _user_path(global_config.runtime.state_dir, home)
         if global_config.runtime.state_dir

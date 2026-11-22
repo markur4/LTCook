@@ -319,7 +319,7 @@ export class RuntimeApi {
         const token = await this.workspaceMcp.grant(
           input.nativeAgentId,
           input.workspaceRoot,
-          false,
+          'provider' in parsed && parsed.provider === 'pi',
         );
         response.writeHead(200).end(JSON.stringify({ token }));
         return;

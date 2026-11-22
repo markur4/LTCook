@@ -132,6 +132,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ➕ Added
 
+- Add workspace inventory and local Ollama summarization over authenticated MCP
+  for ordinary Pi and Codex chats in Paseo.
+
 - Display the Graffiti Jam artwork in the README and use LTCook icons for new
   AppRC shortcuts on Linux and Windows and for Windows Installed apps.
 

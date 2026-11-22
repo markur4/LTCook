@@ -76,12 +76,27 @@ test('adopts the actual Leader before obtaining scoped environment without creat
 });
 test('ordinary Pi, Codex, and history access never activate a Team', async () => {
   const hook = hooks()('agent.open.before');
-  globalThis.fetch = (() => {
-    throw new Error('Unexpected runtime call');
+  process.env.LTCOOK_RUNTIME_API_URL = 'http://runtime.invalid';
+  process.env.LTCOOK_RUNTIME_USER_TOKEN = 'server-secret';
+  const calls: string[] = [];
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    calls.push(String(input));
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer server-secret');
+    return Promise.resolve(Response.json({ token: 'scoped-to-the-workspace' }));
   }) as typeof fetch;
-  expect(await hook({ request: { ...openRequest, provider: 'pi' } })).toBeUndefined();
-  expect(await hook({ request: { ...openRequest, provider: 'codex' } })).toBeUndefined();
+  for (const provider of ['pi', 'codex']) {
+    const prepared = await hook({
+      request: { ...openRequest, provider, env: { LTCOOK_RUNTIME_USER_TOKEN: 'server-secret' } },
+    });
+    expect(prepared?.mcpServers.ltcook_workspace).toMatchObject({
+      type: 'http',
+      url: 'http://runtime.invalid/mcp',
+      headers: { Authorization: 'Bearer scoped-to-the-workspace' },
+    });
+    expect(JSON.stringify(prepared)).not.toContain('server-secret');
+  }
   expect(await hook({ request: { ...openRequest, purpose: 'history' } })).toBeUndefined();
+  expect(calls).toEqual(Array(2).fill('http://runtime.invalid/v1/mcp/grant'));
 });
 test('missing Team selection fails before opening native LTCook', async () => {
   const hook = hooks()('agent.create.before');

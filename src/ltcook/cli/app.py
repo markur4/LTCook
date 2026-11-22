@@ -140,6 +140,7 @@ def _ollama_resource_diagnostics(appdata: Path) -> dict[str, object]:
             MODEL,
             _has_expected_context,
             _json,
+            summarizer_readiness,
         )
 
         version = _json(f"{ENDPOINT}/api/version").get("version")
@@ -170,7 +171,8 @@ def _ollama_resource_diagnostics(appdata: Path) -> dict[str, object]:
                 "eval_model_present": True,
                 "context_tokens": CONTEXT_TOKENS,
                 "endpoint": ENDPOINT,
-            }
+            },
+            "summarizer": summarizer_readiness(previous=data.get("summarizer")),
         }
     except (OSError, RuntimeError, ValueError) as error:
         raise ValueError(f"Ollama readiness check failed: {error}") from error

@@ -221,6 +221,7 @@ export default function contribute(server: PluginServerContext) {
           await runtimeJson('/v1/mcp/grant', {
             nativeAgentId: request.agentId,
             workspaceRoot: request.cwd,
+            provider: request.provider,
           }),
         );
         const { endpoint } = runtimeConfig();

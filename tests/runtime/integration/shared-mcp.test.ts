@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,7 @@ import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { createTools } from '../../../runtime/src/tools/catalog.js';
 import { RiedService } from '../../../runtime/src/tools/ried.js';
+import { createSummarizeTool } from '../../../runtime/src/tools/summarize.js';
 
 async function localAuthority(): Promise<string> {
   const probe = createServer();
@@ -122,3 +124,233 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
     await rm(root, { force: true, recursive: true });
   }
 });
+
+test('MCP summarization enforces workspace grants and cancels local Ollama requests', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ltcook-summary-'));
+  const workspace = path.join(root, 'workspace');
+  await mkdir(workspace);
+  const material = 'Release R-17 passed 42 checks. It did not deploy. The cause remains uncertain.';
+  await writeFile(path.join(workspace, 'notes.txt'), material);
+  await writeFile(path.join(workspace, 'large.txt'), 'x'.repeat(25 * 1024));
+  await writeFile(path.join(root, 'outside.txt'), 'outside');
+  await symlink(path.join(root, 'outside.txt'), path.join(workspace, 'escape.txt'));
+  await writeFile(path.join(workspace, 'binary'), Buffer.from([0x78, 0, 0xff]));
+  const started = Promise.withResolvers<void>();
+  const canceled = Promise.withResolvers<void>();
+  const requests: Array<{
+    model: string;
+    messages: Array<{ role: string; content: string }>;
+    keep_alive: number;
+    options: { num_predict: number };
+  }> = [];
+  let mode = 'length';
+  const ollama = createHttpServer(async (request, response) => {
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body));
+    if (mode === 'abort') {
+      response.once('close', () => canceled.resolve());
+      started.resolve();
+      return;
+    }
+    response.writeHead(mode === 'missing' ? 404 : 200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify(
+        mode === 'missing'
+          ? { error: 'model not found' }
+          : {
+              model: 'fixture-model',
+              message: { content: 'R-17 passed 42 checks and did not deploy.' },
+              done: true,
+              done_reason: mode,
+            },
+      ),
+    );
+  });
+  await new Promise<void>((resolve) => ollama.listen(0, '127.0.0.1', resolve));
+  const address = ollama.address();
+  if (!address || typeof address === 'string') throw new Error('No fixture Ollama port.');
+  const authority = await localAuthority();
+  const api = new RuntimeApi(undefined, 'fixture-unshared-secret', authority);
+  const mcp = new WorkspaceMcp(
+    createTools(new RiedService(path.join(root, 'cache'), undefined, () => ({ PATH: '' })), {
+      endpoint: `http://127.0.0.1:${address.port}`,
+      model: 'fixture-model',
+      keepAlive: 60,
+    }),
+    authority,
+  );
+  const clients: Client[] = [];
+  api.setWorkspaceMcp(mcp);
+  async function session(agentId: string, workspaceFileAccess: boolean) {
+    const token = await mcp.grant(agentId, workspace, workspaceFileAccess);
+    const client = new Client({ name: agentId, version: '1.0.0' });
+    clients.push(client);
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`http://${authority}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${token}` } },
+      }),
+    );
+    return client;
+  }
+  try {
+    await api.listen();
+    const pi = await session('pi', true);
+    const codex = await session('codex', false);
+    expect((await pi.listTools()).tools.map(({ name }) => name)).toEqual([
+      'ltcook_ried',
+      'ltcook_summarize',
+    ]);
+    const summarize = (client: Client, args: Record<string, unknown>, signal?: AbortSignal) =>
+      client.callTool({ name: 'ltcook_summarize', arguments: args }, undefined, { signal });
+    for (const args of [
+      {},
+      { text: 'a', path: 'notes.txt' },
+      { text: 'x'.repeat(25 * 1024) },
+      { path: 'large.txt' },
+      { path: 'escape.txt' },
+      { path: '../outside.txt' },
+      { path: 'binary' },
+      { path: workspace },
+    ]) {
+      expect((await summarize(pi, args)).isError).toBe(true);
+    }
+    expect((await summarize(codex, { path: 'notes.txt' })).isError).toBe(true);
+    expect(requests).toHaveLength(0);
+    expect(
+      (await summarize(pi, { path: 'notes.txt', focus: 'Deployment decision' })).structuredContent,
+    ).toEqual({
+      model: 'fixture-model',
+      summary: 'R-17 passed 42 checks and did not deploy.',
+      incomplete: true,
+    });
+    expect(requests[0]).toMatchObject({
+      model: 'fixture-model',
+      keep_alive: 60,
+      options: { num_predict: 512 },
+    });
+    expect(requests[0]?.messages[1]?.content).toContain(material);
+    expect(requests[0]?.messages[1]?.content).toContain('Deployment decision');
+    mode = 'stop';
+    expect((await summarize(codex, { text: material })).structuredContent).toMatchObject({
+      incomplete: false,
+    });
+    mode = 'missing';
+    const missing = await summarize(codex, { text: material });
+    expect(missing.isError).toBe(true);
+    expect(JSON.stringify(missing.content)).toContain('fixture-model');
+    expect(
+      (await codex.callTool({ name: 'ltcook_ried', arguments: { operation: 'summary' } }))
+        .structuredContent,
+    ).toMatchObject({ value: { workspaceRoot: workspace } });
+    mode = 'abort';
+    const controller = new AbortController();
+    const result = summarize(codex, { text: material }, controller.signal);
+    const rejected = result.then(
+      () => false,
+      () => true,
+    );
+    expect(
+      await Promise.race([started.promise.then(() => true), Bun.sleep(1000).then(() => false)]),
+    ).toBe(true);
+    controller.abort();
+    expect(await rejected).toBe(true);
+    expect(
+      await Promise.race([canceled.promise.then(() => true), Bun.sleep(1000).then(() => false)]),
+    ).toBe(true);
+  } finally {
+    await Promise.all(clients.map((client) => client.close()));
+    ollama.closeAllConnections();
+    await api.close();
+    await new Promise<void>((resolve) => ollama.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+const liveEndpoint = process.env.LTCOOK_TEST_LIVE_OLLAMA;
+
+test.skipIf(!liveEndpoint)(
+  'live summarizer preserves operational details and can coexist with Bonsai',
+  async () => {
+    if (!liveEndpoint) throw new Error('Set an explicit local Ollama endpoint.');
+    const model = 'LiquidAI/lfm2.5-1.2b-instruct:q4_k_m';
+    const bonsai = 'ltcook-bonsai-2-27b-ctx65536:latest';
+    const post = async (endpoint: string, input: object) => {
+      const response = await fetch(new URL(endpoint, liveEndpoint), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(120_000),
+        body: JSON.stringify(input),
+      });
+      if (!response.ok)
+        throw new Error(`Live fixture ${endpoint} returned HTTP ${response.status}.`);
+      return response.json();
+    };
+    const loaded = async (): Promise<string[]> => {
+      const response = await fetch(new URL('/api/ps', liveEndpoint));
+      if (!response.ok) throw new Error('Cannot check live Ollama residency.');
+      return ((await response.json()) as { models: Array<{ name: string }> }).models.map(
+        ({ name }) => name,
+      );
+    };
+    const initial = await loaded();
+    if (initial.includes(model) || initial.includes(bonsai)) {
+      throw new Error('Supply an Ollama instance with neither fixture model running.');
+    }
+    const tool = createSummarizeTool({ endpoint: liveEndpoint, model, keepAlive: -1 });
+    try {
+      await post('/api/chat', {
+        model: bonsai,
+        messages: [{ role: 'user', content: 'Reply OK.' }],
+        stream: false,
+        keep_alive: 180,
+        options: { num_ctx: 65536, num_predict: 1 },
+      });
+      expect(await loaded()).toContain(bonsai);
+      const fidelity: Array<{ summary: string; missing: RegExp[] }> = [];
+      for (const [text, focus, details] of [
+        [
+          'Release R-17 passed 42 checks. Deployment was skipped. The reason is uncertain.',
+          'Use the source wording for the release ID, check count, deployment status, and reason.',
+          [
+            /R-17/i,
+            /42/,
+            /not deploy|no deployment|deployment.{0,20}(skipped|not)|skipped deployment/i,
+            /uncertain|unknown|unclear/i,
+          ],
+        ],
+        [
+          'Migration M-04 failed with exit code 23 in ops/db.py. Inez decided to wait.',
+          'Keep both source sentences and their exact migration ID, path, and exit code.',
+          [/M-04/i, /23/, /ops\/db\.py/, /fail/i, /Inez/i],
+        ],
+        [
+          'No artifacts were deleted. Ada moved 3 files to reports/weekly and logged issue Q-11.',
+          'Keep both source sentences and their exact name, destination, issue ID, and file count.',
+          [/no artifacts|artifacts.{0,15}not deleted/i, /Ada/i, /3/, /reports\/weekly/, /Q-11/i],
+        ],
+      ] as const) {
+        const answer = await tool.execute(
+          { text, focus },
+          {
+            agentId: 'live-fixture',
+            workspaceRoot: process.cwd(),
+            workspaceFileAccess: false,
+            signal: AbortSignal.timeout(120_000),
+          },
+        );
+        expect(answer.incomplete).toBe(false);
+        fidelity.push({
+          summary: answer.summary,
+          missing: details.filter((detail) => !detail.test(answer.summary)),
+        });
+      }
+      expect(await loaded()).toEqual(expect.arrayContaining([model, bonsai]));
+      expect(fidelity.filter(({ missing }) => missing.length)).toEqual([]);
+    } finally {
+      for (const name of [model, bonsai])
+        await post('/api/generate', { model: name, keep_alive: 0, stream: false });
+    }
+  },
+  240_000,
+);

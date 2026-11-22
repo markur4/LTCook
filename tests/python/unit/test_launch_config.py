@@ -253,6 +253,9 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
             state_dir="",
             guidance_dir="",
             database="",
+            ollama_endpoint="http://127.0.0.1:11434",
+            summarizer_model="fixture-model",
+            summarizer_keep_alive=-1,
         ),
         web=Section({"LTCOOK_CRAWL4AI_URL": ""}),
         pi=Section({}),
@@ -310,7 +313,14 @@ def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_p
     config = SimpleNamespace(
         app=Section({}, deployment=""),
         runtime=Section(
-            {}, pi_auth_dir="~/.pi/agent", state_dir="", guidance_dir="", database=""
+            {},
+            pi_auth_dir="~/.pi/agent",
+            state_dir="",
+            guidance_dir="",
+            database="",
+            ollama_endpoint="http://127.0.0.1:11434",
+            summarizer_model="fixture-model",
+            summarizer_keep_alive=-1,
         ),
         web=Section({}),
         pi=Section({}),

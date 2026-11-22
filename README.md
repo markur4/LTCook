@@ -258,6 +258,9 @@ Registration and AppRC workspace markers are optional; existing project settings
 are used when present. Model selections are needed when starting agents, not
 merely opening the UI.
 
+Ordinary Pi and Codex chats in Paseo can use LTCook's workspace inventory and
+local Ollama summarizer. See [workspace tools](docs/How-To-User-Guides.md#use-workspace-tools-in-pi-or-codex).
+
 Bare `ltcook` starts or reuses the local runtime, opens the host default browser
 (Windows when invoked from WSL), and follows backend logs. Ctrl+C detaches this
 terminal; use `ltcook stop` to stop the server. `ltcook launch runtime` remains

@@ -17,7 +17,12 @@ const pi = path.join(fixture, 'pi');
 await Promise.all([workspace, deployment, pi].map((dir) => mkdir(dir, { recursive: true })));
 const hostDir = path.join(deployment, 'paseo');
 const model = 'gpt-5.4';
-const servedTool = 'mcp__ltcook_workspace__ltcook_ried';
+const material = 'Release R-17 passed 42 checks but did not deploy. The cause is uncertain.';
+const summary = 'R-17 passed 42 checks and did not deploy. The cause is uncertain.';
+const summaryModel = 'fixture-summary';
+await writeFile(path.join(workspace, 'notes.txt'), material);
+let tool = 'ltcook_ried';
+let argumentsJson = '{"operation":"summary"}';
 type FixtureTool = {
   type?: string;
   name?: string;
@@ -44,6 +49,21 @@ const provider = createServer(async (request, response) => {
     let text = '';
     for await (const data of request) text += data;
     const input = JSON.parse(text);
+    if (request.url === '/api/chat') {
+      assert.equal(input.model, summaryModel);
+      assert.equal(input.messages[1]?.content, material);
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          model: summaryModel,
+          message: { content: summary },
+          done: true,
+          done_reason: 'stop',
+        }),
+      );
+      return;
+    }
+    const servedTool = `mcp__ltcook_workspace__${tool}`;
     const codex = request.url?.endsWith('/responses');
     const messages = codex ? input.input : input.messages;
     const result = messages?.findLast((item: Record<string, unknown>) =>
@@ -62,8 +82,10 @@ const provider = createServer(async (request, response) => {
     if (result) {
       const returned = JSON.stringify(result);
       assert(
-        returned.includes(workspace) && returned.includes('workspaceRoot'),
-        `RIED result was not returned in ${marker}: ${returned.slice(0, 500)}`,
+        tool === 'ltcook_ried'
+          ? returned.includes(workspace) && returned.includes('workspaceRoot')
+          : returned.includes(summary) && returned.includes(summaryModel),
+        `Tool result was not returned in ${marker}: ${returned.slice(0, 500)}`,
       );
       calls++;
     } else {
@@ -71,9 +93,9 @@ const provider = createServer(async (request, response) => {
       const available: FixtureTool[] = searched?.tools ?? tools;
       const names = toolNames(available);
       namespace = available.find(
-        (tool) =>
-          tool.name === 'mcp__ltcook_workspace' &&
-          tool.tools?.some(({ name }) => name === 'ltcook_ried'),
+        (candidate) =>
+          candidate.name === 'mcp__ltcook_workspace' &&
+          candidate.tools?.some(({ name }) => name === tool),
       )?.name;
       useSearch =
         codex &&
@@ -82,7 +104,7 @@ const provider = createServer(async (request, response) => {
         tools.some((tool) => tool.type === 'tool_search');
       if (!useSearch) {
         assert.deepEqual(
-          names.filter((name) => name?.endsWith('ltcook_ried')),
+          names.filter((name) => name?.endsWith(tool)),
           [servedTool],
           marker,
         );
@@ -97,7 +119,7 @@ const provider = createServer(async (request, response) => {
             role: 'assistant',
             status: 'completed',
             content: [
-              { type: 'output_text', text: 'RIED returned the workspace.', annotations: [] },
+              { type: 'output_text', text: 'The MCP tool returned a result.', annotations: [] },
             ],
           }
         : useSearch
@@ -106,15 +128,20 @@ const provider = createServer(async (request, response) => {
               execution: 'client',
               id: 'search_' + marker,
               call_id: 'search_' + marker,
-              arguments: { query: 'repository environment inventory ried' },
+              arguments: {
+                query:
+                  tool === 'ltcook_ried'
+                    ? 'repository environment inventory ried'
+                    : 'summarize text using local Ollama',
+              },
               status: 'completed',
             }
           : {
               type: 'function_call',
               id: 'fc_' + marker,
               call_id: marker,
-              ...(namespace ? { namespace, name: 'ltcook_ried' } : { name: servedTool }),
-              arguments: '{"operation":"summary"}',
+              ...(namespace ? { namespace, name: tool } : { name: servedTool }),
+              arguments: argumentsJson,
               status: 'completed',
             };
       const send = (type: string, fields: object) =>
@@ -144,7 +171,7 @@ const provider = createServer(async (request, response) => {
           })}\n\n`,
         );
       send({ role: 'assistant' });
-      if (result) send({ content: 'RIED returned the workspace.' });
+      if (result) send({ content: 'The MCP tool returned a result.' });
       else
         send({
           tool_calls: [
@@ -152,7 +179,7 @@ const provider = createServer(async (request, response) => {
               index: 0,
               id: marker,
               type: 'function',
-              function: { name: servedTool, arguments: '{"operation":"summary"}' },
+              function: { name: servedTool, arguments: argumentsJson },
             },
           ],
         });
@@ -219,7 +246,11 @@ async function start() {
   api = new RuntimeApi(undefined, secret, authority);
   api.setWorkspaceMcp(
     new WorkspaceMcp(
-      createTools(new RiedService(path.join(fixture, 'cache'), undefined, () => ({ PATH: '' }))),
+      createTools(new RiedService(path.join(fixture, 'cache'), undefined, () => ({ PATH: '' })), {
+        endpoint: new URL(endpoint).origin,
+        model: summaryModel,
+        keepAlive: -1,
+      }),
       authority,
     ),
   );
@@ -253,17 +284,20 @@ async function stop() {
 async function exercise(
   agent: Awaited<ReturnType<NonNullable<typeof host>['api']['agents']['create']>>,
   phase: string,
+  summaryInput?: { path: string } | { text: string },
 ) {
+  tool = summaryInput ? 'ltcook_summarize' : 'ltcook_ried';
+  argumentsJson = JSON.stringify(summaryInput ?? { operation: 'summary' });
   marker = `call_${phase}`;
   const before = calls;
-  let outcome = await agent.run(`Use the workspace inventory. Fixture phase ${phase}.`, {
+  let outcome = await agent.run(`Call ${tool}. Fixture phase ${phase}.`, {
     timeoutMs: 30_000,
   });
   if (outcome.status === 'permission') {
     const pending = outcome.final?.pendingPermissions ?? [];
     assert.equal(pending.length, 1);
     assert(
-      JSON.stringify(pending[0]).includes('ltcook_ried'),
+      JSON.stringify(pending[0]).includes(tool),
       'Unexpected permission in the offline fixture.',
     );
     await agent.respondToPermission({ requestId: pending[0]!.id, response: { behavior: 'allow' } });
@@ -271,7 +305,7 @@ async function exercise(
   }
   if (providerError) throw providerError;
   assert.equal(outcome.status, 'idle', outcome.error ?? phase);
-  assert.equal(calls, before + 1, `RIED did not run through ${phase}.`);
+  assert.equal(calls, before + 1, `${tool} did not run through ${phase}.`);
 }
 try {
   let active = await start();
@@ -291,6 +325,10 @@ try {
   active = await start();
   await exercise(active.api.agents.ref(ordinaryPi.id), 'pi_restart_resume');
   await exercise(active.api.agents.ref(ordinaryCodex.id), 'codex_restart_resume');
+  await exercise(active.api.agents.ref(ordinaryPi.id), 'pi_summarizes_file', { path: 'notes.txt' });
+  await exercise(active.api.agents.ref(ordinaryCodex.id), 'codex_summarizes_text', {
+    text: material,
+  });
   console.log(JSON.stringify({ result: 'passed', verifiedToolCalls: calls }));
 } finally {
   await stop();

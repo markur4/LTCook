@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import re
@@ -10,8 +11,10 @@ import shutil
 import socket
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from ._common import SetupError, download, no_links, run, write_json
@@ -20,6 +23,7 @@ MODEL = "bonsai-2:27b"
 EVAL_MODEL = "ltcook-bonsai-2-27b-ctx65536:latest"
 CONTEXT_TOKENS = 65536
 ENDPOINT = "http://127.0.0.1:11434"
+LOG = logging.getLogger(__name__)
 
 
 def _has_expected_context(modelfile: object) -> bool:
@@ -48,6 +52,77 @@ def _json(url: str, *, timeout: float = 3, data: object | None = None) -> dict:
     if not isinstance(value, dict):
         raise SetupError("Ollama returned an invalid JSON response.")
     return value
+
+
+def summarizer_readiness(
+    *,
+    environment: Mapping[str, str] | None = None,
+    pull_with: str | None = None,
+    previous: object = None,
+) -> dict[str, str | bool]:
+    """Probe the AppRC-configured summarizer and optionally prepare its model.
+
+    :param environment: Original shell environment for global AppRC resolution.
+    :param pull_with: Ollama CLI to use during explicit installation initialization.
+    :param previous: Previous setup diagnostic for the same endpoint and model.
+    :return: Readiness properties independent of Bonsai preparation.
+    """
+    from ltcook.config.pi_config import resolve_global_config
+    from ltcook.config.sections.runtime import RuntimeSettings
+
+    status: dict[str, str | bool] = {"ready": False}
+    try:
+        settings = resolve_global_config(environment=environment).build(RuntimeSettings)
+        model = settings.summarizer_model.strip()
+        parsed = urlsplit(settings.ollama_endpoint.strip())
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or not parsed.port
+        ):
+            raise SetupError(
+                "Configure the Ollama endpoint as an HTTP loopback URL with a port."
+            )
+        if not model or settings.summarizer_keep_alive < -1:
+            raise SetupError(
+                "Configure a summarizer model and a keep-alive of -1 or nonnegative seconds."
+            )
+        endpoint = f"{parsed.scheme}://{parsed.netloc}"
+        status.update(endpoint=endpoint, model=model)
+
+        def model_available() -> bool:
+            models = _json(f"{endpoint}/api/tags").get("models")
+            if not isinstance(models, list):
+                raise SetupError("Ollama returned an invalid model inventory.")
+            return any(
+                isinstance(item, dict) and item.get("name") == model for item in models
+            )
+
+        ready = model_available()
+        if not ready and pull_with is not None:
+            env = dict(os.environ if environment is None else environment)
+            run(
+                [pull_with, "pull", model], environment={**env, "OLLAMA_HOST": endpoint}
+            )
+            ready = model_available()
+        if not ready:
+            if (
+                isinstance(previous, dict)
+                and previous.get("model") == model
+                and previous.get("endpoint") == endpoint
+                and isinstance(previous.get("error"), str)
+            ):
+                raise SetupError(previous["error"])
+            raise SetupError("Summarizer model is missing. Run LTCook setup or repair.")
+        status["ready"] = True
+    except (OSError, RuntimeError, ValueError) as error:
+        status["error"] = str(error)
+    return status
 
 
 def _install_ollama(deployment: Path, environment: dict[str, str]) -> str:
@@ -166,6 +241,9 @@ def prepare_ollama(appdata: Path, *, environment: dict[str, str] | None = None) 
     show = _json(f"{ENDPOINT}/api/show", data={"name": EVAL_MODEL, "verbose": False})
     if not _has_expected_context(show.get("modelfile")):
         raise SetupError("Ollama did not confirm the 65536-token Bonsai configuration.")
+    summarizer = summarizer_readiness(environment=env, pull_with=executable)
+    if not summarizer["ready"]:
+        LOG.warning("Ollama summarizer is unavailable: %s", summarizer.get("error"))
     write_json(
         receipt_path,
         {
@@ -178,6 +256,7 @@ def prepare_ollama(appdata: Path, *, environment: dict[str, str] | None = None) 
             "eval_model": EVAL_MODEL,
             "eval_model_digest": derived.get("digest"),
             "context_tokens": CONTEXT_TOKENS,
+            "summarizer": summarizer,
             "ollama_installed_by_ltcook": installed,
             "server_started_by_ltcook": owned_process,
             "server_process_id": process_id,

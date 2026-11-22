@@ -323,6 +323,10 @@ availability and Just recipe names. It stores one versioned cache under AppRC
 and refreshes Git status when read. Session activation starts cache warmup without
 waiting. Standalone LTCook Pi chats reuse the same discovery implementation and
 AppRC cache, bound to their native Pi workspace without creating a Team Session.
+Ordinary Pi and Codex chats opened through Paseo receive an authenticated local
+MCP connection to the same service. Their workspace comes from the launch
+context. The shared catalog also exposes local Ollama summarization and keeps
+tool schemas and execution independent of the client transport.
 RIED reports partial or stale results; it does not run recipes, project
 scripts or services, or build a semantic index. See the
 [runtime API](References.md#workflow-api) and

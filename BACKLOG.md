@@ -88,6 +88,17 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 <br>
 
+# 2026-11-22
+
+## P2 / E2 [Tools] - *Improve local summarizer fidelity on operational notes*
+- **Area:** `runtime/src/tools/summarize.ts` and the opt-in live MCP fixture.
+- **Observed while:** Checking the default LFM2.5 1.2B summarizer alongside Bonsai.
+- **Evidence:** Both models remained loaded, but the summarizer sometimes omitted a filename, identifier, or negated action from the three fixed passages.
+- **Why not fixed now:** The model and prompt provide best-effort summaries. Choosing a different default model or adding a fact-verification stage needs its own evaluation.
+- **Suggested next step:** Use the existing passages and the same local settings to compare candidate prompts or models before changing the default.
+
+<br>
+
 # 2026-11-16
 
 ## P1 / E1 [Tooling] - *Quiesce the detached runtime during uninstall*
