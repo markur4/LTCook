@@ -11,8 +11,8 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
-    "apprc-core @ git+https://github.com/HisQu/apprc.git@4e337080b2644025ba53ae6987be77bbb203f098",
-    "apprc @ git+https://github.com/HisQu/apprc.git@4e337080b2644025ba53ae6987be77bbb203f098#subdirectory=src/apprc_dev/packaging/terminal",
+    "apprc-core @ git+https://github.com/HisQu/apprc.git@84b6b843dc7ed0b1bb284a1fec918c80710bfece",
+    "apprc @ git+https://github.com/HisQu/apprc.git@84b6b843dc7ed0b1bb284a1fec918c80710bfece#subdirectory=src/apprc_dev/packaging/terminal",
     "filelock>=3.18",
     "typer",
     "rich>=13.9",
@@ -23,7 +23,7 @@ Repository = "https://github.com/markur4/LTCook.git"
 
 [dependency-groups]
 dev = [
-    "apprc-core[distribution] @ git+https://github.com/HisQu/apprc.git@4e337080b2644025ba53ae6987be77bbb203f098",
+    "apprc-core[distribution] @ git+https://github.com/HisQu/apprc.git@84b6b843dc7ed0b1bb284a1fec918c80710bfece",
     "setuptools>=68",
     "pytest>=8.2",
     "ruff>=0.4",
@@ -61,6 +61,10 @@ state = true
 user-dotenv = true
 workspaces = true
 workspace-registry = true
+
+[tool.apprc.distribution.icons]
+linux = "assets/LTCook-Icon-Final.png"
+windows = "assets/LTCook-Icon-Final.ico"
 
 [tool.apprc.distribution.hooks]
 initialize = "ltcook_distr.payload.app_lifecycle.actions:initialize"

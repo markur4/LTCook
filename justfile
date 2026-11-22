@@ -561,7 +561,7 @@ release-wheel-smoke:
     (cd "$smoke_root"; uv run --isolated --python 3.12 --with "ltcook @ $artifact_uri" python "$smoke_script" --expected-version "$version")
 
 release-install-smoke:
-    LTCOOK_NATIVE_SETUP="$(realpath dist/ltcook-setup-linux-x86_64)" PYTHONPATH=src uv run --locked --no-sync pytest tests/python/system/test_native_setup.py::test_native_setup_initializes_ready_authority_and_retains_resources
+    LTCOOK_NATIVE_SETUP="$(realpath dist/ltcook-setup-linux-x86_64)" PYTHONPATH=src uv run --locked --no-sync pytest tests/python/system/test_native_setup.py::test_native_and_editable_uninstall_remove_selected_resources
 
 # Rehearse the release gate. It does not upload anything.
 release-check:

@@ -166,7 +166,7 @@ as well.
 When an asset has a source builder, update that source and regenerate explicitly.
 `just sync` and `just build` create the canonical runtime/team/service bundle ZIP.
 `just build-native` snapshots committed source and its lock, then builds the Linux
-native setup through AppRC. Native authoring needs uv 0.13.6 and Rust/LLVM;
+native setup through AppRC. Native authoring needs uv 0.11.6 or newer and Rust/LLVM;
 editable registration does not. Never hand-edit generated payloads or stage
 incomplete assets into a distributable package. See
 [asset packaging](docs/Development.md#asset-packaging).

@@ -22,8 +22,8 @@ from apprc.user_files.installation.discovery import (
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def _wait_for_retained_removal(authority: Path, app_id: str) -> None:
-    """Wait for finalization before reusing an installation's retained resources.
+def _wait_for_removal(authority: Path, app_id: str) -> None:
+    """Wait for uninstall to retire the installation authority.
 
     :param authority: Isolated installation authority directory.
     :param app_id: Expected application identity.
@@ -31,18 +31,18 @@ def _wait_for_retained_removal(authority: Path, app_id: str) -> None:
     deadline = time.monotonic() + 30
     while True:
         final = inspect_installation(authority, app_id=app_id)
-        if final.status == "removed-retained" or time.monotonic() >= deadline:
+        if final.status == "missing" or time.monotonic() >= deadline:
             break
         time.sleep(0.05)
-    assert final.status == "removed-retained", final.diagnostics
+    assert final.status == "missing", final.diagnostics
 
 
 @pytest.mark.system
 @pytest.mark.skipif(sys.platform != "linux", reason="Native setup smoke is Linux-only.")
-def test_native_setup_initializes_ready_authority_and_retains_resources(
+def test_native_and_editable_uninstall_remove_selected_resources(
     tmp_path: Path,
 ) -> None:
-    """Prove native/editable retention and reject an unowned command collision."""
+    """Exercise default removal, config retention, and an unowned command collision."""
     setup = Path(
         os.environ.get(
             "LTCOOK_NATIVE_SETUP", str(ROOT / "dist/ltcook-setup-linux-x86_64")
@@ -103,17 +103,14 @@ def test_native_setup_initializes_ready_authority_and_retains_resources(
     assert record.schema_version == 3
     command = command_bin / metadata.identity.commands[0]
     assert command.is_file()
-    sentinels = []
-    for kind, root in (
-        ("config", record.placement.config_dir),
-        ("appdata", record.placement.appdata_dir),
-        ("cache", record.placement.cache_dir),
-        ("state", record.placement.state_dir),
-    ):
-        assert root is not None
-        sentinel = root / "retained-resource"
-        sentinel.write_text(kind, encoding="utf-8")
-        sentinels.append((sentinel, kind))
+    managed_directories = (
+        record.placement.config_dir,
+        record.placement.appdata_dir,
+        record.placement.cache_dir,
+        record.placement.state_dir,
+    )
+    for directory in managed_directories:
+        assert directory is not None and directory.is_dir()
     removed = subprocess.run(
         ["ltcook", "app", "uninstall", "--yes"],
         cwd=tmp_path,
@@ -124,10 +121,10 @@ def test_native_setup_initializes_ready_authority_and_retains_resources(
         timeout=120,
     )
     assert removed.returncode == 0, removed.stdout + removed.stderr
-    _wait_for_retained_removal(authority, metadata.identity.app_id)
+    _wait_for_removal(authority, metadata.identity.app_id)
     assert not command.exists()
-    for sentinel, content in sentinels:
-        assert sentinel.read_text(encoding="utf-8") == content
+    for directory in managed_directories:
+        assert directory is not None and not directory.exists()
     assert pi_auth.read_bytes() == pi_auth_bytes
 
     uv = shutil.which("uv", path=environment["PATH"])
@@ -157,8 +154,6 @@ def test_native_setup_initializes_ready_authority_and_retains_resources(
     checkout_sentinel.write_bytes(b"developer-owned checkout\n")
     environment_sentinel = editable_environment / "retained-environment"
     environment_sentinel.write_bytes(b"developer-owned environment\n")
-    assert record.placement.appdata_dir is not None
-    runtime_receipt = record.placement.appdata_dir / "deployment/runtime.json"
     retained_files = {
         path: path.read_bytes()
         for path in (
@@ -168,7 +163,6 @@ def test_native_setup_initializes_ready_authority_and_retains_resources(
             checkout / "uv.lock",
             editable_environment / "pyvenv.cfg",
             editable_command,
-            runtime_receipt,
             pi_auth,
         )
     }
@@ -202,7 +196,7 @@ def test_native_setup_initializes_ready_authority_and_retains_resources(
     assert command.read_bytes() == unowned_bytes
     assert command.stat().st_mode == unowned_mode
     after_collision = inspect_installation(authority, app_id=metadata.identity.app_id)
-    assert after_collision.status == before_collision.status == "removed-retained"
+    assert after_collision.status == before_collision.status == "missing"
     assert after_collision.revision == before_collision.revision
     for path, content in retained_files.items():
         assert path.read_bytes() == content
@@ -231,11 +225,21 @@ def test_native_setup_initializes_ready_authority_and_retains_resources(
     assert command.resolve(strict=True) == editable_command.resolve(strict=True)
     for path, content in retained_files.items():
         assert path.read_bytes() == content
-    for sentinel, content in sentinels:
-        assert sentinel.read_text(encoding="utf-8") == content
+    config_dir = editable_record.placement.config_dir
+    assert config_dir is not None
+    config_sentinel = config_dir / "retained-config"
+    config_sentinel.write_bytes(b"saved LTCook settings\n")
+    retained_files[config_sentinel] = config_sentinel.read_bytes()
+    editable_data_directories = (
+        editable_record.placement.appdata_dir,
+        editable_record.placement.cache_dir,
+        editable_record.placement.state_dir,
+    )
+    for directory in editable_data_directories:
+        assert directory is not None and directory.is_dir()
 
     editable_removed = subprocess.run(
-        ["ltcook", "app", "uninstall", "--yes"],
+        ["ltcook", "app", "uninstall", "--yes", "--keep-config"],
         cwd=tmp_path,
         env=editable_shell,
         text=True,
@@ -246,15 +250,15 @@ def test_native_setup_initializes_ready_authority_and_retains_resources(
     assert editable_removed.returncode == 0, (
         editable_removed.stdout + editable_removed.stderr
     )
-    _wait_for_retained_removal(authority, metadata.identity.app_id)
+    _wait_for_removal(authority, metadata.identity.app_id)
     assert not command.exists()
     assert not command.is_symlink()
     assert checkout.is_dir()
     assert editable_environment.is_dir()
     for path, content in retained_files.items():
         assert path.read_bytes() == content
-    for sentinel, content in sentinels:
-        assert sentinel.read_text(encoding="utf-8") == content
+    for directory in editable_data_directories:
+        assert directory is not None and not directory.exists()
     surviving_environment = subprocess.run(
         [
             str(editable_environment / "bin/python"),

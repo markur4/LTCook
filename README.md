@@ -28,17 +28,8 @@ design. Before editing, read "README maintenance" in CONTRIBUTING.md.
 # `ltcook`: Pi agents, Paseo chat, interchangeable teams
 
 
-<!-- --- Logo  -->
- <!-- *Part of:*
-
-<a href="https://hisqu.de" target="_blank">
-  <img 
-  src="https://avatars.githubusercontent.com/u/196629600?s=200&v=4" 
-  width="100px" alt="logo"
-  style="margin-top: -10px;"> 
-</a> 
-
-<br> -->
+<!-- --- Banner  -->
+<img src="assets/Let%20Them%20Cook%20Graffiti%20Jam.png" alt="Let Them Cook Graffiti Jam">
 
 
 
@@ -198,13 +189,16 @@ uv run --locked ltcook app install -e --yes --skip-setup
 ltcook
 ```
 
-The SDK is pinned to an exact unreleased AppRC Git commit in `pyproject.toml`
-and `uv.lock`. Git and normal dependency-download access are required.
+AppRC 0.39.1b1 is pinned to an exact Git commit in `pyproject.toml` and
+`uv.lock`. Git and normal dependency-download access are required.
 `just sync` builds the canonical `src/ltcook_distr/bundle.zip`; registration
 prepares Node and service prerequisites without starting containers.
 `--skip-setup` skips only the optional configuration offer, not initialization.
 Editable registration neither copies nor owns the checkout or `.venv`.
 Use Git and `just sync` to update; repeat registration to refresh provisioning.
+The generic AppRC updater skips the runtime bundle build. On Linux or Windows,
+add `--desktop` to editable registration to request a shortcut with the LTCook
+icon.
 Rust/PyApp compilation is not needed for an editable installation.
 
 > [!WARNING]
@@ -229,12 +223,13 @@ ltcook app uninstall --dry-run
 ltcook app uninstall --yes
 ```
 
-Uninstall removes the program and AppRC-managed configuration, appdata, cache
-and state by default. Preview the selected paths first. Use `--keep-data` for
-program-only removal. The editable checkout and its environment remain unless
-`--remove-repository` explicitly selects them; that option cannot be combined
-with `--keep-data`. Shared Pi authentication and external workspaces remain
-outside this removal. See the [removal guide](docs/How-To-User-Guides.md#remove-an-installation).
+Unattended uninstall removes the program, configuration, appdata, cache, and
+state. Add `--keep-config` to both commands to retain the configuration directory,
+including settings and secrets.
+Use `--remove-repository` to also remove the editable checkout and its local
+environment. AppRC rejects removal of a checkout containing configuration
+selected for retention. The [removal guide](docs/How-To-User-Guides.md#remove-an-installation)
+describes removal scope, including shared Pi credentials and external workspaces.
 
 <br>
 

@@ -46,8 +46,11 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 💥 Breaking changes
 
-- Breaking: LTCook now uses AppRC commit `4e3370`. Uninstall removes managed
-  data by default; use `app uninstall --keep-data` for program-only removal.
+- **Breaking:** 💥 LTCook now uses AppRC 0.39.1b1 (commit `84b6b8`).
+  `app uninstall --keep-config` replaces `--keep-data` and retains the
+  configuration directory, including settings and secrets. Uninstall removes
+  appdata, cache, and state even when configuration is retained. Review
+  `app uninstall --dry-run` for selected paths.
   Editable repositories remain unless `--remove-repository` selects them.
   Replace `ltcook diagnose --json` with `ltcook app doctor --verbose --json`.
   Lifecycle hooks are declared only in `pyproject.toml`; cleanup stops the
@@ -112,11 +115,13 @@ All notable changes to `ltcook` will be documented in this file.
 - Breaking: Bare `ltcook` now starts or attaches to the runtime instead of printing
   help. Scripts requiring help must use `ltcook --help`; headless foreground users
   should retain `ltcook launch runtime`.
-- Breaking: LTCook now requires the pinned unreleased AppRC cutover. Maintenance
-  commands move to `ltcook app ...`; use `config setup`, and replace the optional
-  terminal `ltcook launcher` with bare `ltcook` for Paseo or `app doctor|paths|repair`.
-  Retire schema-2 installations with matching old tools before registering the
-  checkout with `uv run --locked ltcook app install -e`; retain all user resources.
+- Breaking: Maintenance commands move to `ltcook app ...`. Use `config setup`
+  and replace the optional terminal `ltcook launcher` with bare `ltcook` for
+  Paseo or `app doctor|paths|repair`.
+  Retire schema-2 installations with matching old tools and remove their
+  LTCook-owned resources before registering the checkout with
+  `uv run --locked ltcook app install -e`. Follow the
+  [clean reinstall guide](docs/How-To-User-Guides.md#install-from-a-checkout).
 - Breaking: Native distribution authors now build a committed-source Linux setup
   with `just build-native`, rather than generated shell/Python installers or
   adjacent-wheel PyApp bundles. Release staging requires schema-2 native manifests;
@@ -126,6 +131,9 @@ All notable changes to `ltcook` will be documented in this file.
   and authentication checks remain read-only.
 
 ### ➕ Added
+
+- Display the Graffiti Jam artwork in the README and use LTCook icons for new
+  AppRC shortcuts on Linux and Windows and for Windows Installed apps.
 
 - Added 🚀 `ltcook serve` as a no-argument alias for bare `ltcook`; both start
   or reuse the desktop runtime, open Paseo, and follow backend logs.

@@ -26,8 +26,8 @@ wheels = [
 
 [[package]]
 name = "apprc"
-version = "0.35.1"
-source = { git = "https://github.com/HisQu/apprc.git?subdirectory=src%2Fapprc_dev%2Fpackaging%2Fterminal&rev=4e337080b2644025ba53ae6987be77bbb203f098#4e337080b2644025ba53ae6987be77bbb203f098" }
+version = "0.39.1b1"
+source = { git = "https://github.com/HisQu/apprc.git?subdirectory=src%2Fapprc_dev%2Fpackaging%2Fterminal&rev=84b6b843dc7ed0b1bb284a1fec918c80710bfece#84b6b843dc7ed0b1bb284a1fec918c80710bfece" }
 dependencies = [
     { name = "apprc-core" },
     { name = "prompt-toolkit" },
@@ -38,8 +38,8 @@ dependencies = [
 
 [[package]]
 name = "apprc-core"
-version = "0.35.1"
-source = { git = "https://github.com/HisQu/apprc.git?rev=4e337080b2644025ba53ae6987be77bbb203f098#4e337080b2644025ba53ae6987be77bbb203f098" }
+version = "0.39.1b1"
+source = { git = "https://github.com/HisQu/apprc.git?rev=84b6b843dc7ed0b1bb284a1fec918c80710bfece#84b6b843dc7ed0b1bb284a1fec918c80710bfece" }
 dependencies = [
     { name = "filelock" },
     { name = "platformdirs" },
@@ -122,8 +122,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apprc", git = "https://github.com/HisQu/apprc.git?subdirectory=src%2Fapprc_dev%2Fpackaging%2Fterminal&rev=4e337080b2644025ba53ae6987be77bbb203f098" },
-    { name = "apprc-core", git = "https://github.com/HisQu/apprc.git?rev=4e337080b2644025ba53ae6987be77bbb203f098" },
+    { name = "apprc", git = "https://github.com/HisQu/apprc.git?subdirectory=src%2Fapprc_dev%2Fpackaging%2Fterminal&rev=84b6b843dc7ed0b1bb284a1fec918c80710bfece" },
+    { name = "apprc-core", git = "https://github.com/HisQu/apprc.git?rev=84b6b843dc7ed0b1bb284a1fec918c80710bfece" },
     { name = "filelock", specifier = ">=3.18" },
     { name = "rich", specifier = ">=13.9" },
     { name = "typer" },
@@ -131,7 +131,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "apprc-core", extras = ["distribution"], git = "https://github.com/HisQu/apprc.git?rev=4e337080b2644025ba53ae6987be77bbb203f098" },
+    { name = "apprc-core", extras = ["distribution"], git = "https://github.com/HisQu/apprc.git?rev=84b6b843dc7ed0b1bb284a1fec918c80710bfece" },
     { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-xdist", specifier = ">=3.8" },
