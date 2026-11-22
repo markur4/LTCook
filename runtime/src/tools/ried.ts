@@ -11,7 +11,9 @@ import {
 } from 'node:fs';
 import { arch, platform, release } from 'node:os';
 import { basename, delimiter, isAbsolute, join } from 'node:path';
-import { isWithin } from './path-containment.js';
+import { isWithin } from '../path-containment.js';
+import { Type, type Static } from 'typebox';
+import { defineTool } from './types.js';
 
 export interface RiedContext {
   id: string;
@@ -52,7 +54,53 @@ export interface RiedSnapshot {
   diagnostics: string[];
 }
 
-export type RiedRequest = { operation: 'summary' | 'section' | 'refresh'; section?: RiedSection };
+export const riedToolDefinition = {
+  name: 'ltcook_ried',
+  description: 'Read a bounded inventory of this chat workspace or refresh it.',
+  inputSchema: Type.Object(
+    {
+      operation: Type.Union([
+        Type.Literal('summary'),
+        Type.Literal('section'),
+        Type.Literal('refresh'),
+      ]),
+      section: Type.Optional(
+        Type.Union([
+          Type.Literal('repository'),
+          Type.Literal('git'),
+          Type.Literal('host'),
+          Type.Literal('recipes'),
+        ]),
+      ),
+    },
+    { additionalProperties: false },
+  ),
+  outputSchema: Type.Object({
+    value: Type.Object(
+      {
+        schemaVersion: Type.Literal(1),
+        workspaceRoot: Type.String(),
+        capturedAt: Type.String(),
+        status: Type.Union([Type.Literal('fresh'), Type.Literal('partial'), Type.Literal('stale')]),
+        diagnostics: Type.Array(Type.String()),
+      },
+      { additionalProperties: true },
+    ),
+  }),
+};
+
+export type RiedRequest = Static<typeof riedToolDefinition.inputSchema>;
+
+export function createRiedTool(ried: RiedService) {
+  return defineTool({
+    ...riedToolDefinition,
+    async execute(input, context) {
+      return {
+        value: await ried.get({ id: context.agentId, workspaceRoot: context.workspaceRoot }, input),
+      };
+    },
+  });
+}
 
 type ProcessResult = { stdout: string; code: number };
 const MAX_OUTPUT = 4 * 1024 * 1024;
@@ -337,7 +385,7 @@ export class RiedService {
     };
   }
 
-  async get(session: RiedContext, request: RiedRequest): Promise<unknown> {
+  async get(session: RiedContext, request: RiedRequest) {
     const wsl =
       platform() === 'linux' &&
       Boolean(
@@ -392,7 +440,7 @@ export class RiedService {
     if (request.operation === 'section') {
       if (!request.section) throw new Error('RIED section is required');
       return {
-        schemaVersion: 1,
+        schemaVersion: 1 as const,
         workspaceRoot: workspace,
         capturedAt: snapshot.capturedAt,
         status: snapshot.status,
@@ -403,7 +451,7 @@ export class RiedService {
     }
     if (request.operation === 'summary')
       return {
-        schemaVersion: 1,
+        schemaVersion: 1 as const,
         workspaceRoot: workspace,
         capturedAt: snapshot.capturedAt,
         status: snapshot.status,

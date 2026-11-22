@@ -8,10 +8,12 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EVAL_MODEL } from '../evals/setup.js';
+import { WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
+  createMcpExtension,
   getAgentDir,
   hasTrustRequiringProjectResources,
   ModelRuntime,
@@ -157,6 +159,13 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
     );
   const cwd = process.cwd();
   const mcpServers = loadMcpServerConfigs(mcpConfigPaths, cwd);
+  const injectedWorkspaceTools =
+    !managed &&
+    !parsed.noExtensions &&
+    !parsed.noMcp &&
+    !process.env.LTCOOK_EVAL_ARM &&
+    process.env.LTCOOK_WORKSPACE_MCP === WORKSPACE_MCP_SERVER;
+  const workspaceMcpExtension = createMcpExtension();
   const agentDir = absolutePath(getAgentDir());
   const authDir = process.env.LTCOOK_PI_AUTH_DIR;
   if (!authDir || !path.isAbsolute(authDir)) {
@@ -232,6 +241,26 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
         additionalPromptTemplatePaths: promptTemplatePaths,
         additionalThemePaths: themePaths,
         extensionFactories: [
+          ...(injectedWorkspaceTools
+            ? [
+                {
+                  name: 'mcp',
+                  builtin: true as const,
+                  factory: (pi: Parameters<ExtensionFactory>[0]) =>
+                    workspaceMcpExtension({
+                      ...pi,
+                      getMcpServers: () =>
+                        pi
+                          .getMcpServers()
+                          .map((server) =>
+                            server.name === WORKSPACE_MCP_SERVER
+                              ? { ...server, config: { ...server.config, exposure: 'direct' } }
+                              : server,
+                          ),
+                    }),
+                },
+              ]
+            : []),
           ...(managed || !parsed.noExtensions
             ? [
                 async (pi: Parameters<ExtensionFactory>[0]) => {
@@ -243,7 +272,8 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
                     pathToFileURL(extensionFile).href
                   )) as typeof import('./pi-extension.js');
                   if (managed) await activate(pi, () => guidance!.inspection);
-                  else activateStandaloneRied(pi, cwd, sessionManager.getSessionId());
+                  else if (!injectedWorkspaceTools)
+                    activateStandaloneRied(pi, cwd, sessionManager.getSessionId());
                 },
               ]
             : []),

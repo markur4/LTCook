@@ -27,6 +27,15 @@ def test_native_paseo_leader_adoption(tmp_path: Path) -> None:
 
 
 @pytest.mark.system
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process acceptance")
+def test_native_paseo_workspace_mcp(tmp_path: Path) -> None:
+    """Call the local MCP tools through actual Pi and Codex sessions."""
+    if shutil.which("codex") is None:
+        pytest.skip("The local Codex CLI is required for the offline MCP fixture.")
+    _run_native_acceptance(tmp_path, "paseo-workspace-mcp.ts")
+
+
+@pytest.mark.system
 @pytest.mark.skipif(
     sys.platform != "linux", reason="Linux Bubblewrap process acceptance"
 )

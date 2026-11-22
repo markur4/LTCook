@@ -12,6 +12,7 @@ import type {
 import { canonicalWorkspace } from '../core/workspace.js';
 import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
+import type { WorkspaceMcp } from './mcp.js';
 import {
   EvalDeleteRequestSchema,
   EvalRunIdSchema,
@@ -72,6 +73,10 @@ export class RuntimeApi {
   private lifecycle: RuntimeLifecycleIdentity | undefined;
   private shutdown: (() => Promise<void>) | undefined;
   private stopping = false;
+  private workspaceMcp: WorkspaceMcp | undefined;
+  setWorkspaceMcp(mcp: WorkspaceMcp): void {
+    this.workspaceMcp = mcp;
+  }
   private evals: EvalRunService | undefined;
   private evaluationObserver:
     | ((agentId: string, value: Record<string, unknown>) => EvaluationExecutionScope | void)
@@ -149,6 +154,11 @@ export class RuntimeApi {
     request: IncomingMessage,
     response: import('node:http').ServerResponse,
   ): Promise<void> {
+    if (request.url === '/mcp') {
+      if (this.stopping || !this.workspaceMcp) response.writeHead(503).end();
+      else await this.workspaceMcp.handle(request, response);
+      return;
+    }
     const operation = (
       {
         '/v1/team/catalog': 'team.catalog',
@@ -186,6 +196,8 @@ export class RuntimeApi {
           '/v1/runtime/stop',
           '/v1/tool/authorize',
           '/v1/ried',
+          '/v1/mcp/grant',
+          '/v1/mcp/revoke',
           '/v1/evaluation/observe',
           '/v1/evals/start',
           '/v1/evals/status',
@@ -284,6 +296,32 @@ export class RuntimeApi {
           : undefined;
       if (!actor) {
         response.writeHead(401).end('{"error":"unauthorized"}');
+        return;
+      }
+      if (request.url === '/v1/mcp/grant' || request.url === '/v1/mcp/revoke') {
+        if (actor.kind !== 'user') {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        if (!this.workspaceMcp || this.stopping) {
+          response.writeHead(503).end('{}');
+          return;
+        }
+        if (typeof input.nativeAgentId !== 'string' || !input.nativeAgentId)
+          throw new Error('A native agent identity is required.');
+        if (request.url === '/v1/mcp/revoke') {
+          await this.workspaceMcp.revoke(input.nativeAgentId);
+          response.writeHead(200).end('{}');
+          return;
+        }
+        if (typeof input.workspaceRoot !== 'string')
+          throw new Error('A trusted launch workspace is required.');
+        const token = await this.workspaceMcp.grant(
+          input.nativeAgentId,
+          input.workspaceRoot,
+          false,
+        );
+        response.writeHead(200).end(JSON.stringify({ token }));
         return;
       }
       if (request.url === '/v1/evaluation/observe') {
@@ -794,6 +832,7 @@ export class RuntimeApi {
     return;
   }
   async close(): Promise<void> {
+    await this.workspaceMcp?.close();
     if (this.server)
       await new Promise<void>((resolve, reject) =>
         this.server!.close((error) => (error ? reject(error) : resolve())),

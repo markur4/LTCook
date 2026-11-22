@@ -1,0 +1,210 @@
+import { randomBytes, randomUUID } from 'node:crypto';
+import { realpathSync, statSync } from 'node:fs';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { isAbsolute } from 'node:path';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import {
+  CallToolRequestSchema,
+  isInitializeRequest,
+  ListToolsRequestSchema,
+  ToolSchema,
+  type Tool,
+} from '@modelcontextprotocol/sdk/types.js';
+import type { ToolDefinition } from '../tools/types.js';
+
+type Grant = {
+  agentId: string;
+  workspaceRoot: string;
+  workspaceIdentity: string;
+  workspaceFileAccess: boolean;
+  token: string;
+};
+
+type Connection = {
+  grant: Grant;
+  server: Server;
+  transport: StreamableHTTPServerTransport;
+};
+
+const MAX_BODY_BYTES = 128 * 1024;
+const MAX_CONNECTIONS = 256;
+
+function directoryIdentity(directory: string): string {
+  const stats = statSync(directory, { bigint: true });
+  if (!stats.isDirectory()) throw new Error('MCP requires a workspace directory.');
+  return `${stats.dev}:${stats.ino}`;
+}
+
+/** In-memory grants remain stable on warm resume and expire with the runtime. */
+export class WorkspaceMcp {
+  private readonly grants = new Map<string, Grant>();
+  private readonly tokens = new Map<string, Grant>();
+  private readonly connections = new Map<string, Connection>();
+  private readonly catalog: Tool[];
+  private readonly tools: Map<string, ToolDefinition>;
+
+  constructor(
+    tools: readonly ToolDefinition[],
+    private readonly authority: string,
+  ) {
+    this.tools = new Map(tools.map((tool) => [tool.name, tool]));
+    this.catalog = tools.map(({ name, description, inputSchema, outputSchema }) =>
+      ToolSchema.parse({
+        name,
+        description,
+        inputSchema,
+        outputSchema,
+      }),
+    );
+  }
+
+  async grant(agentId: string, cwd: string, workspaceFileAccess: boolean): Promise<string> {
+    if (!isAbsolute(cwd)) throw new Error('MCP requires an absolute workspace directory.');
+    const workspaceRoot = realpathSync(cwd);
+    const workspaceIdentity = directoryIdentity(workspaceRoot);
+    const existing = this.grants.get(agentId);
+    if (
+      existing?.workspaceRoot === workspaceRoot &&
+      existing.workspaceIdentity === workspaceIdentity &&
+      existing.workspaceFileAccess === workspaceFileAccess
+    )
+      return existing.token;
+    const previous = this.revoke(agentId);
+    const grant = {
+      agentId,
+      workspaceRoot,
+      workspaceIdentity,
+      workspaceFileAccess,
+      token: randomBytes(32).toString('base64url'),
+    };
+    this.grants.set(agentId, grant);
+    this.tokens.set(grant.token, grant);
+    await previous;
+    return grant.token;
+  }
+
+  async revoke(agentId: string): Promise<void> {
+    const grant = this.grants.get(agentId);
+    if (!grant) return;
+    this.grants.delete(agentId);
+    this.tokens.delete(grant.token);
+    await Promise.all(
+      [...this.connections.values()]
+        .filter((connection) => connection.grant === grant)
+        .map((connection) => connection.server.close()),
+    );
+  }
+
+  async close(): Promise<void> {
+    this.grants.clear();
+    this.tokens.clear();
+    await Promise.all([...this.connections.values()].map(({ server }) => server.close()));
+  }
+
+  private async connect(grant: Grant): Promise<Connection> {
+    const server = new Server(
+      { name: 'ltcook', version: '0.1.0' },
+      { capabilities: { tools: {} } },
+    );
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: randomUUID,
+      enableJsonResponse: true,
+      onsessioninitialized: (id) => {
+        this.connections.set(id, { grant, server, transport });
+      },
+    });
+    transport.onclose = () => {
+      if (transport.sessionId) this.connections.delete(transport.sessionId);
+    };
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: this.catalog }));
+    server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal }) => {
+      try {
+        if (
+          this.tokens.get(grant.token) !== grant ||
+          realpathSync(grant.workspaceRoot) !== grant.workspaceRoot ||
+          directoryIdentity(grant.workspaceRoot) !== grant.workspaceIdentity
+        ) {
+          throw new Error('The authorized workspace is no longer available.');
+        }
+        const tool = this.tools.get(params.name);
+        if (!tool) throw new Error('Unknown LTCook tool.');
+        const output = await tool.invoke(params.arguments ?? {}, {
+          agentId: grant.agentId,
+          workspaceRoot: grant.workspaceRoot,
+          workspaceFileAccess: grant.workspaceFileAccess,
+          signal,
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(output) }],
+          structuredContent: output,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'LTCook tool failed.';
+        return { isError: true, content: [{ type: 'text', text: message }] };
+      }
+    });
+    await server.connect(transport);
+    return { server, transport, grant };
+  }
+
+  async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.headers.host !== this.authority || request.headers.origin !== undefined) {
+      response.writeHead(403).end();
+      return;
+    }
+    const token = request.headers.authorization?.match(/^Bearer ([\w-]+)$/)?.[1];
+    const grant = token && this.tokens.get(token);
+    if (!grant) {
+      response.writeHead(401).end();
+      return;
+    }
+    try {
+      let body: unknown;
+      if (request.method === 'POST') {
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        for await (const chunk of request.iterator({ destroyOnReturn: false })) {
+          bytes += chunk.length;
+          if (bytes > MAX_BODY_BYTES) {
+            request.resume();
+            response.writeHead(413).end();
+            return;
+          }
+          chunks.push(chunk);
+        }
+        body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      }
+
+      const id = request.headers['mcp-session-id'];
+      if (id !== undefined) {
+        const connection = typeof id === 'string' ? this.connections.get(id) : undefined;
+        if (!connection || connection.grant !== grant || this.tokens.get(grant.token) !== grant) {
+          response.writeHead(404).end();
+          return;
+        }
+        await connection.transport.handleRequest(request, response, body);
+      } else if (
+        request.method === 'POST' &&
+        isInitializeRequest(body) &&
+        this.tokens.get(grant.token) === grant
+      ) {
+        if (this.connections.size >= MAX_CONNECTIONS) {
+          response.writeHead(503).end();
+          return;
+        }
+        const connection = await this.connect(grant);
+        try {
+          await connection.transport.handleRequest(request, response, body);
+        } finally {
+          if (!connection.transport.sessionId) await connection.server.close();
+        }
+      } else {
+        response.writeHead(400).end();
+      }
+    } catch {
+      if (!response.headersSent) response.writeHead(400);
+      response.end();
+    }
+  }
+}
