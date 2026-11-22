@@ -6,6 +6,7 @@ import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
+import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
@@ -266,6 +267,27 @@ const environment = {
 const tracePath = path.join(directory, 'gui.perfetto.json');
 const telemetry = new Telemetry(path.join(directory, 'gui.events.jsonl'), tracePath);
 const api = new RuntimeApi(undefined, secret, listen, environment, telemetry);
+const evals = new EvalRunService(path.join(directory, 'eval-state'), async (request) => {
+  assert.equal(request.preset, 'full');
+  assert.equal(request.setup, 'synthetic');
+  assert.equal(request.scenario, 'summarization');
+  return {
+    metadata: { summarizationQualification: 'failed' },
+    result: {
+      results: {
+        summarization: {
+          scope: 'full',
+          verdict: 'failed',
+          complete: true,
+          attempts: [{ id: 'migration-failure', input: 'inline', attempt: 1, verdict: 'failed' }],
+        },
+      },
+    },
+    trace: null,
+  };
+});
+await evals.initialize();
+api.setEval(evals);
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 let runtime: ReturnType<typeof createRuntime> | undefined;
@@ -513,6 +535,10 @@ try {
   await inspectStage('contextual-task-board');
   await clickButton('Diagnostics');
   await browser('wait', '--text', 'Agent Evals');
+  await clickButton('Synthetic Setup');
+  await clickButton('Summarization only');
+  await clickButton('Run full qualification');
+  await browser('wait', '--text', 'Summarization qualification · failed');
   await inspectStage('contextual-diagnostics');
   await clickButton('Team Overview');
   await browser('wait', '--text', 'Persistent members');
@@ -572,6 +598,7 @@ try {
   await browser('close').catch(() => undefined);
   await host?.close();
   await runtime?.close();
+  await evals.close();
   await api.close();
   await new Promise<void>((resolve) => provider.close(() => resolve()));
 }

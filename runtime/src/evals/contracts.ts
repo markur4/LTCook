@@ -5,8 +5,10 @@ export type EvalSetup = z.infer<typeof EvalSetupSchema>;
 
 export const EvalPresetSchema = z.enum(['quick', 'audit', 'behavior', 'bottlenecks', 'full']);
 export type EvalPreset = z.infer<typeof EvalPresetSchema>;
-export const EvalScenarioSchema = z.enum(['read-only', 'no-op', 'targeted-fix']);
+export const EvalScenarioSchema = z.enum(['read-only', 'no-op', 'targeted-fix', 'summarization']);
 export type EvalScenario = z.infer<typeof EvalScenarioSchema>;
+export const SummarizationQualificationSchema = z.enum(['passed', 'failed', 'blocked']);
+export type SummarizationQualification = z.infer<typeof SummarizationQualificationSchema>;
 
 // > Only settings consumed by Current Setup cross the authenticated API boundary.
 export const EvalEnvironmentOverridesSchema = z
@@ -49,18 +51,32 @@ export const EvalStartRequestSchema = z
   .refine((input) => !input.scenario || !['audit', 'quick'].includes(input.preset), {
     message: 'A selected case requires Behavior Evaluation or Bottleneck Attribution',
   })
+  .refine(
+    (input) => input.scenario !== 'summarization' || ['behavior', 'full'].includes(input.preset),
+    {
+      message: 'Summarization requires the Behavior Evaluation or full preset',
+    },
+  )
   .refine((input) => !input.environmentOverrides || input.setup === 'current', {
     message: 'Environment overrides require Current Setup',
   });
 export type EvalStartRequest = z.input<typeof EvalStartRequestSchema>;
+
+export function summarizationScope(input: Pick<EvalStartRequest, 'preset' | 'scenario'>) {
+  if (input.scenario && input.scenario !== 'summarization') return undefined;
+  if (input.preset === 'behavior') return 'core';
+  if (input.preset === 'full') return 'full';
+  return undefined;
+}
 
 /** Count checks once even when Behavior Evaluation and Bottleneck Attribution share execution. */
 export function evaluationCaseCount(input: EvalStartRequest): number {
   if (input.staticOnly) return 1;
   if (input.preset === 'audit') return 2;
   if (input.preset === 'quick') return 1 + (input.repetitions ?? 1);
+  if (input.scenario === 'summarization') return 1;
   const cases = (input.scenario ? 1 : 3) * (input.repetitions ?? 1);
-  return input.preset === 'full' ? 2 + cases : cases;
+  return cases + (summarizationScope(input) ? 1 : 0) + (input.preset === 'full' ? 2 : 0);
 }
 export const EvalRunIdSchema = z.object({ runId: z.string().uuid() });
 export const EvalStatusRequestSchema = EvalRunIdSchema.extend({
@@ -104,6 +120,7 @@ export const EvalSummarySchema = z.object({
   teamSelection: z.string().optional(),
   model: z.string().optional(),
   fixtureRevision: z.string().optional(),
+  summarizationQualification: SummarizationQualificationSchema.optional(),
   provenance: z.unknown().optional(),
   limitations: z.array(z.string()).default([]),
   status: EvalStatusSchema,

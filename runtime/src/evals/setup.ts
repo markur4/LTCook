@@ -4,6 +4,7 @@ import { lstat, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/pr
 import path from 'node:path';
 import { captureShellEnvironment } from '../integrations/shell-environment.js';
 import type { EvalEnvironmentOverrides, EvalSetup } from './contracts.js';
+import type { OllamaSettings } from '../integrations/ollama.js';
 
 export const EVAL_MODEL = 'ltcook-bonsai-2-27b-ctx65536:latest';
 export const EVAL_CONTEXT_WINDOW = 65536;
@@ -23,6 +24,7 @@ export type EvaluationContext = {
   sharedSkillsDirectory: string;
   webConfiguration: Record<string, unknown>;
   limitations: string[];
+  summarization?: OllamaSettings;
 };
 export type SnapshotEntry = { path: string; included: boolean; reason?: string; sha256?: string };
 const secret =

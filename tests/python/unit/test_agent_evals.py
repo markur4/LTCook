@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_cli_report_summarizes_behavioral_evals(monkeypatch):
     from io import StringIO
 
@@ -328,3 +331,57 @@ def test_current_eval_forwards_only_relevant_original_shell_overrides(monkeypatc
         "LTCOOK_SEARXNG_URL": "http://127.0.0.1:8123",
     }
     assert "must-not-cross-api" not in json.dumps(calls)
+
+
+@pytest.mark.parametrize("verdict", ["failed", "blocked", "passed"])
+def test_cli_exits_unsuccessfully_when_summarization_not_qualified(
+    monkeypatch, verdict
+):
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    summary = {
+        "status": "completed",
+        "completed": 1,
+        "total": 1,
+        "preset": "full",
+        "setup": "synthetic",
+        "runId": "fixture",
+        "summarizationQualification": verdict,
+    }
+    calls = []
+
+    def call(_environment, route, payload):
+        calls.append((route, payload))
+        if route.endswith("/start"):
+            return {"runId": "fixture"}
+        if route.endswith("/status"):
+            return {"summary": summary, "next": 0}
+        return {
+            "summary": summary,
+            "result": {
+                "results": {
+                    "summarization": {
+                        "complete": True,
+                        "scope": "full",
+                        "verdict": verdict,
+                        "attempts": [],
+                    }
+                }
+            },
+        }
+
+    monkeypatch.setattr(cli, "_runtime", lambda: ({}, None))
+    monkeypatch.setattr(cli, "_call", call)
+    result = CliRunner().invoke(
+        cli.eval_cli,
+        ["run", "--all", "--case", "summarization", "--setup", "synthetic"],
+    )
+    assert result.exit_code == (0 if verdict == "passed" else 1), result.output
+    assert "Agent Evals · COMPLETED" in result.output
+    assert verdict.upper() in result.output
+    route, params = calls[0]
+    assert route == "/v1/evals/start"
+    assert params["preset"] == "full"
+    assert params["scenario"] == "summarization"

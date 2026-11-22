@@ -204,11 +204,13 @@ ltcook eval run --quick --setup synthetic
 ltcook eval run --setup synthetic --case read-only
 ltcook eval run --setup synthetic --repetitions 2
 ltcook eval run --all --setup synthetic
+ltcook eval run --all --setup synthetic --case summarization
 ltcook eval analyze --setup synthetic
 ltcook eval list
 ltcook eval watch RUN_ID
 ltcook eval status RUN_ID
 ltcook eval report RUN_ID
+ltcook eval report RUN_ID --json
 ltcook eval cancel RUN_ID
 ltcook eval delete RUN_ID
 ```
@@ -218,10 +220,27 @@ local Ollama and the prepared Bonsai model; they never select another model when
 it is unavailable. Existing installations prepared for another model need the normal
 setup or repair flow to prepare Bonsai. `ollama ps` shows the context and GPU
 allocation while the model is loaded. Behavior Evaluation uses full instructions in the selected setup. It runs the
-read-only, no-op and targeted-fix cases once each unless `--case` selects one or
-`--repetitions N` requests more executions. Cases start with reasoning off and
-may fall back once to low reasoning on the same Bonsai model. If the fallback
-also fails, the run stops and preserves the evidence.
+read-only, no-op and targeted-fix agent cases once each unless `--case` selects
+one or `--repetitions N` requests more agent executions. These agent cases start
+with reasoning off and may fall back once to low reasoning on Bonsai. If the
+fallback also fails, the run stops and preserves the evidence.
+
+Normal Behavior Evaluation also runs the core summarization evaluations. They
+call the AppRC-configured local summarizer on fixed fixtures. Bonsai grades the
+summaries after passing a calibration check. The CLI and Paseo panel show
+summarization qualification separately from the run's execution status. A
+confirmed required-fact omission, contradiction, invented material claim, or
+cutoff fails qualification. Unavailable or inconclusive grading can block
+qualification. The report retains the cases that ran and their evidence.
+
+To qualify a change to the recommended model, prompt, generation settings, or
+input preparation, run `ltcook eval run --all --setup synthetic --case summarization`.
+It adds the near-limit input, file/inline comparison, three attempts for
+selected high-risk cases, and a downstream native Pi decision. In the Paseo
+diagnostics panel choose **Synthetic Setup**, **Summarization only**, then
+**Run full qualification**. The command exits unsuccessfully for both failed
+and blocked qualification. Use `ltcook eval report RUN_ID --json` or the panel's
+structured data to inspect fixed-fixture summaries, evidence, and model versions.
 
 Bottleneck Attribution uses the timings and traces from the same executions;
 it does not repeat the agent's work just to measure time. Instruction Audit is

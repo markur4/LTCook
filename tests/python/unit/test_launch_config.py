@@ -256,6 +256,7 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
             ollama_endpoint="http://127.0.0.1:11434",
             summarizer_model="fixture-model",
             summarizer_keep_alive=-1,
+            summarizer_generation="",
         ),
         web=Section({"LTCOOK_CRAWL4AI_URL": ""}),
         pi=Section({}),
@@ -321,6 +322,7 @@ def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_p
             ollama_endpoint="http://127.0.0.1:11434",
             summarizer_model="fixture-model",
             summarizer_keep_alive=-1,
+            summarizer_generation="",
         ),
         web=Section({}),
         pi=Section({}),
@@ -978,6 +980,8 @@ def test_evaluation_context_excludes_credentials_and_does_not_write_native_state
         "OPENAI_API_KEY": "evaluation-secret-sentinel",
         "ANTHROPIC_API_KEY": "evaluation-secret-sentinel",
         "LTCOOK_API_TOKEN": "evaluation-secret-sentinel",
+        "LTCOOK_SUMMARIZER_MODEL": "lfm3:1.7b-q8_0",
+        "LTCOOK_SUMMARIZER_GENERATION": '{"think":false,"options":{"num_ctx":4096,"num_predict":128,"temperature":0.1}}',
     }.items():
         monkeypatch.setenv(key, value)
     launch.evaluation_context(None)
@@ -987,6 +991,10 @@ def test_evaluation_context_excludes_credentials_and_does_not_write_native_state
     assert context["sharedSkillsDirectory"]
     assert context["guidanceDirectory"]
     assert "webConfiguration" in context
+    assert context["summarization"]["model"] == "lfm3:1.7b-q8_0"
+    assert (
+        json.loads(context["summarization"]["generation"])["options"]["num_ctx"] == 4096
+    )
     assert "evaluation-secret-sentinel" not in output
     assert not list(tmp_path.rglob("models.json"))
     assert not list(tmp_path.rglob("auth.json"))

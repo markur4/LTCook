@@ -181,6 +181,9 @@ def resolve_launch(
     environment["LTCOOK_SUMMARIZER_KEEP_ALIVE"] = str(
         global_config.runtime.summarizer_keep_alive
     )
+    environment["LTCOOK_SUMMARIZER_GENERATION"] = (
+        global_config.runtime.summarizer_generation
+    )
     runtime_state = (
         _user_path(global_config.runtime.state_dir, home)
         if global_config.runtime.state_dir
@@ -308,6 +311,14 @@ def evaluation_context(
                 "guidanceDirectory": launch.environment["LTCOOK_GUIDANCE_DIR"],
                 "sharedSkillsDirectory": launch.environment["LTCOOK_SHARED_SKILLS_DIR"],
                 "webConfiguration": web,
+                "summarization": {
+                    "endpoint": launch.environment["LTCOOK_OLLAMA_ENDPOINT"],
+                    "model": launch.environment["LTCOOK_SUMMARIZER_MODEL"],
+                    "keepAlive": int(
+                        launch.environment["LTCOOK_SUMMARIZER_KEEP_ALIVE"]
+                    ),
+                    "generation": launch.environment["LTCOOK_SUMMARIZER_GENERATION"],
+                },
                 "limitations": [
                     "Authenticated external tools are skipped; browser and authenticated MCP integrations are disabled."
                 ],

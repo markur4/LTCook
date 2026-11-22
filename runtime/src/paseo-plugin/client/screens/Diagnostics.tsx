@@ -18,9 +18,12 @@ const evalLabels: Record<string, string> = {
   semantic: 'Instruction Audit · semantic',
   behavior: 'Behavior Evaluation',
   bottlenecks: 'Bottleneck Attribution',
+  summarization: 'Summarization evaluations',
 };
 function resultSummary(report: any): string[] {
   return Object.entries(report.result?.results ?? {}).map(([name, value]: [string, any]) => {
+    if (name === 'summarization')
+      return `Summarization qualification · ${value?.complete ? value.verdict : 'in progress'}`;
     if (name === 'bottlenecks')
       return `Bottleneck Attribution: ${((value?.totalElapsedMs ?? 0) / 1000).toFixed(2)}s from the same executions`;
     const tasks = Array.isArray(value) ? value : value?.tasks;
@@ -45,7 +48,9 @@ export function Diagnostics({
 }) {
   const [setup, setSetup] = useState<'current' | 'synthetic'>('current');
   const [repetitions, setRepetitions] = useState('1');
-  const [scenario, setScenario] = useState<'read-only' | 'no-op' | 'targeted-fix'>();
+  const [scenario, setScenario] = useState<
+    'read-only' | 'no-op' | 'targeted-fix' | 'summarization'
+  >();
   const call = useRpc(evalsRpc);
   const [runs, setRuns] = useState<any[]>([]);
   const [selected, setSelected] = useState<string>();
@@ -134,12 +139,12 @@ export function Diagnostics({
         <Action
           theme={theme}
           title="Bottleneck Attribution"
-          disabled={currentUnavailable}
+          disabled={currentUnavailable || scenario === 'summarization'}
           onPress={() => void start('bottlenecks')}
         />
         <Action
           theme={theme}
-          title="Run all categories"
+          title={scenario === 'summarization' ? 'Run full qualification' : 'Run all categories'}
           disabled={currentUnavailable}
           onPress={() => void start('full')}
         />
@@ -153,15 +158,15 @@ export function Diagnostics({
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         <Action
           theme={theme}
-          title="All three cases"
+          title="All cases"
           selected={!scenario}
           onPress={() => setScenario(undefined)}
         />
-        {(['read-only', 'no-op', 'targeted-fix'] as const).map((value) => (
+        {(['read-only', 'no-op', 'targeted-fix', 'summarization'] as const).map((value) => (
           <Action
             key={value}
             theme={theme}
-            title={value}
+            title={value === 'summarization' ? 'Summarization only' : value}
             selected={scenario === value}
             onPress={() => setScenario(value)}
           />
@@ -190,6 +195,11 @@ export function Diagnostics({
             muted
           >{`${evalLabels[status.currentSuite] ?? 'Preparing'}${status.currentCase ? ` · ${status.currentCase}` : ''}`}</Label>
           {status.error && <Label theme={theme}>{status.error}</Label>}
+          {status.summarizationQualification && (
+            <Label theme={theme}>
+              Summarization qualification · {status.summarizationQualification}
+            </Label>
+          )}
           {status.status === 'running' && (
             <Action
               theme={theme}
@@ -251,6 +261,34 @@ export function Diagnostics({
             </Label>
           ))}
           {Object.entries(report.result?.results ?? {}).map(([name, value]: [string, any]) => {
+            if (name === 'summarization')
+              return (
+                <View key={name} style={{ gap: 4 }}>
+                  <Label theme={theme}>{evalLabels.summarization}</Label>
+                  <Label theme={theme} muted>
+                    {`${value.scope} · ${value.complete ? value.verdict : 'in progress'}`}
+                  </Label>
+                  {(value.blockers ?? []).map((blocker: string, index: number) => (
+                    <Label key={index} theme={theme} muted>
+                      {blocker}
+                    </Label>
+                  ))}
+                  {(value.attempts ?? []).map((attempt: any) => (
+                    <Label
+                      key={`${attempt.id}-${attempt.input}-${attempt.attempt}`}
+                      theme={theme}
+                      muted
+                    >
+                      {`${attempt.id} · ${attempt.input} · attempt ${attempt.attempt} · ${attempt.verdict}${attempt.reason ? ` · ${attempt.reason}` : ''}`}
+                    </Label>
+                  ))}
+                  {value.downstream && (
+                    <Label theme={theme} muted>
+                      {`Behavior Evaluation · downstream decision · ${value.downstream.verdict}`}
+                    </Label>
+                  )}
+                </View>
+              );
             if (name === 'bottlenecks')
               return (
                 <View key={name} style={{ gap: 4 }}>
