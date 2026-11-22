@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { LFM3_SUMMARIZER_MODEL } from '../../../runtime/src/integrations/ollama.js';
 import { createTools } from '../../../runtime/src/tools/catalog.js';
 import { RiedService } from '../../../runtime/src/tools/ried.js';
 import { createSummarizeTool } from '../../../runtime/src/tools/summarize.js';
@@ -177,7 +178,7 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
         mode === 'missing'
           ? { error: 'model not found' }
           : {
-              model: 'fixture-model',
+              model: LFM3_SUMMARIZER_MODEL,
               message: {
                 content: mode === 'empty-length' ? '' : 'R-17 passed 42 checks and did not deploy.',
               },
@@ -195,7 +196,7 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
   const mcp = new WorkspaceMcp(
     createTools(new RiedService(path.join(root, 'cache'), undefined, () => ({ PATH: '' })), {
       endpoint: `http://127.0.0.1:${address.port}`,
-      model: 'fixture-model',
+      model: LFM3_SUMMARIZER_MODEL,
       keepAlive: 60,
     }),
     authority,
@@ -243,14 +244,16 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
     expect(
       (await summarize(pi, { path: 'notes.txt', focus: 'Deployment decision' })).structuredContent,
     ).toEqual({
-      model: 'fixture-model',
+      model: LFM3_SUMMARIZER_MODEL,
       summary: 'R-17 passed 42 checks and did not deploy.',
       incomplete: true,
     });
     expect(requests[0]).toMatchObject({
-      model: 'fixture-model',
+      model: LFM3_SUMMARIZER_MODEL,
       keep_alive: 60,
-      options: { num_predict: 512 },
+      think: true,
+      stream: false,
+      options: { num_ctx: 32768, num_predict: 4096, temperature: 0.1 },
     });
     expect(requests[0]?.messages[1]?.content).toContain(material);
     expect(requests[0]?.messages[1]?.content).toContain('Deployment decision');
@@ -258,6 +261,7 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
     expect((await summarize(codex, { text: material })).structuredContent).toMatchObject({
       incomplete: false,
     });
+    expect((await summarize(codex, { text: 'x'.repeat(24 * 1024) })).isError).toBeFalsy();
     mode = 'empty-length';
     expect((await summarize(codex, { text: material })).structuredContent).toMatchObject({
       summary: '',
@@ -266,7 +270,7 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
     mode = 'missing';
     const missing = await summarize(codex, { text: material });
     expect(missing.isError).toBe(true);
-    expect(JSON.stringify(missing.content)).toContain('fixture-model');
+    expect(JSON.stringify(missing.content)).toContain(LFM3_SUMMARIZER_MODEL);
     expect(
       (await codex.callTool({ name: 'ltcook_ried', arguments: { operation: 'summary' } }))
         .structuredContent,
@@ -333,7 +337,7 @@ test.skipIf(!liveEndpoint)(
   'live summarizer inference can coexist with Bonsai',
   async () => {
     if (!liveEndpoint) throw new Error('Set an explicit local Ollama endpoint.');
-    const model = 'LiquidAI/lfm2.5-1.2b-instruct:q4_k_m';
+    const model = LFM3_SUMMARIZER_MODEL;
     const bonsai = 'ltcook-bonsai-2-27b-ctx65536:latest';
     const post = async (endpoint: string, input: object) => {
       const response = await fetch(new URL(endpoint, liveEndpoint), {

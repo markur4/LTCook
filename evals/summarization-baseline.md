@@ -115,3 +115,22 @@ for all five calibration examples and the downstream control.
   uncertainty, and the unapproved retry. The $50,000 cost is unsupported.
 - The downstream control preserves the scope of Ada's approval and Inez's
   explicit refusal. The supported decision is `HOLD`.
+
+## LFM3 default qualification
+
+The default keeps the 24 KiB input allowance by using a 32,768-token context.
+With reasoning enabled and a 2,048-token generation limit, full run
+`58654548-2c5f-4f11-9472-fd90dafea1e5` passed 15 of 17 attempts. The near-limit
+case reached the cap before returning a summary with `AUTH-17` and `Nia`.
+An artifact-negation grade was blocked when Bonsai quoted a Markdown label
+without its italic markers. All five calibration examples and the downstream
+decision passed.
+
+The final default raises the generation limit to 4,096 tokens. Full run
+`30cd96aa-f6bf-4dc9-8f90-63d055b0e0b1` passed all 17 attempts and all five
+Bonsai calibration examples. The 24,575-byte near-limit input preserved
+`AUTH-17` and `Nia`, and native Pi returned `HOLD`. The run took 111.2 seconds.
+The runtime bundle hash was
+`8a0c57f8a126a554ce84a2bf1fcc28b5bb3733f72d886a9aa30467a5a2da128e`
+and the fixture hash was
+`ac783efe57b57e879652db622985be6b560978884ea0caa23ad3113a5de901a9`.

@@ -34,7 +34,7 @@ class RuntimeSettings(rc.Config):
         "LTCOOK_OLLAMA_ENDPOINT", default="http://127.0.0.1:11434"
     )
     summarizer_model: str = rc.field(
-        "LTCOOK_SUMMARIZER_MODEL", default="LiquidAI/lfm2.5-1.2b-instruct:q4_k_m"
+        "LTCOOK_SUMMARIZER_MODEL", default="lfm3:1.7b-q8_0"
     )
     summarizer_keep_alive: int = rc.field("LTCOOK_SUMMARIZER_KEEP_ALIVE", default=-1)
     summarizer_generation: str = rc.field("LTCOOK_SUMMARIZER_GENERATION", default="")

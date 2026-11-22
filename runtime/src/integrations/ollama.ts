@@ -7,6 +7,8 @@ export interface OllamaSettings {
   generation?: string;
 }
 
+export const LFM3_SUMMARIZER_MODEL = 'lfm3:1.7b-q8_0';
+
 const result = z.object({
   model: z.string().min(1),
   message: z.object({ content: z.string() }),
@@ -36,7 +38,11 @@ const generationSchema = z.strictObject({
 export type SummaryGeneration = z.infer<typeof generationSchema>;
 
 export function summaryGeneration(settings: OllamaSettings): SummaryGeneration {
-  if (!settings.generation?.trim()) return { options: SUMMARY_GENERATION_OPTIONS };
+  if (!settings.generation?.trim()) {
+    if (settings.model.trim() === LFM3_SUMMARIZER_MODEL)
+      return { think: true, options: { num_ctx: 32768, num_predict: 4096, temperature: 0.1 } };
+    return { options: SUMMARY_GENERATION_OPTIONS };
+  }
   try {
     return generationSchema.parse(JSON.parse(settings.generation));
   } catch {

@@ -231,6 +231,9 @@ All notable changes to `ltcook` will be documented in this file.
 ### 💔 Changed
 
 <br>
+- Local summarization defaults to LFM3 1.7B Q8 with reasoning enabled.
+  Setup and repair prepare the new model in the configured Ollama instance.
+
 - Updated the locked AppRC Git revision to include the central host-first,
   colored help renderer, preserving the CLI presentation after dependency sync.
 

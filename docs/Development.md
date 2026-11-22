@@ -275,7 +275,8 @@ fingerprint the evaluation and summarizer source files and the Bun lockfile
 at engine creation.
 
 Set the global AppRC model and generation options before starting the evaluation
-runtime to compare a candidate. For the LFM3 baseline, the settings were
+runtime to compare a candidate. Leave both settings unset to qualify the
+current default. To reproduce the initial LFM3 baseline, use
 `LTCOOK_SUMMARIZER_MODEL=lfm3:1.7b-q8_0` and the following generation value.
 
 ```shell

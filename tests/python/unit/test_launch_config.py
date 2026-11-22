@@ -980,7 +980,6 @@ def test_evaluation_context_excludes_credentials_and_does_not_write_native_state
         "OPENAI_API_KEY": "evaluation-secret-sentinel",
         "ANTHROPIC_API_KEY": "evaluation-secret-sentinel",
         "LTCOOK_API_TOKEN": "evaluation-secret-sentinel",
-        "LTCOOK_SUMMARIZER_MODEL": "lfm3:1.7b-q8_0",
         "LTCOOK_SUMMARIZER_GENERATION": '{"think":false,"options":{"num_ctx":4096,"num_predict":128,"temperature":0.1}}',
     }.items():
         monkeypatch.setenv(key, value)

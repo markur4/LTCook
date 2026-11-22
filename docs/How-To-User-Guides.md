@@ -171,11 +171,12 @@ search. Some Codex modes ask for permission before calling an MCP tool.
 - Ask for a summary using `ltcook_summarize`. Supply text or ask Pi to summarize
   one regular UTF-8 file from the selected workspace, up to 24 KiB. An optional
   focus tells the summarizer what to emphasize. Codex accepts text because its
-  file-read policy is outside the workspace connection's authority. The default
-  model can omit details, including identifiers and negated actions.
+  file-read policy is outside the workspace connection's authority. Check
+  consequential details such as identifiers and negated actions against the source.
 
 LTCook initialization and repair that reruns initialization prepare
-`LiquidAI/lfm2.5-1.2b-instruct:q4_k_m` in the configured local Ollama instance.
+`lfm3:1.7b-q8_0` in the configured local Ollama instance. The default runs
+with reasoning enabled.
 Run `ltcook app doctor --verbose --json` for the summarizer's readiness alongside
 Bonsai. RIED and ordinary chats are available if the summarizer model is missing.
 Set the global [summarizer settings](References.md#environment-variables) in
