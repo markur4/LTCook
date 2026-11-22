@@ -373,8 +373,10 @@ they use the same discovery service and AppRC cache directly, with the native
 Pi runtime workspace as the scan root and no Team Session or bearer. New, resumed
 and forked Pi sessions rebind that workspace. The managed runtime derives its
 scan root from the Session. Its schema-version-1 result reports
-provenance, capture time, partial or stale status and diagnostics. Neither
-Team API v3 nor coordination snapshots carry the full inventory.
+provenance, capture time, partial or stale status and diagnostics. The `host`
+section and the summary report the operating system and a `wsl` flag. On WSL,
+`os` is `linux` and `wsl` is `true`. Neither Team API v3 nor coordination
+snapshots carry the full inventory.
 
 The local authenticated command endpoint accepts
 `POST /v1/command` with `{"sessionId":"SESSION","command":{"type":"..."}}`

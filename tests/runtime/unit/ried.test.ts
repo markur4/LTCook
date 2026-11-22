@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
@@ -9,7 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import * as os from 'node:os';
 import { delimiter, join } from 'node:path';
 import { RiedService, type RiedSnapshot } from '../../../runtime/src/ried.js';
 import type { Session } from '../../../runtime/src/workflow-api/index.js';
@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 test('RIED shares one bounded scan, discovers Just modules, and refreshes without running project commands', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'ltcook-ried-'));
+  const home = mkdtempSync(join(os.tmpdir(), 'ltcook-ried-'));
   directories.push(home);
   const workspace = join(home, 'workspace');
   mkdirSync(workspace);
@@ -122,7 +122,7 @@ printf '%s\\n' '{"recipes":{"build":{}},"modules":{"runtime":{"recipes":{"check"
 });
 
 test('RIED reports missing discovery tools without running project commands', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'ltcook-ried-missing-'));
+  const home = mkdtempSync(join(os.tmpdir(), 'ltcook-ried-missing-'));
   directories.push(home);
   const workspace = join(home, 'workspace');
   mkdirSync(workspace);
@@ -152,4 +152,51 @@ test('RIED reports missing discovery tools without running project commands', as
   expect(result.recipes).toBe(0);
   expect(result.diagnostics).toContain('Just is unavailable outside the workspace');
   expect(existsSync(sentinel)).toBe(false);
+});
+
+test('RIED reports WSL in the host section and summary without reusing native Linux inventory', async () => {
+  const workspace = mkdtempSync(join(os.tmpdir(), 'ltcook-ried-host-'));
+  directories.push(workspace);
+  const service = new RiedService(
+    join(workspace, 'cache'),
+    join(workspace, 'missing-brief'),
+    () => ({
+      PATH: '',
+    }),
+  );
+  const session = { id: 'host', workspaceRoot: workspace };
+  const { WSL_INTEROP, WSL_DISTRO_NAME } = process.env;
+  const platform = spyOn(os, 'platform').mockReturnValue('linux');
+  const release = spyOn(os, 'release').mockReturnValue('6.6.114.1-microsoft-standard-WSL2');
+  try {
+    delete process.env.WSL_INTEROP;
+    delete process.env.WSL_DISTRO_NAME;
+    expect(await service.get(session, { operation: 'section', section: 'host' })).toMatchObject({
+      value: { os: 'linux', wsl: true },
+    });
+    release.mockReturnValue('6.6.114.1-generic');
+    expect(await service.get(session, { operation: 'summary' })).toMatchObject({
+      host: { os: 'linux', wsl: false },
+    });
+    process.env.WSL_INTEROP = '/run/WSL/interop';
+    expect(await service.get(session, { operation: 'summary' })).toMatchObject({
+      host: { os: 'linux', wsl: true },
+    });
+    delete process.env.WSL_INTEROP;
+    process.env.WSL_DISTRO_NAME = 'Fixture';
+    expect(await service.get(session, { operation: 'summary' })).toMatchObject({
+      host: { os: 'linux', wsl: true },
+    });
+    platform.mockReturnValue('win32');
+    expect(await service.get(session, { operation: 'summary' })).toMatchObject({
+      host: { os: 'win32', wsl: false },
+    });
+  } finally {
+    platform.mockRestore();
+    release.mockRestore();
+    if (WSL_INTEROP === undefined) delete process.env.WSL_INTEROP;
+    else process.env.WSL_INTEROP = WSL_INTEROP;
+    if (WSL_DISTRO_NAME === undefined) delete process.env.WSL_DISTRO_NAME;
+    else process.env.WSL_DISTRO_NAME = WSL_DISTRO_NAME;
+  }
 });

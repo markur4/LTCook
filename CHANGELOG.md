@@ -173,7 +173,8 @@ All notable changes to `ltcook` will be documented in this file.
   persisted topic coverage and mandatory user decisions, authenticated native
   dialogs and explicit `ltcook planning` CLI operations.
 - Added approval-before-execution tool gates, pending-decision recovery and
-  runtime-owned RIED discovery with one AppRC cache and separately refreshed Git state.
+  runtime-owned RIED discovery with one AppRC cache and separately refreshed Git
+  state. RIED identifies WSL in its summary and host inventory.
 - Added verbatim Modes and Clear Writing guidance plus shared research and optional
   domain skills with source provenance and notices.
 

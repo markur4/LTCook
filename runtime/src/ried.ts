@@ -9,7 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { arch, platform } from 'node:os';
+import { arch, platform, release } from 'node:os';
 import { basename, delimiter, isAbsolute, join } from 'node:path';
 import { isWithin } from './path-containment.js';
 
@@ -44,6 +44,7 @@ export interface RiedSnapshot {
   host: {
     source: 'node';
     os: string;
+    wsl: boolean;
     architecture: string;
     tools: { name: string; available: boolean }[];
   };
@@ -149,11 +150,14 @@ export class RiedService {
     private readonly shellEnvironment: (sessionId: string) => Record<string, string> | undefined,
   ) {}
 
-  private key(session: RiedContext): { workspace: string; pathValue: string; file: string } {
+  private key(
+    session: RiedContext,
+    wsl: boolean,
+  ): { workspace: string; pathValue: string; file: string } {
     const workspace = realpathSync(session.workspaceRoot);
     const pathValue = this.shellEnvironment(session.id)?.PATH ?? process.env.PATH ?? '';
     const digest = createHash('sha256')
-      .update(JSON.stringify([workspace, pathValue, platform(), arch(), 'brief-0.16.0']))
+      .update(JSON.stringify([workspace, pathValue, platform(), arch(), wsl, 'brief-0.16.0']))
       .digest('hex');
     return { workspace, pathValue, file: join(this.cacheDirectory, `${digest}.json`) };
   }
@@ -206,7 +210,7 @@ export class RiedService {
     };
   }
 
-  private async scan(workspace: string, pathValue: string): Promise<RiedSnapshot> {
+  private async scan(workspace: string, pathValue: string, wsl: boolean): Promise<RiedSnapshot> {
     const capturedAt = new Date().toISOString();
     const diagnostics: string[] = [];
     const repository: RiedSnapshot['repository'] = {
@@ -227,6 +231,7 @@ export class RiedService {
     const host: RiedSnapshot['host'] = {
       source: 'node',
       os: platform(),
+      wsl,
       architecture: arch(),
       tools: TOOL_NAMES.map((name) => ({
         name,
@@ -333,7 +338,12 @@ export class RiedService {
   }
 
   async get(session: RiedContext, request: RiedRequest): Promise<unknown> {
-    const { workspace, pathValue, file } = this.key(session);
+    const wsl =
+      platform() === 'linux' &&
+      Boolean(
+        process.env.WSL_INTEROP || process.env.WSL_DISTRO_NAME || /microsoft/i.test(release()),
+      );
+    const { workspace, pathValue, file } = this.key(session, wsl);
     if (!statSync(workspace).isDirectory())
       throw new Error('RIED requires an existing workspace directory');
     let snapshot: RiedSnapshot | undefined;
@@ -350,7 +360,7 @@ export class RiedService {
       const key = basename(file);
       let pending = this.pending.get(key);
       if (!pending) {
-        pending = this.scan(workspace, pathValue);
+        pending = this.scan(workspace, pathValue, wsl);
         this.pending.set(key, pending);
       }
       try {
@@ -397,6 +407,7 @@ export class RiedService {
         workspaceRoot: workspace,
         capturedAt: snapshot.capturedAt,
         status: snapshot.status,
+        host: { os: snapshot.host.os, wsl: snapshot.host.wsl },
         languages: snapshot.repository.languages,
         manifests: snapshot.repository.manifests.length,
         branch: snapshot.git.branch,
