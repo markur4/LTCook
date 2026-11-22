@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createEvalEngine } from '../../../runtime/src/evals/engine.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import { EVAL_MODEL } from '../../../runtime/src/evals/setup.js';
+import { DECISION_MAX_TOKENS } from '../../../runtime/src/evals/summarization-decision.js';
 import {
   SUMMARY_MAX_INPUT_BYTES,
   summaryInputLimit,
@@ -33,6 +34,7 @@ const wrongDecisionSummary =
 
 function scriptedGrade(fixture: SummarizationCase, summary: string) {
   const calibration = SUMMARIZATION_CALIBRATION.find((item) => item.summary === summary);
+  const flagged = calibration?.expectedClaim;
   const expected: Record<string, string> =
     calibration?.expected ?? (summary === wrongDecisionSummary ? { decision: 'contradicted' } : {});
   const sample = summary.slice(0, 36);
@@ -45,17 +47,22 @@ function scriptedGrade(fixture: SummarizationCase, summary: string) {
   return {
     facts,
     claims: [
-      {
-        verdict: Object.values(expected).includes('contradicted') ? 'contradicted' : 'supported',
-        sourceQuote: fixture.facts[0]!.sourceQuote,
-        summaryQuote: sample,
-      },
-      ...(calibration?.unsupported
+      ...(flagged?.verdict !== 'contradicted'
         ? [
             {
-              verdict: 'unsupported',
-              sourceQuote: null,
-              summaryQuote: 'The incident cost $50,000.',
+              verdict: 'supported',
+              sourceQuote: fixture.facts[0]!.sourceQuote,
+              summaryQuote: sample,
+            },
+          ]
+        : []),
+      ...(flagged
+        ? [
+            {
+              verdict: flagged.verdict,
+              sourceQuote:
+                flagged.verdict === 'contradicted' ? fixture.facts[0]!.sourceQuote : null,
+              summaryQuote: flagged.excerpt,
             },
           ]
         : []),
@@ -71,6 +78,11 @@ async function runFixture(
     | 'bad-calibration'
     | 'blocked'
     | 'decision'
+    | 'truncated-control'
+    | 'model-mismatch'
+    | 'downstream-model-mismatch'
+    | 'summarizer-retargeted'
+    | 'grader-retargeted'
     | 'profile',
 ) {
   const fixtures = [
@@ -83,18 +95,29 @@ async function runFixture(
   const root = await mkdtemp(path.join(os.tmpdir(), 'ltcook-summary-eval-'));
   let graderCalls = 0;
   let decisionCalls = 0;
+  let inventoryCalls = 0;
   const sources: string[] = [];
   const server = createServer(async (request, response) => {
     try {
       if (request.url === '/api/tags') {
+        const recheck = ++inventoryCalls > 1;
         response.setHeader('content-type', 'application/json');
         response.end(
           JSON.stringify({
             models: [
-              { name: candidate, digest: 'candidate-digest' },
+              {
+                name: candidate,
+                digest:
+                  recheck && mode === 'summarizer-retargeted' ? 'changed' : 'candidate-digest',
+              },
               ...(mode === 'unavailable-grader'
                 ? []
-                : [{ name: EVAL_MODEL, digest: 'grader-digest' }]),
+                : [
+                    {
+                      name: EVAL_MODEL,
+                      digest: recheck && mode === 'grader-retargeted' ? 'changed' : 'grader-digest',
+                    },
+                  ]),
             ],
           }),
         );
@@ -114,18 +137,30 @@ async function runFixture(
       }
       if (request.url === '/v1/chat/completions') {
         decisionCalls++;
-        const answer = mode === 'decision' && decisionCalls === 1 ? 'PROCEED' : 'HOLD';
+        const decisionMode = mode === 'decision' || mode === 'truncated-control';
+        const answer = decisionMode && decisionCalls === 1 ? 'PROCEED' : 'HOLD';
+        const finishReason =
+          mode === 'truncated-control' && decisionCalls === 2 ? 'length' : 'stop';
         response.writeHead(200, { 'content-type': 'text/event-stream' });
         for (const [delta, reason] of [
           [{ role: 'assistant', content: answer }, null],
-          [{}, 'stop'],
+          [{}, finishReason],
         ]) {
           const event = {
             id: 'decision-fixture',
             object: 'chat.completion.chunk',
             created: 1,
-            model: EVAL_MODEL,
+            model: mode === 'downstream-model-mismatch' ? 'different-model:latest' : EVAL_MODEL,
             choices: [{ index: 0, delta, finish_reason: reason }],
+            ...(reason === 'length'
+              ? {
+                  usage: {
+                    prompt_tokens: 100,
+                    completion_tokens: DECISION_MAX_TOKENS,
+                    total_tokens: 100 + DECISION_MAX_TOKENS,
+                  },
+                }
+              : {}),
           };
           response.write('data: ' + JSON.stringify(event) + '\n\n');
         }
@@ -134,6 +169,8 @@ async function runFixture(
       }
       if (request.url !== '/api/chat') throw new Error('Unexpected Ollama route.');
       let content: string;
+      let returnedModel = input.model;
+      let doneReason = 'stop';
       if (input.model === candidate) {
         if (mode === 'profile') {
           expect({
@@ -150,9 +187,20 @@ async function runFixture(
         if (!fixture) throw new Error('Unexpected summarization input.');
         sources.push(fixture.id);
         content = source;
-        if (mode === 'self-grading' && fixture.id === 'migration-failure')
+        const missingValues =
+          mode === 'self-grading' ||
+          mode === 'summarizer-retargeted' ||
+          mode === 'grader-retargeted';
+        if (missingValues && fixture.id === 'migration-failure')
           content = 'M-04 failed with exit code 23.';
-        if (mode === 'decision' && fixture === DOWNSTREAM_CASE) content = wrongDecisionSummary;
+        if (fixture === DOWNSTREAM_CASE) {
+          if (mode === 'decision' || mode === 'truncated-control') content = wrongDecisionSummary;
+          if (mode === 'model-mismatch') {
+            returnedModel = 'different-model:latest';
+            content = 'R-31';
+            doneReason = 'length';
+          }
+        }
       } else if (input.model === EVAL_MODEL) {
         graderCalls++;
         const data = JSON.parse(input.messages[1].content);
@@ -162,9 +210,9 @@ async function runFixture(
       } else throw new Error('Unexpected Ollama model.');
       response.end(
         JSON.stringify({
-          model: input.model,
+          model: returnedModel,
           done: true,
-          done_reason: 'stop',
+          done_reason: doneReason,
           message: { content },
           ...(mode === 'pass' ? {} : { prompt_eval_count: 124, eval_count: 20 }),
         }),
@@ -191,7 +239,15 @@ async function runFixture(
   try {
     await service.initialize();
     const runId = await service.start({
-      preset: mode === 'decision' || mode === 'profile' ? 'full' : 'behavior',
+      preset: [
+        'decision',
+        'truncated-control',
+        'model-mismatch',
+        'downstream-model-mismatch',
+        'profile',
+      ].includes(mode)
+        ? 'full'
+        : 'behavior',
       scenario: 'summarization',
       setup: 'synthetic',
     });
@@ -306,7 +362,73 @@ test('qualification uses the requested generation and derives its near-limit inp
   const { report } = await runFixture('profile');
   expect(report.verdict).toBe('passed');
   expect(report.settings.summarizer.generation).toEqual(profile);
+  expect(report.downstream?.candidate).not.toHaveProperty('inputTokens');
+  expect(report.downstream?.candidate).not.toHaveProperty('outputTokens');
   const nearLimit = report.attempts.find(({ id }) => id === 'near-limit-exception')!;
   expect(nearLimit.inputBytes).toBeLessThanOrEqual(profileLimit);
   expect(nearLimit.inputBytes).toBeGreaterThanOrEqual(profileLimit - 1);
+});
+
+test('a truncated correct-summary control leaves downstream attribution unresolved', async () => {
+  const { report, decisionCalls } = await runFixture('truncated-control');
+  expect(decisionCalls).toBe(2);
+  expect(report.downstream).toMatchObject({
+    verdict: 'failed',
+    attribution: 'unresolved',
+    candidate: { decision: 'PROCEED' },
+    control: { decision: 'HOLD', incomplete: true },
+  });
+});
+
+test('a cutoff from a different model blocks qualification and supplies no downstream input', async () => {
+  const { status, report, decisionCalls } = await runFixture('model-mismatch');
+  expect(status.summary).toMatchObject({
+    status: 'completed',
+    summarizationQualification: 'blocked',
+  });
+  expect(report.attempts.find(({ id }) => id === DOWNSTREAM_CASE.id)).toMatchObject({
+    verdict: 'blocked',
+    reason: 'The returned summarizer identity did not match.',
+    incomplete: true,
+    missingExact: [],
+  });
+  expect(report.downstream).toMatchObject({ verdict: 'blocked' });
+  expect(decisionCalls).toBe(0);
+});
+
+test('a retargeted summarizer cannot supply confirmed failures for the original candidate', async () => {
+  const { report } = await runFixture('summarizer-retargeted');
+  expect(report.verdict).toBe('blocked');
+  expect(report.blockers).toContain('The summarizer identity changed during evaluation.');
+  expect(report.attempts.every(({ verdict, grading }) => verdict === 'blocked' && !grading)).toBe(
+    true,
+  );
+});
+
+test('a decision response from a different model blocks downstream qualification', async () => {
+  const { report, decisionCalls } = await runFixture('downstream-model-mismatch');
+  expect(report.verdict).toBe('blocked');
+  expect(report.downstream).toMatchObject({
+    verdict: 'blocked',
+    attribution: 'unresolved',
+    reason: 'Ollama returned a different downstream decision model.',
+  });
+  expect(decisionCalls).toBe(1);
+});
+
+test('a retargeted grader invalidates grades while confirmed deterministic failures remain', async () => {
+  const { report } = await runFixture('grader-retargeted');
+  expect(report.verdict).toBe('failed');
+  expect(report.blockers).toContain('The Bonsai identity changed during evaluation.');
+  expect(
+    report.calibration.every(({ verdict, grading }) => verdict === 'blocked' && !grading),
+  ).toBe(true);
+  expect(report.attempts.find(({ id }) => id === 'migration-failure')).toMatchObject({
+    verdict: 'failed',
+    reason: 'Required exact values are missing.',
+  });
+  expect(report.attempts.filter(({ verdict }) => verdict === 'blocked')).toHaveLength(
+    CORE_SUMMARIZATION_CASES.length - 1,
+  );
+  expect(report.attempts.every(({ grading }) => !grading)).toBe(true);
 });

@@ -110,6 +110,19 @@ test('grade evidence permits absent text for omissions and inventions and reject
   ).toBe(false);
   expect(() =>
     validateSummaryGrade(
+      {
+        ...grade,
+        facts: [
+          { ...grade.facts[0], sourceQuote: example.document.facts[1]!.sourceQuote },
+          ...grade.facts.slice(1),
+        ],
+      },
+      example.document,
+      example.summary,
+    ),
+  ).toThrow('unsupported fact citation');
+  expect(() =>
+    validateSummaryGrade(
       { ...grade, claims: [{ ...grade.claims[0], sourceQuote: 'Deletion was approved.' }] },
       example.document,
       example.summary,
@@ -138,6 +151,37 @@ test('grade evidence permits absent text for omissions and inventions and reject
       example.summary,
     ),
   ).not.toThrow();
+  expect(() =>
+    validateSummaryGrade(
+      { ...grade, claims: [{ ...grade.claims[0], verdict: 'unsupported' }] },
+      example.document,
+      example.summary,
+    ),
+  ).toThrow('invalid evidence');
+});
+
+test('held-out calibration requires finding the actual unsupported claim', () => {
+  const example = SUMMARIZATION_CALIBRATION.find(({ id }) => id === 'unsupported-material-claim')!;
+  const draft = {
+    facts: example.document.facts.map(({ id, sourceQuote }) => ({
+      id,
+      verdict: 'preserved',
+      sourceQuote,
+      summaryQuote:
+        id === 'correction'
+          ? 'The network was ruled out, and the cause is unknown.'
+          : 'Kim proposed a retry, which Ada did not approve.',
+    })),
+    claims: [{ verdict: 'unsupported', summaryQuote: 'The incident cost $50,000.' }],
+  };
+  const correct = validateSummaryGrade(draft, example.document, example.summary);
+  expect(calibrationMatches(correct, example)).toBe(true);
+  const misplaced = validateSummaryGrade(
+    { ...draft, claims: [{ verdict: 'unsupported', summaryQuote: 'The network was ruled out' }] },
+    example.document,
+    example.summary,
+  );
+  expect(calibrationMatches(misplaced, example)).toBe(false);
 });
 
 test('qualification keeps confirmed failures ahead of blocked checks and requires independent weights', () => {

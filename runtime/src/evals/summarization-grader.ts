@@ -66,10 +66,11 @@ export function validateSummaryGrade(
   const grade = gradeSchema.parse(value);
   const hasQuoted = (text: string, evidence: string | undefined) =>
     evidence !== undefined && text.includes(evidence);
-  const expected = new Set(fixture.facts.map(({ id }) => id));
+  const expected = new Map(fixture.facts.map(({ id, sourceQuote }) => [id, sourceQuote]));
   for (const item of grade.facts) {
-    if (!expected.delete(item.id) || !hasQuoted(fixture.source, item.sourceQuote))
+    if (expected.get(item.id) !== item.sourceQuote || !hasQuoted(fixture.source, item.sourceQuote))
       throw new Error('Grader returned an unknown, duplicate, or unsupported fact citation.');
+    expected.delete(item.id);
     const requiresSummaryQuote = item.verdict === 'preserved' || item.verdict === 'contradicted';
     if (
       (requiresSummaryQuote || item.summaryQuote !== undefined) &&
@@ -83,6 +84,7 @@ export function validateSummaryGrade(
     const requiresSourceQuote = claim.verdict === 'supported' || claim.verdict === 'contradicted';
     if (
       !hasQuoted(summary, claim.summaryQuote) ||
+      (claim.verdict === 'unsupported' && claim.sourceQuote !== undefined) ||
       ((requiresSourceQuote || claim.sourceQuote !== undefined) &&
         !hasQuoted(fixture.source, claim.sourceQuote))
     )
@@ -92,13 +94,23 @@ export function validateSummaryGrade(
 }
 
 export function calibrationMatches(grade: SummaryGrade, example: CalibrationExample): boolean {
+  if (
+    grade.facts.length !== Object.keys(example.expected).length ||
+    grade.facts.some(({ id, verdict }) => example.expected[id] !== verdict)
+  )
+    return false;
+
+  const flaggedClaims = grade.claims.filter(({ verdict }) => verdict !== 'supported');
+  if (!example.expectedClaim) return flaggedClaims.length === 0;
+  const { verdict: expectedVerdict, excerpt } = example.expectedClaim;
   return (
-    grade.facts.every(({ id, verdict }) => example.expected[id] === verdict) &&
-    !grade.claims.some(({ verdict }) => verdict === 'uncertain') &&
-    (example.unsupported === true) ===
-      grade.claims.some(({ verdict }) => verdict === 'unsupported') &&
-    Object.values(example.expected).includes('contradicted') ===
-      grade.claims.some(({ verdict }) => verdict === 'contradicted')
+    flaggedClaims.length > 0 &&
+    flaggedClaims.every(
+      ({ verdict, summaryQuote }) => verdict === expectedVerdict && summaryQuote.includes(excerpt),
+    ) &&
+    !grade.claims.some(
+      ({ verdict, summaryQuote }) => verdict === 'supported' && summaryQuote.includes(excerpt),
+    )
   );
 }
 
@@ -181,8 +193,8 @@ const responseSchema = z.object({
   message: z.object({ content: z.string() }),
   done: z.boolean(),
   done_reason: z.string().optional(),
-  prompt_eval_count: z.number().int().nonnegative().optional(),
-  eval_count: z.number().int().nonnegative().optional(),
+  prompt_eval_count: z.number().int().nonnegative().optional().catch(undefined),
+  eval_count: z.number().int().nonnegative().optional().catch(undefined),
 });
 
 export async function gradeSummary(input: {

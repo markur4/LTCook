@@ -144,6 +144,11 @@ function semanticVerdict(grade: SummaryGrade): SummarizationQualification {
   return 'passed';
 }
 
+function generationFailure(result: Attempt): string | undefined {
+  if (result.incomplete) return 'Generation did not complete.';
+  if (result.missingExact.length) return 'Required exact values are missing.';
+}
+
 const errorReason = (error: unknown) =>
   sanitizeEvaluationText(
     error instanceof Error ? error.message : 'Local inference did not complete.',
@@ -321,17 +326,15 @@ export async function evaluateSummarization(input: {
       result.summary = summary.summary;
       result.incomplete = summary.incomplete;
       result.usage = usage;
-      result.missingExact = missingExactFacts(fixture, summary.summary);
-      if (result.incomplete || result.missingExact.length) {
-        result.verdict = 'failed';
-        result.reason = result.incomplete
-          ? 'Generation did not complete.'
-          : 'Required exact values are missing.';
-      }
       if (modelTag(summary.model) !== modelTag(summarizer?.name ?? settings.model)) {
-        report.blockers.push('Ollama returned a different summarizer model.');
         result.reason = 'The returned summarizer identity did not match.';
       } else {
+        result.missingExact = missingExactFacts(fixture, summary.summary);
+        const failure = generationFailure(result);
+        if (failure) {
+          result.verdict = 'failed';
+          result.reason = failure;
+        }
         generated.push({ fixture, result });
       }
     } catch (error) {
@@ -351,7 +354,7 @@ export async function evaluateSummarization(input: {
         id: example.id,
         set: example.set,
         expected: example.expected,
-        expectedUnsupported: example.unsupported ?? false,
+        expectedUnsupported: example.expectedClaim?.verdict === 'unsupported',
         verdict: 'blocked',
       };
       try {
@@ -403,7 +406,7 @@ export async function evaluateSummarization(input: {
   }
 
   if (full) {
-    const source = report.attempts.find(({ id }) => id === DOWNSTREAM_CASE.id);
+    const source = generated.find(({ fixture }) => fixture === DOWNSTREAM_CASE)?.result;
     const downstream: Decision = { verdict: 'blocked', attribution: 'unresolved' };
     report.downstream = downstream;
     if (source?.summary && grader) {
@@ -423,19 +426,25 @@ export async function evaluateSummarization(input: {
           delete downstream.attribution;
         } else {
           downstream.verdict = 'failed';
-          downstream.reason = 'The native Pi agent did not return the required HOLD decision.';
+          downstream.reason = downstream.candidate.incomplete
+            ? 'The native Pi candidate response did not complete.'
+            : 'The native Pi agent did not return the required HOLD decision.';
           try {
-            downstream.control = await decide(DOWNSTREAM_CONTROL, 'control');
-            if (
-              downstream.control.decision === 'HOLD' &&
+            const control = await decide(DOWNSTREAM_CONTROL, 'control');
+            downstream.control = control;
+            if (control.incomplete) {
+              downstream.reason += ' The correct-summary control did not complete.';
+            } else if (
+              control.decision === 'HOLD' &&
               source.grading?.grade.facts.some(
                 ({ id, verdict }) =>
                   id === 'decision' && (verdict === 'missing' || verdict === 'contradicted'),
               )
-            )
+            ) {
               downstream.attribution = 'summary';
-            else if (downstream.control.decision !== 'HOLD' && source.verdict === 'passed')
+            } else if (control.decision !== 'HOLD' && source.verdict === 'passed') {
               downstream.attribution = 'agent';
+            }
           } catch (error) {
             signal.throwIfAborted();
             downstream.reason += ' Control could not run: ' + errorReason(error);
@@ -451,15 +460,44 @@ export async function evaluateSummarization(input: {
   if (summarizer || grader) {
     try {
       const inventory = await list();
-      const changed = [summarizer, grader].some(
-        (model) =>
-          model &&
-          !inventory.some(
-            ({ name, digest }) =>
-              modelTag(name) === modelTag(model.name) && digest === model.digest,
-          ),
-      );
-      if (changed) report.blockers.push('A model identity changed during evaluation.');
+      const changed = (model: ModelIdentity | undefined) =>
+        model &&
+        !inventory.some(
+          ({ name, digest }) => modelTag(name) === modelTag(model.name) && digest === model.digest,
+        );
+      const summarizerChanged = changed(summarizer);
+      const graderChanged = changed(grader);
+      const summarizerReason = 'The summarizer identity changed during evaluation.';
+      const graderReason = 'The Bonsai identity changed during evaluation.';
+      if (summarizerChanged) {
+        report.blockers.push(summarizerReason);
+        for (const result of report.attempts) {
+          result.verdict = 'blocked';
+          result.reason = summarizerReason;
+          result.missingExact = [];
+          delete result.grading;
+        }
+      }
+      if (graderChanged) {
+        report.blockers.push(graderReason);
+        for (const result of report.calibration) {
+          result.verdict = 'blocked';
+          result.reason = graderReason;
+          delete result.grading;
+        }
+        for (const result of report.attempts) {
+          if (!result.grading) continue;
+          delete result.grading;
+          const failure = generationFailure(result);
+          result.verdict = failure ? 'failed' : 'blocked';
+          result.reason = failure ?? graderReason;
+        }
+      }
+      if (report.downstream && (summarizerChanged || graderChanged)) {
+        report.downstream.verdict = 'blocked';
+        report.downstream.attribution = 'unresolved';
+        report.downstream.reason = summarizerChanged ? summarizerReason : graderReason;
+      }
     } catch {
       signal.throwIfAborted();
       report.blockers.push('The model identities could not be rechecked.');

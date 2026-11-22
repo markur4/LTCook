@@ -264,7 +264,7 @@ export type CalibrationExample = {
   document: SummarizationCase;
   summary: string;
   expected: Record<string, 'preserved' | 'missing' | 'contradicted'>;
-  unsupported?: boolean;
+  expectedClaim?: { verdict: 'contradicted' | 'unsupported'; excerpt: string };
 };
 
 // > Gold labels are fixture authors' judgments. They are never sent to the grader.
@@ -282,6 +282,7 @@ export const SUMMARIZATION_CALIBRATION: CalibrationExample[] = [
     document: migration,
     summary: 'M-04 passed with exit code 23 in ops/db.py. Inez decided to wait.',
     expected: { 'migration-failed': 'contradicted', decision: 'preserved' },
+    expectedClaim: { verdict: 'contradicted', excerpt: 'M-04 passed' },
   },
   {
     id: 'negation-and-missing-fact',
@@ -289,6 +290,7 @@ export const SUMMARIZATION_CALIBRATION: CalibrationExample[] = [
     document: artifacts,
     summary: 'The artifacts were deleted. Ada moved 3 files to reports/weekly.',
     expected: { 'no-deletion': 'contradicted', move: 'preserved', issue: 'missing' },
+    expectedClaim: { verdict: 'contradicted', excerpt: 'artifacts were deleted' },
   },
   {
     id: 'irrelevant-omission',
@@ -305,6 +307,6 @@ export const SUMMARIZATION_CALIBRATION: CalibrationExample[] = [
     summary:
       'The network was ruled out, and the cause is unknown. Kim proposed a retry, which Ada did not approve. The incident cost $50,000.',
     expected: { correction: 'preserved', retry: 'preserved' },
-    unsupported: true,
+    expectedClaim: { verdict: 'unsupported', excerpt: 'cost $50,000' },
   },
 ];

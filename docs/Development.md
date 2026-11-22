@@ -247,7 +247,7 @@ read-only, no-op and targeted-fix agent cases once each.
 `--case` selects one case, and `--repetitions N` explicitly repeats the selected
 agent cases. The default is one repetition. `eval run --all` adds Instruction
 Audit and full summarization qualification.
-when the categories run together, semantic audit uses the prompt already
+When the categories run together, semantic audit uses the prompt already
 captured during Behavior Evaluation rather than launching another agent task.
 
 ### Summarization qualification
@@ -282,11 +282,13 @@ and the recorded fixture hash. See the [first full LFM3 baseline](../evals/summa
 
 Each run checks Bonsai against development and held-out fixtures with reviewed
 labels. Keep the held-out cases separate when refining the grading prompt.
-Evidence validation checks whether the cited text exists. Critical disagreements
-can be adjudicated manually against the fixed source and candidate. An
-unavailable, uncalibrated, or self-grading model blocks semantic checks while
-deterministic checks continue. A confirmed failure takes precedence over a
-blocker. Qualification passes only when every required check passes.
+Calibration requires Bonsai to flag the expected claims and cite their wording.
+Evidence validation checks each required fact against its supplied quotation.
+Critical disagreements can be adjudicated manually against the fixed source and
+candidate. An unavailable, uncalibrated, or self-grading model blocks semantic
+checks while deterministic checks continue. A changed summarizer identity blocks
+attribution of its outputs to the candidate. A confirmed failure takes precedence
+over a blocker. Qualification passes only when every required check passes.
 
 The quick preset and focused runs for other agent cases provide partial coverage.
 The qualification verdict belongs to the summarization report, independently
