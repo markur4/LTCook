@@ -51,6 +51,9 @@ All notable changes to `ltcook` will be documented in this file.
   repository metadata, and live Git details with optional local base comparison.
   Repository Core shares workspace and result contracts across providers.
 
+- Workspace-scoped semantic repository search in Pi using ColGREP, a pinned
+  LateOn-Code-edge model, and lazy local indexing.
+
 - Shared SearXNG search, URL retrieval, and stored-result tools for managed
   Pi and workspace Pi and Codex chats in Paseo. Local searches wait for SearXNG
   to become ready during startup.

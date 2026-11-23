@@ -15,6 +15,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from ._colgrep import COLGREP_VERSION, prepare_colgrep
 from ._common import (
     SetupError,
     download,
@@ -100,6 +101,20 @@ def _prepare_brief(deployment: Path, record: dict[str, Any]) -> None:
         record.pop("brief_version", None)
         record.pop("brief_executable", None)
         record["brief_unavailable_reason"] = str(exc)
+    write_json(deployment / "runtime.json", record)
+
+
+def _prepare_repo_search(deployment: Path, record: dict[str, Any]) -> None:
+    """Report optional repository-search readiness without invalidating Node."""
+    try:
+        assets = prepare_colgrep(deployment)
+        record["colgrep_version"] = COLGREP_VERSION
+        record["colgrep_assets"] = str(assets)
+        record.pop("colgrep_unavailable_reason", None)
+    except (OSError, SetupError, tarfile.TarError, zipfile.BadZipFile, KeyError) as exc:
+        record.pop("colgrep_version", None)
+        record.pop("colgrep_assets", None)
+        record["colgrep_unavailable_reason"] = str(exc)
     write_json(deployment / "runtime.json", record)
 
 
@@ -295,6 +310,7 @@ def prepare_runtime(
                     (deployment / "runtime.json").read_text(encoding="utf-8")
                 )
             _prepare_brief(deployment, record)
+            _prepare_repo_search(deployment, record)
             return deployment
         archive_url, archive_name, suffix = _node_asset(
             version, platform.system(), platform.machine()
@@ -444,6 +460,7 @@ def prepare_runtime(
             record["browser_unavailable_reason"] = browser_error
         write_json(deployment / "runtime.json", record)
         _prepare_brief(deployment, record)
+        _prepare_repo_search(deployment, record)
     return deployment
 
 

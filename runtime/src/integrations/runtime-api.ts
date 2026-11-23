@@ -13,6 +13,7 @@ import { canonicalWorkspace } from '../core/workspace.js';
 import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { WorkspaceMcp } from './mcp.js';
+import { REPO_SEARCH_TIMEOUT_MS, REPO_SEARCH_TOOL_NAME } from '../tools/repo-search.js';
 import { isWebTool } from '../tools/web.js';
 import { validateRiedRequest } from '../repository/requests.js';
 import { z } from 'zod';
@@ -343,10 +344,13 @@ export class RuntimeApi {
         }
         if (typeof input.workspaceRoot !== 'string')
           throw new Error('A trusted launch workspace is required.');
+        // > The authenticated launch hook identifies native Pi. Codex does not provide read scope.
+        const nativePi = 'provider' in parsed && parsed.provider === 'pi';
         const token = await this.workspaceMcp.grant(
           input.nativeAgentId,
           input.workspaceRoot,
-          'provider' in parsed && parsed.provider === 'pi',
+          nativePi,
+          nativePi,
         );
         response.writeHead(200).end(JSON.stringify({ token }));
         return;
@@ -521,11 +525,13 @@ export class RuntimeApi {
         return;
       }
       if (request.url === '/v1/workspace-tool') {
+        const toolName = input.toolName;
+        const repositorySearch = toolName === REPO_SEARCH_TOOL_NAME;
         if (
           actor.kind !== 'agent' ||
           !input.sessionId ||
           !this.workspaceMcp ||
-          !isWebTool(input.toolName) ||
+          !(repositorySearch || isWebTool(toolName)) ||
           !input.toolArgs ||
           typeof input.toolArgs !== 'object' ||
           Array.isArray(input.toolArgs)
@@ -547,7 +553,7 @@ export class RuntimeApi {
         const authorization = runtime.authorizeTool(
           input.sessionId,
           actor.nativeAgentId,
-          input.toolName,
+          toolName,
           input.toolArgs as Record<string, unknown>,
         );
         if (!authorization.allowed) {
@@ -558,12 +564,14 @@ export class RuntimeApi {
         const cancel = () => controller.abort();
         response.once('close', cancel);
         try {
-          const result = await this.workspaceMcp.invokeTool(input.toolName, input.toolArgs, {
+          const timeoutMs = repositorySearch ? REPO_SEARCH_TIMEOUT_MS + 5_000 : 120_000;
+          const result = await this.workspaceMcp.invokeTool(toolName, input.toolArgs, {
             agentId: actor.nativeAgentId,
             workspaceRoot: session.session.workspaceRoot,
             sessionId: input.sessionId,
             workspaceFileAccess: false,
-            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]),
+            repositorySearchAccess: repositorySearch,
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]),
           });
           response.writeHead(200).end(JSON.stringify(result));
         } finally {

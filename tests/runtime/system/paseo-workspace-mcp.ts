@@ -20,6 +20,14 @@ const model = 'gpt-5.4';
 const material = 'Release R-17 passed 42 checks but did not deploy. The cause is uncertain.';
 const summary = 'R-17 passed 42 checks and did not deploy. The cause is uncertain.';
 const summaryModel = 'fixture-summary';
+const verifyRepositorySearch = Boolean(process.env.LTCOOK_COLGREP_DEPLOYMENT);
+if (verifyRepositorySearch) {
+  process.env.LTCOOK_COLGREP_CACHE_DIR = path.join(fixture, 'colgrep-cache');
+  await writeFile(
+    path.join(workspace, 'checksum.ts'),
+    'export function computeReleaseChecksum(value: number) { return value % 65521; }\n',
+  );
+}
 await writeFile(path.join(workspace, 'notes.txt'), material);
 let tool = 'ltcook_ried';
 let argumentsJson = '{"operation":"summary"}';
@@ -84,7 +92,9 @@ const provider = createServer(async (request, response) => {
       assert(
         tool === 'ltcook_ried'
           ? returned.includes(workspace) && returned.includes('workspaceRoot')
-          : returned.includes(summary) && returned.includes(summaryModel),
+          : tool === 'ltcook_repo_search'
+            ? returned.includes('checksum.ts') && returned.includes('computeReleaseChecksum')
+            : returned.includes(summary) && returned.includes(summaryModel),
         `Tool result was not returned in ${marker}: ${returned.slice(0, 500)}`,
       );
       calls++;
@@ -92,6 +102,7 @@ const provider = createServer(async (request, response) => {
       const tools = input.tools as FixtureTool[];
       const available: FixtureTool[] = searched?.tools ?? tools;
       const names = toolNames(available);
+      if (codex) assert(!names.some((name) => name?.endsWith('ltcook_repo_search')));
       namespace = available.find(
         (candidate) =>
           candidate.name === 'mcp__ltcook_workspace' &&
@@ -284,10 +295,15 @@ async function stop() {
 async function exercise(
   agent: Awaited<ReturnType<NonNullable<typeof host>['api']['agents']['create']>>,
   phase: string,
-  summaryInput?: { path: string } | { text: string },
+  toolInput?: { path: string } | { text: string } | { query: string; pattern: string },
 ) {
-  tool = summaryInput ? 'ltcook_summarize' : 'ltcook_ried';
-  argumentsJson = JSON.stringify(summaryInput ?? { operation: 'summary' });
+  tool =
+    toolInput && 'query' in toolInput
+      ? 'ltcook_repo_search'
+      : toolInput
+        ? 'ltcook_summarize'
+        : 'ltcook_ried';
+  argumentsJson = JSON.stringify(toolInput ?? { operation: 'summary' });
   marker = `call_${phase}`;
   const before = calls;
   let outcome = await agent.run(`Call ${tool}. Fixture phase ${phase}.`, {
@@ -314,6 +330,11 @@ try {
     config: { provider: `pi/fixture/${model}` },
   });
   await exercise(ordinaryPi, 'pi_fresh');
+  if (verifyRepositorySearch)
+    await exercise(ordinaryPi, 'pi_searches_repository', {
+      query: 'calculate the release checksum',
+      pattern: 'computeReleaseChecksum',
+    });
   const ordinaryCodex = await active.api.agents.create({
     cwd: workspace,
     config: { provider: `codex/${model}` },

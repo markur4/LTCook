@@ -75,7 +75,18 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
     const secondToken = await grant('codex-two', second, 'codex');
     const one = await client(firstToken);
     const two = await client(secondToken);
-    expect((await one.sdk.listTools()).tools.map(({ name }) => name)).toContain('ltcook_ried');
+    const piTools = (await one.sdk.listTools()).tools.map(({ name }) => name);
+    const codexTools = (await two.sdk.listTools()).tools.map(({ name }) => name);
+    expect(piTools).toContain('ltcook_ried');
+    expect(piTools).toContain('ltcook_repo_search');
+    expect(codexTools).toContain('ltcook_ried');
+    expect(codexTools).not.toContain('ltcook_repo_search');
+    const deniedSearch = await two.sdk.callTool({
+      name: 'ltcook_repo_search',
+      arguments: { query: 'read repository source' },
+    });
+    expect(deniedSearch.isError).toBe(true);
+    expect(deniedSearch.content).toEqual([{ type: 'text', text: 'Unknown LTCook tool.' }]);
     const previousSession = one.transport.sessionId;
     const reconnected = await client(firstToken);
     expect(reconnected.transport.sessionId).not.toBe(previousSession);

@@ -19,6 +19,8 @@ import { panelSnapshot } from '../../../runtime/src/paseo-plugin/shared/panel-sn
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
+import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
 import { createWebTools, type WebToolService } from '../../../runtime/src/tools/web.js';
 import { captureShellEnvironment } from '../../../runtime/src/integrations/shell-environment.js';
 
@@ -182,14 +184,14 @@ describe('native runtime boundary', () => {
       await api.close();
     }
   });
-  test('managed web tools enforce the runtime authorization before invoking the catalog', async () => {
+  test('managed workspace tools enforce runtime authorization before invoking the catalog', async () => {
     const master = 'test-master';
     const nativeAgentId = 'bound-web-agent';
     let allowed = false;
     let authorized = 0;
     let invoked = 0;
     const controller = {
-      snapshot: () => snapshotFor(nativeAgentId),
+      snapshot: () => snapshotFor(nativeAgentId, true, 'session-1', process.cwd()),
       authorizeTool() {
         authorized++;
         return { allowed, reason: 'Tool budget exhausted' };
@@ -203,16 +205,24 @@ describe('native runtime boundary', () => {
         return 'Search result';
       },
     } as unknown as WebToolService;
-    api.setWorkspaceMcp(new WorkspaceMcp(createWebTools(service), authority));
+    api.setWorkspaceMcp(
+      new WorkspaceMcp(
+        [
+          ...createWebTools(service),
+          createRepoSearchTool(createColgrepProvider({ deploymentDirectory: '' })),
+        ],
+        authority,
+      ),
+    );
     const endpoint = await api.listen();
-    const call = (agentId: string = nativeAgentId) =>
+    const call = (agentId: string = nativeAgentId, toolName = 'ltcook_web_search') =>
       fetch(`${endpoint}/v1/workspace-tool`, {
         method: 'POST',
         headers: { authorization: `Bearer ${agentBearer(master, agentId)}` },
         body: JSON.stringify({
           sessionId: 'session-1',
           nativeAgentId: agentId,
-          toolName: 'ltcook_web_search',
+          toolName,
           toolArgs: { query: 'release evidence' },
         }),
       });
@@ -227,6 +237,13 @@ describe('native runtime boundary', () => {
       expect(await (await call()).json()).toEqual({ content: 'Search result' });
       expect(authorized).toBe(2);
       expect(invoked).toBe(1);
+      const search = await call(nativeAgentId, 'ltcook_repo_search');
+      expect(search.status).toBe(400);
+      expect(await search.json()).toEqual({
+        error: expect.stringMatching(/ColGREP.*setup/i),
+      });
+      expect(await (await call('unbound', 'ltcook_repo_search')).text()).toBe('{}');
+      expect(authorized).toBe(3);
     } finally {
       await api.close();
     }
@@ -957,6 +974,7 @@ describe('native runtime boundary', () => {
     expect(nativeToolAllowed(true, 'web_enable')).toBe(true);
     expect(nativeToolAllowed(true, 'ltcook_team')).toBe(true);
     expect(nativeToolAllowed(true, 'ltcook_ried')).toBe(true);
+    expect(nativeToolAllowed(true, 'ltcook_repo_search')).toBe(true);
     expect(nativeToolAllowed(true, 'bash')).toBe(false);
     expect(nativeToolAllowed(true, 'edit')).toBe(false);
     expect(nativeToolAllowed(true, 'web_disable')).toBe(false);

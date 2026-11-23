@@ -341,6 +341,18 @@ own authorization and index lifecycle. The shared workspace and observation
 types give providers a common boundary for future composition. See the
 [RIED tool contract](References.md#repository-inventory).
 
+Repository Core's ColGREP provider searches code locally with a managed
+LateOn-Code-edge model and ONNX Runtime. The Pi tool authorizes and forwards
+requests to that provider. It builds and updates an index on demand under the AppRC
+cache, with separate storage for each canonical workspace identity. The tool reports
+relevant paths, line ranges, and excerpts. ColGREP uses its native file
+discovery and ignore rules. The per-workspace cache isolates index state. The
+process runs on the host with LTCook's filesystem access.
+
+Standalone Pi uses its native workspace, Team Pi uses its bound Session,
+and ordinary Paseo Pi uses its authenticated workspace grant. LTCook setup
+prepares the optional ColGREP assets. Indexing starts on the first search.
+
 ## Coordination and recovery
 
 One runtime owns the SQLite coordination database. It records TeamInstances,

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
 
-from ltcook_distr.payload.app_lifecycle import prepare_runtime
+from ltcook_distr.payload.app_lifecycle import _colgrep, prepare_runtime
 from ltcook_distr.payload.app_lifecycle._common import (
     SetupError,
     extract_archive,
@@ -259,6 +261,64 @@ def test_brief_checksum_failure_leaves_runtime_usable(
     assert "SHA-256" in str(record["brief_unavailable_reason"])
 
 
+def test_colgrep_repairs_damaged_assets_and_publishes_verified_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deployment = owned_directory(tmp_path / "deployment")
+    model = b"model fixture"
+    model_digest = hashlib.sha256(model).hexdigest()
+    monkeypatch.setattr(_colgrep.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(_colgrep.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(_colgrep, "_MODEL_FILES", {"model.onnx": model_digest})
+    executable = tmp_path / "colgrep"
+    executable.write_bytes(b"executable fixture")
+    downloads: list[str] = []
+
+    def download_asset(url: str, path: Path, digest: str) -> None:
+        downloads.append(url)
+        if path.suffix == ".whl":
+            with zipfile.ZipFile(path, "w") as wheel:
+                for name in _colgrep._ORT_FILES["Linux"]:
+                    wheel.writestr(f"onnxruntime/capi/{name}", b"library fixture")
+        elif path.suffix == ".onnx":
+            assert digest == model_digest
+            path.write_bytes(model)
+        else:
+            with tarfile.open(path, "w:xz") as archive:
+                archive.add(executable, arcname="colgrep-linux/colgrep")
+
+    monkeypatch.setattr(_colgrep, "download", download_asset)
+    target = _colgrep.prepare_colgrep(deployment)
+    manifest = json.loads((target / "assets.json").read_text(encoding="utf-8"))
+    assert manifest["files"]["model/model.onnx"] == model_digest
+    assert (target / manifest["binary"]).read_bytes() == executable.read_bytes()
+    library = target / manifest["library"]
+    assert library.read_bytes() == b"library fixture"
+    assert len(downloads) == 3
+    assert _colgrep.prepare_colgrep(deployment) == target
+    assert len(downloads) == 3
+
+    library.write_bytes(b"damaged")
+    assert _colgrep.prepare_colgrep(deployment) == target
+    assert len(downloads) == 6
+    assert library.read_bytes() == b"library fixture"
+
+
+def test_colgrep_setup_failure_preserves_core_runtime_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deployment = owned_directory(tmp_path / "deployment")
+    record: dict[str, object] = {"schema": 1, "node": "fixture"}
+    monkeypatch.setattr(_colgrep.platform, "system", lambda: "Plan9")
+
+    prepare_runtime._prepare_repo_search(deployment, record)
+
+    updated = json.loads((deployment / "runtime.json").read_text(encoding="utf-8"))
+    assert updated["node"] == "fixture"
+    assert "No pinned ColGREP assets" in updated["colgrep_unavailable_reason"]
+    assert "colgrep_assets" not in updated
+
+
 def test_browser_failure_is_retryable_without_invalidating_core(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -367,6 +427,7 @@ def test_browser_flag_controls_optional_setup_without_skipping_node(
     )
     monkeypatch.setattr(prepare_runtime, "extract_archive", extract)
     monkeypatch.setattr(prepare_runtime, "_prepare_brief", lambda *_args: None)
+    monkeypatch.setattr(prepare_runtime, "_prepare_repo_search", lambda *_args: None)
     monkeypatch.setattr(prepare_runtime, "run", fake_run)
     monkeypatch.setattr(prepare_runtime, "_chrome_binary", lambda _home: chrome)
     environment = (
