@@ -13,7 +13,7 @@ export const COLGREP_MAX_RESULTS = 20;
 const MAX_EXCERPT = 2000;
 const MAX_STDOUT = 4 * 1024 * 1024;
 const MAX_STDERR = 64 * 1024;
-const REPAIR = 'Run ltcook app repair to restore the managed ColGREP assets.';
+const REPAIR = 'Repeat LTCook setup with the supported installer or editable registration.';
 const MODEL_FILES = [
   'config.json',
   'config_sentence_transformers.json',
@@ -104,6 +104,7 @@ async function loadAssets(
   verified: Map<string, VerifiedFile>,
   signal: AbortSignal,
 ) {
+  let repair = REPAIR;
   try {
     if (!deployment || !path.isAbsolute(deployment)) throw new Error('Missing managed deployment.');
     const root = await realpath(deployment);
@@ -128,25 +129,41 @@ async function loadAssets(
     if (
       !files.has(binary) ||
       !files.has(library) ||
-      MODEL_FILES.some((file) => !files.has(path.join(model, file))) ||
-      (await readdir(model)).some((file) => !files.has(path.join(model, file)))
+      MODEL_FILES.some((file) => !files.has(path.join(model, file)))
     ) {
       throw new Error('The managed model files differ from the asset receipt.');
+    }
+    if ((await readdir(model)).some((file) => !files.has(path.join(model, file)))) {
+      repair = `Move unexpected files out of the managed ColGREP model directory. ${REPAIR}`;
+      throw new Error('The managed model directory contains unverified entries.');
     }
     for (const [file, digest] of files) await verifyFile(file, digest, verified, signal);
     return { root, binary, library, model };
   } catch (error) {
     signal.throwIfAborted();
-    throw new Error(`ColGREP assets are missing or invalid. ${REPAIR}`, { cause: error });
+    throw new Error(`ColGREP assets are missing or invalid. ${repair}`, { cause: error });
   }
 }
 
-async function getIndexDirectory(cache: string | undefined, workspace: string): Promise<string> {
+async function workspaceIdentity(root: string): Promise<string> {
+  const [actual, info] = await Promise.all([realpath(root), lstat(root, { bigint: true })]).catch(
+    () => [],
+  );
+  if (actual !== root || !info?.isDirectory())
+    throw new Error('The authorized workspace is unavailable.');
+  return `${info.dev}:${info.ino}`;
+}
+
+async function getIndexDirectory(
+  cache: string | undefined,
+  workspace: string,
+  identity: string,
+): Promise<string> {
   try {
     if (!cache || !path.isAbsolute(cache)) throw new Error('Missing AppRC cache path.');
     await mkdir(cache, { recursive: true, mode: 0o700 });
     const root = await realpath(cache);
-    const key = createHash('sha256').update(workspace).digest('hex');
+    const key = createHash('sha256').update(workspace).update('\0').update(identity).digest('hex');
     const scope = path.join(root, key);
     const indices = path.join(scope, 'indices');
     for (const directory of [scope, indices]) {
@@ -370,15 +387,18 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       const timeout = AbortSignal.timeout(options.timeoutMs ?? REPO_SEARCH_TIMEOUT_MS);
       const signal = AbortSignal.any([callerSignal, timeout]);
       try {
-        const workspace = await realpath(authorizedWorkspace.root).catch(() => undefined);
-        if (!workspace || !(await lstat(workspace)).isDirectory())
-          throw new Error('The authorized workspace is unavailable.');
+        const workspace = authorizedWorkspace.root;
+        const identity = await workspaceIdentity(workspace);
+        const ensureWorkspaceUnchanged = async () => {
+          if ((await workspaceIdentity(workspace)) !== identity)
+            throw new Error('The authorized workspace changed during repository search.');
+        };
         const paths = await searchPaths(workspace, input.paths ?? []);
         const limit = Math.min(input.limit ?? 8, COLGREP_MAX_RESULTS);
         // > ColGREP also matches globs below the root. Verify exact literal scope on every hit.
         const filters = paths.some(({ filter }) => !filter) ? [] : paths;
         const assets = await loadAssets(deployment, verifiedFiles, signal);
-        const indices = await getIndexDirectory(cache, workspace);
+        const indices = await getIndexDirectory(cache, workspace, identity);
         const args = [
           'search',
           '--json',
@@ -393,7 +413,9 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
           input.query,
           workspace,
         ];
+        await ensureWorkspaceUnchanged();
         const result = await execute(assets, args, indices, signal);
+        await ensureWorkspaceUnchanged();
         const capturedAt = new Date().toISOString();
         if (result.code !== 0) {
           if (

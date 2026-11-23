@@ -414,10 +414,11 @@ persists, check the AppRC cache's storage and file locking. The call has a
 two-minute deadline. The current Paseo launch hook supplies no trusted Codex
 file-read scope, so Codex does not discover or invoke repository search.
 
-Setup and repair install ColGREP 1.8.5, ONNX Runtime 1.23.0, and the
+LTCook setup installs ColGREP 1.8.5, ONNX Runtime 1.23.0, and the
 `lightonai/LateOn-Code-edge` snapshot
 `4bcdf5ed93f791259eb130b577a240f753d68dd8`. Asset failures affect repository
-search only. Use `ltcook app repair` to restore the assets.
+search only. Repeat [LTCook setup](How-To-User-Guides.md#install-from-a-checkout)
+for your installation to restore the managed assets.
 
 Web tools resolve the authorized workspace's AppRC settings. Search uses
 SearXNG and URL retrieval uses the HTTP/Crawl4AI settings. Read stored results

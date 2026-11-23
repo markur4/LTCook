@@ -1,5 +1,6 @@
 import type { GuidanceInspection } from '../guidance-api/index.js';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { realpathSync } from 'node:fs';
 import { setTimeout } from 'node:timers';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -557,11 +558,17 @@ export function activateStandaloneRepoSearch(
   sessionId: string,
 ): void {
   if (!process.env.LTCOOK_COLGREP_DEPLOYMENT || !process.env.LTCOOK_COLGREP_CACHE_DIR) return;
+  let root: string;
+  try {
+    root = realpathSync(workspaceRoot);
+  } catch {
+    return;
+  }
   const tool = createRepoSearchTool();
   registerRepoSearchTool(pi, tool, (input, signal) =>
     tool.invoke(input, {
       agentId: sessionId,
-      workspaceRoot,
+      workspaceRoot: root,
       workspaceFileAccess: false,
       repositorySearchAccess: true,
       signal: signal ?? new AbortController().signal,

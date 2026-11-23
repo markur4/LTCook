@@ -8,6 +8,7 @@ import {
   readFile,
   readdir,
   realpath,
+  rename,
   rm,
   stat,
   symlink,
@@ -34,7 +35,7 @@ const piFixture = fileURLToPath(new URL('./repo-search-pi.ts', import.meta.url))
 async function withTemporaryDirectory<T>(operation: (root: string) => Promise<T>): Promise<T> {
   const root = await mkdtemp(path.join(tmpdir(), 'ltcook-repo-search-'));
   try {
-    return await operation(root);
+    return await operation(await realpath(root));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -77,8 +78,12 @@ function code(symbol: string) {
 }
 
 async function workspaceIndexDirectory(cacheDirectory: string, workspace: string) {
+  const root = await realpath(workspace);
+  const info = await stat(root, { bigint: true });
   const key = createHash('sha256')
-    .update(await realpath(workspace))
+    .update(root)
+    .update('\0')
+    .update(`${info.dev}:${info.ino}`)
     .digest('hex');
   return path.join(cacheDirectory, key, 'indices');
 }
@@ -257,6 +262,41 @@ test.skipIf(!deploymentDirectory)(
 );
 
 test.skipIf(!deploymentDirectory)(
+  'repository search rejects a linked replacement and isolates a newly authorized directory',
+  async () =>
+    withTemporaryDirectory(async (root) => {
+      const workspace = path.join(root, 'workspace');
+      const prior = path.join(root, 'prior');
+      const cacheDirectory = path.join(root, 'cache');
+      const tool = searchTool(cacheDirectory);
+      await mkdir(workspace);
+      await writeFile(path.join(workspace, 'checksum.ts'), code('priorChecksum'));
+      const priorIndex = await workspaceIndexDirectory(cacheDirectory, workspace);
+      expect(
+        await search(tool, workspace, { query: 'checksum', pattern: 'priorChecksum' }),
+      ).toMatchObject({ status: 'ready', results: [{ path: 'checksum.ts' }] });
+
+      await rename(workspace, prior);
+      await symlink(prior, workspace, 'junction');
+      await expect(
+        search(tool, workspace, { query: 'checksum', pattern: 'priorChecksum' }),
+      ).rejects.toThrow('The authorized workspace is unavailable.');
+      await rm(workspace);
+
+      await mkdir(workspace);
+      await writeFile(path.join(workspace, 'checksum.ts'), code('replacementChecksum'));
+      expect(
+        await search(tool, workspace, { query: 'checksum', pattern: 'replacementChecksum' }),
+      ).toMatchObject({ status: 'ready', results: [{ path: 'checksum.ts' }] });
+      expect(await readdir(priorIndex)).not.toHaveLength(0);
+      const newIndex = await workspaceIndexDirectory(cacheDirectory, workspace);
+      expect(await readdir(newIndex)).not.toHaveLength(0);
+      expect(newIndex).not.toBe(priorIndex);
+    }),
+  timeoutMs,
+);
+
+test.skipIf(!deploymentDirectory)(
   'standalone Pi and workspace MCP share the native lock and can retry after cancellation',
   async () =>
     withTemporaryDirectory(async (root) => {
@@ -351,6 +391,12 @@ test.skipIf(!deploymentDirectory)(
         search(searchTool(cacheDirectory, assets), workspace, { query: 'checksum' }),
       ).rejects.toThrow(/setup|repair/i);
       await copyFile(path.join(deploymentDirectory, manifest.library), library);
+      const extra = path.join(assets, manifest.model, 'unverified.txt');
+      await writeFile(extra, 'unexpected model file');
+      await expect(
+        search(searchTool(cacheDirectory, assets), workspace, { query: 'checksum' }),
+      ).rejects.toThrow(/move unexpected files.*repeat LTCook setup/i);
+      await rm(extra);
       await writeFile(path.join(assets, manifest.model, 'tokenizer.json'), '{}');
       await expect(
         search(searchTool(cacheDirectory, assets), workspace, { query: 'checksum' }),
@@ -377,10 +423,11 @@ test.skipIf(!deploymentDirectory || !benchmarkWorkspace)(
   async () =>
     withTemporaryDirectory(async (cacheDirectory) => {
       if (!benchmarkWorkspace) throw new Error('A benchmark workspace is required.');
+      const workspace = await realpath(benchmarkWorkspace);
       const tool = searchTool(cacheDirectory, deploymentDirectory, 240_000);
       const measure = async () => {
         const started = performance.now();
-        const result = await search(tool, benchmarkWorkspace, {
+        const result = await search(tool, workspace, {
           query: 'validate workspace authorization and tool access',
           limit: 8,
         });
@@ -392,7 +439,7 @@ test.skipIf(!deploymentDirectory || !benchmarkWorkspace)(
       const coldMs = await measure();
       const warmMs = [await measure(), await measure(), await measure()];
       const indexBytes = await directoryBytes(
-        await workspaceIndexDirectory(cacheDirectory, benchmarkWorkspace),
+        await workspaceIndexDirectory(cacheDirectory, workspace),
       );
       console.log(JSON.stringify({ coldMs, warmMs, indexBytes }));
     }),

@@ -177,9 +177,10 @@ search. Some Codex modes ask for permission before calling an MCP tool.
   “Where does the runtime recover an interrupted assignment?” Add a relative
   path to narrow results. The first search builds the workspace index and can
   take longer than later searches. If another request is populating the index,
-  retry once it finishes. If setup assets are missing or damaged, run
-  `ltcook app repair` and retry. Codex repository search requires a trusted
-  read scope, which the current Paseo launch hook does not provide.
+  retry once it finishes. If setup assets are missing or damaged, repeat the
+  [installation procedure](#install-from-a-checkout) for your installation.
+  Codex repository search requires a trusted read scope, which the current
+  Paseo launch hook does not provide.
 - Ask for a summary using `ltcook_summarize`. Supply text or ask Pi to summarize
   one regular UTF-8 file from the selected workspace, up to 24 KiB. An optional
   focus tells the summarizer what to emphasize. Codex accepts text because its
@@ -779,7 +780,7 @@ Use `ltcook app paths` and `ltcook app doctor --json` for passive inspection.
 | Database already has an owner | Stop that runtime; do not delete its lock or run another recovery owner. |
 | Browser unavailable | Inspect the installation receipt and browser prerequisites; do not confuse it with core chat/search availability. |
 | Web tools cannot connect | Check configured URLs, actual Compose ports, credentials, network access, and narrow SSRF allowances. |
-| Saved installation is incomplete | Inspect `ltcook app doctor --json` and use the matching `app repair` workflow; preserve pending authority. |
+| Saved installation is incomplete | Inspect `ltcook app doctor --json` and repeat the installation procedure for your installation. |
 
 The internal `python -m ltcook.launch environment --workspace ROOT` command emits
 raw child-process environment values, including secrets. It is not a redacted
