@@ -8,6 +8,8 @@ import { Type, type Static } from 'typebox';
 import { Value } from 'typebox/value';
 import { REPO_SEARCH_TIMEOUT_MS } from '../../paseo-plugin/shared/workspace-tools.js';
 import { isWithin } from '../../path-containment.js';
+import type { RepositoryResult } from '../results.js';
+import type { RepositoryWorkspace } from '../workspace.js';
 
 export const COLGREP_MAX_RESULTS = 20;
 const MAX_EXCERPT = 2000;
@@ -46,6 +48,9 @@ export const ColgrepHitSchema = Type.Object({
   excerpt: Type.String({ maxLength: MAX_EXCERPT }),
   name: Type.Optional(Type.String()),
 });
+
+type ColgrepOutcome =
+  { status: 'ready'; hits: Static<typeof ColgrepHitSchema>[] } | { status: 'indexing' };
 
 interface ColgrepOptions {
   deploymentDirectory?: string;
@@ -371,10 +376,10 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
   const cache = options.cacheDirectory ?? process.env.LTCOOK_COLGREP_CACHE_DIR;
   return {
     async search(
-      authorizedWorkspace: { readonly root: string },
+      authorizedWorkspace: Pick<RepositoryWorkspace, 'root'>,
       input: RepositorySearchRequest,
       callerSignal: AbortSignal,
-    ) {
+    ): Promise<RepositoryResult<ColgrepOutcome>> {
       if (!input.query.trim() || input.query.includes('\0') || input.pattern?.includes('\0')) {
         throw new Error('ColGREP queries and regular expressions must be nonempty text.');
       }

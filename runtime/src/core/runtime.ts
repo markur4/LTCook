@@ -23,8 +23,9 @@ import type {
 } from '../workflow-api/index.js';
 import { CoordinationStore } from '../storage/coordination.js';
 import { canonicalWorkspace } from './workspace.js';
+import type { RiedService } from '../repository/discovery.js';
+import type { RiedRequest } from '../repository/requests.js';
 import { REPO_SEARCH_TOOL_NAME } from '../tools/repo-search.js';
-import { RiedService, type RiedRequest } from '../tools/ried.js';
 
 type RuntimeOptions = {
   databasePath: string;
@@ -196,14 +197,14 @@ Task to register: ${input.description}`,
     }
     if (this.initializedSessions.has(session.id)) return this.snapshot(session.id);
     await this.initializeSession(session);
-    void this.riedService?.get(session, { operation: 'summary' }).catch(() => undefined);
+    void this.riedService?.warm({ ...session, boundWorkspace: true }).catch(() => undefined);
     return this.snapshot(session.id);
   }
 
   async ried(sessionId: string, request: RiedRequest): Promise<unknown> {
     this.assertOpen();
     if (!this.riedService) throw new Error('RIED is unavailable');
-    return this.riedService.get(this.session(sessionId), request);
+    return this.riedService.get({ ...this.session(sessionId), boundWorkspace: true }, request);
   }
 
   private assertSessionSelection(session: Session, workspaceRoot: string): void {

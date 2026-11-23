@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import type { SessionSnapshot } from './workflow-api/index.js';
 import { TeamRegistry } from './integrations/team-loader.js';
-import { RiedService } from './tools/ried.js';
+import { RiedService } from './repository/discovery.js';
 import { createTools } from './tools/catalog.js';
 import { WebToolService } from './tools/web.js';
 import { WorkspaceMcp } from './integrations/mcp.js';

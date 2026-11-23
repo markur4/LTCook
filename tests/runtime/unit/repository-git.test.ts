@@ -1,0 +1,221 @@
+import { afterEach, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, normalize } from 'node:path';
+import { readGit } from '../../../runtime/src/repository/providers/git.js';
+import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
+
+const fixtures: string[] = [];
+
+afterEach(() => {
+  for (const fixture of fixtures.splice(0)) rmSync(fixture, { recursive: true, force: true });
+});
+
+function git(root: string, ...args: string[]): string {
+  return execFileSync(
+    'git',
+    [
+      '-C',
+      root,
+      '-c',
+      'user.name=Fixture',
+      '-c',
+      'user.email=fixture@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      '-c',
+      'core.hooksPath=',
+      ...args,
+    ],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+  ).trim();
+}
+
+function createRepository() {
+  const fixture = realpathSync(mkdtempSync(join(tmpdir(), 'ltcook-repository-git-')));
+  fixtures.push(fixture);
+  const root = join(fixture, 'workspace');
+  mkdirSync(root);
+  git(root, 'init', '-q', '-b', 'trunk');
+  return { fixture, root };
+}
+
+function commitAll(root: string, subject: string) {
+  git(root, 'add', '--all');
+  git(root, 'commit', '-qm', subject);
+  return git(root, 'rev-parse', 'HEAD');
+}
+
+const gitPath = process.env.PATH ?? '';
+
+test('Git discovery splits committed base changes from staged, unstaged and untracked files', async () => {
+  const { root, fixture } = createRepository();
+  const supportedOddName = process.platform === 'win32' ? 'name space ü' : 'name\tline\né\\';
+  const changed = `${supportedOddName}.ts`;
+  const untracked = `${supportedOddName}.txt`;
+  writeFileSync(join(root, changed), 'initial\n');
+  const trunk = commitAll(root, 'Initial');
+  git(root, 'switch', '-qc', 'feature');
+  writeFileSync(join(root, changed), 'commit\n');
+  const head = commitAll(root, 'Feature');
+
+  const linked = join(fixture, 'linked worktree');
+  git(root, 'worktree', 'add', '-q', linked, 'trunk');
+  git(root, 'remote', 'add', 'upstream', 'https://example.invalid/fixture');
+  git(root, 'update-ref', 'refs/remotes/upstream/stable', trunk);
+  git(root, 'symbolic-ref', 'refs/remotes/upstream/HEAD', 'refs/remotes/upstream/stable');
+  git(root, 'branch', '--set-upstream-to=upstream/stable');
+  git(root, 'remote', 'add', 'origin', 'https://example.invalid/mirror');
+  git(root, 'update-ref', 'refs/remotes/origin/mirror', trunk);
+  git(root, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/mirror');
+
+  const workspace = await openRepositoryWorkspace(root);
+  const before = await readGit(workspace, gitPath);
+  expect(before.partial).toBe(false);
+  expect(before.value).toMatchObject({
+    branch: 'feature',
+    head,
+    changed: 0,
+    untracked: 0,
+    worktrees: 2,
+  });
+  expect(before.value.changedFiles).toBeUndefined();
+
+  writeFileSync(join(root, changed), 'already staged\n');
+  git(root, '--literal-pathspecs', 'add', '--', changed);
+  writeFileSync(join(root, changed), 'yet another edit\n');
+  writeFileSync(join(root, untracked), 'untracked\n');
+  git(root, 'config', 'diff.orderFile', 'missing-order-file');
+  const index = readFileSync(join(root, '.git', 'index'));
+  const detail = await readGit(workspace, gitPath, { detailed: true, base: 'trunk' });
+
+  expect(detail.diagnostics).toEqual([]);
+  expect(detail.value).toMatchObject({
+    branch: 'feature',
+    head,
+    changed: 1,
+    untracked: 1,
+    worktrees: 2,
+    upstream: 'upstream/stable',
+    defaultBranch: 'stable',
+    defaultBranchRef: 'refs/remotes/upstream/stable',
+    remotes: ['origin', 'upstream'],
+    changedFiles: [{ path: changed, indexStatus: 'M', worktreeStatus: 'M' }],
+    untrackedFiles: [untracked],
+    base: { reference: 'trunk', commit: trunk, changedFiles: [{ path: changed, status: 'M' }] },
+  });
+  expect(
+    detail.value.worktreeEntries?.map((item) => ({ ...item, path: normalize(item.path) })),
+  ).toContainEqual({ path: linked, head: trunk, branch: 'trunk' });
+  expect(readFileSync(join(root, '.git', 'index')).equals(index)).toBe(true);
+
+  const linkedResult = await readGit(await openRepositoryWorkspace(linked), gitPath);
+  expect(linkedResult.value).toMatchObject({ head: trunk, branch: 'trunk', worktrees: 2 });
+});
+
+test('Git discovery limits nested workspace records to the authorized directory', async () => {
+  const { root } = createRepository();
+  const nested = join(root, 'authorized space ü');
+  mkdirSync(nested);
+  const outside = join(root, 'outside.txt');
+  const inside = join(nested, 'inside.txt');
+  writeFileSync(inside, 'initial');
+  writeFileSync(outside, 'initial');
+  const first = commitAll(root, 'Initial');
+  writeFileSync(inside, 'committed change');
+  writeFileSync(outside, 'committed change');
+  commitAll(root, 'Change both');
+  writeFileSync(inside, 'visible dirty file');
+  writeFileSync(outside, 'outside dirty file');
+  writeFileSync(join(nested, 'visible untracked.txt'), 'inside');
+  writeFileSync(join(root, 'outside untracked.txt'), 'outside');
+
+  const detail = await readGit(await openRepositoryWorkspace(nested), gitPath, {
+    detailed: true,
+    base: first,
+  });
+  expect(detail.value.changedFiles).toEqual([{ path: 'inside.txt', worktreeStatus: 'M' }]);
+  expect(detail.value.untrackedFiles).toEqual(['visible untracked.txt']);
+  expect(detail.value.base?.changedFiles).toEqual([{ path: 'inside.txt', status: 'M' }]);
+  expect(detail.value.worktreeEntries).toEqual([]);
+  expect(JSON.stringify(detail)).not.toContain('outside.txt');
+  expect(JSON.stringify(detail)).not.toContain('outside untracked.txt');
+});
+
+test('Git discovery handles an unborn branch, detached HEAD, unavailable Git and non-ref arguments', async () => {
+  const { root } = createRepository();
+  const workspace = await openRepositoryWorkspace(root);
+  const unborn = await readGit(workspace, gitPath, { detailed: true });
+  expect(unborn.value.branch).toBe('trunk');
+  expect(unborn.value.head).toBeUndefined();
+  expect(unborn.value.defaultBranch).toBeUndefined();
+  expect(unborn.diagnostics).toEqual([]);
+
+  writeFileSync(join(root, 'tracked.txt'), 'tracking');
+  const head = commitAll(root, 'Initial');
+  git(root, 'switch', '--detach', '-q', head);
+  const detached = await readGit(workspace, gitPath, { detailed: true, base: 'HEAD' });
+  expect(detached.value).toMatchObject({ branch: '(detached)', head, base: { changedFiles: [] } });
+  expect(detached.value.worktreeEntries?.[0]).toMatchObject({ detached: true, head });
+  expect(detached.value.upstream).toBeUndefined();
+
+  const invalidBase = await readGit(workspace, gitPath, { detailed: true, base: '--help' });
+  expect(invalidBase.value.base).toBeUndefined();
+  expect(invalidBase.diagnostics).toContainEqual(expect.objectContaining({ code: 'invalid-base' }));
+  const missingGit = await readGit(workspace, '');
+  expect(missingGit.partial).toBe(true);
+  expect(missingGit.diagnostics).toContainEqual(
+    expect.objectContaining({ code: 'git-unavailable' }),
+  );
+});
+
+test('Git discovery marks a file inventory as truncated while retaining counts', async () => {
+  const { root } = createRepository();
+  const group = join(root, 'untracked group');
+  mkdirSync(group);
+  for (let index = 0; index < 140; index++) writeFileSync(join(group, `file-${index}`), '');
+
+  const workspace = await openRepositoryWorkspace(root);
+  const summary = await readGit(workspace, gitPath);
+  expect(summary.value.untracked).toBe(1);
+  const detail = await readGit(workspace, gitPath, { detailed: true });
+  expect(detail.value.untracked).toBe(140);
+  expect(detail.value.untrackedFiles).toHaveLength(128);
+  expect(detail.truncated).toBe(true);
+  expect(detail.partial).toBe(true);
+  expect(detail.diagnostics).toContainEqual(
+    expect.objectContaining({ code: 'untracked-files-limited' }),
+  );
+});
+
+test('Git discovery does not execute the repository’s configured clean or fsmonitor commands', async () => {
+  const { root } = createRepository();
+  const tracked = join(root, 'tracked.txt');
+  writeFileSync(tracked, 'same size a\n');
+  writeFileSync(join(root, '.gitattributes'), 'tracked.txt filter=sentinel\n');
+  commitAll(root, 'Initial');
+  git(root, 'config', 'filter.sentinel.clean', 'echo ran > filter-ran; cat');
+  git(root, 'config', 'core.fsmonitor', './fsmonitor');
+  writeFileSync(join(root, 'fsmonitor'), '#!/bin/sh\necho ran > fsmonitor-ran\nexit 1\n', {
+    mode: 0o755,
+  });
+  writeFileSync(tracked, 'same size b\n');
+  const future = new Date(Date.now() + 2_000);
+  utimesSync(tracked, future, future);
+
+  const detail = await readGit(await openRepositoryWorkspace(root), gitPath, { detailed: true });
+  expect(detail.diagnostics).toContainEqual(expect.objectContaining({ code: 'filters-disabled' }));
+  expect(detail.value.changedFiles).toEqual([{ path: 'tracked.txt', worktreeStatus: 'M' }]);
+  expect(existsSync(join(root, 'filter-ran'))).toBe(false);
+  expect(existsSync(join(root, 'fsmonitor-ran'))).toBe(false);
+});

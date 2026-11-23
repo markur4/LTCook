@@ -3,7 +3,7 @@ import { createServer } from 'node:net';
 import { mkdir, readFile, writeFile, copyFile, readdir, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { RiedService } from '../tools/ried.js';
+import { RiedService } from '../repository/discovery.js';
 import { createRuntime } from '../core/runtime.js';
 import { RuntimeApi, agentBearer } from '../integrations/runtime-api.js';
 import { createPaseoAgentBackend, startPaseoHost } from '../integrations/paseo.js';

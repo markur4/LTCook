@@ -318,19 +318,28 @@ execution while member read-only restrictions remain. Unavailable runtime
 authorization fails closed. These controls are native tool/API boundaries; they
 are not an operating-system sandbox.
 
-RIED combines bounded `brief` repository discovery with Git state, host tool
-availability and Just recipe names. It stores one versioned cache under AppRC
-and refreshes Git status when read. Session activation starts cache warmup without
-waiting. Standalone LTCook Pi chats reuse the same discovery implementation and
-AppRC cache, bound to their native Pi workspace without creating a Team Session.
-Ordinary Pi and Codex chats opened through Paseo receive an authenticated local
-MCP connection to the same service. Their workspace comes from the launch
-context. The shared catalog also exposes local Ollama summarization and keeps
-tool schemas and execution independent of the client transport.
-RIED reports partial or stale results; it does not run recipes, project
-scripts or services, or build a semantic index. See the
-[runtime API](References.md#workflow-api) and
-[planning guide](How-To-User-Guides.md#plan-work-and-answer-decisions).
+### Repository Core and RIED
+
+Repository Core is the internal, harness-independent subsystem in
+`runtime/src/repository`. Runtime and MCP adapters establish workspace identity
+and read permissions. Core opens that trusted workspace, resolves relative
+paths, and rejects links and traversal for targeted discovery. Its provider
+results record capture time, freshness, truncation, and diagnostics.
+
+RIED composes the `brief`, Git, and Just providers with host tool availability.
+It caches repository metadata in AppRC and samples Git on summary and Git
+requests. Session activation warms metadata in the background. Summaries
+return a small briefing. Directory maps and source outlines run on demand.
+`brief` reads a bounded staging directory of regular workspace files so its
+own filesystem probes cannot follow workspace links. Detected developer
+commands remain inventory data.
+
+Managed Pi conversations and ordinary Pi or Codex chats share the discovery
+service through their existing native or MCP adapters. Source outlines require
+trusted file-read access. ColGREP remains a separate retrieval provider with its
+own authorization and index lifecycle. The shared workspace and observation
+types give providers a common boundary for future composition. See the
+[RIED tool contract](References.md#repository-inventory).
 
 Repository Core's ColGREP provider searches code locally with a managed
 LateOn-Code-edge model and ONNX Runtime. The Pi tool authorizes and forwards

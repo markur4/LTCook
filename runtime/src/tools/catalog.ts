@@ -1,5 +1,6 @@
+import { createRiedTool } from './ried.js';
+import type { RiedService } from '../repository/discovery.js';
 import { createRepoSearchTool } from './repo-search.js';
-import { createRiedTool, type RiedService } from './ried.js';
 import { createSummarizeTool } from './summarize.js';
 import { createWebTools, type WebToolService } from './web.js';
 import type { OllamaSettings } from '../integrations/ollama.js';
