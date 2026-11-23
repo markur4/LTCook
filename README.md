@@ -189,16 +189,17 @@ uv run --locked ltcook app install -e --yes --skip-setup
 ltcook
 ```
 
-AppRC 0.39.1rc1 is pinned to an exact Git commit in `pyproject.toml` and
+AppRC is pinned to an exact Git commit in `pyproject.toml` and
 `uv.lock`. Git and normal dependency-download access are required.
 `just sync` builds the canonical `src/ltcook_distr/bundle.zip`; registration
 prepares Node and service prerequisites without starting containers.
 `--skip-setup` skips only the optional configuration offer, not initialization.
 Editable registration neither copies nor owns the checkout or `.venv`.
-Use Git and `just sync` to update; repeat registration to refresh provisioning.
-The generic AppRC updater skips the runtime bundle build. On Linux or Windows,
-add `--desktop` to editable registration to request a shortcut with the LTCook
-icon.
+For later updates, stop LTCook and run `ltcook app update` to rebuild the
+runtime bundle and refresh registration. See the
+[editable update instructions](docs/How-To-User-Guides.md#install-from-a-checkout)
+for the one-time bootstrap from an older AppRC. On Linux or Windows, add
+`--desktop` to editable registration to request a shortcut with the LTCook icon.
 Rust/PyApp compilation is not needed for an editable installation.
 
 > [!WARNING]

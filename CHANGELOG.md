@@ -191,7 +191,11 @@ All notable changes to `ltcook` will be documented in this file.
   explicit reasoning in the Team or session. Start a new LTCook conversation
   for existing Paseo profile records that predate saved alias selections.
 
-- **Breaking:** 💥 LTCook now uses AppRC 0.39.1rc1 (commit `054685`).
+- `ltcook app update` rebuilds runtime assets before refreshing an editable
+  installation. Checkouts using an older updater need one manual asset build
+  and editable registration to pick up the new update path.
+
+- **Breaking:** 💥 LTCook now uses AppRC 0.39.1rc1 (commit `26aa61`).
   `app uninstall --keep-config` replaces `--keep-data` and retains the
   configuration directory, including settings and secrets. Uninstall removes
   appdata, cache, and state even when configuration is retained. Review

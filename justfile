@@ -373,14 +373,7 @@ reset-venv:
 
 # Install or sync everything from uv.lock into venv. (CI should use this)
 # `python -m pip install -e ".[<all_extras>]" --group dev`
-sync:
-    just _note-direnv
-    just _check-uv
-    test -d "$UV_PROJECT_ENVIRONMENT" || uv venv "$UV_PROJECT_ENVIRONMENT"
-    {{quote(BUN)}} install --frozen-lockfile
-    {{quote(BUN)}} run build
-    uv sync --locked --all-extras --all-groups --no-install-project
-    PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.package_assets --root . --destination src/ltcook_distr/bundle.zip
+sync: _note-direnv build-assets
     uv sync --locked --all-extras --all-groups
 alias install := sync
 
@@ -803,9 +796,15 @@ test-system:
     {{quote(BUN)}} run build
     uv run --locked --no-sync pytest -m system
 
+# Build the deployment archive before installing or refreshing Python packages.
 [group('Build')]
-build:
+build-assets: _check-uv
+    test -d "$UV_PROJECT_ENVIRONMENT" || uv venv "$UV_PROJECT_ENVIRONMENT"
+    {{quote(BUN)}} install --frozen-lockfile
     {{quote(BUN)}} run build
-    uv sync --locked --all-groups --no-install-project
     PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.package_assets --root . --destination src/ltcook_distr/bundle.zip
+
+[group('Build')]
+build: build-assets
+    uv sync --locked --all-groups --no-install-project
     uv build --no-sources --no-build-logs

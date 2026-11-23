@@ -37,10 +37,10 @@ uv venv --python 3.12 .venv
 just sync
 ```
 
-`just sync` also creates the environment when it is absent. It installs Bun's
-frozen `bun.lock`, builds the TypeScript packages, installs locked Python
-development groups without the project, stages production assets, then installs
-the Python application into that same environment. `UV_PROJECT_ENVIRONMENT`
+`just sync` creates the environment when it is absent. It runs `just build-assets`
+to install Bun's frozen dependencies, build the TypeScript packages, and archive
+the production assets. It then installs the locked Python application and
+development groups into that same environment. `UV_PROJECT_ENVIRONMENT`
 defaults to this checkout's `.venv`; set it explicitly for an isolated environment.
 Directory entry does not create or activate a virtual environment.
 
@@ -507,8 +507,9 @@ manifests/lock and Node selection, but no development dependencies.
 `BuildPy` validates and copies that archive; initialization extracts it into
 private staging while preparing the deployment.
 
-`just sync` and `just build` create the archive; the latter also builds wheel
-and sdist. The ZIP is required because AppRC's snapshot cleanup removes every
+`just sync`, `just build`, and AppRC editable updates call `just build-assets`
+to create the archive. `just build` also builds the wheel and sdist. The ZIP is
+required because AppRC's snapshot cleanup removes every
 new generated `dist` directory, including nested staged package assets.
 
 `just build-native` uses the exact committed tree and `uv.lock`, builds assets

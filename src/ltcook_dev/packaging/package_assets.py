@@ -11,8 +11,6 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from setuptools.command.build_py import build_py as BuildPyBase
-
 ROOT_DECLARATIONS = ("package.json", "package-lock.json", ".node-version")
 REQUIRED_RUNTIME_ENTRIES = (
     "dist/main.js",
@@ -357,21 +355,6 @@ def archive_assets(
     return destination
 
 
-class BuildPy(BuildPyBase):
-    """Validate the canonical archive and copy it with the Python package."""
-
-    def run(self) -> None:
-        """Keep wheel builds offline and refuse linked package outputs."""
-        source = Path(__file__).absolute().parents[2] / "ltcook_distr/bundle.zip"
-        validate_bundle(source)
-        destination = Path(os.path.abspath(self.build_lib)) / "ltcook_distr/bundle.zip"
-        _no_links(destination)
-        super().run()
-        _no_links(destination)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        self.copy_file(str(source), str(destination))
-
-
 def main() -> int:
     """Archive checked production outputs from private external staging."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -385,3 +368,22 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+else:
+    # > AppRC runs the archive CLI before Setuptools is available.
+    from setuptools.command.build_py import build_py as BuildPyBase
+
+    class BuildPy(BuildPyBase):
+        """Validate the canonical archive and copy it with the Python package."""
+
+        def run(self) -> None:
+            """Keep wheel builds offline and refuse linked package outputs."""
+            source = Path(__file__).absolute().parents[2] / "ltcook_distr/bundle.zip"
+            validate_bundle(source)
+            destination = (
+                Path(os.path.abspath(self.build_lib)) / "ltcook_distr/bundle.zip"
+            )
+            _no_links(destination)
+            super().run()
+            _no_links(destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            self.copy_file(str(source), str(destination))

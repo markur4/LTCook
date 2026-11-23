@@ -11,8 +11,8 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
-    "apprc-core @ git+https://github.com/HisQu/apprc.git@0546851432ac865c43b899d569e80b7bd8c9c611",
-    "apprc @ git+https://github.com/HisQu/apprc.git@0546851432ac865c43b899d569e80b7bd8c9c611#subdirectory=src/apprc_dev/packaging/terminal",
+    "apprc-core @ git+https://github.com/HisQu/apprc.git@26aa613b3a0de5e1b63a3dc30a7ae3c42fa7c9b1",
+    "apprc @ git+https://github.com/HisQu/apprc.git@26aa613b3a0de5e1b63a3dc30a7ae3c42fa7c9b1#subdirectory=src/apprc_dev/packaging/terminal",
     "filelock>=3.18",
     "typer",
     "rich>=13.9",
@@ -23,7 +23,7 @@ Repository = "https://github.com/markur4/LTCook.git"
 
 [dependency-groups]
 dev = [
-    "apprc-core[distribution] @ git+https://github.com/HisQu/apprc.git@0546851432ac865c43b899d569e80b7bd8c9c611",
+    "apprc-core[distribution] @ git+https://github.com/HisQu/apprc.git@26aa613b3a0de5e1b63a3dc30a7ae3c42fa7c9b1",
     "setuptools>=68",
     "pytest>=8.2",
     "ruff>=0.4",
@@ -42,6 +42,9 @@ where = ["src"]
 [tool.setuptools.package-data]
 "ltcook" = ["config/apprc.defaults.env"]
 "ltcook_distr" = ["bundle.zip"]
+
+[tool.apprc.editable-update]
+prepare = ["just", "build-assets"]
 
 [tool.apprc.distribution]
 app-id = "ltcook"

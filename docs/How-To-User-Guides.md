@@ -54,8 +54,8 @@ uv run --locked ltcook app install -e --yes --skip-setup
 ```
 
 This registers the checkout's existing `.venv` and publishes its command without
-copying or owning the developer environment. The Git commit for AppRC 0.39.1rc1
-is pinned in `pyproject.toml` and `uv.lock`. The editable route needs no
+copying or owning the developer environment. The AppRC revision is pinned in
+`pyproject.toml` and `uv.lock`. The editable route needs no
 Rust/native compilation. On Linux or Windows, add `--desktop` to request a
 desktop shortcut with the LTCook icon.
 
@@ -81,9 +81,15 @@ Runtime launches omit an unset or empty `CONTAINER_CONNECTION`, preserving Podma
 default engine selection. Set it to a configured Podman connection name only when
 a remote engine is intended.
 
-To update the checkout, use Git, run `just sync`, and repeat editable
-registration. `just sync` builds the deployment archive. AppRC's generic
-`app update` synchronizes Python dependencies and skips that build.
+To update an editable installation, run `ltcook stop`, then `ltcook app update`
+and `ltcook` to start the refreshed runtime. AppRC selects the registered
+checkout, which must be clean and track an upstream branch. It runs
+`just build-assets` before synchronizing Python and refreshing registration,
+even if Git is already current.
+
+If your installed AppRC predates asset preparation, fast-forward the checkout,
+run `just sync`, then repeat the editable registration command above once to
+bootstrap the new updater.
 See [installation placement](References.md#installation-placement) for recorded
 resource locations and explicit migration.
 

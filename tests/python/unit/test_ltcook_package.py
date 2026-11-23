@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -135,8 +137,8 @@ def test_bundle_includes_all_local_team_workspaces(tmp_path: Path) -> None:
 def test_rebuild_replaces_owned_generated_output_with_current_assets(
     tmp_path: Path,
 ) -> None:
-    """An old compiler output can be rebuilt while install inputs remain strict."""
-    from ltcook_dev.packaging.package_assets import archive_assets, validate_bundle
+    """Rebuild a stale archive before the updater has synced Python packages."""
+    from ltcook_dev.packaging.package_assets import validate_bundle
 
     root = _asset_source(tmp_path / "source")
     destination = tmp_path / "bundle.zip"
@@ -144,8 +146,25 @@ def test_rebuild_replaces_owned_generated_output_with_current_assets(
         archive.writestr(".ltcook-bundle", b"ltcook\n")
     with pytest.raises(ValueError):
         validate_bundle(destination)
-    archive_assets(root, destination)
-    assert "runtime/dist/workflow-api/index.js" in validate_bundle(destination)
+    source = Path(__file__).resolve().parents[3] / "src"
+    subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-m",
+            "ltcook_dev.packaging.package_assets",
+            "--root",
+            str(root),
+            "--destination",
+            str(destination),
+        ],
+        env={**os.environ, "PYTHONPATH": str(source)},
+        check=True,
+        timeout=30,
+    )
+    validate_bundle(destination)
+    with zipfile.ZipFile(destination) as archive:
+        assert archive.read("runtime/dist/main.js") == b"runtime"
 
 
 @pytest.mark.skipif(

@@ -183,7 +183,8 @@ the validated archive; initialization safely extracts it while preparing Node.
 An archive is necessary because SDK snapshot cleanup strips generated `dist`
 directories, even inside staged package directories.
 
-`just sync` and `just build` prepare the archive. `just build-native` exports a
+`just build-assets` prepares the archive for `just sync`, `just build`, and
+AppRC editable updates. `just build-native` exports a
 committed tree, builds assets inside that private tree and invokes AppRC's native
 builder with the locked application graph. Authoring needs uv >=0.11.6, Rust and
 LLVM; editable registration does not.
