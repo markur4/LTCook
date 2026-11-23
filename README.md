@@ -189,7 +189,7 @@ uv run --locked ltcook app install -e --yes --skip-setup
 ltcook
 ```
 
-AppRC 0.39.1b1 is pinned to an exact Git commit in `pyproject.toml` and
+AppRC 0.39.1rc1 is pinned to an exact Git commit in `pyproject.toml` and
 `uv.lock`. Git and normal dependency-download access are required.
 `just sync` builds the canonical `src/ltcook_distr/bundle.zip`; registration
 prepares Node and service prerequisites without starting containers.
