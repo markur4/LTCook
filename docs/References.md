@@ -447,12 +447,16 @@ SearXNG and URL retrieval uses the HTTP/Crawl4AI settings.
 
 - `ltcook_web_search` returns a `responseId` and query outcomes in input order.
   Each successful query includes `sources` with a title, URL, and snippet.
-  A failed query in a mixed batch includes an `error`. If `includeContent`
-  returns a `fetchId`, use that ID to read the fetched pages.
-- Pass a source URL to `ltcook_web_fetch`. Use its `responseId` with
-  `ltcook_web_content` and `findText` to find a passage. For instance,
-  `{"responseId":"FETCH_ID","urlIndex":0,"findText":"experimental support"}`
-  searches the first fetched page.
+  LTCook drops malformed and duplicate links before applying `numResults`.
+  A degraded query reports `engineIssues` when SearXNG identifies an engine.
+  If engine failures leave no usable results, LTCook can retry once with
+  other enabled general web engines. An explicit SearXNG bang keeps its selection.
+  A failed query includes an `error`. If `includeContent` returns a `fetchId`,
+  use that ID to read the fetched pages.
+- Pass a source URL and `findText` to `ltcook_web_fetch` to return matching
+  passages with their source URLs. The same option works with `urls` for up to
+  five pages. Each passage result reports its match count or its fetch error.
+  Use the returned `responseId` with `ltcook_web_content` to continue reading.
 - Use `queryIndex` to inspect a stored search and `urlIndex` to select a fetched
   page. Both indexes start at zero. Use the response ID from the same agent.
   Archiving the agent or restarting the runtime ends access to stored results.

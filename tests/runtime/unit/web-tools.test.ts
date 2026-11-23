@@ -116,6 +116,7 @@ test.skipIf(process.platform === 'win32')(
     const repoRoot = resolve(import.meta.dir, '../../..');
     const root = await mkdtemp(join(tmpdir(), 'ltcook-web-test-'));
     const queries: string[] = [];
+    const fallbackEngineRequests: string[] = [];
     let healthChecks = 0;
     const server = Bun.serve({
       hostname: '127.0.0.1',
@@ -128,19 +129,50 @@ test.skipIf(process.platform === 'win32')(
         }
         if (url.pathname === '/report')
           return new Response('Release notes\n\nThe fixture contains a searchable passage.');
+        if (url.pathname === '/second')
+          return new Response('Not found. This error page also says searchable passage.', {
+            status: 404,
+          });
+        if (url.pathname === '/config')
+          return Response.json({
+            engines: [
+              { name: 'brave', categories: ['general', 'web'], enabled: true },
+              { name: 'duckduckgo', categories: ['general', 'web'], enabled: true },
+              { name: 'google cse', categories: ['general', 'web'], enabled: true },
+              { name: 'spare', categories: ['general', 'web'], enabled: true },
+              { name: 'disabled', categories: ['general', 'web'], enabled: false },
+              { name: 'images', categories: ['images', 'web'], enabled: true },
+              { name: 'dictionary', categories: ['general'], enabled: true },
+            ],
+          });
         if (url.pathname !== '/search' || url.searchParams.get('format') !== 'json')
           return new Response(null, { status: 404 });
         if (healthChecks < 2) return new Response(null, { status: 503 });
         const query = url.searchParams.get('q') ?? '';
         queries.push(query);
         if (query === 'startup logs') return new Response('Fixture error', { status: 503 });
+        const engines = url.searchParams.get('engines');
+        if (engines) fallbackEngineRequests.push(engines);
+        if (query === 'healthy empty') return Response.json({ results: [] });
+        if ((query === 'recover sources' && !engines) || query === 'degraded sources')
+          return Response.json({
+            results: [{ title: 'Broken redirect', url: 'http:///go/v1/fixture', engine: 'brave' }],
+            unresponsive_engines: [
+              ['duckduckgo', 'CAPTCHA'],
+              ['google cse', 'Suspended: too many requests'],
+              ...(engines ? [['spare', 'Timeout']] : []),
+            ],
+          });
         return Response.json({
           results: [
+            { title: 'Broken redirect', url: 'http:///go/v1/fixture', engine: 'brave' },
             {
               title: 'Recorded document',
               url: `${url.origin}/report`,
               content: 'Fixture evidence',
             },
+            { title: 'Duplicate source', url: `${url.origin}/report#chapter`, engine: 'brave' },
+            { title: 'Next useful source', url: `${url.origin}/second`, content: 'More evidence' },
           ],
         });
       },
@@ -192,19 +224,28 @@ test.skipIf(process.platform === 'win32')(
       };
       const reportUrl = new URL('/report', server.url).href;
       const found = await search!.invoke(
-        { queries: [' release evidence ', 'startup logs'] },
+        { queries: [' release evidence ', 'startup logs'], numResults: 2 },
         context,
       );
       expect(found.content).toContain('Recorded document');
       expect(found.content).toContain('ltcook_web_content');
       expect(found.content).not.toContain('get_search_content(');
+      expect(found.content).not.toContain('go/v1');
       expect(queries.sort()).toEqual(['release evidence', 'startup logs']);
       expect(found.responseId).toEqual(expect.any(String));
       expect(found.fetchId).toBeUndefined();
       expect(found.queries).toEqual([
         {
           query: ' release evidence ',
-          sources: [{ title: 'Recorded document', url: reportUrl, snippet: 'Fixture evidence' }],
+          sources: [
+            { title: 'Recorded document', url: reportUrl, snippet: 'Fixture evidence' },
+            {
+              title: 'Next useful source',
+              url: new URL('/second', server.url).href,
+              snippet: 'More evidence',
+            },
+          ],
+          engineIssues: [{ engine: 'brave', reason: 'invalid_links' }],
         },
         { query: 'startup logs', error: expect.stringContaining('503') },
       ]);
@@ -213,8 +254,36 @@ test.skipIf(process.platform === 'win32')(
         (await stored!.invoke({ responseId, query: ' release evidence ' }, context)).content,
       ).toContain('Fixture evidence');
       await expect(stored!.invoke({ responseId, queryIndex: 1 }, context)).rejects.toThrow('503');
+      const fallback = await search!.invoke({ query: 'recover sources', numResults: 1 }, context);
+      expect(fallback.queries).toEqual([
+        {
+          query: 'recover sources',
+          sources: [{ title: 'Recorded document', url: reportUrl, snippet: 'Fixture evidence' }],
+          engineIssues: [
+            { engine: 'duckduckgo', reason: 'blocked' },
+            { engine: 'google cse', reason: 'rate_limited' },
+            { engine: 'brave', reason: 'invalid_links' },
+          ],
+        },
+      ]);
+      const degraded = await search!.invoke({ query: 'degraded sources' }, context);
+      expect(degraded.queries).toEqual([
+        {
+          query: 'degraded sources',
+          error: 'SearXNG returned no usable sources.',
+          engineIssues: [
+            { engine: 'duckduckgo', reason: 'blocked' },
+            { engine: 'google cse', reason: 'rate_limited' },
+            { engine: 'brave', reason: 'invalid_links' },
+            { engine: 'spare', reason: 'timeout' },
+          ],
+        },
+      ]);
+      const empty = await search!.invoke({ query: 'healthy empty' }, context);
+      expect(empty.queries).toEqual([{ query: 'healthy empty', sources: [] }]);
+      expect(fallbackEngineRequests).toEqual(['spare', 'spare']);
       const foundWithPages = await search!.invoke(
-        { query: 'release evidence', includeContent: true },
+        { query: 'release evidence', includeContent: true, numResults: 1 },
         context,
       );
       expect(foundWithPages.fetchId).toEqual(expect.any(String));
@@ -232,6 +301,22 @@ test.skipIf(process.platform === 'win32')(
         context,
       );
       expect(passage.content).toContain('searchable passage');
+      const inlinePassage = await fetchPage!.invoke(
+        {
+          urls: [reportUrl, new URL('/second', server.url).href],
+          mode: 'raw',
+          findText: 'SEARCHABLE PASSAGE',
+        },
+        context,
+      );
+      expect(inlinePassage).toMatchObject({
+        content: expect.stringContaining(reportUrl),
+        responseId: expect.any(String),
+        passages: [
+          { url: reportUrl, content: expect.stringContaining('searchable passage'), matchCount: 1 },
+          { url: new URL('/second', server.url).href, error: expect.stringContaining('404') },
+        ],
+      });
       await expect(
         stored!.invoke({ responseId, queryIndex: 0 }, { ...context, agentId: 'second' }),
       ).rejects.toThrow(/no stored results/i);

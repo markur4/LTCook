@@ -2,96 +2,177 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Value } from 'typebox/value';
+import { findContent } from '../../../node_modules/pi-web-access/content-find.ts';
+import { deleteResult, storeResult } from '../../../node_modules/pi-web-access/storage.ts';
+import { runWithProxy } from '../../../node_modules/pi-web-access/utils.ts';
 import {
-  createStandaloneWebToolCore,
-  DEFAULT_TOOL_NAMES,
+  createWebToolCore,
+  fetchAllContent,
+  getMaxInlineContentChars,
+  isToolEnabled,
+  loadConfig,
+  markToolError,
+  registeredFetchToolNames,
+  resolveFetchModeConfig,
 } from '../../../node_modules/pi-web-access/web-tool-core.ts';
 import {
+  MAX_PASSAGE_TEXT_LENGTH,
   MAX_QUERY_ERROR_LENGTH,
-  MAX_SEARCH_RESULTS,
-  MAX_SOURCE_SNIPPET_LENGTH,
   MAX_SOURCE_TITLE_LENGTH,
-  MAX_SOURCE_URL_LENGTH,
-  SOURCE_URL_PATTERN,
   webDefinitions,
 } from './web.ts';
+import { searchSearxng } from './searxng.mjs';
 
 // > Only the MCP transport may write to stdout.
 console.log = console.info = console.debug = console.error;
 
-// > pi-web-access's standalone MCP server only forwards text. Use its shared
-// > execution core to obtain source metadata and keep its policy and cache.
 const toolBindings = {
-  ltcook_web_search: { coreName: 'webSearch', run: search },
+  ltcook_web_search: {
+    coreName: 'webSearch',
+    run: (args, signal) => runWithProxy(undefined, () => search(args, signal)),
+  },
   ltcook_web_fetch: { coreName: 'fetchContent', run: fetchPage },
   ltcook_web_content: { coreName: 'getSearchContent', run: readStored },
 };
-// > This private child uses the LTCook names in the core's pagination hints.
-for (const [name, { coreName }] of Object.entries(toolBindings))
-  DEFAULT_TOOL_NAMES[coreName] = name;
-const core = createStandaloneWebToolCore();
-const enabledTools = webDefinitions.filter(({ name }) => core.enabledToolNames.includes(name));
-const sourceUrlPattern = new RegExp(SOURCE_URL_PATTERN);
+const config = loadConfig();
+const settings = {
+  toolNames: {
+    webSearch: 'ltcook_web_search',
+    fetchContent: 'ltcook_web_fetch',
+    getSearchContent: 'ltcook_web_content',
+    sourceCheck: 'source_check',
+  },
+  enabledTools: {
+    webSearch: isToolEnabled(config, 'webSearch'),
+    fetchContent: isToolEnabled(config, 'fetchContent'),
+    getSearchContent: isToolEnabled(config, 'getSearchContent'),
+    sourceCheck: false,
+  },
+  maxInlineContentChars: getMaxInlineContentChars(config),
+  fetchModes: resolveFetchModeConfig(config),
+};
+const extractOptions = { rejectDirectImages: 'The LTCook web tools can only read text sources.' };
+const storedIds = [];
+function remember(id) {
+  storedIds.push(id);
+  if (storedIds.length > 50) deleteResult(storedIds.shift());
+}
+
+// > Keep search and fetched content in the core's bounded, per-child store.
+const core = createWebToolCore({
+  settings,
+  extractOptions,
+  storeFetchedContent(id, data) {
+    storeResult(id, data);
+    remember(id);
+  },
+  publishResult({ id }) {
+    remember(id);
+  },
+});
+const enabledTools = webDefinitions.filter(
+  ({ name }) => settings.enabledTools[toolBindings[name].coreName],
+);
 
 function errorResult(text) {
   return { content: [{ type: 'text', text }], isError: true };
 }
 
-function searchSource(source) {
-  if (
-    typeof source.url !== 'string' ||
-    source.url.length > MAX_SOURCE_URL_LENGTH ||
-    !sourceUrlPattern.test(source.url)
-  )
-    return [];
-  const url = URL.parse(source.url);
-  if (!url || url.username || url.password) return [];
-  const title = typeof source.title === 'string' ? source.title : source.url;
-  const snippet = typeof source.snippet === 'string' ? source.snippet : '';
-  return [
-    {
-      title: title.slice(0, MAX_SOURCE_TITLE_LENGTH),
-      url: source.url,
-      snippet: snippet.slice(0, MAX_SOURCE_SNIPPET_LENGTH),
-    },
-  ];
-}
-
 async function search(args, signal) {
+  const providers = config.webSearch?.allowedProviders;
+  if (Array.isArray(providers) && !providers.includes('searxng'))
+    return errorResult('SearXNG is disabled by the configured search providers.');
   const queries = args.queries ?? [args.query];
-  const result = await core.webSearch({ ...args, queries, provider: 'searxng' }, signal);
-  const { content, isError, structuredContent } = result;
-  if (isError) return { content, isError };
-  if (structuredContent?.queries?.length !== queries.length)
-    return errorResult('Web search returned an invalid result.');
-  const { responseId, fetchId } = structuredContent;
+  const queryList = queries.map((query) => query.trim());
+  const responses = await searchSearxng(config, queryList, args, signal);
+  const urls = [...new Set(responses.flatMap(({ results }) => results.map(({ url }) => url)))];
+  const includeContent = args.includeContent ?? false;
+  const inlineContent =
+    includeContent && urls.length > 0
+      ? await fetchAllContent(urls, signal, {
+          ...extractOptions,
+          toolNames: registeredFetchToolNames(settings),
+        })
+      : undefined;
+  signal.throwIfAborted();
+  const result = core.buildSearchReturn({
+    queryList,
+    results: responses,
+    urls,
+    includeContent,
+    inlineContent,
+  });
+  const diagnostics = responses.flatMap(({ issues }, index) =>
+    issues.map(
+      ([engine, reason]) => `Query ${index + 1}: ${engine} (${reason.replaceAll('_', ' ')})`,
+    ),
+  );
+  if (!diagnostics.length && markToolError(result).isError)
+    return errorResult(result.content[0].text);
+  const { responseId, fetchId } = result.structuredContent;
   return {
-    content,
+    content: diagnostics.length
+      ? [
+          ...result.content,
+          { type: 'text', text: `SearXNG engine issues\n${diagnostics.join('\n')}` },
+        ]
+      : result.content,
     structuredContent: {
       responseId,
       ...(fetchId && { fetchId }),
-      queries: structuredContent.queries.map(({ error, results }, index) => {
+      queries: responses.map(({ error, results, issues }, index) => {
         const query = queries[index];
-        return error !== null
-          ? { query, error: error.slice(0, MAX_QUERY_ERROR_LENGTH) || 'Search failed.' }
-          : { query, sources: results.slice(0, MAX_SEARCH_RESULTS).flatMap(searchSource) };
+        return {
+          query,
+          ...(error ? { error } : { sources: results }),
+          ...(issues.length && {
+            engineIssues: issues.map(([engine, reason]) => ({ engine, reason })),
+          }),
+        };
       }),
     },
   };
 }
 
 async function fetchPage(args, signal) {
-  const { content, isError, structuredContent } = await core.fetchContent(args, signal);
+  const { findText, findMode = 'case-insensitive', ...fetchArgs } = args;
+  const mode = fetchArgs.mode ?? settings.fetchModes.defaultMode;
+  if (mode !== 'readable' && mode !== 'raw')
+    return errorResult('The LTCook web fetch mode must be readable or raw.');
+  const { content, isError, structuredContent } = markToolError(
+    await core.fetchContent({ ...fetchArgs, mode }, signal),
+  );
   const responseId = structuredContent?.responseId;
-  if (isError || !responseId) return { content, isError };
-  return { content, structuredContent: { responseId } };
+  if (isError) return { content, isError };
+  const stored = responseId ? { responseId } : {};
+  if (findText === undefined) return { content, structuredContent: stored };
+  const pages = structuredContent?.urls;
+  if (!pages?.length) return errorResult('No fetched text was available for passage lookup.');
+  const terms = Array.isArray(findText) ? findText : [findText];
+  const passages = pages.map(({ url, title, content: pageText, error, status }) => {
+    const failure = error || (status >= 400 ? `HTTP ${status}` : null);
+    if (failure) return { url, error: failure.slice(0, MAX_QUERY_ERROR_LENGTH) };
+    const { text, matchCount } = findContent(pageText, terms, findMode);
+    return {
+      url,
+      title: title.slice(0, MAX_SOURCE_TITLE_LENGTH),
+      content: text.slice(0, MAX_PASSAGE_TEXT_LENGTH),
+      matchCount,
+    };
+  });
+  const text = passages
+    .map((page) =>
+      'error' in page
+        ? `${page.url}\n${page.error}`
+        : `# ${page.title || page.url}\n\n${page.url}\n\n${page.content}`,
+    )
+    .join('\n\n');
+  return { content: [{ type: 'text', text }], structuredContent: { ...stored, passages } };
 }
 
 async function readStored(args, signal) {
-  const { content, isError } = await core.getSearchContent(
-    { ...args, query: args.query?.trim() },
-    signal,
-  );
+  const result = await core.getSearchContent({ ...args, query: args.query?.trim() }, signal);
+  const { content, isError } = markToolError(result);
   return { content, isError };
 }
 

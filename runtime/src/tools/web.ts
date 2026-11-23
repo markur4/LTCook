@@ -48,7 +48,7 @@ const searchQuery = Type.String({ minLength: 1, maxLength: 2000, pattern: '\\S' 
 const MAX_QUERIES = 4;
 export const MAX_SEARCH_RESULTS = 20;
 export const MAX_SOURCE_URL_LENGTH = 4096;
-export const SOURCE_URL_PATTERN = '^[Hh][Tt][Tt][Pp][Ss]?://';
+export const SOURCE_URL_PATTERN = '^[Hh][Tt][Tt][Pp][Ss]?://[^/\\\\?#\\s]';
 export const MAX_SOURCE_TITLE_LENGTH = 300;
 export const MAX_SOURCE_SNIPPET_LENGTH = 1000;
 export const MAX_QUERY_ERROR_LENGTH = 1000;
@@ -79,11 +79,23 @@ const searchSchema = Type.Object(
   },
   { additionalProperties: false, oneOf: [{ required: ['query'] }, { required: ['queries'] }] },
 );
+const findTerm = Type.String({ minLength: 1, maxLength: 500, pattern: '\\S' });
+const findText = Type.Union([findTerm, Type.Array(findTerm, { minItems: 1, maxItems: 10 })], {
+  description: 'Find passages containing these terms or phrases.',
+});
+const findMode = Type.Union([
+  Type.Literal('exact'),
+  Type.Literal('case-insensitive'),
+  Type.Literal('fuzzy'),
+]);
+
 const fetchSchema = Type.Object(
   {
     url: Type.Optional(Type.String({ minLength: 1 })),
     urls: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 5 })),
     mode: Type.Optional(Type.Union([Type.Literal('readable'), Type.Literal('raw')])),
+    findText: Type.Optional(findText),
+    findMode: Type.Optional(findMode),
   },
   { additionalProperties: false, oneOf: [{ required: ['url'] }, { required: ['urls'] }] },
 );
@@ -96,21 +108,8 @@ const contentSchema = Type.Object(
     urlIndex: Type.Optional(Type.Integer({ minimum: 0 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })),
-    findText: Type.Optional(
-      Type.Union(
-        [
-          Type.String({ minLength: 1, maxLength: 500 }),
-          Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
-            minItems: 1,
-            maxItems: 10,
-          }),
-        ],
-        { description: 'Find passages in a fetched page or stored search results.' },
-      ),
-    ),
-    findMode: Type.Optional(
-      Type.Union([Type.Literal('exact'), Type.Literal('case-insensitive'), Type.Literal('fuzzy')]),
-    ),
+    findText: Type.Optional(findText),
+    findMode: Type.Optional(findMode),
   },
   { additionalProperties: false },
 );
@@ -127,22 +126,61 @@ const searchSource = Type.Object(
   },
   { additionalProperties: false },
 );
+export const MAX_ENGINE_ISSUES = 20;
+export const MAX_ENGINE_NAME_LENGTH = 80;
+const engineIssues = Type.Optional(
+  Type.Array(
+    Type.Object(
+      {
+        engine: Type.String({ minLength: 1, maxLength: MAX_ENGINE_NAME_LENGTH }),
+        reason: Type.Union([
+          Type.Literal('blocked'),
+          Type.Literal('rate_limited'),
+          Type.Literal('timeout'),
+          Type.Literal('unavailable'),
+          Type.Literal('invalid_links'),
+        ]),
+      },
+      { additionalProperties: false },
+    ),
+    { maxItems: MAX_ENGINE_ISSUES },
+  ),
+);
+const queryError = Type.String({ minLength: 1, maxLength: MAX_QUERY_ERROR_LENGTH });
 const queryResult = Type.Union([
   Type.Object(
-    { query: searchQuery, sources: Type.Array(searchSource, { maxItems: MAX_SEARCH_RESULTS }) },
+    {
+      query: searchQuery,
+      sources: Type.Array(searchSource, { maxItems: MAX_SEARCH_RESULTS }),
+      engineIssues,
+    },
     { additionalProperties: false },
   ),
   Type.Object(
-    { query: searchQuery, error: Type.String({ minLength: 1, maxLength: MAX_QUERY_ERROR_LENGTH }) },
+    { query: searchQuery, error: queryError, engineIssues },
     { additionalProperties: false },
   ),
+]);
+
+export const MAX_PASSAGE_TEXT_LENGTH = 12000;
+const passage = Type.Union([
+  Type.Object(
+    {
+      url: Type.String(),
+      title: Type.String({ maxLength: MAX_SOURCE_TITLE_LENGTH }),
+      content: Type.String({ maxLength: MAX_PASSAGE_TEXT_LENGTH }),
+      matchCount: Type.Integer({ minimum: 0 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object({ url: Type.String(), error: queryError }, { additionalProperties: false }),
 ]);
 
 export const webDefinitions = [
   {
     name: 'ltcook_web_search',
     description:
-      'Search the web through LTCook SearXNG. Returns sources and snippets per query. Use ltcook_web_fetch to read a source or ltcook_web_content with the responseId to revisit the search.',
+      'Search the web through LTCook SearXNG. Returns sources, snippets, and any engine issues per query. Use ltcook_web_fetch with a source URL and findText to locate a passage.',
     inputSchema: searchSchema,
     outputSchema: Type.Object(
       {
@@ -157,10 +195,14 @@ export const webDefinitions = [
   {
     name: 'ltcook_web_fetch',
     description:
-      'Read a page at a source URL through LTCook HTTP or Crawl4AI. Use the returned responseId with ltcook_web_content to find passages with findText or continue reading.',
+      'Read pages through LTCook HTTP or Crawl4AI. Add findText to return matching passages and their URLs in the same call. Use the responseId with ltcook_web_content to continue reading.',
     inputSchema: fetchSchema,
     outputSchema: Type.Object(
-      { content, responseId: Type.Optional(responseId) },
+      {
+        content,
+        responseId: Type.Optional(responseId),
+        passages: Type.Optional(Type.Array(passage, { maxItems: 5 })),
+      },
       { additionalProperties: false },
     ),
   },
