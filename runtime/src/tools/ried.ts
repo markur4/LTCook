@@ -1,6 +1,7 @@
 import { Type } from 'typebox';
 import type { RiedService } from '../repository/discovery.js';
 import { riedInputSchema } from '../repository/requests.js';
+import { RepositoryDiagnosticSchema, RepositoryFreshnessSchema } from '../repository/results.js';
 import { defineTool } from './types.js';
 
 export const riedToolDefinition = {
@@ -13,9 +14,14 @@ export const riedToolDefinition = {
       {
         schemaVersion: Type.Literal(1),
         workspaceRoot: Type.String(),
+        provider: Type.String(),
         capturedAt: Type.String(),
+        freshness: RepositoryFreshnessSchema,
+        partial: Type.Boolean(),
+        truncated: Type.Boolean(),
         status: Type.Union([Type.Literal('fresh'), Type.Literal('partial'), Type.Literal('stale')]),
         diagnostics: Type.Array(Type.String()),
+        diagnosticDetails: Type.Array(RepositoryDiagnosticSchema),
       },
       { additionalProperties: true },
     ),

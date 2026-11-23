@@ -7,20 +7,35 @@ type RepositoryPath = { absolute: string; relative: string; kind: PathKind };
 
 export interface RepositoryWorkspace {
   readonly root: string;
+  readonly identity: string;
+  assertUnchanged(): Promise<void>;
   resolvePath(
     input: string,
     options?: { kind?: PathKind; allowRoot?: boolean },
   ): Promise<RepositoryPath>;
 }
 
+async function directoryIdentity(directory: string): Promise<string> {
+  const info = await stat(directory, { bigint: true });
+  if (!info.isDirectory())
+    throw new Error('Repository discovery requires an existing workspace directory');
+  return `${info.dev}:${info.ino}`;
+}
+
 /** Open a root supplied by an already authenticated workspace/session binding. */
 export async function openRepositoryWorkspace(root: string): Promise<RepositoryWorkspace> {
   const canonical = await realpath(root);
-  if (!(await stat(canonical)).isDirectory())
-    throw new Error('Repository discovery requires an existing workspace directory');
+  const identity = await directoryIdentity(canonical);
 
   return {
     root: canonical,
+    identity,
+    async assertUnchanged() {
+      const unchanged = await Promise.all([realpath(canonical), directoryIdentity(canonical)])
+        .then(([current, currentIdentity]) => current === canonical && currentIdentity === identity)
+        .catch(() => false);
+      if (!unchanged) throw new Error('The authorized workspace changed during repository search.');
+    },
     async resolvePath(input, { kind, allowRoot = false } = {}) {
       if (
         !input ||
@@ -36,8 +51,9 @@ export async function openRepositoryWorkspace(root: string): Promise<RepositoryW
       if (!isWithin(canonical, absolute, allowRoot))
         throw new Error('Repository target is outside the authorized workspace');
 
-      const actual = await realpath(absolute).catch(() => undefined);
-      if (!actual) throw new Error('Repository target does not exist');
+      const actual = await realpath(absolute).catch((cause: unknown) => {
+        throw new Error('Repository target does not exist', { cause });
+      });
       if (path.relative(absolute, actual) !== '' || !isWithin(canonical, actual, allowRoot))
         throw new Error('Repository targets cannot traverse symbolic links or junctions');
 

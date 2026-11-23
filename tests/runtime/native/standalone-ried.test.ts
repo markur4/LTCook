@@ -41,6 +41,7 @@ function fixture() {
     PI_OFFLINE: '1',
     LTCOOK_NATIVE_AGENT_ID: '',
     LTCOOK_SESSION_ID: '',
+    LTCOOK_WORKSPACE_MCP: '',
     LTCOOK_AGENT_API_TOKEN: '',
   });
   process.chdir(workspace);
@@ -69,6 +70,12 @@ test('standalone native Pi exposes RIED with the shared cache and rebinds invent
     };
     expect((await read()).value).toMatchObject({
       workspaceRoot: f.workspace,
+      provider: 'ried',
+      freshness: 'cached',
+      partial: true,
+      diagnosticDetails: expect.arrayContaining([
+        expect.objectContaining({ source: 'git', code: expect.any(String) }),
+      ]),
       languages: ['TypeScript'],
     });
     expect(readFileSync(f.count, 'utf8').trim().split('\n')).toHaveLength(1);
@@ -111,9 +118,18 @@ test('standalone Pi leaves chat available when the managed repository search ass
     expect(runtime.session.getActiveToolNames()).toContain('ltcook_ried');
     const search = runtime.session.getToolDefinition('ltcook_repo_search');
     if (!search) throw new Error('Repository search was not registered');
-    await expect(
-      search.execute('search', { query: 'state handling' }, undefined, undefined, {} as never),
-    ).rejects.toThrow(/ColGREP.*(repair|setup)/i);
+    const result = await search.execute(
+      'search',
+      { query: 'state handling' },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(result.details).toMatchObject({
+      status: 'unavailable',
+      provider: 'colgrep',
+      hint: expect.stringMatching(/ColGREP.*(repair|setup)/i),
+    });
   } finally {
     await runtime.dispose();
   }

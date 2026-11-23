@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { arch, platform, release } from 'node:os';
 import path from 'node:path';
+import { Value } from 'typebox/value';
 import { readBrief, type RepositoryInventory } from './providers/brief.js';
 import { readRepositoryMap } from './filesystem.js';
 import { readGit, type GitDiscovery } from './providers/git.js';
@@ -9,7 +10,11 @@ import { readRepositoryOutline } from './outline.js';
 import { findRepositoryExecutable } from './process.js';
 import { readRecipes, type RepositoryRecipes } from './providers/recipes.js';
 import { validateRiedRequest, type RiedRequest } from './requests.js';
-import type { RepositoryDiagnostic, RepositoryResult } from './results.js';
+import {
+  RepositoryDiagnosticSchema,
+  type RepositoryDiagnostic,
+  type RepositoryResult,
+} from './results.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from './workspace.js';
 
 interface RiedContext {
@@ -39,10 +44,9 @@ interface CachedDiscovery {
   truncated: boolean;
 }
 
-export interface RiedSnapshot {
+export interface RiedSnapshot extends Omit<RepositoryResult<unknown>, 'value' | 'diagnostics'> {
   schemaVersion: 1;
   workspaceRoot: string;
-  capturedAt: string;
   expiresAt: string;
   status: 'fresh' | 'partial' | 'stale';
   repository: RepositoryInventory;
@@ -50,6 +54,7 @@ export interface RiedSnapshot {
   host: HostInventory;
   recipes: RepositoryRecipes;
   diagnostics: string[];
+  diagnosticDetails: RepositoryDiagnostic[];
 }
 
 const TTL_MS = 5 * 60 * 1000;
@@ -87,14 +92,17 @@ function validCache(value: unknown, root: string): value is CachedDiscovery {
     Number.isSafeInteger(record.expiresAt) &&
     typeof record.partial === 'boolean' &&
     typeof record.truncated === 'boolean' &&
+    record.repository?.source === 'brief' &&
     stringList(record.repository?.languages) &&
     Array.isArray(record.repository?.manifests) &&
     stringList(record.repository?.layout?.sourceDirs) &&
     stringList(record.repository?.layout?.testDirs) &&
+    record.recipes?.source === 'just' &&
     Array.isArray(record.recipes?.items) &&
+    record.host?.source === 'node' &&
     typeof record.host?.os === 'string' &&
     Array.isArray(record.diagnostics) &&
-    record.diagnostics.every((item) => item && typeof item.message === 'string')
+    record.diagnostics.every((item) => Value.Check(RepositoryDiagnosticSchema, item))
   );
 }
 
@@ -196,6 +204,7 @@ export class RiedService {
       return {
         value: {
           ...cached,
+          partial: true,
           diagnostics: [
             ...cached.diagnostics,
             { source: 'cache', code: 'refresh-failed', message: 'RIED refresh failed' },
@@ -255,28 +264,37 @@ export class RiedService {
     const metadata = this.metadata(workspace, pathValue, request.operation === 'refresh');
     const gitResult = request.operation === 'section' ? undefined : readGit(workspace, pathValue);
     const [{ value: snapshot, freshness }, git] = await Promise.all([metadata, gitResult]);
-    const diagnostics = [...snapshot.diagnostics, ...(git?.diagnostics ?? [])].map(
-      ({ message }) => message,
-    );
+    const diagnosticDetails = [...snapshot.diagnostics, ...(git?.diagnostics ?? [])];
+    const partial = snapshot.partial || (git?.partial ?? false);
+    const truncated = snapshot.truncated || (git?.truncated ?? false);
     const status =
       freshness === 'stale'
         ? ('stale' as const)
-        : snapshot.partial || snapshot.truncated || git?.partial || git?.truncated
+        : partial || truncated
           ? ('partial' as const)
           : ('fresh' as const);
     const shared = {
       schemaVersion: 1 as const,
       workspaceRoot: workspace.root,
+      provider: 'ried',
       capturedAt: snapshot.capturedAt,
+      freshness,
+      partial,
+      truncated,
       status,
-      diagnostics,
+      diagnostics: diagnosticDetails.map(({ message }) => message),
+      diagnosticDetails,
     };
-    if (request.operation === 'section' && request.section && request.section !== 'git')
-      return { ...shared, section: request.section, value: snapshot[request.section], freshness };
+    if (request.operation === 'section' && request.section && request.section !== 'git') {
+      const value = snapshot[request.section];
+      return { ...shared, section: request.section, provider: value.source, value };
+    }
     if (request.operation === 'summary' && git)
       return {
         ...shared,
-        diagnostics: diagnostics.slice(0, 6),
+        truncated: truncated || diagnosticDetails.length > 6,
+        diagnostics: shared.diagnostics.slice(0, 6),
+        diagnosticDetails: diagnosticDetails.slice(0, 6),
         host: { os: snapshot.host.os, wsl: snapshot.host.wsl },
         languages: snapshot.repository.languages
           .slice(0, 12)
@@ -315,12 +333,14 @@ export class RiedService {
       schemaVersion: 1 as const,
       workspaceRoot: workspace.root,
       operation,
+      provider: result.provider,
       capturedAt: result.capturedAt,
       freshness: result.freshness,
       partial: result.partial,
       truncated: result.truncated,
       status: result.partial || result.truncated ? ('partial' as const) : ('fresh' as const),
       diagnostics: result.diagnostics.map(({ message }) => message),
+      diagnosticDetails: result.diagnostics,
       value: result.value,
     };
   }

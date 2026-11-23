@@ -248,9 +248,18 @@ describe('native runtime boundary', () => {
       expect(authorized).toBe(2);
       expect(invoked).toBe(1);
       const search = await call(nativeAgentId, 'ltcook_repo_search');
-      expect(search.status).toBe(400);
-      expect(await search.json()).toEqual({
-        error: expect.stringMatching(/ColGREP.*setup/i),
+      expect(search.status).toBe(200);
+      expect(await search.json()).toMatchObject({
+        status: 'unavailable',
+        provider: 'colgrep',
+        partial: true,
+        diagnostics: [
+          {
+            source: 'colgrep',
+            code: 'unavailable',
+            message: expect.stringMatching(/ColGREP.*setup/i),
+          },
+        ],
       });
       expect(await (await call('unbound', 'ltcook_repo_search')).text()).toBe('{}');
       expect(authorized).toBe(3);

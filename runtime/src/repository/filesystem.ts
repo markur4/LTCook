@@ -102,6 +102,7 @@ export async function readRepositoryMap(
     return false;
   });
   return {
+    provider: 'filesystem',
     value: { target: relative, entries: bounded },
     capturedAt,
     freshness: 'current',

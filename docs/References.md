@@ -408,12 +408,14 @@ registered worktree paths as metadata. Set `base` on a Git section request to
 compare a local branch, tag, or commit with HEAD. Uncommitted changes appear
 in the separate status lists. Git discovery uses local, read-only commands.
 
-The existing response envelope includes `schemaVersion: 1`, `capturedAt`,
-`status`, and `diagnostics`. Maps, outlines, and Git detail also report
-`partial`, `truncated`, and `freshness`. Cached section responses indicate when
-metadata came from cache. Common generated and credential paths, symlinks,
-and junctions are excluded from map traversal and provider staging. On WSL,
-`os` is `linux` and `wsl` is `true`.
+The response envelope includes `schemaVersion: 1`, `provider`, `capturedAt`,
+`status`, `partial`, `truncated`, and `freshness`. `diagnostics` contains the
+existing display messages and `diagnosticDetails` contains their structured
+`source`, `code`, and `message` fields. Combined RIED responses report the
+metadata cache's freshness alongside separately sampled Git information.
+Common generated and credential paths, symlinks, and junctions are excluded
+from map traversal and provider staging. On WSL, `os` is `linux` and `wsl` is
+`true`.
 
 Ordinary Paseo Pi and Codex calls use local Streamable HTTP at `/mcp`.
 LTCook issues a workspace-scoped bearer during an authenticated launch or
@@ -430,11 +432,23 @@ or `semantic`), an optional regular expression `pattern`, literal
 workspace-relative `paths` using forward slashes, and a `limit` from 1 to 20
 (default 8). With a pattern, use descriptive query text and put file restrictions
 in `paths`. Results carry `path`, `startLine`, `endLine`, `excerpt`, and an optional
-symbol `name`. The `status` is `ready` with results or `indexing` when ColGREP
-reports that it cannot read an index during its initial build. If that report
-persists, check the AppRC cache's storage and file locking. The call has a
-two-minute deadline. The current Paseo launch hook supplies no trusted Codex
-file-read scope, so Codex does not discover or invoke repository search.
+symbol `name`. Paths are relative to the workspace and use forward slashes.
+Line ranges are one-based and inclusive. `excerptTruncated: true` identifies a
+verified excerpt clipped to 2,000 characters.
+
+The response includes `provider: "colgrep"`, `kind: "ranked"`, `capturedAt`,
+`freshness`, `partial`, `truncated`, and structured `diagnostics`. `partial`
+signals that some evidence was dropped or retrieval failed to finish.
+`truncated` signals a result, candidate, or excerpt limit. `ready` includes a
+`results` array, which can be empty. `indexing` reports an index that is still
+being built. `unavailable` reports operational failures such as missing assets
+or a failed search. Both include a `hint`. Invalid input and denied workspace
+access still return tool errors, and cancellation aborts the call.
+
+The call has a two-minute deadline. If indexing persists, check the AppRC
+cache's storage and file locking. The current Paseo launch hook supplies no
+trusted Codex file-read scope, so Codex does not discover or invoke repository
+search.
 
 LTCook setup installs ColGREP 1.8.5, ONNX Runtime 1.23.0, and the
 `lightonai/LateOn-Code-edge` snapshot

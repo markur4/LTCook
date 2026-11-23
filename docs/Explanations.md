@@ -323,8 +323,9 @@ are not an operating-system sandbox.
 Repository Core is the internal, harness-independent subsystem in
 `runtime/src/repository`. Runtime and MCP adapters establish workspace identity
 and read permissions. Core opens that trusted workspace, resolves relative
-paths, and rejects links and traversal for targeted discovery. Its provider
-results record capture time, freshness, truncation, and diagnostics.
+paths, and rejects links and traversal for targeted discovery. Every
+`RepositoryResult<T>` names its provider and records capture time, freshness,
+partial results, truncation, and structured diagnostics next to the value.
 
 RIED composes the `brief`, Git, and Just providers with host tool availability.
 It caches repository metadata in AppRC and samples Git on summary and Git
@@ -344,10 +345,24 @@ types give providers a common boundary for future composition. See the
 Repository Core's ColGREP provider searches code locally with a managed
 LateOn-Code-edge model and ONNX Runtime. The Pi tool authorizes and forwards
 requests to that provider. It builds and updates an index on demand under the AppRC
-cache, with separate storage for each canonical workspace identity. The tool reports
-relevant paths, line ranges, and excerpts. ColGREP uses its native file
-discovery and ignore rules. The per-workspace cache isolates index state. The
-process runs on the host with LTCook's filesystem access.
+cache, with separate storage for each canonical workspace identity. ColGREP
+uses its native file discovery and ignore rules. The process runs on the host
+with LTCook's filesystem access.
+
+Repository Core verifies each candidate against its current workspace file
+before returning an excerpt. A hit names a workspace-relative path and a
+one-based, inclusive line range. Core checks either the provider's best-match
+range or its enclosing unit range and returns the one that contains the exact
+excerpt. It omits invalid candidates and retains verified hits in provider
+order. The check reads regular UTF-8 files up to 2 MiB and compares text with
+normalized CRLF line endings. A verified excerpt can be clipped after
+verification. It reflects the source at the time of the check.
+
+Source evidence and retrieval freshness answer different questions. ColGREP
+can rank against a cached index even when every returned excerpt matches the
+current file. A missing file or a source mismatch marks retrieval stale.
+Verification cannot detect relevant source that the index omitted entirely.
+See the [repository search response](References.md#repository-inventory).
 
 Standalone Pi uses its native workspace, Team Pi uses its bound Session,
 and ordinary Paseo Pi uses its authenticated workspace grant. LTCook setup

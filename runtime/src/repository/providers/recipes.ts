@@ -137,6 +137,7 @@ export async function readRecipes(
   pathValue: string,
 ): Promise<RepositoryResult<RepositoryRecipes>> {
   const result: RepositoryResult<RepositoryRecipes> = {
+    provider: 'just',
     value: { source: 'just', items: [] },
     diagnostics: [],
     partial: false,
