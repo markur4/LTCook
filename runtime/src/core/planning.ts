@@ -1,3 +1,4 @@
+import { REPO_SEARCH_TOOL_NAME } from '../tools/repo-search.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -38,6 +39,7 @@ const readTools = new Set([
   'code_fetch',
   'web_enable',
   'ltcook_ried',
+  REPO_SEARCH_TOOL_NAME,
 ]);
 export interface PlanningDependencies {
   executionAllowed?(sessionId: string, passId: string): boolean;

@@ -1,3 +1,4 @@
+import { REPO_SEARCH_TOOL_NAME } from '../tools/repo-search.js';
 const READ_ONLY_TOOLS = new Set([
   'read',
   'grep',
@@ -10,6 +11,7 @@ const READ_ONLY_TOOLS = new Set([
   'code_fetch',
   'ltcook_team',
   'ltcook_ried',
+  REPO_SEARCH_TOOL_NAME,
   'web_enable',
   'ltcook_web_search',
   'ltcook_web_fetch',

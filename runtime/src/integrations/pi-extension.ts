@@ -1,11 +1,17 @@
 import type { GuidanceInspection } from '../guidance-api/index.js';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { realpathSync } from 'node:fs';
 import { setTimeout } from 'node:timers';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { RiedService, riedToolDefinition, type RiedRequest } from '../tools/ried.js';
+import {
+  createRepoSearchTool,
+  REPO_SEARCH_TIMEOUT_MS,
+  REPO_SEARCH_TOOL_NAME,
+} from '../tools/repo-search.js';
 import { isWebTool, webDefinitions } from '../tools/web.js';
 import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
@@ -359,7 +365,7 @@ export default async function activate(
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
     // > The shared HTTP endpoint authorizes these calls once for every native caller.
-    if (isWebTool(event.toolName)) return;
+    if (isWebTool(event.toolName) || event.toolName === REPO_SEARCH_TOOL_NAME) return;
     try {
       // > Native new/resume may change cwd; authorize exactly the path the tool will use.
       const input =
@@ -468,6 +474,42 @@ export default async function activate(
     if (!response.ok) throw new Error(`RIED request failed (${response.status})`);
     return response.json();
   });
+  const invokeWorkspaceTool = (
+    toolName: string,
+    toolArgs: unknown,
+    signal: AbortSignal | undefined,
+    timeoutMs: number,
+  ) => {
+    const deadline = AbortSignal.timeout(timeoutMs);
+    return fetch(`${endpoint}/v1/workspace-tool`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, nativeAgentId, toolName, toolArgs }),
+      signal: (signal ? AbortSignal.any([signal, deadline]) : deadline) as NonNullable<
+        Parameters<typeof fetch>[1]
+      >['signal'],
+    });
+  };
+  const repoSearch = createRepoSearchTool();
+  registerRepoSearchTool(pi, repoSearch, async (input, signal) => {
+    const response = await invokeWorkspaceTool(
+      repoSearch.name,
+      input,
+      signal,
+      REPO_SEARCH_TIMEOUT_MS + 10_000,
+    );
+    const result: unknown = await response.json();
+    if (!response.ok) {
+      const detail =
+        typeof result === 'object' && result !== null && 'error' in result
+          ? result.error
+          : undefined;
+      throw new Error(
+        typeof detail === 'string' ? detail : `Repository search unavailable (${response.status}).`,
+      );
+    }
+    return result;
+  });
   for (const definition of webDefinitions) {
     pi.registerTool({
       name: definition.name,
@@ -475,19 +517,7 @@ export default async function activate(
       description: definition.description,
       parameters: definition.inputSchema,
       async execute(_id, input, signal) {
-        const response = await fetch(`${endpoint}/v1/workspace-tool`, {
-          method: 'POST',
-          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-          body: JSON.stringify({
-            sessionId,
-            nativeAgentId,
-            toolName: definition.name,
-            toolArgs: input,
-          }),
-          signal: (signal
-            ? AbortSignal.any([signal, AbortSignal.timeout(120000)])
-            : AbortSignal.timeout(120000)) as NonNullable<Parameters<typeof fetch>[1]>['signal'],
-        });
+        const response = await invokeWorkspaceTool(definition.name, input, signal, 120_000);
         const result = (await response.json().catch(() => undefined)) as
           { content?: unknown; error?: unknown } | undefined;
         if (!response.ok || typeof result?.content !== 'string')
@@ -503,6 +533,49 @@ export default async function activate(
     });
   }
   await activateOptionalBrowser(pi);
+}
+
+/** Register the shared search contract for managed and standalone Pi. */
+function registerRepoSearchTool(
+  pi: ExtensionAPI,
+  tool: ReturnType<typeof createRepoSearchTool>,
+  search: (input: unknown, signal?: AbortSignal) => Promise<unknown>,
+): void {
+  pi.registerTool({
+    name: tool.name,
+    label: 'Search repository',
+    description: tool.description,
+    parameters: tool.inputSchema,
+    async execute(_id, input, signal) {
+      const result = await search(input, signal);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
+    },
+  });
+}
+
+/** Use the trusted native workspace for an AppRC-launched standalone Pi. */
+export function activateStandaloneRepoSearch(
+  pi: ExtensionAPI,
+  workspaceRoot: string,
+  sessionId: string,
+): void {
+  if (!process.env.LTCOOK_COLGREP_DEPLOYMENT || !process.env.LTCOOK_COLGREP_CACHE_DIR) return;
+  let root: string;
+  try {
+    root = realpathSync(workspaceRoot);
+  } catch {
+    return;
+  }
+  const tool = createRepoSearchTool();
+  registerRepoSearchTool(pi, tool, (input, signal) =>
+    tool.invoke(input, {
+      agentId: sessionId,
+      workspaceRoot: root,
+      workspaceFileAccess: false,
+      repositorySearchAccess: true,
+      signal: signal ?? new AbortController().signal,
+    }),
+  );
 }
 
 /** Register the same read-only inventory contract for managed and standalone Pi. */

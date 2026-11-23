@@ -139,6 +139,7 @@ with patch.dict(os.environ, {'LTCOOK_BROWSER_ENABLED': 'false', 'LTCOOK_SERVICE_
     with (
         patch.object(runtime, 'download', download_node),
         patch.object(runtime, 'run', install_dependencies),
+        patch.object(runtime, 'prepare_colgrep', side_effect=runtime.SetupError('Offline fixture')),
         patch.object(ollama, 'prepare_ollama'),
         patch('socket.create_connection', side_effect=AssertionError('Unexpected network in package fixture')),
     ):

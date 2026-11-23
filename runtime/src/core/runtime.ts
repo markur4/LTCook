@@ -23,6 +23,7 @@ import type {
 } from '../workflow-api/index.js';
 import { CoordinationStore } from '../storage/coordination.js';
 import { canonicalWorkspace } from './workspace.js';
+import { REPO_SEARCH_TOOL_NAME } from '../tools/repo-search.js';
 import { RiedService, type RiedRequest } from '../tools/ried.js';
 
 type RuntimeOptions = {
@@ -1356,6 +1357,7 @@ Task to register: ${input.description}`,
         'code_fetch',
         'ltcook_team',
         'ltcook_ried',
+        REPO_SEARCH_TOOL_NAME,
         'web_enable',
       ].includes(toolName)
     )
