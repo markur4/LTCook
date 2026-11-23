@@ -4,6 +4,7 @@ import { createTools } from '../../../runtime/src/tools/catalog.js';
 import {
   createWebTools,
   webDefinitions,
+  webProcessEnvironment,
   type WebToolService,
 } from '../../../runtime/src/tools/web.js';
 import { RiedService } from '../../../runtime/src/tools/ried.js';
@@ -58,4 +59,22 @@ test('shared catalog delegates to one service with authorized agent and workspac
     'ltcook_web_fetch',
     'ltcook_web_content',
   ]);
+});
+
+test('web subprocess does not inherit runtime authentication or model credentials', () => {
+  expect(
+    webProcessEnvironment(
+      { PI_CODING_AGENT_DIR: '/workspace/pi', CRAWL4AI_API_TOKEN: 'crawl' },
+      {
+        LTCOOK_API_TOKEN: 'runtime-secret',
+        LTCOOK_RUNTIME_USER_TOKEN: 'user-secret',
+        OPENAI_API_KEY: 'model-secret',
+        PATH: '/usr/bin',
+      },
+    ),
+  ).toEqual({
+    PI_CODING_AGENT_DIR: '/workspace/pi',
+    CRAWL4AI_API_TOKEN: 'crawl',
+    PATH: '/usr/bin',
+  });
 });
