@@ -74,10 +74,16 @@ export class WebToolService {
   ) {}
 
   private async connect(workspace: string): Promise<Connection> {
+    // The runtime may have started for a different workspace. Never reuse its
+    // launch-derived Pi home when resolving another workspace's web settings.
+    const environment = { ...this.environment };
+    delete environment.PI_CODING_AGENT_DIR;
+    delete environment.LTCOOK_WORKSPACE;
+    delete environment.LTCOOK_SESSION;
     const { stdout } = await exec(
       this.python,
       ['-m', 'ltcook.launch', 'prepare-native', '--workspace', workspace],
-      { env: this.environment, windowsHide: true, maxBuffer: 1024 * 1024 },
+      { env: environment, windowsHide: true, maxBuffer: 1024 * 1024 },
     );
     const prepared: unknown = JSON.parse(stdout);
     if (
