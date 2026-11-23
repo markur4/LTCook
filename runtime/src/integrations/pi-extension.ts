@@ -482,7 +482,9 @@ export default async function activate(
             toolName: definition.name,
             toolArgs: input,
           }),
-          signal: AbortSignal.any([signal, AbortSignal.timeout(120000)]),
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(120000)])
+            : AbortSignal.timeout(120000),
         });
         if (!response.ok) throw new Error(`Web tool unavailable (${response.status}).`);
         const result = (await response.json()) as { content: string };

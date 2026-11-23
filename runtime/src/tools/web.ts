@@ -144,9 +144,10 @@ export class WebToolService {
       undefined,
       { signal, timeout: 120000 },
     );
-    const content = (result.content ?? [])
-      .filter((item: { type?: string }) => item.type === 'text')
-      .map((item: { text?: string }) => item.text ?? '')
+    const content = (Array.isArray(result.content) ? result.content : [])
+      .flatMap((item: unknown) =>
+        item && typeof item === 'object' && 'type' in item && item.type === 'text' &&
+        'text' in item && typeof item.text === 'string' ? [item.text] : [])
       .join('\n');
     if (result.isError) throw new Error(content || 'Web request failed.');
     return content.length > 128000
