@@ -87,7 +87,12 @@ def _checksum_matches(checksums: Path, setup: Path) -> bool:
 
 
 def stage_release(
-    tag: str, commit: str, *, root: Path, repository: str = REPOSITORY
+    tag: str,
+    commit: str,
+    *,
+    root: Path,
+    repository: str = REPOSITORY,
+    destination: Path | None = None,
 ) -> tuple[str, ...]:
     """Stage validated wheel/sdist and the SDK's Linux setup/checksum pair.
 
@@ -95,6 +100,7 @@ def stage_release(
     :param commit: Full immutable source commit represented by native binding.
     :param root: Application repository root, which must be the current directory.
     :param repository: Immutable OWNER/REPO release identity.
+    :param destination: Optional invocation-owned destination for the final assets.
     :return: Strict manifest validator's exact upload filename set.
     """
     _no_links(root)
@@ -123,7 +129,7 @@ def stage_release(
         raise ValueError(
             "SHA256SUMS is missing, contains extra entries, or does not match the Linux setup."
         )
-    destination = root / "release/assets"
+    destination = destination or root / "release/assets"
     _no_links(destination)
     destination.mkdir(parents=True, exist_ok=True)
     _no_links(destination / MANIFEST_NAME)
@@ -135,7 +141,7 @@ def stage_release(
     for source in (wheel, sdist, setup, checksums):
         _regular_file(source)
         _no_links(destination / source.name)
-        shutil.copyfile(source, destination / source.name)
+        shutil.copy(source, destination / source.name)
     return release_assets.stage(
         destination,
         [wheel.name, sdist.name, setup.name, "SHA256SUMS"],
@@ -151,6 +157,7 @@ def main() -> None:
     parser.add_argument("tag")
     parser.add_argument("commit")
     parser.add_argument("--repository", default=REPOSITORY)
+    parser.add_argument("--destination", type=Path)
     arguments = parser.parse_args()
     print(
         "\n".join(
@@ -159,6 +166,7 @@ def main() -> None:
                 arguments.commit,
                 root=Path.cwd(),
                 repository=arguments.repository,
+                destination=arguments.destination,
             )
         )
     )

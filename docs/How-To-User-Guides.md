@@ -54,7 +54,7 @@ uv run --locked ltcook app install -e --yes --skip-setup
 ```
 
 This registers the checkout's existing `.venv` and publishes its command without
-copying or owning the developer environment. The Git commit for AppRC 0.39.1b1
+copying or owning the developer environment. The Git commit for AppRC 0.39.1rc1
 is pinned in `pyproject.toml` and `uv.lock`. The editable route needs no
 Rust/native compilation. On Linux or Windows, add `--desktop` to request a
 desktop shortcut with the LTCook icon.

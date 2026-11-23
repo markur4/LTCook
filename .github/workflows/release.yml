@@ -1,15 +1,18 @@
-name: Build release assets
+name: Release assets
 
-run-name: ${{ github.actor }} - manual LTCook Linux asset build
+run-name: ${{ github.actor }} - LTCook Linux assets - ${{ github.ref_name }}
 
 on:
   workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch'
     name: Linux wheel, source archive, and native setup
     runs-on: ubuntu-latest
     steps:
@@ -50,3 +53,42 @@ jobs:
           path: release/assets/*
           if-no-files-found: error
           retention-days: 14
+
+  uploaded-assets:
+    if: github.event_name == 'release'
+    name: Verify and launch the uploaded Linux setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: "1.56.0"
+      - name: Prepare the locked source environment
+        run: just sync
+      - name: Check published bytes, setup identity and native command startup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets="$RUNNER_TEMP/ltcook-release-assets"
+          mkdir "$assets"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$assets"
+          PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.release_assets verify \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --commit "$GITHUB_SHA" \
+            --directory "$assets"
+          chmod +x "$assets/ltcook-setup-linux-x86_64"
+          "$assets/ltcook-setup-linux-x86_64" --help
