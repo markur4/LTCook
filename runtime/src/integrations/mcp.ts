@@ -87,7 +87,11 @@ export class WorkspaceMcp {
     return grant.token;
   }
 
-  async invokeTool(name: string, args: unknown, context: ToolContext): Promise<Record<string,unknown>> {
+  async invokeTool(
+    name: string,
+    args: unknown,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
     const tool = this.tools.get(name);
     if (!tool) throw new Error('Unknown LTCook tool.');
     return tool.invoke(args, context);

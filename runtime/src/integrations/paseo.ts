@@ -366,9 +366,7 @@ export async function createPaseoAgentBackend(input: {
     const browserEnabled =
       input.browserAvailable && workspaceEnv.LTCOOK_BROWSER_ENABLED !== 'false';
     const codeSearchEnabled = workspaceEnv.LTCOOK_CODESEARCH_ENABLED === 'true';
-    const ownedExtensions = [
-      ...(codeSearchEnabled ? codeSearchExtensions : []),
-    ];
+    const ownedExtensions = [...(codeSearchEnabled ? codeSearchExtensions : [])];
     await configurePiExtensions(settingsPath, ownedExtensions);
     const browserHome =
       workspaceEnv.LTCOOK_BROWSER_HOME || path.join(path.dirname(agentHome), 'browser-home');

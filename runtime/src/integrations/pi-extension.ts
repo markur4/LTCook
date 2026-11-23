@@ -475,13 +475,18 @@ export default async function activate(
       async execute(_id, input, signal) {
         const response = await fetch(`${endpoint}/v1/workspace-tool`, {
           method: 'POST',
-          headers: {authorization: `Bearer ${token}`, 'content-type': 'application/json'},
-          body: JSON.stringify({sessionId, nativeAgentId, toolName: definition.name, toolArgs: input}),
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            nativeAgentId,
+            toolName: definition.name,
+            toolArgs: input,
+          }),
           signal: AbortSignal.any([signal, AbortSignal.timeout(120000)]),
         });
         if (!response.ok) throw new Error(`Web tool unavailable (${response.status}).`);
-        const result = await response.json() as {content: string};
-        return {content: [{type: 'text', text: result.content}], details: result};
+        const result = (await response.json()) as { content: string };
+        return { content: [{ type: 'text', text: result.content }], details: result };
       },
     });
   }
