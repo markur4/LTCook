@@ -202,6 +202,9 @@ def resolve_launch(
     environment["LTCOOK_RIED_CACHE_DIR"] = str(
         global_resolved.paths.require("cache") / "projects"
     )
+    environment["LTCOOK_COLGREP_CACHE_DIR"] = str(
+        global_resolved.paths.require("cache") / "colgrep"
+    )
     environment["LTCOOK_DATABASE"] = (
         str(_user_path(global_config.runtime.database, home))
         if global_config.runtime.database
@@ -217,6 +220,10 @@ def resolve_launch(
     )
     environment["LTCOOK_BRIEF_EXECUTABLE"] = str(
         deployment / "brief" / ("brief.exe" if os.name == "nt" else "brief")
+    )
+    # > Repository search uses the global assets prepared by AppRC setup.
+    environment["LTCOOK_COLGREP_DEPLOYMENT"] = str(
+        global_resolved.paths.require("appdata") / "deployment" / "colgrep"
     )
     if workspace_root is not None and not environment.get("LTCOOK_SESSION"):
         environment["LTCOOK_SESSION"] = f"session-{uuid4()}"

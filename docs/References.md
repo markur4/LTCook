@@ -213,6 +213,8 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_DATABASE` | Global `runtime.database`; defaults to `<LTCOOK_RUNTIME_STATE_DIR>/coordination.sqlite`. Incompatible schemas are rejected unchanged. |
 | `LTCOOK_GUIDANCE_DIR` | Global `runtime.guidance_dir`; defaults to `<AppRC config>/guidance` with `rules/` and `skills/`. |
 | `LTCOOK_RIED_CACHE_DIR` | Launch-derived `<AppRC cache>/projects`, holding the single versioned RIED cache. |
+| `LTCOOK_COLGREP_CACHE_DIR` | Launch-derived `<AppRC cache>/colgrep`, holding workspace-scoped ColGREP indexes. |
+| `LTCOOK_COLGREP_DEPLOYMENT` | Launch-derived `<global AppRC appdata>/deployment/colgrep`, holding the verified ColGREP executable, ONNX Runtime, and model snapshot. |
 | `LTCOOK_OLLAMA_ENDPOINT` | Global `runtime.ollama_endpoint`. Ollama loopback HTTP URL with a port, default `http://127.0.0.1:11434`. Used by the tiny-local adapters, summarization, and readiness. |
 | `LTCOOK_MODEL_TINY_LOCAL` | Global `runtime.tiny_local_model`. Ollama tag for `@tiny-local` and `ltcook_summarize`. Defaults to `hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0`. Pull it explicitly. |
 | `LTCOOK_SUMMARIZER_KEEP_ALIVE` | Global `runtime.summarizer_keep_alive`. Default `-1` keeps the loaded model resident. Use `0` to unload or a positive number of seconds. |
@@ -399,6 +401,23 @@ runtime clears in-memory credentials, and reopening a chat configures a new
 connection. The shared catalog provides `ltcook_ried`, `ltcook_summarize`,
 `ltcook_web_search`, `ltcook_web_fetch`, and `ltcook_web_content`. Clients may
 qualify these names with the server name `ltcook_workspace`.
+
+`ltcook_repo_search` is available in Team, standalone, and ordinary Paseo Pi
+workspaces. It accepts a required `query`, an optional `mode` (`hybrid` by default
+or `semantic`), an optional regular expression `pattern`, literal
+workspace-relative `paths` using forward slashes, and a `limit` from 1 to 20
+(default 8). With a pattern, use descriptive query text and put file restrictions
+in `paths`. Results carry `path`, `startLine`, `endLine`, `excerpt`, and an optional
+symbol `name`. The `status` is `ready` with results or `indexing` when ColGREP
+reports that it cannot read an index during its initial build. If that report
+persists, check the AppRC cache's storage and file locking. The call has a
+two-minute deadline. The current Paseo launch hook supplies no trusted Codex
+file-read scope, so Codex does not discover or invoke repository search.
+
+Setup and repair install ColGREP 1.8.5, ONNX Runtime 1.23.0, and the
+`lightonai/LateOn-Code-edge` snapshot
+`4bcdf5ed93f791259eb130b577a240f753d68dd8`. Asset failures affect repository
+search only. Use `ltcook app repair` to restore the assets.
 
 Web tools resolve the authorized workspace's AppRC settings. Search uses
 SearXNG and URL retrieval uses the HTTP/Crawl4AI settings. Read stored results

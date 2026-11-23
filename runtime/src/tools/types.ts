@@ -6,6 +6,7 @@ export interface ToolContext {
   workspaceRoot: string;
   sessionId?: string;
   workspaceFileAccess: boolean;
+  repositorySearchAccess?: boolean;
   signal: AbortSignal;
 }
 

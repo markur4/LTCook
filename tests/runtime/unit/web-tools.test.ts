@@ -65,6 +65,7 @@ test('shared catalog delegates to one service with authorized agent and workspac
   );
   expect(catalog.map((tool) => tool.name)).toEqual([
     'ltcook_ried',
+    'ltcook_repo_search',
     'ltcook_web_search',
     'ltcook_web_fetch',
     'ltcook_web_content',

@@ -173,6 +173,13 @@ search. Some Codex modes ask for permission before calling an MCP tool.
   same chat to read or page through results.
 - Ask for a repository and environment inventory to use `ltcook_ried`. It can
   return a summary, inspect one section, or refresh the inventory.
+- In Pi, ask for code by meaning to use `ltcook_repo_search`. For example, ask
+  “Where does the runtime recover an interrupted assignment?” Add a relative
+  path to narrow results. The first search builds the workspace index and can
+  take longer than later searches. If another request is populating the index,
+  retry once it finishes. If setup assets are missing or damaged, run
+  `ltcook app repair` and retry. Codex repository search requires a trusted
+  read scope, which the current Paseo launch hook does not provide.
 - Ask for a summary using `ltcook_summarize`. Supply text or ask Pi to summarize
   one regular UTF-8 file from the selected workspace, up to 24 KiB. An optional
   focus tells the summarizer what to emphasize. Codex accepts text because its
