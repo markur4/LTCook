@@ -428,35 +428,36 @@ bun evals/repository-retrieval-live.ts --k 5 > retrieval-ripgrep.json
 bun evals/repository-retrieval-live.ts --k 5 --colgrep > retrieval-comparison.json
 ```
 
-Each provider searches its own copy of the same synthetic files and three
-LTCook files read from the checkout's committed `HEAD`. Identifier queries use
-ripgrep's case-sensitive whole-word mode. Conceptual queries use the entire
-question as a literal ripgrep baseline. ColGREP receives the same original
-wording in hybrid mode. Both providers have the same result budget. The report
-groups identifier and conceptual scores and calculates reciprocal ranks only
-for ranked retrieval.
+Each provider searches its own copy of the TypeScript and Python fixtures and
+selected LTCook files read from the checkout's committed `HEAD`. Identifier
+queries use case-sensitive whole-word ripgrep. Conceptual questions run through
+the whole-question literal control, a keyword baseline, and ColGREP hybrid when
+requested. The keyword baseline takes distinct words from the question alone,
+scans up to 100 matching lines, and ranks them by keyword overlap. ColGREP
+receives the original question. Each arm returns the same top-K budget.
 
 Each question lists its labeled locations, returned paths and line ranges,
 independently checked excerpt validity, coverage, and diagnostics. A match
-covers a label when the verified excerpt contains its labeled range. Additional
-hits count as nonrelevant to the labels, including literal occurrences such as
-imports that establish none of the expected locations. An answerless question
-requires a complete empty response. An intentionally limited case demonstrates
-truncation. Edit, rename, and delete scenarios reuse each provider's search
-state. Traditional Tests also inject stale and malformed evidence so failure
-coverage does not depend on catching a live index midway through an update.
+covers a label when the verified excerpt contains its labeled range. The report
+groups scores by question category, code language, and question language.
+Additional valid hits count as nonrelevant to the labels. For negatives, the
+report counts both irrelevant hits and searches that completed with no hits.
+An intentionally limited case demonstrates truncation. Edit, rename, and delete
+scenarios reuse each provider's search state. Traditional Tests inject stale
+and malformed evidence to cover failures during index updates.
 
 The first query runs with an empty application index. The next invocation of
 the same question measures warm retrieval. ColGREP also measures its native
 index build on a fresh copy and reports cache bytes. Filesystem caches remain
 in place. Each result records serialized bytes and elapsed time. Save the JSON
 to compare per-question outcomes across runs using the recorded source revision,
-corpus, labels, implementation hash, and provider versions. An unavailable or
-indexing response, or a failed standalone index build, yields exit status 1.
-Quality scores remain descriptive until enough comparable runs establish a
-baseline. See the [initial baseline](../evals/repository-retrieval-baseline.md).
+corpus, labels, implementation hash, and provider versions. Invalid evidence,
+an unavailable or indexing response, or a failed standalone index build
+yields exit status 1. Truncation and quality scores are reported separately.
+Use the [initial baseline](../evals/repository-retrieval-baseline.md) as a
+historical reference.
 
-### Codex Repository Agent Behavior Evaluation
+### Repository Agent Behavior Evaluation
 
 With Codex CLI authenticated, `rg` on `PATH`, and `LTCOOK_COLGREP_DEPLOYMENT`
 pointing to installed assets, run the two-case evaluation explicitly.
@@ -465,9 +466,10 @@ pointing to installed assets, run the two-case evaluation explicitly.
 bun evals/codex-repository-behavior-live.ts > codex-repository-behavior.json
 ```
 
-Pass `--model MODEL` to select the Codex model. The runner starts an isolated
-local MCP runtime and makes two sequential model calls in fresh read-only Codex
-sessions. It disables the shell tool so the measured evidence comes from MCP.
+Pass `--model MODEL` to select the Codex model. This guided smoke test starts
+an isolated local MCP runtime and makes two sequential model calls in fresh
+read-only Codex sessions. The harness owns and grants access to its disposable
+fixture. It disables the shell tool so the measured evidence comes from MCP.
 The labeled multi-file question grades exact-mode choice, support for citations
 in returned evidence, and coverage of the definition, caller, and test. The
 answerless conceptual question grades ranked-mode choice and abstention.
@@ -496,6 +498,26 @@ verified citation measures when returned evidence first supports a correct
 citation that appears in the final answer. It is `null` when no citation
 qualifies. Compare paired correctness before timing. One run per variant
 gives an initial observation.
+
+For an autonomous comparison, use identical task prompts in two arms. The
+first gives the agent Search. The second adds Locate. Neither prompt names
+a tool. Run Codex in the same controlled workspace or pass `--pi` to run
+the paired cases through native Pi with the installed LTCook Bonsai model.
+
+```shell
+bun evals/codex-repository-behavior-live.ts --autonomous > codex-autonomous.json
+bun evals/codex-repository-behavior-live.ts --autonomous --pi > pi-autonomous.json
+```
+
+Both runs use a warmed disposable index and repeat a selected pair in the
+opposite order. A separate pair tests the response to deliberately unavailable
+retrieval for a question with a known answer. The answer schema ties each
+factual assertion to citations.
+The report separates factual correctness, evidence validity, retrieval
+coverage, and tool selection. It records tool calls, repeated or low-yield
+requests, context size, and elapsed times without making them task-success
+requirements. These live comparisons are opt-in. Normal CI type-checks the
+scripts and runs the deterministic graders.
 
 ## Asset packaging
 
