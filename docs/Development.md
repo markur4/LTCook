@@ -475,6 +475,28 @@ The JSON records each verdict, cited ranges, retrieval metadata, model and
 fixture provenance. It excludes credentials and raw responses. This evaluation
 uses a live model and stays outside Traditional Tests.
 
+#### Compare Locate with repository search
+
+Use the same prerequisites to run a paired comparison.
+
+```shell
+bun evals/codex-repository-behavior-live.ts --compare-locate > codex-locate-comparison.json
+```
+
+The runner prebuilds one local ColGREP index and opens six fresh read-only
+Codex sessions. It runs the labeled implementation–caller–test, pixel bounds,
+and answerless conceptual questions once with repository search and once
+with Locate. The Locate variant can use repository search for follow-up.
+Variants alternate order across pairs. The comparison defaults to
+`gpt-6.2-sol`; `--model MODEL` sets one model for both variants.
+
+The report records citation coverage, unsupported citations, abstention,
+tool calls, elapsed time, and model and fixture provenance. Time to the first
+verified citation measures when returned evidence first supports a correct
+citation that appears in the final answer. It is `null` when no citation
+qualifies. Compare paired correctness before timing. One run per variant
+gives an initial observation.
+
 ## Asset packaging
 
 `src/ltcook_dev/packaging/package_assets.py` builds the canonical

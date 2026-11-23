@@ -48,3 +48,20 @@ export function gradeRepositoryCitations(
   );
   return { supported, unsupported, missing };
 }
+
+/** Measure when completed replies first supported a correct citation in the final answer. */
+export function firstVerifiedCitationMs(
+  citations: readonly SourceRange[],
+  expected: readonly SourceRange[],
+  replies: readonly { elapsedMs: number; hits: readonly RepositoryHit[] }[],
+  files: ReadonlyMap<string, string>,
+): number | null {
+  if (!citations.length || !expected.length) return null;
+  const hits: RepositoryHit[] = [];
+  for (const reply of replies.toSorted((left, right) => left.elapsedMs - right.elapsedMs)) {
+    hits.push(...reply.hits);
+    const { missing } = gradeRepositoryCitations(citations, expected, hits, files);
+    if (missing.length < expected.length) return reply.elapsedMs;
+  }
+  return null;
+}
