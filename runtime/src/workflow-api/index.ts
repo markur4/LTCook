@@ -213,7 +213,10 @@ export interface RuntimeController {
   teamCatalog(): import('../integrations/team-loader.js').TeamCatalogEntry[];
   listSessions(workspaceRoot: string, teamSelection?: string): Session[];
   snapshot(sessionId: string): SessionSnapshot;
-  ried(sessionId: string, request: import('../tools/ried.js').RiedRequest): Promise<unknown>;
+  ried(
+    sessionId: string,
+    request: import('../repository/requests.js').RiedRequest,
+  ): Promise<unknown>;
   execute(sessionId: string, actor: RuntimeActor, command: RuntimeCommand): Promise<unknown>;
   authorizeTool(
     sessionId: string,

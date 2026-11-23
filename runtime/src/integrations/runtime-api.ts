@@ -14,6 +14,7 @@ import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { WorkspaceMcp } from './mcp.js';
 import { isWebTool } from '../tools/web.js';
+import { validateRiedRequest } from '../repository/requests.js';
 import { z } from 'zod';
 import { ResolvedModelSchema, type ResolvedModel } from '../models/aliases.js';
 import {
@@ -313,8 +314,6 @@ export class RuntimeApi {
         toolName?: unknown;
         toolArgs?: unknown;
         input?: unknown;
-        operation?: unknown;
-        section?: unknown;
       };
       const isUser = equalToken(bearer, this.secret);
       const actor: RuntimeActor | undefined = isUser
@@ -574,15 +573,12 @@ export class RuntimeApi {
       }
       if (request.url === '/v1/ried') {
         if (!input.sessionId) throw new Error('RIED requires a Session');
-        if ('path' in parsed || 'workspaceRoot' in parsed)
-          throw new Error('RIED scan paths are derived from the Session');
-        if (!['summary', 'section', 'refresh'].includes(String(input.operation)))
-          throw new Error('Invalid RIED operation');
-        if (
-          input.operation === 'section' &&
-          !['repository', 'git', 'host', 'recipes'].includes(String(input.section))
-        )
-          throw new Error('Invalid RIED section');
+        const {
+          sessionId: _sessionId,
+          nativeAgentId: _nativeAgentId,
+          ...toolArgs
+        } = parsed as Record<string, unknown>;
+        const inventoryRequest = validateRiedRequest(toolArgs);
         const session = runtime.snapshot(input.sessionId);
         if (actor.kind === 'agent') {
           if (
@@ -601,12 +597,7 @@ export class RuntimeApi {
           response.writeHead(403).end('{"error":"session is not active in this runtime"}');
           return;
         }
-        const value = await runtime.ried(input.sessionId, {
-          operation: input.operation as 'summary' | 'section' | 'refresh',
-          ...(input.operation === 'section'
-            ? { section: input.section as 'repository' | 'git' | 'host' | 'recipes' }
-            : {}),
-        });
+        const value = await runtime.ried(input.sessionId, inventoryRequest);
         response.writeHead(200).end(JSON.stringify({ value }));
         return;
       }

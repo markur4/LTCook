@@ -171,8 +171,15 @@ search. Some Codex modes ask for permission before calling an MCP tool.
   `ltcook_web_content` for stored search/page results. All three use the
   shared workspace catalog in Pi and Codex. Keep the response ID in the
   same chat to read or page through results.
-- Ask for a repository and environment inventory to use `ltcook_ried`. It can
-  return a summary, inspect one section, or refresh the inventory.
+- Ask for a repository and environment inventory to use `ltcook_ried`. Ask
+  for the repository section to see the source and test layout, project
+  conventions, detected tools, and project scripts. Ask for the Git section
+  to see live branch and working-tree details. You can name a locally
+  available base branch or commit for comparison.
+- Ask RIED to map a directory for a bounded file tree. In a Pi chat with
+  workspace file access, ask for an outline of a specific source file or
+  directory. Ordinary Codex chats can use maps and inventory. See the
+  [RIED operations and limits](References.md#repository-inventory).
 - Ask for a summary using `ltcook_summarize`. Supply text or ask Pi to summarize
   one regular UTF-8 file from the selected workspace, up to 24 KiB. An optional
   focus tells the summarizer what to emphasize. Codex accepts text because its

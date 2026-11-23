@@ -14,7 +14,7 @@ import {
   type OllamaUsage,
 } from '../../../runtime/src/integrations/ollama.js';
 import { createTools } from '../../../runtime/src/tools/catalog.js';
-import { RiedService } from '../../../runtime/src/tools/ried.js';
+import { RiedService } from '../../../runtime/src/repository/discovery.js';
 import { createSummarizeTool } from '../../../runtime/src/tools/summarize.js';
 
 async function localAuthority(): Promise<string> {
@@ -31,6 +31,8 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
   const first = path.join(root, 'first');
   const second = path.join(root, 'second');
   await Promise.all([mkdir(first), mkdir(second)]);
+  await writeFile(path.join(first, 'source.ts'), 'export const firstWorkspace = true;\n');
+  await writeFile(path.join(second, 'other.ts'), 'export const otherWorkspace = true;\n');
   const clients: Client[] = [];
   const authority = await localAuthority();
   const base = `http://${authority}`;
@@ -49,8 +51,8 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-  async function grant(agentId: string, workspaceRoot: string) {
-    const response = await admin('grant', { nativeAgentId: agentId, workspaceRoot });
+  async function grant(agentId: string, workspaceRoot: string, provider: 'pi' | 'codex') {
+    const response = await admin('grant', { nativeAgentId: agentId, workspaceRoot, provider });
     expect(response.status).toBe(200);
     return ((await response.json()) as { token: string }).token;
   }
@@ -68,9 +70,9 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
     expect(
       (await fetch(`${base}/mcp`, { headers: { authorization: `Bearer ${secret}` } })).status,
     ).toBe(401);
-    const firstToken = await grant('pi-one', first);
-    expect(await grant('pi-one', first)).toBe(firstToken);
-    const secondToken = await grant('codex-two', second);
+    const firstToken = await grant('pi-one', first, 'pi');
+    expect(await grant('pi-one', first, 'pi')).toBe(firstToken);
+    const secondToken = await grant('codex-two', second, 'codex');
     const one = await client(firstToken);
     const two = await client(secondToken);
     expect((await one.sdk.listTools()).tools.map(({ name }) => name)).toContain('ltcook_ried');
@@ -105,6 +107,36 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
       ).structuredContent,
     ).toMatchObject({ value: { workspaceRoot: second, section: 'host' } });
     expect(
+      (await reconnected.sdk.callTool({ name: 'ltcook_ried', arguments: { operation: 'map' } }))
+        .structuredContent,
+    ).toMatchObject({
+      value: { value: { entries: [{ path: 'source.ts', kind: 'file' }] } },
+    });
+    expect(
+      (
+        await reconnected.sdk.callTool({
+          name: 'ltcook_ried',
+          arguments: { operation: 'outline', target: 'source.ts' },
+        })
+      ).isError,
+    ).not.toBe(true);
+    expect(
+      (
+        await two.sdk.callTool({
+          name: 'ltcook_ried',
+          arguments: { operation: 'outline', target: 'other.ts' },
+        })
+      ).isError,
+    ).toBe(true);
+    expect(
+      (
+        await reconnected.sdk.callTool({
+          name: 'ltcook_ried',
+          arguments: { operation: 'map', target: '../second' },
+        })
+      ).isError,
+    ).toBe(true);
+    expect(
       (
         await reconnected.sdk.callTool({
           name: 'ltcook_ried',
@@ -136,7 +168,7 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
     expect(
       (await fetch(`${base}/mcp`, { headers: { authorization: `Bearer ${secondToken}` } })).status,
     ).toBe(401);
-    const resumed = await client(await grant('codex-two', second));
+    const resumed = await client(await grant('codex-two', second, 'codex'));
     expect(
       (await resumed.sdk.callTool({ name: 'ltcook_ried', arguments: { operation: 'refresh' } }))
         .structuredContent,

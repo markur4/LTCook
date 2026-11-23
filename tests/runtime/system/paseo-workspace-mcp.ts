@@ -6,7 +6,7 @@ import { startPaseoHost } from '../../../runtime/src/integrations/paseo.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { createTools } from '../../../runtime/src/tools/catalog.js';
-import { RiedService } from '../../../runtime/src/tools/ried.js';
+import { RiedService } from '../../../runtime/src/repository/discovery.js';
 
 const root = path.resolve(import.meta.dir, '../../..');
 const fixture = process.argv[2];

@@ -377,19 +377,39 @@ sends remain visible through the existing Paseo views. Duplicate events are
 idempotent only when identical. An interrupted send becomes uncertain and is
 never replayed automatically.
 
-RIED is a separate runtime service. `POST /v1/ried` accepts an authenticated
-Session and `operation` of `summary`, `section` or `refresh`; `section` requires
-`repository`, `git`, `host` or `recipes`. The `ltcook_ried` native tool exposes
-these operations to bound agents, including read-only members. Standalone Pi
-chats outside the Paseo MCP connection expose the native tool when AppRC inventory paths are resolved;
-they use the same discovery service and AppRC cache directly, with the native
-Pi runtime workspace as the scan root and no Team Session or bearer. New, resumed
-and forked Pi sessions rebind that workspace. The managed runtime derives its
-scan root from the Session. Its schema-version-1 result reports
-provenance, capture time, partial or stale status and diagnostics. The `host`
-section and the summary report the operating system and a `wsl` flag. On WSL,
-`os` is `linux` and `wsl` is `true`. Neither Team API v3 nor coordination
-snapshots carry the full inventory.
+### Repository inventory
+
+`ltcook_ried` uses the workspace bound to the Session or MCP grant. Native Pi
+can also bind inventory directly to its current workspace. The authenticated
+Team route is `POST /v1/ried`. Requests accept the following operations.
+
+| Operation | Arguments | Result |
+| --- | --- | --- |
+| `summary` | None | Compact layout, languages, host platform, and current Git counts. Untracked directories can be grouped in the count. |
+| `section` | `section: repository\|git\|host\|recipes` | Detailed inventory for the selected section. |
+| `refresh` | None | Rebuilds cached metadata and returns the full inventory with current Git counts. |
+| `map` | Optional `target`, `maxDepth`, and `maxEntries` | Bounded workspace-relative directory and file paths. The default is the workspace root, depth 3, and 100 scanned entries. Limits can be raised to depth 8 and 256 scanned entries. |
+| `outline` | Explicit workspace-relative `target` | A `brief outline` of a source file or up to 12 source files in a directory. Requires trusted file-read access and limits the returned text to 12,000 characters. |
+
+The repository section includes source and test directories, detected tools
+and configuration files, scripts, resources, agent instructions, conventions,
+and platform metadata. Command provenance indicates whether `brief` inferred a
+command or observed a project script. Discovery reports these commands as data.
+
+The Git section reports branch, HEAD, upstream, locally known default branch,
+remote names, worktrees, staged and unstaged changes, and untracked files.
+It reads the default from local remote HEAD references when available. Git
+records are scoped to the workspace. A Git worktree root can also report
+registered worktree paths as metadata. Set `base` on a Git section request to
+compare a local branch, tag, or commit with HEAD. Uncommitted changes appear
+in the separate status lists. Git discovery uses local, read-only commands.
+
+The existing response envelope includes `schemaVersion: 1`, `capturedAt`,
+`status`, and `diagnostics`. Maps, outlines, and Git detail also report
+`partial`, `truncated`, and `freshness`. Cached section responses indicate when
+metadata came from cache. Common generated and credential paths, symlinks,
+and junctions are excluded from map traversal and provider staging. On WSL,
+`os` is `linux` and `wsl` is `true`.
 
 Ordinary Paseo Pi and Codex calls use local Streamable HTTP at `/mcp`.
 LTCook issues a workspace-scoped bearer during an authenticated launch or

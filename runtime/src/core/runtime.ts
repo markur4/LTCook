@@ -23,7 +23,8 @@ import type {
 } from '../workflow-api/index.js';
 import { CoordinationStore } from '../storage/coordination.js';
 import { canonicalWorkspace } from './workspace.js';
-import { RiedService, type RiedRequest } from '../tools/ried.js';
+import type { RiedService } from '../repository/discovery.js';
+import type { RiedRequest } from '../repository/requests.js';
 
 type RuntimeOptions = {
   databasePath: string;
@@ -195,7 +196,7 @@ Task to register: ${input.description}`,
     }
     if (this.initializedSessions.has(session.id)) return this.snapshot(session.id);
     await this.initializeSession(session);
-    void this.riedService?.get(session, { operation: 'summary' }).catch(() => undefined);
+    void this.riedService?.warm(session).catch(() => undefined);
     return this.snapshot(session.id);
   }
 
