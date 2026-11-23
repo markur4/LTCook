@@ -10,7 +10,7 @@ import {
   webProcessEnvironment,
   WebToolService,
 } from '../../../runtime/src/tools/web.js';
-import { RiedService } from '../../../runtime/src/tools/ried.js';
+import { RiedService } from '../../../runtime/src/repository/discovery.js';
 
 test('web tools are LTCook-owned and expose a bounded schema', () => {
   expect(webDefinitions.map((tool) => tool.name)).toEqual([

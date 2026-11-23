@@ -47,6 +47,10 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- RIED provides bounded directory maps, targeted source outlines, richer
+  repository metadata, and live Git details with optional local base comparison.
+  Repository Core shares workspace and result contracts across providers.
+
 - Workspace-scoped semantic repository search in Pi using ColGREP, a pinned
   LateOn-Code-edge model, and lazy local indexing.
 

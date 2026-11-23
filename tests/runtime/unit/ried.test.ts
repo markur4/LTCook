@@ -6,12 +6,16 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import * as os from 'node:os';
 import { delimiter, join } from 'node:path';
-import { RiedService, type RiedSnapshot } from '../../../runtime/src/tools/ried.js';
+import { RiedService, type RiedSnapshot } from '../../../runtime/src/repository/discovery.js';
 import type { Session } from '../../../runtime/src/workflow-api/index.js';
 
 const directories: string[] = [];
@@ -67,7 +71,7 @@ test('RIED shares one bounded scan, discovers Just modules, and refreshes withou
     just,
     `#!/bin/sh
 printf '%s\\n' "$*" >> '${justCalls}'
-if [ "$#" -ne 4 ] || [ "$1" != "--dump" ] || [ "$2" != "--dump-format" ] || [ "$3" != "json" ] || [ "$4" != "--no-dotenv" ]; then
+if [ ! -f runtime/justfile ] || [ -f package.json ] || [ "$#" -ne 4 ] || [ "$1" != "--dump" ] || [ "$2" != "--dump-format" ] || [ "$3" != "json" ] || [ "$4" != "--no-dotenv" ]; then
   : > '${sentinel}'
   exit 64
 fi
@@ -119,6 +123,18 @@ printf '%s\\n' '{"recipes":{"build":{}},"modules":{"runtime":{"recipes":{"check"
     '--dump --dump-format json --no-dotenv',
   ]);
   expect(existsSync(sentinel)).toBe(false);
+
+  const cacheDirectory = join(home, 'cache');
+  const [cacheFile] = readdirSync(cacheDirectory);
+  if (!cacheFile) throw new Error('No repository metadata cache was written');
+  const cachedPath = join(cacheDirectory, cacheFile);
+  const cached = JSON.parse(readFileSync(cachedPath, 'utf8'));
+  cached.repository.languages = [99];
+  writeFileSync(cachedPath, JSON.stringify(cached));
+  expect(await service.get(session, { operation: 'summary' })).toMatchObject({
+    languages: ['JavaScript'],
+  });
+  expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(3);
 });
 
 test('RIED reports missing discovery tools without running project commands', async () => {
@@ -200,3 +216,97 @@ test('RIED reports WSL in the host section and summary without reusing native Li
     else process.env.WSL_DISTRO_NAME = WSL_DISTRO_NAME;
   }
 });
+
+test.skipIf(process.platform === 'win32')(
+  'RIED validates Just sources before invoking metadata discovery',
+  async () => {
+    const home = mkdtempSync(join(os.tmpdir(), 'ltcook-ried-recipe-scope-'));
+    directories.push(home);
+    const workspaceRoot = join(home, 'workspace');
+    const tools = join(home, 'tools');
+    mkdirSync(workspaceRoot);
+    mkdirSync(tools);
+    const invocation = join(home, 'just-invoked');
+    const just = join(tools, 'just');
+    writeFileSync(just, `#!/bin/sh\n: > '${invocation}'\nprintf '{}\n'\n`);
+    chmodSync(just, 0o700);
+    writeFileSync(join(home, 'outside.just'), 'outside-recipe:\n');
+    writeFileSync(join(workspaceRoot, 'justfile'), "import '../outside.just'\nlocal-recipe:\n");
+
+    const service = new RiedService(join(home, 'cache'), undefined, () => ({ PATH: tools }));
+    const inventory = await service.get(
+      { id: 'scope', workspaceRoot },
+      {
+        operation: 'section',
+        section: 'recipes',
+      },
+    );
+    expect(inventory).toMatchObject({
+      status: 'partial',
+      diagnostics: expect.arrayContaining([
+        'Just imports and modules must stay inside the workspace',
+      ]),
+      value: { items: [] },
+    });
+    expect(existsSync(invocation)).toBe(false);
+  },
+);
+
+test('RIED rejects an outline if the recorded workspace becomes a directory link', async () => {
+  const home = mkdtempSync(join(os.tmpdir(), 'ltcook-ried-bound-root-'));
+  directories.push(home);
+  const workspace = join(home, 'workspace');
+  const replacement = join(home, 'replacement');
+  mkdirSync(workspace);
+  mkdirSync(replacement);
+  const workspaceRoot = realpathSync(workspace);
+  writeFileSync(join(replacement, 'outside.ts'), 'export const outside = true;');
+  renameSync(workspace, join(home, 'original'));
+  symlinkSync(replacement, workspace, 'junction');
+
+  const service = new RiedService(join(home, 'cache'), undefined, () => ({ PATH: '' }));
+  await expect(
+    service.get(
+      { id: 'bound-session', workspaceRoot, boundWorkspace: true },
+      { operation: 'outline', target: 'outside.ts' },
+    ),
+  ).rejects.toThrow('The bound repository workspace no longer resolves to its recorded directory');
+});
+
+test.skipIf(!Bun.which('just'))(
+  'native Just inventories a staged local recipe graph without running commands',
+  async () => {
+    const home = mkdtempSync(join(os.tmpdir(), 'ltcook-ried-native-just-'));
+    directories.push(home);
+    const workspaceRoot = join(home, 'workspace');
+    mkdirSync(join(workspaceRoot, 'checks'), { recursive: true });
+    const sentinel = join(home, 'command-ran');
+    writeFileSync(
+      join(workspaceRoot, 'justfile'),
+      `import 'included.just'\nmod checks\n\nbuild:\n    touch "${sentinel}"\n`,
+    );
+    writeFileSync(join(workspaceRoot, 'included.just'), `lint:\n    touch "${sentinel}"\n`);
+    writeFileSync(join(workspaceRoot, 'checks', 'mod.just'), `check:\n    touch "${sentinel}"\n`);
+    const service = new RiedService(join(home, 'cache'), undefined, () => ({
+      PATH: process.env.PATH ?? '',
+    }));
+    expect(
+      await service.get(
+        { id: 'native-just', workspaceRoot },
+        {
+          operation: 'section',
+          section: 'recipes',
+        },
+      ),
+    ).toMatchObject({
+      value: {
+        items: expect.arrayContaining([
+          { name: 'build', module: '' },
+          { name: 'lint', module: '' },
+          { name: 'check', module: 'checks' },
+        ]),
+      },
+    });
+    expect(existsSync(sentinel)).toBe(false);
+  },
+);
