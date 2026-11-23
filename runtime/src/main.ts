@@ -241,10 +241,16 @@ async function run(): Promise<void> {
       workspaceShellEnvironments.get(id),
     );
     api = new RuntimeApi(undefined, apiToken, apiListen, process.env, telemetry);
+    const sourceRuntime = process.versions.bun !== undefined;
     const web = new WebToolService(
       python,
-      appRoot,
-      node,
+      {
+        command: sourceRuntime ? process.execPath : node,
+        entrypoint: path.join(
+          appRoot,
+          sourceRuntime ? 'runtime/src/tools/web-mcp.mjs' : 'runtime/dist/tools/web-mcp.js',
+        ),
+      },
       process.env,
       (id) => workspaceShellEnvironments.get(id),
       ensureProjectServices,

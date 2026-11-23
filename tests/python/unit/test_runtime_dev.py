@@ -92,7 +92,14 @@ def test_runtime_dev_watch_uses_explicit_bun_and_forwards_arguments(
     assert calls == [
         (
             "explicit-bun",
-            ["explicit-bun", "--watch", "runtime/src/main.ts", "--help"],
+            [
+                "explicit-bun",
+                "--watch",
+                "--preload",
+                "./runtime/src/watch-web-mcp.mjs",
+                "runtime/src/main.ts",
+                "--help",
+            ],
         )
     ]
 

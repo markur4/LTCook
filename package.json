@@ -16,8 +16,8 @@
     "check": "\"$npm_execpath\" run format:check && \"$npm_execpath\" run --cwd runtime check && \"$npm_execpath\" run --filter './teams/*' check",
     "test": "\"$npm_execpath\" test tests/runtime/unit tests/runtime/native tests/runtime/integration tests/teams/contract",
     "test:integration": "\"$npm_execpath\" test tests/runtime/integration",
-    "format": "prettier --write \"runtime/src/**/*.{ts,tsx}\" \"teams/*/src/**/*.ts\" \"tests/{runtime,teams}/**/*.ts\" \"evals/**/*.ts\"",
-    "format:check": "prettier --check \"runtime/src/**/*.{ts,tsx}\" \"teams/*/src/**/*.ts\" \"tests/{runtime,teams}/**/*.ts\" \"evals/**/*.ts\"",
+    "format": "prettier --write \"runtime/src/**/*.{ts,tsx,mjs}\" \"teams/*/src/**/*.ts\" \"tests/{runtime,teams}/**/*.ts\" \"evals/**/*.ts\"",
+    "format:check": "prettier --check \"runtime/src/**/*.{ts,tsx,mjs}\" \"teams/*/src/**/*.ts\" \"tests/{runtime,teams}/**/*.ts\" \"evals/**/*.ts\"",
     "build": "\"$npm_execpath\" run --cwd runtime build && \"$npm_execpath\" run --filter './teams/*' build"
   },
   "devDependencies": {

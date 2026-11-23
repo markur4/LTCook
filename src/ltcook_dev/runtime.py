@@ -49,7 +49,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     os.chdir(source_root)
     command = [bun]
     if options.watch:
-        command.append("--watch")
+        command.extend(
+            (
+                "--watch",
+                "--preload",
+                "./runtime/src/watch-web-mcp.mjs",
+            )
+        )
     command.extend(("runtime/src/main.ts", *runtime_arguments))
     try:
         os.execvpe(bun, command, launch.environment)

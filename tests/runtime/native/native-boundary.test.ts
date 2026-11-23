@@ -199,10 +199,20 @@ describe('native runtime boundary', () => {
     } as unknown as RuntimeController;
     const authority = `127.0.0.1:${await freePort()}`;
     const api = new RuntimeApi(controller, master, authority);
+    const searchResult = {
+      content: 'Search result',
+      responseId: 'search-result',
+      queries: [
+        {
+          query: 'release evidence',
+          sources: [{ title: 'Official release', url: 'https://example.org/release', snippet: '' }],
+        },
+      ],
+    };
     const service = {
       async call() {
         invoked++;
-        return 'Search result';
+        return searchResult;
       },
     } as unknown as WebToolService;
     api.setWorkspaceMcp(
@@ -234,7 +244,7 @@ describe('native runtime boundary', () => {
       expect(invoked).toBe(0);
       allowed = true;
       expect((await call('unbound')).status).toBe(403);
-      expect(await (await call()).json()).toEqual({ content: 'Search result' });
+      expect(await (await call()).json()).toEqual(searchResult);
       expect(authorized).toBe(2);
       expect(invoked).toBe(1);
       const search = await call(nativeAgentId, 'ltcook_repo_search');

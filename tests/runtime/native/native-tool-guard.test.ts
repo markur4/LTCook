@@ -171,6 +171,55 @@ test('every native call requires runtime authorization and runtime failures bloc
   }
 });
 
+test('managed Pi exposes search sources and response IDs in its model-facing tool content', async () => {
+  const search = {
+    content: 'Search result',
+    responseId: 'search-result',
+    fetchId: 'fetched-sources',
+    queries: [
+      {
+        query: 'release evidence',
+        sources: [{ title: 'Release notes', url: 'https://example.org/release', snippet: 'Notes' }],
+      },
+      { query: 'startup logs', error: 'Search service unavailable' },
+    ],
+  };
+  const server = Bun.serve({ port: 0, fetch: () => Response.json(search) });
+  try {
+    Object.assign(process.env, {
+      LTCOOK_NATIVE_AGENT_ID: 'native',
+      LTCOOK_SESSION_ID: 'session',
+      LTCOOK_TEAM_INSTANCE_ID: 'team-instance',
+      LTCOOK_TEAM_ID: '@ltcook/team-default-minimal',
+      LTCOOK_MEMBER_KEY: 'leader',
+      LTCOOK_RUNTIME_API_URL: `http://127.0.0.1:${server.port}`,
+      LTCOOK_AGENT_API_TOKEN: 'fixture',
+      LTCOOK_TEAM: 'default-minimal',
+      LTCOOK_BROWSER_ENABLED: 'false',
+    });
+    const tools = new Map<string, Parameters<ExtensionAPI['registerTool']>[0]>();
+    await activate({
+      on() {},
+      registerTool(tool: Parameters<ExtensionAPI['registerTool']>[0]) {
+        tools.set(tool.name, tool);
+      },
+    } as unknown as ExtensionAPI);
+    const tool = tools.get('ltcook_web_search');
+    if (!tool) throw new Error('Web search tool was not registered');
+    const result = await tool.execute(
+      'search-1',
+      { queries: ['release evidence', 'startup logs'], includeContent: true },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(result.content).toEqual([{ type: 'text', text: JSON.stringify(search) }]);
+    expect(result.details).toEqual(search);
+  } finally {
+    server.stop(true);
+  }
+});
+
 test('managed RPC rejects flags which would remove required guidance or guards', async () => {
   const { createPiRpcRuntime } = await import('../../../runtime/src/integrations/pi-rpc.js');
   process.env.LTCOOK_NATIVE_AGENT_ID = 'managed-fixture';

@@ -161,6 +161,8 @@ def test_finished_snapshot_wheel_initializes_compiled_assets(tmp_path: Path) -> 
         "runtime/resources/evals/manifest.json": "{}",
         "runtime/resources/evals/verify.cjs": "// evaluation verifier\n",
         "runtime/dist/main.js": "export const runtime = 'snapshot-runtime';\n",
+        "runtime/dist/tools/web-mcp.js": "// snapshot web MCP bridge\n",
+        "runtime/dist/tools/pi-web-access.LICENSE": "MIT fixture\n",
         "runtime/dist/team-api/index.js": "export const teamApiVersion = 2;\n",
         "runtime/dist/guidance-api/index.js": "export const guidance = true;\n",
         "runtime/dist/workflow-api/index.js": "export const workflow = true;\n",

@@ -528,7 +528,9 @@ export default async function activate(
               ? result.error
               : `Web tool unavailable (${response.status}).`,
           );
-        return { content: [{ type: 'text', text: result.content }], details: result };
+        const text =
+          definition.name === 'ltcook_web_search' ? JSON.stringify(result) : result.content;
+        return { content: [{ type: 'text', text }], details: result };
       },
     });
   }

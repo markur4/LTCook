@@ -1,11 +1,12 @@
-/** LTCook-owned web-tool contracts, backed by pi-web-access MCP. */
+/** LTCook-owned contracts for the isolated pi-web-access tools. */
 import { execFile } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { Type } from 'typebox';
+import { Type, type Static } from 'typebox';
+import { Value } from 'typebox/value';
 import { captureShellEnvironment } from '../integrations/shell-environment.js';
 import { defineTool, type ToolContext } from './types.js';
 
@@ -43,17 +44,29 @@ export function webProcessEnvironment(
   }
   return output;
 }
+const searchQuery = Type.String({ minLength: 1, maxLength: 2000, pattern: '\\S' });
+const MAX_QUERIES = 4;
+export const MAX_SEARCH_RESULTS = 20;
+export const MAX_SOURCE_URL_LENGTH = 4096;
+export const SOURCE_URL_PATTERN = '^[Hh][Tt][Tt][Pp][Ss]?://';
+export const MAX_SOURCE_TITLE_LENGTH = 300;
+export const MAX_SOURCE_SNIPPET_LENGTH = 1000;
+export const MAX_QUERY_ERROR_LENGTH = 1000;
+const MAX_WEB_TEXT_LENGTH = 128000;
+
 const searchSchema = Type.Object(
   {
-    query: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+    query: Type.Optional(searchQuery),
     queries: Type.Optional(
-      Type.Array(Type.String({ minLength: 1, maxLength: 2000 }), {
+      Type.Array(searchQuery, {
         minItems: 1,
-        maxItems: 4,
+        maxItems: MAX_QUERIES,
       }),
     ),
-    numResults: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
-    includeContent: Type.Optional(Type.Boolean()),
+    numResults: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_RESULTS })),
+    includeContent: Type.Optional(
+      Type.Boolean({ description: 'Also fetch source pages and return a fetchId when stored.' }),
+    ),
     recencyFilter: Type.Optional(
       Type.Union([
         Type.Literal('day'),
@@ -84,13 +97,16 @@ const contentSchema = Type.Object(
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })),
     findText: Type.Optional(
-      Type.Union([
-        Type.String({ minLength: 1, maxLength: 500 }),
-        Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
-          minItems: 1,
-          maxItems: 10,
-        }),
-      ]),
+      Type.Union(
+        [
+          Type.String({ minLength: 1, maxLength: 500 }),
+          Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
+            minItems: 1,
+            maxItems: 10,
+          }),
+        ],
+        { description: 'Find passages in a fetched page or stored search results.' },
+      ),
     ),
     findMode: Type.Optional(
       Type.Union([Type.Literal('exact'), Type.Literal('case-insensitive'), Type.Literal('fuzzy')]),
@@ -98,28 +114,67 @@ const contentSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const responseId = Type.String({ minLength: 1, maxLength: 128 });
+const content = Type.String({ maxLength: MAX_WEB_TEXT_LENGTH });
+const searchSource = Type.Object(
+  {
+    title: Type.String({ maxLength: MAX_SOURCE_TITLE_LENGTH }),
+    url: Type.String({
+      maxLength: MAX_SOURCE_URL_LENGTH,
+      pattern: SOURCE_URL_PATTERN,
+    }),
+    snippet: Type.String({ maxLength: MAX_SOURCE_SNIPPET_LENGTH }),
+  },
+  { additionalProperties: false },
+);
+const queryResult = Type.Union([
+  Type.Object(
+    { query: searchQuery, sources: Type.Array(searchSource, { maxItems: MAX_SEARCH_RESULTS }) },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { query: searchQuery, error: Type.String({ minLength: 1, maxLength: MAX_QUERY_ERROR_LENGTH }) },
+    { additionalProperties: false },
+  ),
+]);
+
 export const webDefinitions = [
   {
     name: 'ltcook_web_search',
-    upstream: 'web_search',
-    description: 'Search the web using LTCook SearXNG. Save the responseId to inspect results.',
+    description:
+      'Search the web through LTCook SearXNG. Returns sources and snippets per query. Use ltcook_web_fetch to read a source or ltcook_web_content with the responseId to revisit the search.',
     inputSchema: searchSchema,
+    outputSchema: Type.Object(
+      {
+        content,
+        responseId,
+        fetchId: Type.Optional(responseId),
+        queries: Type.Array(queryResult, { minItems: 1, maxItems: MAX_QUERIES }),
+      },
+      { additionalProperties: false },
+    ),
   },
   {
     name: 'ltcook_web_fetch',
-    upstream: 'fetch_content',
     description:
-      'Retrieve a URL through LTCook HTTP/Crawl4AI. Save the responseId for later reading.',
+      'Read a page at a source URL through LTCook HTTP or Crawl4AI. Use the returned responseId with ltcook_web_content to find passages with findText or continue reading.',
     inputSchema: fetchSchema,
+    outputSchema: Type.Object(
+      { content, responseId: Type.Optional(responseId) },
+      { additionalProperties: false },
+    ),
   },
   {
     name: 'ltcook_web_content',
-    upstream: 'get_search_content',
     description:
-      'Read stored web results by responseId. Select a search with queryIndex or a fetched page with urlIndex.',
+      'Read stored web results by responseId. Select a query with queryIndex or a page with urlIndex. Use findText to locate terms or quotes, or offset and limit to continue reading.',
     inputSchema: contentSchema,
+    outputSchema: Type.Object({ content }, { additionalProperties: false }),
   },
 ] as const;
+
+type WebToolName = (typeof webDefinitions)[number]['name'];
+type WebToolOutput = Static<(typeof webDefinitions)[number]['outputSchema']>;
 
 export function isWebTool(name: unknown): name is string {
   return webDefinitions.some((definition) => definition.name === name);
@@ -171,8 +226,7 @@ export class WebToolService {
   private closing = false;
   constructor(
     private readonly python: string,
-    private readonly appRoot: string,
-    private readonly node: string,
+    private readonly launcher: { command: string; entrypoint: string },
     private readonly environment: NodeJS.ProcessEnv = process.env,
     private readonly sessionShell?: (sessionId: string) => Record<string, string> | undefined,
     private readonly prepareServices?: () => Promise<void>,
@@ -224,8 +278,8 @@ export class WebToolService {
     if (!env.PI_CODING_AGENT_DIR || !path.isAbsolute(env.PI_CODING_AGENT_DIR))
       throw new Error('Web tool configuration requires an absolute Pi home.');
     const transport = new StdioClientTransport({
-      command: this.node,
-      args: [path.join(this.appRoot, 'node_modules', 'pi-web-access', 'dist', 'mcp-cli.js')],
+      command: this.launcher.command,
+      args: [this.launcher.entrypoint],
       env: webProcessEnvironment(env, this.environment),
       stderr: 'inherit',
     });
@@ -267,23 +321,21 @@ export class WebToolService {
 
   async call(
     context: ToolContext,
-    upstream: string,
+    name: WebToolName,
     args: Record<string, unknown>,
-  ): Promise<string> {
+  ): Promise<WebToolOutput> {
+    const definition = webDefinitions.find((tool) => tool.name === name);
+    if (!definition) throw new Error('Unknown web tool.');
     const { signal } = context;
     signal.throwIfAborted();
     const { client, searxngHealthUrl } = await this.connection(context);
     signal.throwIfAborted();
-    if (upstream === 'web_search' && searxngHealthUrl)
+    if (name === 'ltcook_web_search' && searxngHealthUrl)
       await waitForSearxng(searxngHealthUrl, signal);
-    const result = await client.callTool(
-      {
-        name: upstream,
-        arguments: upstream === 'web_search' ? { ...args, provider: 'searxng' } : args,
-      },
-      undefined,
-      { signal, timeout: 120000 },
-    );
+    const result = await client.callTool({ name, arguments: args }, undefined, {
+      signal,
+      timeout: 120000,
+    });
     const content = (Array.isArray(result.content) ? result.content : [])
       .flatMap((item: unknown) =>
         item &&
@@ -296,15 +348,20 @@ export class WebToolService {
           : [],
       )
       .join('\n');
-    if (result.isError) throw new Error(content || 'Web request failed.');
-    const bounded = content.slice(0, 128000);
-    const hint =
-      'Use ltcook_web_content with the responseId and queryIndex or urlIndex to page through stored results.';
-    return content.length > bounded.length
-      ? `${bounded}\n[Truncated.] ${hint}`
-      : upstream === 'get_search_content' && !content.includes('get_search_content(')
-        ? content
-        : `${bounded}\n\n${hint}`;
+    const bounded = boundWebText(content);
+    if (result.isError) throw new Error(bounded || 'Web request failed.');
+    const { structuredContent } = result;
+    if (
+      structuredContent !== undefined &&
+      (structuredContent === null ||
+        typeof structuredContent !== 'object' ||
+        Array.isArray(structuredContent))
+    )
+      throw new Error('Web tool returned an invalid result.');
+    const output = { ...structuredContent, content: bounded };
+    if (!Value.Check(definition.outputSchema, output))
+      throw new Error('Web tool returned an invalid result.');
+    return output;
   }
   async disposeAgent(agentId: string): Promise<void> {
     const session = this.agents.get(agentId);
@@ -320,18 +377,20 @@ export class WebToolService {
   }
 }
 
+function boundWebText(text: string): string {
+  if (text.length <= MAX_WEB_TEXT_LENGTH) return text;
+  const suffix = '\n[Truncated.] Use ltcook_web_content with the stored responseId to read more.';
+  return text.slice(0, MAX_WEB_TEXT_LENGTH - suffix.length) + suffix;
+}
+
 export function createWebTools(service: WebToolService) {
   return webDefinitions.map((definition) =>
     defineTool({
       name: definition.name,
       description: definition.description,
       inputSchema: definition.inputSchema,
-      outputSchema: Type.Object({ content: Type.String() }),
-      async execute(input, context) {
-        return {
-          content: await service.call(context, definition.upstream, input),
-        };
-      },
+      outputSchema: definition.outputSchema,
+      execute: (input, context) => service.call(context, definition.name, input),
     }),
   );
 }
