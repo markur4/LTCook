@@ -6,6 +6,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { RiedService, riedToolDefinition, type RiedRequest } from '../tools/ried.js';
+import { webDefinitions } from '../tools/web.js';
 import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
@@ -465,6 +466,25 @@ export default async function activate(
     if (!response.ok) throw new Error(`RIED request failed (${response.status})`);
     return response.json();
   });
+  for (const definition of webDefinitions) {
+    pi.registerTool({
+      name: definition.name,
+      label: definition.name.replace('ltcook_', '').replaceAll('_', ' '),
+      description: definition.description,
+      parameters: definition.inputSchema,
+      async execute(_id, input, signal) {
+        const response = await fetch(`${endpoint}/v1/workspace-tool`, {
+          method: 'POST',
+          headers: {authorization: `Bearer ${token}`, 'content-type': 'application/json'},
+          body: JSON.stringify({sessionId, nativeAgentId, toolName: definition.name, toolArgs: input}),
+          signal: AbortSignal.any([signal, AbortSignal.timeout(120000)]),
+        });
+        if (!response.ok) throw new Error(`Web tool unavailable (${response.status}).`);
+        const result = await response.json() as {content: string};
+        return {content: [{type: 'text', text: result.content}], details: result};
+      },
+    });
+  }
   await activateOptionalBrowser(pi);
 }
 

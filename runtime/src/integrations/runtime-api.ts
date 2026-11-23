@@ -221,6 +221,7 @@ export class RuntimeApi {
           '/v1/runtime/stop',
           '/v1/tool/authorize',
           '/v1/ried',
+          '/v1/workspace-tool',
           '/v1/mcp/grant',
           '/v1/mcp/revoke',
           '/v1/evaluation/observe',
@@ -309,6 +310,7 @@ export class RuntimeApi {
         leaderAgentId?: string;
         shellEnvironment?: unknown;
         toolName?: unknown;
+        toolArgs?: unknown;
         input?: unknown;
         operation?: unknown;
         section?: unknown;
@@ -516,6 +518,25 @@ export class RuntimeApi {
             });
           response.writeHead(200).end(JSON.stringify({ sessions }));
         }
+        return;
+      }
+      if (request.url === '/v1/workspace-tool') {
+        if (actor.kind !== 'agent' || !input.sessionId || !this.workspaceMcp ||
+          !['ltcook_web_search', 'ltcook_web_fetch', 'ltcook_web_content'].includes(String(input.toolName))) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        const session = runtime.snapshot(input.sessionId);
+        if (!session.members.some(member => member.binding?.nativeAgentId === actor.nativeAgentId &&
+          member.binding.state === 'bound')) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        const result = await this.workspaceMcp.invokeTool(String(input.toolName), input.toolArgs, {
+          agentId: actor.nativeAgentId, workspaceRoot: session.session.workspaceRoot,
+          workspaceFileAccess: false, signal: AbortSignal.timeout(120000),
+        });
+        response.writeHead(200).end(JSON.stringify(result));
         return;
       }
       if (request.url === '/v1/ried') {

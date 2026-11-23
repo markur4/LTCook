@@ -396,8 +396,8 @@ LTCook issues a workspace-scoped bearer during an authenticated launch or
 resume. A warm reopen in the same workspace reuses the grant. Archiving the
 chat or changing its authorized workspace revokes the grant. Restarting the
 runtime clears in-memory credentials, and reopening a chat configures a new
-connection. The shared tool schemas use the names `ltcook_ried` and
-`ltcook_summarize`. Clients may qualify them with the server name
+connection. The shared tool schemas use the names `ltcook_ried`, `ltcook_summarize`, `ltcook_web_search`,
+`ltcook_web_fetch`, and `ltcook_web_content`. Clients may qualify them with the server name
 `ltcook_workspace`.
 
 `ltcook_summarize` takes one of `text` or `path` plus an optional `focus`.
