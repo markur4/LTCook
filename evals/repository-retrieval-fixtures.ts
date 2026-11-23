@@ -4,9 +4,17 @@ export type RetrievalQuestion = {
   id: string;
   group: 'lexical' | 'conceptual';
   category:
-    'identifier' | 'concept' | 'distractor' | 'multi-file' | 'answerless' | 'lifecycle' | 'limited';
+    | 'identifier'
+    | 'concept'
+    | 'distractor'
+    | 'keyword-overlap'
+    | 'multi-file'
+    | 'answerless'
+    | 'lifecycle'
+    | 'limited';
   source: 'fixture' | 'ltcook';
   query: string;
+  queryLanguage?: 'de';
   expected: SourceRange[];
   limit?: number;
 };
@@ -15,6 +23,7 @@ export const repositoryFixturePaths = [
   'runtime/src/repository/workspace.ts',
   'runtime/src/repository/filesystem.ts',
   'runtime/src/repository/discovery.ts',
+  'src/ltcook_dev/packaging/package_assets.py',
 ] as const;
 
 const moveSource = 'fixture/src/banner.ts';
@@ -61,6 +70,36 @@ const fixture = {
     '  return n.toFixed(0);',
     '}',
   ),
+  'fixture/src/billing-preview.ts': fixtureSource(
+    'export function formatCreditCardNumber(value: string) {',
+    '  return value.replace(/\\D/g, "").replace(/(.{4})/g, "$1 ").trim();',
+    '}',
+    'export function receiptChecksum(payload: string) {',
+    '  return payload.length % 97;',
+    '}',
+  ),
+  'fixture/src/retry.py': fixtureSource(
+    'MAX_RETRY_SECONDS = 30',
+    '',
+    'def bounded_retry_delay(attempt: int) -> int:',
+    '    return min(2 ** attempt, MAX_RETRY_SECONDS)',
+  ),
+  'fixture/src/dispatch.py': fixtureSource(
+    'from .retry import bounded_retry_delay',
+    '',
+    'def dispatch_retry_in(failures: int) -> int:',
+    '    return bounded_retry_delay(failures)',
+  ),
+  'fixture/src/retry_preview.py': fixtureSource(
+    'def preview_retry_delay(attempt: int) -> int:',
+    '    return 2 ** attempt',
+  ),
+  'fixture/tests/test_retry.py': fixtureSource(
+    'from fixture.src.retry import bounded_retry_delay',
+    '',
+    'def test_retry_delay_stops_growing():',
+    '    assert bounded_retry_delay(12) == 30',
+  ),
   [moveSource]: fixtureSource('export const inventoryBannerAmber = "standard";'),
 };
 
@@ -90,7 +129,11 @@ export function retrievalCorpus(repositoryFiles: ReadonlyMap<string, string>) {
     anchor('fixture/src/cart.ts', 'return allocateTicket('),
     anchor('fixture/tests/ledger.test.ts', 'expect(allocateTicket('),
   ];
-  const [workspace, filesystem, discovery] = repositoryFixturePaths;
+  const [workspace, filesystem, discovery, packaging] = repositoryFixturePaths;
+  const retryCeiling = anchor(
+    'fixture/src/retry.py',
+    'return min(2 ** attempt, MAX_RETRY_SECONDS)',
+  );
   const questions: RetrievalQuestion[] = [
     {
       id: 'exact-identifier',
@@ -167,6 +210,67 @@ export function retrievalCorpus(repositoryFiles: ReadonlyMap<string, string>) {
       category: 'concept',
       query: 'What forbids a junction from aliasing a requested location?',
       expected: [anchor(workspace, 'path.relative(absolute, actual) !==')],
+    },
+    {
+      id: 'python-retry-definition-caller-test',
+      source: 'fixture',
+      group: 'lexical',
+      category: 'multi-file',
+      query: 'bounded_retry_delay',
+      expected: [
+        anchor('fixture/src/retry.py', 'def bounded_retry_delay('),
+        anchor('fixture/src/dispatch.py', 'return bounded_retry_delay('),
+        anchor('fixture/tests/test_retry.py', 'assert bounded_retry_delay('),
+      ],
+    },
+    {
+      id: 'python-retry-ceiling',
+      source: 'fixture',
+      group: 'conceptual',
+      category: 'distractor',
+      query: 'Where does the retry delay grow exponentially while staying under a maximum?',
+      expected: [retryCeiling],
+    },
+    {
+      id: 'python-retry-ceiling-de',
+      source: 'fixture',
+      group: 'conceptual',
+      category: 'distractor',
+      query: 'Wo wächst die Wartezeit für Wiederholungen exponentiell bis zu einer Obergrenze?',
+      queryLanguage: 'de',
+      expected: [retryCeiling],
+    },
+    {
+      id: 'retry-cap-with-keywords',
+      source: 'fixture',
+      group: 'conceptual',
+      category: 'keyword-overlap',
+      query: 'Where is the retry attempt capped by the maximum retry seconds?',
+      expected: [retryCeiling],
+    },
+    {
+      id: 'occupied-ticket-with-keywords',
+      source: 'fixture',
+      group: 'conceptual',
+      category: 'keyword-overlap',
+      query: 'Where does issuing a ticket return false for an already occupied id?',
+      expected: [anchor('fixture/src/ledger.ts', 'if (occupied.has(id))')],
+    },
+    {
+      id: 'absent-retry-jitter',
+      source: 'fixture',
+      group: 'conceptual',
+      category: 'answerless',
+      query: 'Where does the retry delay add randomized jitter?',
+      expected: [],
+    },
+    {
+      id: 'ltcook-archive-link-protection',
+      source: 'ltcook',
+      group: 'conceptual',
+      category: 'concept',
+      query: 'Where does packaging reject symlinks in the archive destination or its parents?',
+      expected: [anchor(packaging, 'if any(part.is_symlink() for part in (path, *path.parents))')],
     },
     lifecycleQuestion('before-edits', 'inventoryBannerAmber', [
       anchor(moveSource, 'inventoryBannerAmber'),

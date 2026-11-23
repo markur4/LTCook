@@ -17,7 +17,12 @@ import {
   openRepositoryWorkspace,
   type RepositoryWorkspace,
 } from '../runtime/src/repository/workspace.js';
-import { gradeRepositoryRetrieval } from './repository-retrieval.js';
+import {
+  gradeRepositoryRetrieval,
+  rankKeywordHits,
+  retrievalKeywords,
+  retrievalObservationFailed,
+} from './repository-retrieval.js';
 import {
   repositoryFixturePaths,
   retrievalCorpus,
@@ -38,6 +43,7 @@ const implementationFiles = [
   'runtime/src/repository/results.ts',
   'runtime/src/repository/workspace.ts',
 ];
+const keywordCandidateLimit = 100;
 
 type Search = (
   workspace: RepositoryWorkspace,
@@ -109,19 +115,23 @@ async function observeQuestion(
     ...question,
     k: limit,
     elapsedMs,
-    ...gradeRepositoryRetrieval(question, result, files),
+    ...gradeRepositoryRetrieval(question, result, files, limit),
   };
 }
 
 function summarize(group: Observation[]) {
+  const comparable = group.filter((entry) => !retrievalObservationFailed(entry));
   const mean = (field: 'recallAtK' | 'reciprocalRank') => {
-    const values = group.flatMap((entry) => (entry[field] === null ? [] : [entry[field]]));
+    const values = comparable.flatMap((entry) => (entry[field] === null ? [] : [entry[field]]));
     return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
   };
   return {
     questions: group.length,
     ready: group.filter(({ status }) => status === 'ready').length,
+    operationalFailures: group.filter(({ status }) => status !== 'ready').length,
     incomplete: group.filter(({ incomplete }) => incomplete).length,
+    integrityFailures: group.filter(({ invalidEvidence }) => invalidEvidence > 0).length,
+    scoredRecallQuestions: comparable.filter(({ recallAtK }) => recallAtK !== null).length,
     falsePositives: group.reduce((sum, { falsePositives }) => sum + falsePositives, 0),
     invalidEvidence: group.reduce((sum, { invalidEvidence }) => sum + invalidEvidence, 0),
     recallAtK: mean('recallAtK'),
@@ -161,7 +171,9 @@ async function runProvider(
   const workspace = await writeCorpus(root, files);
   const observe = (question: RetrievalQuestion) =>
     observeQuestion(search, workspace, question, files, k);
-  const cold = await observe(corpus.questions[0]!);
+  const [first] = corpus.questions;
+  if (!first) throw new Error('The retrieval benchmark needs at least one question per provider.');
+  const cold = await observe(first);
   const indexCacheBytes = cache ? await directoryBytes(cache) : 0;
   const queries: Observation[] = [];
   for (const question of corpus.questions) queries.push(await observe(question));
@@ -187,6 +199,8 @@ async function runProvider(
   }
 
   const comparable = queries.filter(({ category }) => category !== 'limited');
+  const conceptual = comparable.filter(({ group }) => group === 'conceptual');
+  const categories = [...new Set(queries.map(({ category }) => category))];
   return {
     kind: cold.kind,
     cold,
@@ -196,7 +210,25 @@ async function runProvider(
     lifecycle,
     summary: {
       lexical: summarize(comparable.filter(({ group }) => group === 'lexical')),
-      conceptual: summarize(comparable.filter(({ group }) => group === 'conceptual')),
+      conceptual: summarize(conceptual),
+      byCategory: Object.fromEntries(
+        categories.map((category) => [
+          category,
+          summarize(queries.filter((question) => question.category === category)),
+        ]),
+      ),
+      byCodeLanguage: {
+        python: summarize(
+          comparable.filter(({ expected }) => expected.some(({ path }) => path.endsWith('.py'))),
+        ),
+        typescript: summarize(
+          comparable.filter(({ expected }) => expected.some(({ path }) => path.endsWith('.ts'))),
+        ),
+      },
+      byQueryLanguage: {
+        en: summarize(conceptual.filter(({ queryLanguage }) => queryLanguage === undefined)),
+        de: summarize(conceptual.filter(({ queryLanguage }) => queryLanguage === 'de')),
+      },
     },
   };
 }
@@ -240,6 +272,32 @@ async function benchmark(k: number, deployment: string | undefined, signal: Abor
         ),
       path.join(temporary, 'ripgrep'),
       corpus,
+      k,
+    );
+    const keyword = await runProvider(
+      async (workspace, { query }) => {
+        const keywords = retrievalKeywords(query);
+        if (!keywords.length) throw new Error('A keyword baseline query needs at least one word.');
+        const result = await ripgrep.search(
+          workspace,
+          { query: `(?i)(?:${keywords.join('|')})`, mode: 'regex', limit: keywordCandidateLimit },
+          signal,
+        );
+        return {
+          ...result,
+          value: {
+            ...result.value,
+            kind: 'ranked',
+            hits: rankKeywordHits(result.value.hits, keywords),
+          },
+        };
+      },
+      path.join(temporary, 'ripgrep-keywords'),
+      {
+        ...corpus,
+        questions: corpus.questions.filter(({ group }) => group === 'conceptual'),
+        transitions: [],
+      },
       k,
     );
     const cacheDirectory = path.join(temporary, 'colgrep-cache');
@@ -289,7 +347,7 @@ async function benchmark(k: number, deployment: string | undefined, signal: Abor
         })()
       : undefined;
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       runId: randomUUID(),
       startedAt,
       environment: { platform: process.platform, architecture: process.arch, bun: Bun.version },
@@ -310,6 +368,12 @@ async function benchmark(k: number, deployment: string | undefined, signal: Abor
         ripgrep: {
           queryModes: { lexical: 'exact', conceptual: 'literal' },
           ...exhaustive,
+          indexing: null,
+        },
+        ripgrepKeywords: {
+          queryMode: 'case-insensitive-keyword-overlap',
+          candidateLimit: keywordCandidateLimit,
+          ...keyword,
           indexing: null,
         },
         ...(ranked ? { colgrep: { queryMode: 'hybrid', ...ranked } } : {}),
@@ -337,14 +401,14 @@ process.once('SIGTERM', cancel);
 try {
   const report = await benchmark(k, deployment, controller.signal);
   console.log(JSON.stringify(report, null, 2));
-  const incompleteRun = Object.values(report.providers).some((provider) =>
+  const failedRun = Object.values(report.providers).some((provider) =>
     [
       provider.cold,
       ...provider.queries,
       ...provider.lifecycle.flatMap(({ observations }) => observations),
-    ].some(({ status }) => status !== 'ready'),
+    ].some(retrievalObservationFailed),
   );
-  if (incompleteRun || report.providers.colgrep?.indexing.status === 'unavailable')
+  if (failedRun || report.providers.colgrep?.indexing.status === 'unavailable')
     process.exitCode = 1;
 } finally {
   process.off('SIGINT', cancel);
