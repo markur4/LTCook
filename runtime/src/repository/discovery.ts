@@ -15,6 +15,7 @@ import { openRepositoryWorkspace, type RepositoryWorkspace } from './workspace.j
 interface RiedContext {
   id: string;
   workspaceRoot: string;
+  boundWorkspace?: true;
 }
 
 interface HostInventory {
@@ -72,6 +73,10 @@ function hostInventory(workspace: RepositoryWorkspace, pathValue: string): HostI
   };
 }
 
+function stringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item: unknown) => typeof item === 'string');
+}
+
 function validCache(value: unknown, root: string): value is CachedDiscovery {
   if (!value || typeof value !== 'object') return false;
   const record = value as Partial<CachedDiscovery>;
@@ -79,13 +84,13 @@ function validCache(value: unknown, root: string): value is CachedDiscovery {
     record.version === 2 &&
     record.workspaceRoot === root &&
     typeof record.capturedAt === 'string' &&
-    typeof record.expiresAt === 'number' &&
+    Number.isSafeInteger(record.expiresAt) &&
     typeof record.partial === 'boolean' &&
     typeof record.truncated === 'boolean' &&
-    Array.isArray(record.repository?.languages) &&
+    stringList(record.repository?.languages) &&
     Array.isArray(record.repository?.manifests) &&
-    Array.isArray(record.repository?.layout?.sourceDirs) &&
-    Array.isArray(record.repository?.layout?.testDirs) &&
+    stringList(record.repository?.layout?.sourceDirs) &&
+    stringList(record.repository?.layout?.testDirs) &&
     Array.isArray(record.recipes?.items) &&
     typeof record.host?.os === 'string' &&
     Array.isArray(record.diagnostics) &&
@@ -201,8 +206,18 @@ export class RiedService {
     }
   }
 
-  async warm(context: RiedContext): Promise<void> {
+  private async openWorkspace(context: RiedContext): Promise<RepositoryWorkspace> {
     const workspace = await openRepositoryWorkspace(context.workspaceRoot);
+    if (context.boundWorkspace && path.relative(workspace.root, context.workspaceRoot) !== '') {
+      throw new Error(
+        'The bound repository workspace no longer resolves to its recorded directory',
+      );
+    }
+    return workspace;
+  }
+
+  async warm(context: RiedContext): Promise<void> {
+    const workspace = await this.openWorkspace(context);
     await this.metadata(workspace, this.toolPath(context), false);
   }
 
@@ -211,7 +226,7 @@ export class RiedService {
     if (request.operation === 'outline' && !workspaceFileAccess)
       throw new Error('Source outlines require trusted workspace file-read access');
 
-    const workspace = await openRepositoryWorkspace(context.workspaceRoot);
+    const workspace = await this.openWorkspace(context);
     const pathValue = this.toolPath(context);
     if (request.operation === 'map') {
       const map = await readRepositoryMap(workspace, request.target ?? '.', {

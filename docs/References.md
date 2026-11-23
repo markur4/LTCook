@@ -397,6 +397,8 @@ The repository section includes source and test directories, detected tools
 and configuration files, scripts, resources, agent instructions, conventions,
 and platform metadata. Command provenance indicates whether `brief` inferred a
 command or observed a project script. Discovery reports these commands as data.
+Just recipe metadata supports literal workspace-local includes. Unsupported
+include syntax produces a partial result with a diagnostic.
 
 The Git section reports branch, HEAD, upstream, locally known default branch,
 remote names, worktrees, staged and unstaged changes, and untracked files.

@@ -78,7 +78,7 @@ async function walk(
   return { entries, truncated, partial };
 }
 
-function assertVisible(target: string): void {
+export function assertRepositoryPathVisible(target: string): void {
   if (target.split('/').some(excluded))
     throw new Error('Repository target is excluded from discovery');
 }
@@ -90,7 +90,7 @@ export async function readRepositoryMap(
 ): Promise<RepositoryResult<{ target: string; entries: TreeEntry[] }>> {
   const capturedAt = new Date().toISOString();
   const { relative } = await workspace.resolvePath(target, { kind: 'directory', allowRoot: true });
-  assertVisible(relative);
+  assertRepositoryPathVisible(relative);
   const { entries, partial, truncated: scanTruncated } = await walk(workspace, relative, options);
   entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   let bytes = 0;
@@ -130,7 +130,11 @@ export async function readRepositoryMap(
   };
 }
 
-async function readBoundedFile(absolute: string, limit: number): Promise<Buffer | undefined> {
+/** Read bytes from a provider path already resolved against the workspace. */
+export async function readBoundedFile(
+  absolute: string,
+  limit: number,
+): Promise<Buffer | undefined> {
   const entry = await lstat(absolute, { bigint: true });
   if (!entry.isFile()) throw new Error('Repository file changed during discovery');
   if (entry.size > limit) return;
@@ -192,7 +196,7 @@ export async function stageRepositoryFiles(
   dispose(): Promise<void>;
 }> {
   const selected = await workspace.resolvePath(target, { allowRoot: true });
-  assertVisible(selected.relative);
+  assertRepositoryPathVisible(selected.relative);
   const scan =
     selected.kind === 'file'
       ? {

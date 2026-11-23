@@ -197,14 +197,14 @@ Task to register: ${input.description}`,
     }
     if (this.initializedSessions.has(session.id)) return this.snapshot(session.id);
     await this.initializeSession(session);
-    void this.riedService?.warm(session).catch(() => undefined);
+    void this.riedService?.warm({ ...session, boundWorkspace: true }).catch(() => undefined);
     return this.snapshot(session.id);
   }
 
   async ried(sessionId: string, request: RiedRequest): Promise<unknown> {
     this.assertOpen();
     if (!this.riedService) throw new Error('RIED is unavailable');
-    return this.riedService.get(this.session(sessionId), request);
+    return this.riedService.get({ ...this.session(sessionId), boundWorkspace: true }, request);
   }
 
   private assertSessionSelection(session: Session, workspaceRoot: string): void {
