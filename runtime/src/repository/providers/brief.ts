@@ -91,6 +91,7 @@ function observation(
   diagnostics: RepositoryDiagnostic[],
 ): RepositoryResult<RepositoryInventory> {
   return {
+    provider: value.source,
     value,
     capturedAt,
     diagnostics,

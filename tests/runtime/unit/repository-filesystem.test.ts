@@ -8,6 +8,7 @@ import {
   stageRepositoryFiles,
 } from '../../../runtime/src/repository/filesystem.js';
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
+import { createRiedTool } from '../../../runtime/src/tools/ried.js';
 
 test('repository maps are bounded and omit links, sensitive files, and generated directories', async () => {
   const home = await mkdtemp(path.join(tmpdir(), 'ltcook-repository-map-'));
@@ -38,6 +39,34 @@ test('repository maps are bounded and omit links, sensitive files, and generated
     const one = await readRepositoryMap(workspace, 'src', { maxDepth: 3, maxEntries: 1 });
     expect(one.value.entries).toHaveLength(1);
     expect(one.truncated).toBe(true);
+    const ried = new RiedService(path.join(home, 'cache'), undefined, () => ({ PATH: '' }));
+    expect(
+      await createRiedTool(ried).invoke(
+        { operation: 'map', maxDepth: 2, maxEntries: 20 },
+        {
+          agentId: 'map-fixture',
+          workspaceRoot: root,
+          workspaceFileAccess: false,
+          signal: new AbortController().signal,
+        },
+      ),
+    ).toMatchObject({
+      value: {
+        provider: 'filesystem',
+        status: 'partial',
+        freshness: 'current',
+        partial: false,
+        truncated: true,
+        diagnostics: ['Directory map reached its scan or depth limit'],
+        diagnosticDetails: [
+          {
+            source: 'filesystem',
+            code: 'map-limit',
+            message: 'Directory map reached its scan or depth limit',
+          },
+        ],
+      },
+    });
     for (const target of ['../outside', outside, 'C:repo', 'outside-link', 'inside-link', '.env']) {
       await expect(
         readRepositoryMap(workspace, target, { maxDepth: 1, maxEntries: 10 }),
@@ -103,6 +132,7 @@ test.skipIf(!brief)(
       const outline = await service.get(context, { operation: 'outline', target: 'src/wanted.ts' });
       expect(outline).toMatchObject({
         operation: 'outline',
+        provider: 'brief',
         value: { target: 'src/wanted.ts', outline: expect.stringContaining('function wanted') },
         freshness: 'current',
         truncated: false,

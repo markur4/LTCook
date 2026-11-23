@@ -103,6 +103,7 @@ export async function readRepositoryOutline(
       message: 'Source outline reached its file, scan, or output limit',
     });
   return {
+    provider: 'brief',
     value: { target: selected.relative, outline },
     capturedAt,
     freshness: 'current',

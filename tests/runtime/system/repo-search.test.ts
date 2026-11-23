@@ -28,7 +28,6 @@ import {
 } from '../../../runtime/src/tools/repo-search.js';
 
 const deploymentDirectory = process.env.LTCOOK_COLGREP_DEPLOYMENT;
-const benchmarkWorkspace = process.env.LTCOOK_COLGREP_BENCHMARK_WORKSPACE;
 const timeoutMs = 120_000;
 const piFixture = fileURLToPath(new URL('./repo-search-pi.ts', import.meta.url));
 
@@ -115,6 +114,7 @@ function startStandalonePi(root: string, workspace: string, cacheDirectory: stri
       PI_OFFLINE: '1',
       LTCOOK_NATIVE_AGENT_ID: '',
       LTCOOK_SESSION_ID: '',
+      LTCOOK_WORKSPACE_MCP: '',
       LTCOOK_AGENT_API_TOKEN: '',
     },
     stdin: 'pipe',
@@ -222,7 +222,10 @@ test.skipIf(!deploymentDirectory)(
           },
         ],
       });
-      expect(await byName(workspace, 'mainOnlyChecksum')).toEqual(cold);
+      expect(await byName(workspace, 'mainOnlyChecksum')).toMatchObject({
+        status: 'ready',
+        results: cold.results,
+      });
       expect(await byName(workspace, 'Checksum', ['nested'])).toMatchObject({
         status: 'ready',
         results: [{ path: 'nested/nested.ts' }],
@@ -231,13 +234,16 @@ test.skipIf(!deploymentDirectory)(
         status: 'ready',
         results: [{ path: 'nested.ts' }],
       });
-      expect(await byName(nested, 'mainOnlyChecksum')).toEqual({ status: 'ready', results: [] });
-      expect(await byName(workspace, 'excludedChecksum|outsideOnlyChecksum')).toEqual({
+      expect(await byName(nested, 'mainOnlyChecksum')).toMatchObject({
+        status: 'ready',
+        results: [],
+      });
+      expect(await byName(workspace, 'excludedChecksum|outsideOnlyChecksum')).toMatchObject({
         status: 'ready',
         results: [],
       });
       await expect(byName(nested, 'outsideOnlyChecksum', ['escape.ts'])).rejects.toThrow(
-        /workspace|outside|symlink/i,
+        /workspace|outside|symbolic link/i,
       );
       await expect(
         search(tool, nested, { query: outside, pattern: 'outsideOnlyChecksum' }),
@@ -246,14 +252,20 @@ test.skipIf(!deploymentDirectory)(
         status: 'ready',
         results: [{ path: 'main.ts' }],
       });
-      expect(await byName(sibling, 'mainOnlyChecksum')).toEqual({ status: 'ready', results: [] });
+      expect(await byName(sibling, 'mainOnlyChecksum')).toMatchObject({
+        status: 'ready',
+        results: [],
+      });
       await writeFile(path.join(workspace, 'main.ts'), code('updatedMainChecksum'));
-      expect(await byName(workspace, 'mainOnlyChecksum')).toEqual({ status: 'ready', results: [] });
+      expect(await byName(workspace, 'mainOnlyChecksum')).toMatchObject({
+        status: 'ready',
+        results: [],
+      });
       expect(await byName(workspace, 'updatedMainChecksum')).toMatchObject({
         status: 'ready',
         results: [{ path: 'main.ts' }],
       });
-      expect(await byName(sibling, 'updatedMainChecksum')).toEqual({
+      expect(await byName(sibling, 'updatedMainChecksum')).toMatchObject({
         status: 'ready',
         results: [],
       });
@@ -326,7 +338,12 @@ test.skipIf(!deploymentDirectory)(
         try {
           const indexes = await workspaceIndexDirectory(cacheDirectory, workspace);
           await waitForInitialBuild(indexes, pi);
-          expect((await searchMcp()).structuredContent).toMatchObject({ status: 'indexing' });
+          expect((await searchMcp()).structuredContent).toMatchObject({
+            status: 'indexing',
+            partial: true,
+            provider: 'colgrep',
+            diagnostics: [{ source: 'colgrep', code: 'indexing' }],
+          });
           expect(pi.child.exitCode).toBeNull();
           pi.cancel();
           expect(await pi.child.exited).toBe(1);
@@ -365,7 +382,10 @@ test.skipIf(!deploymentDirectory)(
       const lock = path.join(indexes, indexName, '.lock');
       await rm(lock);
       await mkdir(lock);
-      await expect(run()).rejects.toThrow(/lock|storage|cache/i);
+      expect(await run()).toMatchObject({
+        status: 'unavailable',
+        hint: expect.stringMatching(/lock|storage|cache/i),
+      });
     }),
   timeoutMs,
 );
@@ -387,61 +407,25 @@ test.skipIf(!deploymentDirectory)(
 
       const library = path.join(assets, manifest.library);
       await rm(library);
-      await expect(
-        search(searchTool(cacheDirectory, assets), workspace, { query: 'checksum' }),
-      ).rejects.toThrow(/setup|repair/i);
+      expect(
+        await search(searchTool(cacheDirectory, assets), workspace, { query: 'checksum' }),
+      ).toMatchObject({ status: 'unavailable', hint: expect.stringMatching(/setup|repair/i) });
       await copyFile(path.join(deploymentDirectory, manifest.library), library);
       const extra = path.join(assets, manifest.model, 'unverified.txt');
       await writeFile(extra, 'unexpected model file');
-      await expect(
-        search(searchTool(cacheDirectory, assets), workspace, { query: 'checksum' }),
-      ).rejects.toThrow(/move unexpected files.*repeat LTCook setup/i);
+      expect(
+        await search(searchTool(cacheDirectory, assets), workspace, { query: 'checksum' }),
+      ).toMatchObject({
+        status: 'unavailable',
+        hint: expect.stringMatching(/move unexpected files.*repeat LTCook setup/i),
+      });
       await rm(extra);
       await writeFile(path.join(assets, manifest.model, 'tokenizer.json'), '{}');
-      await expect(
-        search(searchTool(cacheDirectory, assets), workspace, { query: 'checksum' }),
-      ).rejects.toThrow(/setup|repair/i);
+      expect(
+        await search(searchTool(cacheDirectory, assets), workspace, { query: 'checksum' }),
+      ).toMatchObject({ status: 'unavailable', hint: expect.stringMatching(/setup|repair/i) });
       const indexes = await workspaceIndexDirectory(cacheDirectory, workspace);
       expect(await readdir(indexes).catch(() => [])).toEqual([]);
     }),
   timeoutMs,
-);
-
-async function directoryBytes(directory: string): Promise<number> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const sizes = await Promise.all(
-    entries.map(async (entry) => {
-      const child = path.join(directory, entry.name);
-      return entry.isDirectory() ? directoryBytes(child) : (await stat(child)).size;
-    }),
-  );
-  return sizes.reduce((sum, size) => sum + size, 0);
-}
-
-test.skipIf(!deploymentDirectory || !benchmarkWorkspace)(
-  'reports managed ColGREP cold and warm timings on the benchmark workspace',
-  async () =>
-    withTemporaryDirectory(async (cacheDirectory) => {
-      if (!benchmarkWorkspace) throw new Error('A benchmark workspace is required.');
-      const workspace = await realpath(benchmarkWorkspace);
-      const tool = searchTool(cacheDirectory, deploymentDirectory, 240_000);
-      const measure = async () => {
-        const started = performance.now();
-        const result = await search(tool, workspace, {
-          query: 'validate workspace authorization and tool access',
-          limit: 8,
-        });
-        const elapsed = Math.round(performance.now() - started);
-        expect(result.status).toBe('ready');
-        expect(result.results).not.toEqual([]);
-        return elapsed;
-      };
-      const coldMs = await measure();
-      const warmMs = [await measure(), await measure(), await measure()];
-      const indexBytes = await directoryBytes(
-        await workspaceIndexDirectory(cacheDirectory, workspace),
-      );
-      console.log(JSON.stringify({ coldMs, warmMs, indexBytes }));
-    }),
-  260_000,
 );

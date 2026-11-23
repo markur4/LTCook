@@ -1,9 +1,13 @@
 import { Type } from 'typebox';
+import { COLGREP_MAX_RESULTS, createColgrepProvider } from '../repository/providers/colgrep.js';
 import {
-  COLGREP_MAX_RESULTS,
-  ColgrepHitSchema,
-  createColgrepProvider,
-} from '../repository/providers/colgrep.js';
+  RepositoryDiagnosticSchema,
+  RepositoryFreshnessSchema,
+  RepositoryHitSchema,
+  RepositoryRetrievalKindSchema,
+  RepositoryRetrievalStatusSchema,
+} from '../repository/results.js';
+import { openRepositoryWorkspace } from '../repository/workspace.js';
 import { defineTool } from './types.js';
 
 export { REPO_SEARCH_TIMEOUT_MS } from '../paseo-plugin/shared/workspace-tools.js';
@@ -26,18 +30,32 @@ export function createRepoSearchTool(provider = createColgrepProvider()) {
       { additionalProperties: false },
     ),
     outputSchema: Type.Object({
-      status: Type.Union([Type.Literal('ready'), Type.Literal('indexing')]),
-      results: Type.Optional(Type.Array(ColgrepHitSchema)),
+      status: RepositoryRetrievalStatusSchema,
+      results: Type.Optional(Type.Array(RepositoryHitSchema)),
       hint: Type.Optional(Type.String()),
+      provider: Type.String(),
+      kind: RepositoryRetrievalKindSchema,
+      diagnostics: Type.Array(RepositoryDiagnosticSchema),
+      freshness: RepositoryFreshnessSchema,
+      capturedAt: Type.String(),
+      partial: Type.Boolean(),
+      truncated: Type.Boolean(),
     }),
     async execute(input, context) {
       if (!context.repositorySearchAccess) {
         throw new Error('Repository search is unavailable for this session.');
       }
-      const outcome = await provider.search({ root: context.workspaceRoot }, input, context.signal);
-      if (outcome.value.status === 'indexing')
-        return { status: 'indexing' as const, hint: outcome.diagnostics[0]?.message };
-      return { status: 'ready' as const, results: outcome.value.hits };
+      const workspace = await openRepositoryWorkspace(context.workspaceRoot).catch(() => undefined);
+      if (workspace?.root !== context.workspaceRoot)
+        throw new Error('The authorized workspace is unavailable.');
+      const { value, ...metadata } = await provider.search(workspace, input, context.signal);
+      const { status, kind, hits } = value;
+      return {
+        ...metadata,
+        kind,
+        status,
+        ...(status === 'ready' ? { results: hits } : { hint: metadata.diagnostics[0]?.message }),
+      };
     },
   });
 }

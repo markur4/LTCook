@@ -4,15 +4,15 @@ import { createReadStream } from 'node:fs';
 import { lstat, mkdir, readdir, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
-import { Type, type Static } from 'typebox';
+import { Type } from 'typebox';
 import { Value } from 'typebox/value';
 import { REPO_SEARCH_TIMEOUT_MS } from '../../paseo-plugin/shared/workspace-tools.js';
 import { isWithin } from '../../path-containment.js';
-import type { RepositoryResult } from '../results.js';
+import { verifySourceEvidence } from '../evidence.js';
+import type { RepositoryDiagnostic, RepositoryRetrieval } from '../results.js';
 import type { RepositoryWorkspace } from '../workspace.js';
 
 export const COLGREP_MAX_RESULTS = 20;
-const MAX_EXCERPT = 2000;
 const MAX_STDOUT = 4 * 1024 * 1024;
 const MAX_STDERR = 64 * 1024;
 const REPAIR = 'Repeat LTCook setup with the supported installer or editable registration.';
@@ -35,22 +35,10 @@ const RANGE_SCHEMA = Type.Object({
   end_line: Type.Integer({ minimum: 1 }),
   name: Type.String(),
 });
-const NATIVE_RESULTS = Type.Array(
-  Type.Object({
-    unit: Type.Intersect([RANGE_SCHEMA, Type.Object({ file: Type.String(), code: Type.String() })]),
-    matches: Type.Optional(Type.Array(RANGE_SCHEMA)),
-  }),
-);
-export const ColgrepHitSchema = Type.Object({
-  path: Type.String(),
-  startLine: Type.Integer({ minimum: 1 }),
-  endLine: Type.Integer({ minimum: 1 }),
-  excerpt: Type.String({ maxLength: MAX_EXCERPT }),
-  name: Type.Optional(Type.String()),
+const NATIVE_RESULT = Type.Object({
+  unit: Type.Intersect([RANGE_SCHEMA, Type.Object({ file: Type.String(), code: Type.String() })]),
+  matches: Type.Optional(Type.Array(RANGE_SCHEMA)),
 });
-
-type ColgrepOutcome =
-  { status: 'ready'; hits: Static<typeof ColgrepHitSchema>[] } | { status: 'indexing' };
 
 interface ColgrepOptions {
   deploymentDirectory?: string;
@@ -70,6 +58,18 @@ interface VerifiedFile {
   identity: string;
   digest: string;
 }
+
+class ColgrepCommandLimitError extends Error {
+  constructor(readonly code: 'output-limit' | 'diagnostic-limit') {
+    super(
+      code === 'output-limit'
+        ? 'ColGREP output exceeded its size limit.'
+        : 'ColGREP diagnostics exceeded their size limit.',
+    );
+  }
+}
+
+class ColgrepPatternError extends Error {}
 
 function confinedPath(root: string, relative: string): string {
   const candidate = path.resolve(root, relative);
@@ -150,15 +150,6 @@ async function loadAssets(
   }
 }
 
-async function workspaceIdentity(root: string): Promise<string> {
-  const [actual, info] = await Promise.all([realpath(root), lstat(root, { bigint: true })]).catch(
-    () => [],
-  );
-  if (actual !== root || !info?.isDirectory())
-    throw new Error('The authorized workspace is unavailable.');
-  return `${info.dev}:${info.ino}`;
-}
-
 async function getIndexDirectory(
   cache: string | undefined,
   workspace: string,
@@ -194,30 +185,22 @@ interface SearchPath {
   directory: boolean;
 }
 
-async function searchPaths(workspace: string, requested: string[]): Promise<SearchPath[]> {
+async function searchPaths(
+  workspace: RepositoryWorkspace,
+  requested: string[],
+): Promise<SearchPath[]> {
   return Promise.all(
     requested.map(async (relative) => {
-      if (/[\u0000*?{}\[\]\\:]/.test(relative) || relative.split('/').includes('..')) {
+      if (/[\u0000*?{}\[\]\\:]/.test(relative)) {
         throw new Error(
           'Search paths must be literal workspace-relative paths using forward slashes.',
         );
       }
-      const candidate = path.resolve(workspace, relative);
-      if (!isWithin(workspace, candidate, true) || path.isAbsolute(relative)) {
-        throw new Error('Search path is outside the authorized workspace.');
-      }
-      const [resolved, info] = await Promise.all([realpath(candidate), lstat(candidate)]).catch(
-        () => {
-          throw new Error('Search path does not exist inside the authorized workspace.');
-        },
-      );
-      if (resolved !== candidate || !(info.isDirectory() || info.isFile())) {
-        throw new Error('Search paths must name regular files or directories without symlinks.');
-      }
+      const selected = await workspace.resolvePath(relative, { allowRoot: true });
       return {
-        absolute: candidate,
-        filter: path.relative(workspace, candidate).split(path.sep).join('/'),
-        directory: info.isDirectory(),
+        absolute: selected.absolute,
+        filter: selected.relative === '.' ? '' : selected.relative,
+        directory: selected.kind === 'directory',
       };
     }),
   );
@@ -265,14 +248,14 @@ function execute(
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
       if (failure) return;
       stdoutBytes += Buffer.byteLength(chunk);
-      if (stdoutBytes > MAX_STDOUT) stop(new Error('ColGREP output exceeded its size limit.'));
+      if (stdoutBytes > MAX_STDOUT) stop(new ColgrepCommandLimitError('output-limit'));
       else stdout += chunk;
     });
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
       if (failure) return;
       stderrBytes += Buffer.byteLength(chunk);
       if (stderrBytes > MAX_STDERR) {
-        stop(new Error('ColGREP diagnostics exceeded their size limit.'));
+        stop(new ColgrepCommandLimitError('diagnostic-limit'));
         return;
       }
       stderr += chunk;
@@ -292,7 +275,7 @@ function execute(
   });
 }
 
-function searchFailure(stderr: string): Error {
+function searchFailure(stderr: string, pattern?: string): Error {
   if (
     /index lock|permission denied|read.only file system|not a directory|no space left/i.test(stderr)
   ) {
@@ -300,8 +283,8 @@ function searchFailure(stderr: string): Error {
       'ColGREP could not access its index or lock. Check AppRC cache permissions, disk space, and competing searches.',
     );
   }
-  if (/regex|regular expression|look.around/i.test(stderr)) {
-    return new Error(
+  if (pattern && /regex|regular expression|look.around/i.test(stderr)) {
+    return new ColgrepPatternError(
       'ColGREP could not search with the supplied regular expression. Check the pattern.',
     );
   }
@@ -324,49 +307,98 @@ function nativePath(file: string): string {
   return file.startsWith('\\\\?\\') ? file.slice(4) : file;
 }
 
-async function parseResults(
+function rankedResult(): RepositoryRetrieval {
+  return {
+    provider: 'colgrep',
+    value: { kind: 'ranked', status: 'ready', hits: [] },
+    diagnostics: [],
+    partial: false,
+    truncated: false,
+    capturedAt: new Date().toISOString(),
+    // > ColGREP may serve an existing index while another process updates it.
+    freshness: 'cached',
+  };
+}
+
+function report(result: RepositoryRetrieval, code: string, message: string) {
+  if (!result.diagnostics.some((diagnostic) => diagnostic.code === code)) {
+    result.diagnostics.push({ source: 'colgrep', code, message } satisfies RepositoryDiagnostic);
+  }
+  result.partial = true;
+}
+
+async function normalizeResults(
   stdout: string,
-  workspace: string,
+  workspace: RepositoryWorkspace,
   paths: SearchPath[],
-): Promise<Static<typeof ColgrepHitSchema>[]> {
+  limit: number,
+  candidateLimit: number,
+  signal: AbortSignal,
+  result: RepositoryRetrieval,
+): Promise<void> {
   let value: unknown;
   try {
     value = JSON.parse(stdout);
   } catch {
     throw new Error('ColGREP returned malformed JSON.');
   }
-  if (!Value.Check(NATIVE_RESULTS, value)) throw new Error('ColGREP returned malformed results.');
-  const results: Static<typeof ColgrepHitSchema>[] = [];
-  for (const hit of value) {
-    const file = nativePath(hit.unit.file);
-    if (!path.isAbsolute(file) || !isWithin(workspace, file)) {
-      throw new Error('ColGREP returned a path outside the authorized workspace.');
+  if (!Array.isArray(value)) throw new Error('ColGREP returned malformed results.');
+  result.truncated = value.length >= candidateLimit;
+
+  for (const hit of value as unknown[]) {
+    if (result.value.hits.length === limit) {
+      result.truncated = true;
+      break;
     }
-    const actual = await realpath(file).catch(() => undefined);
-    if (!actual || actual !== file) continue;
-    const info = await lstat(actual).catch(() => undefined);
-    if (!info?.isFile()) continue;
+    signal.throwIfAborted();
+    if (!Value.Check(NATIVE_RESULT, hit)) {
+      report(result, 'invalid-hit', 'ColGREP returned a malformed source candidate.');
+      continue;
+    }
+    const file = nativePath(hit.unit.file);
+    if (!path.isAbsolute(file) || path.resolve(file) !== file || !isWithin(workspace.root, file)) {
+      report(
+        result,
+        'outside-workspace',
+        'ColGREP returned a path outside the authorized workspace.',
+      );
+      continue;
+    }
     if (
       paths.length &&
       !paths.some(
-        ({ absolute, directory }) =>
-          absolute === actual || (directory && isWithin(absolute, actual)),
+        ({ absolute, directory }) => absolute === file || (directory && isWithin(absolute, file)),
       )
     )
       continue;
 
-    const best = hit.matches?.[0] ?? hit.unit;
-    if (best.end_line < best.line) throw new Error('ColGREP returned an invalid line range.');
-    const name = best.name.slice(0, 200);
-    results.push({
-      path: path.relative(workspace, actual).split(path.sep).join('/'),
-      startLine: best.line,
-      endLine: best.end_line,
-      excerpt: hit.unit.code.slice(0, MAX_EXCERPT),
-      ...(name ? { name } : {}),
-    });
+    // > Native JSON can give a unit's context range and its best match's narrower range.
+    const ranges = [hit.matches?.[0], hit.unit].flatMap((range) =>
+      range ? [{ startLine: range.line, endLine: range.end_line, name: range.name }] : [],
+    );
+    const evidence = await verifySourceEvidence(
+      workspace,
+      {
+        path: path.relative(workspace.root, file),
+        excerpt: hit.unit.code,
+        ranges,
+      },
+      signal,
+    );
+    if (typeof evidence === 'string') {
+      if (evidence !== 'source-unavailable') result.freshness = 'stale';
+      report(
+        result,
+        evidence,
+        evidence === 'source-unavailable'
+          ? 'ColGREP evidence could not be checked against an authorized current source file.'
+          : 'ColGREP evidence refers to a missing file or differs from its current source.',
+      );
+      continue;
+    }
+    result.value.hits.push(evidence);
+    result.truncated ||= evidence.excerptTruncated === true;
   }
-  return results;
 }
 
 /** Search an authorized workspace, opening and refreshing its isolated index on demand. */
@@ -374,12 +406,35 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
   const verifiedFiles = new Map<string, VerifiedFile>();
   const deployment = options.deploymentDirectory ?? process.env.LTCOOK_COLGREP_DEPLOYMENT;
   const cache = options.cacheDirectory ?? process.env.LTCOOK_COLGREP_CACHE_DIR;
+  const timeoutMs = options.timeoutMs ?? REPO_SEARCH_TIMEOUT_MS;
   return {
+    /** Build the same native index without searching and return the native command's elapsed time. */
+    async buildIndex(workspace: RepositoryWorkspace, callerSignal: AbortSignal): Promise<number> {
+      const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(timeoutMs)]);
+      signal.throwIfAborted();
+      const assets = await loadAssets(deployment, verifiedFiles, signal);
+      const indices = await getIndexDirectory(cache, workspace.root, workspace.identity);
+      await workspace.assertUnchanged();
+      const started = performance.now();
+      const result = await execute(
+        assets,
+        ['init', '--model', assets.model, '--', workspace.root],
+        indices,
+        signal,
+      );
+      const elapsedMs = performance.now() - started;
+      await workspace.assertUnchanged();
+      signal.throwIfAborted();
+      if (result.code !== 0) throw searchFailure(result.stderr);
+      return elapsedMs;
+    },
+
     async search(
-      authorizedWorkspace: Pick<RepositoryWorkspace, 'root'>,
+      workspace: RepositoryWorkspace,
       input: RepositorySearchRequest,
       callerSignal: AbortSignal,
-    ): Promise<RepositoryResult<ColgrepOutcome>> {
+    ): Promise<RepositoryRetrieval> {
+      callerSignal.throwIfAborted();
       if (!input.query.trim() || input.query.includes('\0') || input.pattern?.includes('\0')) {
         throw new Error('ColGREP queries and regular expressions must be nonempty text.');
       }
@@ -389,39 +444,36 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
           'Use a descriptive query and put file or directory restrictions in paths when using a regular expression.',
         );
       }
-      const timeout = AbortSignal.timeout(options.timeoutMs ?? REPO_SEARCH_TIMEOUT_MS);
+      await workspace.assertUnchanged();
+      const paths = await searchPaths(workspace, input.paths ?? []);
+      const limit = input.limit ?? 8;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > COLGREP_MAX_RESULTS)
+        throw new Error('ColGREP result limit is outside the supported range.');
+      const timeout = AbortSignal.timeout(timeoutMs);
       const signal = AbortSignal.any([callerSignal, timeout]);
+      const outcome = rankedResult();
       try {
-        const workspace = authorizedWorkspace.root;
-        const identity = await workspaceIdentity(workspace);
-        const ensureWorkspaceUnchanged = async () => {
-          if ((await workspaceIdentity(workspace)) !== identity)
-            throw new Error('The authorized workspace changed during repository search.');
-        };
-        const paths = await searchPaths(workspace, input.paths ?? []);
-        const limit = Math.min(input.limit ?? 8, COLGREP_MAX_RESULTS);
         // > ColGREP also matches globs below the root. Verify exact literal scope on every hit.
         const filters = paths.some(({ filter }) => !filter) ? [] : paths;
+        const candidateLimit = (filters.length ? COLGREP_MAX_RESULTS : limit) + 1;
         const assets = await loadAssets(deployment, verifiedFiles, signal);
-        const indices = await getIndexDirectory(cache, workspace, identity);
+        const indices = await getIndexDirectory(cache, workspace.root, workspace.identity);
         const args = [
           'search',
           '--json',
           '--model',
           assets.model,
           '--results',
-          String((filters.length ? COLGREP_MAX_RESULTS : limit) + 1),
+          String(candidateLimit),
           ...(input.mode === 'semantic' ? ['--semantic-only'] : []),
           ...(input.pattern ? [`--pattern=${input.pattern}`] : []),
           ...filters.map(({ filter, directory }) => `--include=${filter}${directory ? '/**' : ''}`),
           '--',
           input.query,
-          workspace,
+          workspace.root,
         ];
-        await ensureWorkspaceUnchanged();
+        await workspace.assertUnchanged();
         const result = await execute(assets, args, indices, signal);
-        await ensureWorkspaceUnchanged();
-        const capturedAt = new Date().toISOString();
         if (result.code !== 0) {
           if (
             result.stderr
@@ -432,41 +484,51 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
                   'Error: colgrep index is currently being built, rely on grep for now.',
               )
           ) {
-            return {
-              value: { status: 'indexing' as const },
-              diagnostics: [
-                {
-                  source: 'colgrep',
-                  code: 'indexing',
-                  message:
-                    'Retry when indexing finishes. If this status persists, check that AppRC cache storage supports file locking.',
-                },
-              ],
-              partial: true,
-              truncated: false,
-              capturedAt,
-              freshness: 'stale' as const,
-            };
+            outcome.value.status = 'indexing';
+            outcome.freshness = 'unknown';
+            report(
+              outcome,
+              'indexing',
+              'Retry when indexing finishes. If this status persists, check that AppRC cache storage supports file locking.',
+            );
+          } else {
+            throw searchFailure(result.stderr, input.pattern);
           }
-          throw searchFailure(result.stderr);
+        } else {
+          await workspace.assertUnchanged();
+          await normalizeResults(
+            result.stdout,
+            workspace,
+            filters,
+            limit,
+            candidateLimit,
+            signal,
+            outcome,
+          );
         }
-        const results = await parseResults(result.stdout, workspace, paths);
-        signal.throwIfAborted();
-        return {
-          value: { status: 'ready' as const, hits: results.slice(0, limit) },
-          diagnostics: [],
-          partial: false,
-          truncated: results.length > limit,
-          capturedAt,
-          // > ColGREP may serve an existing index while another process updates it.
-          freshness: 'cached' as const,
-        };
       } catch (error) {
-        if (timeout.aborted && !callerSignal.aborted) {
-          throw new Error('ColGREP exceeded its time limit. Retry the search.');
+        callerSignal.throwIfAborted();
+        if (error instanceof ColgrepPatternError) throw error;
+        if (!outcome.value.hits.length) {
+          outcome.value.status = 'unavailable';
+          outcome.freshness = 'unknown';
         }
-        throw error;
+        const limitError = error instanceof ColgrepCommandLimitError ? error : undefined;
+        if (limitError) outcome.truncated = true;
+        report(
+          outcome,
+          timeout.aborted ? 'timeout' : (limitError?.code ?? 'unavailable'),
+          timeout.aborted
+            ? 'ColGREP exceeded its time limit. Retry the search.'
+            : error instanceof Error
+              ? error.message
+              : 'ColGREP search failed.',
+        );
       }
+      await workspace.assertUnchanged();
+      callerSignal.throwIfAborted();
+      outcome.capturedAt = new Date().toISOString();
+      return outcome;
     },
   };
 }

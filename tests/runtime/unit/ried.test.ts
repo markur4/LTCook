@@ -93,6 +93,13 @@ printf '%s\\n' '{"recipes":{"build":{}},"modules":{"runtime":{"recipes":{"check"
     service.get(session, { operation: 'refresh' }),
     service.get(session, { operation: 'refresh' }),
   ])) as RiedSnapshot[];
+  expect(first).toMatchObject({
+    provider: 'ried',
+    freshness: 'current',
+    partial: false,
+    truncated: false,
+    diagnosticDetails: [],
+  });
   expect(first.repository.languages).toEqual(['JavaScript']);
   expect(first.recipes).toEqual({
     source: 'just',
@@ -108,14 +115,18 @@ printf '%s\\n' '{"recipes":{"build":{}},"modules":{"runtime":{"recipes":{"check"
   expect(second.repository.manifests).toHaveLength(1);
   expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(1);
   expect(existsSync(sentinel)).toBe(false);
-  const summary = (await service.get(session, { operation: 'summary' })) as { recipes: number };
-  expect(summary.recipes).toBe(2);
+  expect(await service.get(session, { operation: 'summary' })).toMatchObject({
+    provider: 'ried',
+    recipes: 2,
+    freshness: 'cached',
+  });
   expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(1);
   writeFileSync(join(workspace, 'changed.txt'), 'changed');
   const git = (await service.get(session, { operation: 'section', section: 'git' })) as {
     value: RiedSnapshot['git'];
   };
   expect(git.value.untracked).toBe(1);
+  expect(git).toMatchObject({ provider: 'git', freshness: 'current' });
   await service.get(session, { operation: 'refresh' });
   expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(2);
   expect(readFileSync(justCalls, 'utf8').trim().split('\n')).toEqual([
@@ -135,6 +146,18 @@ printf '%s\\n' '{"recipes":{"build":{}},"modules":{"runtime":{"recipes":{"check"
     languages: ['JavaScript'],
   });
   expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(3);
+
+  const malformedDiagnostic = JSON.parse(readFileSync(cachedPath, 'utf8'));
+  malformedDiagnostic.diagnostics = [{ message: 'Incomplete cached diagnostic' }];
+  writeFileSync(cachedPath, JSON.stringify(malformedDiagnostic));
+  const rebuilt = await service.get(session, { operation: 'section', section: 'repository' });
+  expect(rebuilt).toMatchObject({
+    provider: 'brief',
+    freshness: 'current',
+    diagnostics: [],
+    diagnosticDetails: [],
+  });
+  expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(4);
 });
 
 test('RIED reports missing discovery tools without running project commands', async () => {
@@ -158,14 +181,29 @@ test('RIED reports missing discovery tools without running project commands', as
   const service = new RiedService(join(home, 'cache'), join(home, 'missing-brief'), () => ({
     PATH: '',
   }));
-  const result = (await service.get(session, { operation: 'summary' })) as {
-    status: string;
-    recipes: number;
-    diagnostics: string[];
-  };
-  expect(result.status).toBe('partial');
+  const result = await service.get(session, { operation: 'summary' });
+  expect(result).toMatchObject({
+    status: 'partial',
+    provider: 'ried',
+    freshness: 'current',
+    partial: true,
+    truncated: false,
+    recipes: 0,
+    diagnosticDetails: [
+      { source: 'brief', code: 'unavailable', message: expect.stringContaining('brief v0.16.0') },
+      {
+        source: 'just',
+        code: 'unavailable',
+        message: 'Just is unavailable outside the workspace',
+      },
+      {
+        source: 'git',
+        code: 'git-unavailable',
+        message: 'Git is unavailable outside the workspace',
+      },
+    ],
+  });
   expect(result.diagnostics.some((item) => item.includes('brief v0.16.0'))).toBe(true);
-  expect(result.recipes).toBe(0);
   expect(result.diagnostics).toContain('Just is unavailable outside the workspace');
   expect(existsSync(sentinel)).toBe(false);
 });
@@ -188,6 +226,7 @@ test('RIED reports WSL in the host section and summary without reusing native Li
     delete process.env.WSL_INTEROP;
     delete process.env.WSL_DISTRO_NAME;
     expect(await service.get(session, { operation: 'section', section: 'host' })).toMatchObject({
+      provider: 'node',
       value: { os: 'linux', wsl: true },
     });
     release.mockReturnValue('6.6.114.1-generic');
@@ -243,8 +282,17 @@ test.skipIf(process.platform === 'win32')(
     );
     expect(inventory).toMatchObject({
       status: 'partial',
+      provider: 'just',
+      partial: true,
       diagnostics: expect.arrayContaining([
         'Just imports and modules must stay inside the workspace',
+      ]),
+      diagnosticDetails: expect.arrayContaining([
+        {
+          source: 'just',
+          code: 'source-scope',
+          message: 'Just imports and modules must stay inside the workspace',
+        },
       ]),
       value: { items: [] },
     });

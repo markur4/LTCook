@@ -287,6 +287,7 @@ export async function readGit(
     capturedAt,
   };
   const result: RepositoryResult<GitDiscovery> = {
+    provider: value.source,
     value,
     diagnostics: [],
     partial: false,
