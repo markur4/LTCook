@@ -28,7 +28,6 @@ import {
 } from '../../../runtime/src/tools/repo-search.js';
 
 const deploymentDirectory = process.env.LTCOOK_COLGREP_DEPLOYMENT;
-const benchmarkWorkspace = process.env.LTCOOK_COLGREP_BENCHMARK_WORKSPACE;
 const timeoutMs = 120_000;
 const piFixture = fileURLToPath(new URL('./repo-search-pi.ts', import.meta.url));
 
@@ -429,43 +428,4 @@ test.skipIf(!deploymentDirectory)(
       expect(await readdir(indexes).catch(() => [])).toEqual([]);
     }),
   timeoutMs,
-);
-
-async function directoryBytes(directory: string): Promise<number> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const sizes = await Promise.all(
-    entries.map(async (entry) => {
-      const child = path.join(directory, entry.name);
-      return entry.isDirectory() ? directoryBytes(child) : (await stat(child)).size;
-    }),
-  );
-  return sizes.reduce((sum, size) => sum + size, 0);
-}
-
-test.skipIf(!deploymentDirectory || !benchmarkWorkspace)(
-  'reports managed ColGREP cold and warm timings on the benchmark workspace',
-  async () =>
-    withTemporaryDirectory(async (cacheDirectory) => {
-      if (!benchmarkWorkspace) throw new Error('A benchmark workspace is required.');
-      const workspace = await realpath(benchmarkWorkspace);
-      const tool = searchTool(cacheDirectory, deploymentDirectory, 240_000);
-      const measure = async () => {
-        const started = performance.now();
-        const result = await search(tool, workspace, {
-          query: 'validate workspace authorization and tool access',
-          limit: 8,
-        });
-        const elapsed = Math.round(performance.now() - started);
-        expect(result.status).toBe('ready');
-        expect(result.results).not.toEqual([]);
-        return elapsed;
-      };
-      const coldMs = await measure();
-      const warmMs = [await measure(), await measure(), await measure()];
-      const indexBytes = await directoryBytes(
-        await workspaceIndexDirectory(cacheDirectory, workspace),
-      );
-      console.log(JSON.stringify({ coldMs, warmMs, indexBytes }));
-    }),
-  260_000,
 );

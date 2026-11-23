@@ -56,8 +56,17 @@ export async function runRepositoryCommand(
     timeoutMs,
     maxBytes,
     env = {},
-  }: { timeoutMs: number; maxBytes: number; env?: Record<string, string> },
-): Promise<{ stdout: string; code: number }> {
+    signal,
+    stopAfterLine,
+  }: {
+    timeoutMs: number;
+    maxBytes: number;
+    env?: Record<string, string>;
+    signal?: AbortSignal;
+    stopAfterLine?: (line: string) => boolean;
+  },
+): Promise<{ stdout: string; code: number; stopped: boolean }> {
+  signal?.throwIfAborted();
   if (!path.isAbsolute(command) || isWithin(workspace.root, realpathSync(command), true))
     throw new Error('Repository discovery requires a tool outside the workspace');
   return new Promise((accept, reject) => {
@@ -76,32 +85,56 @@ export async function runRepositoryCommand(
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const chunks: Buffer[] = [];
+    const chunks: string[] = [];
+    let pendingLine = '';
     let bytes = 0;
     let stopped = false;
-    const timer = setTimeout(() => stop('timeout'), timeoutMs);
-    function stop(code: RepositoryCommandError['code']) {
+    let failure: unknown;
+    const timer = setTimeout(() => stop(new RepositoryCommandError('timeout')), timeoutMs);
+    const cancel = () => stop(signal?.reason ?? new Error('Repository command cancelled'));
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) cancel();
+    function stop(error?: unknown) {
       if (stopped) return;
       stopped = true;
+      failure = error;
       clearTimeout(timer);
       child.kill('SIGKILL');
       child.stdout.destroy();
       child.stderr.destroy();
-      reject(new RepositoryCommandError(code));
     }
-    child.stdout.on('data', (chunk: Buffer) => {
-      bytes += chunk.length;
-      if (bytes > maxBytes) stop('output-limit');
-      else chunks.push(chunk);
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      if (stopped) return;
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > maxBytes) {
+        stop(new RepositoryCommandError('output-limit'));
+        return;
+      }
+      if (!stopAfterLine) {
+        chunks.push(chunk);
+        return;
+      }
+      const lines = (pendingLine + chunk).split('\n');
+      pendingLine = lines.pop() ?? '';
+      for (const line of lines) {
+        try {
+          if (!stopAfterLine(line)) continue;
+          stop();
+        } catch (error) {
+          stop(error);
+        }
+        break;
+      }
     });
     child.stderr.resume();
     child.once('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
+      failure ??= error;
     });
     child.once('close', (code) => {
       clearTimeout(timer);
-      if (!stopped) accept({ stdout: Buffer.concat(chunks).toString('utf8'), code: code ?? -1 });
+      signal?.removeEventListener('abort', cancel);
+      if (failure !== undefined) reject(failure);
+      else accept({ stdout: chunks.join(''), code: code ?? -1, stopped });
     });
   });
 }

@@ -15,6 +15,7 @@ layout, packaging boundary, verification limits, and current release workflow.
 - [Verify and release](#verify-and-release)
   - [Verification](#verification)
   - [Local Ollama and Agent Evals](#local-ollama-and-agent-evals)
+  - [Repository retrieval evaluation](#repository-retrieval-evaluation)
   - [Asset packaging](#asset-packaging)
   - [Integration and system procedures](#integration-and-system-procedures)
   - [Releases](#releases)
@@ -414,6 +415,46 @@ not read as current results. Preserve them if needed, stop the runtime, remove
 its `evals/runs` directory, and restart to reset history. Tests of the evaluation
 machinery use scripted responses without Ollama or user login; model-backed Agent Evals remain
 explicitly invoked outside ordinary CI.
+
+## Repository retrieval evaluation
+
+Run the checkout benchmark with Bun, Git, and `rg` on the trusted `PATH`.
+Pass `--colgrep` explicitly to include hybrid retrieval using the installed
+`LTCOOK_COLGREP_DEPLOYMENT` assets. The command builds disposable indexes and
+uses no agent sessions, LLM grading, or external service.
+
+```shell
+bun evals/repository-retrieval-live.ts --k 5 > retrieval-ripgrep.json
+bun evals/repository-retrieval-live.ts --k 5 --colgrep > retrieval-comparison.json
+```
+
+Each provider searches its own copy of the same synthetic files and three
+LTCook files read from the checkout's committed `HEAD`. Identifier queries use
+ripgrep's case-sensitive whole-word mode. Conceptual queries use the entire
+question as a literal ripgrep baseline. ColGREP receives the same original
+wording in hybrid mode. Both providers have the same result budget. The report
+groups identifier and conceptual scores and calculates reciprocal ranks only
+for ranked retrieval.
+
+Each question lists its labeled locations, returned paths and line ranges,
+independently checked excerpt validity, coverage, and diagnostics. A match
+covers a label when the verified excerpt contains its labeled range. Additional
+hits count as nonrelevant to the labels, including literal occurrences such as
+imports that establish none of the expected locations. An answerless question
+requires a complete empty response. An intentionally limited case demonstrates
+truncation. Edit, rename, and delete scenarios reuse each provider's search
+state. Traditional Tests also inject stale and malformed evidence so failure
+coverage does not depend on catching a live index midway through an update.
+
+The first query runs with an empty application index. The next invocation of
+the same question measures warm retrieval. ColGREP also measures its native
+index build on a fresh copy and reports cache bytes. Filesystem caches remain
+in place. Each result records serialized bytes and elapsed time. Save the JSON
+to compare per-question outcomes across runs using the recorded source revision,
+corpus, labels, implementation hash, and provider versions. An unavailable or
+indexing response, or a failed standalone index build, yields exit status 1.
+Quality scores remain descriptive until enough comparable runs establish a
+baseline. See the [initial baseline](../evals/repository-retrieval-baseline.md).
 
 ## Asset packaging
 

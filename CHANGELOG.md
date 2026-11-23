@@ -56,6 +56,9 @@ All notable changes to `ltcook` will be documented in this file.
   excerpts against current files and reports unavailable, partial, stale, and
   truncated retrieval separately.
 
+- Repository Core includes a standalone ripgrep provider for bounded lexical
+  scans and a labeled retrieval benchmark with opt-in ColGREP comparison.
+
 - Shared SearXNG search, URL retrieval, and stored-result tools for managed
   Pi and workspace Pi and Codex chats in Paseo. Local searches wait for SearXNG
   to become ready during startup. Search returns structured source links and

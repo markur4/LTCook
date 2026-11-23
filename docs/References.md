@@ -547,6 +547,7 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just eval probe` | Run the opt-in quick Agent Evals preset; requires normal app setup and the exact local model. |
 | `just eval audit-static` | Run model-free instruction inventory checks. |
 | `bun evals/web-search-engine-mix.ts [SEARXNG_BASE_URL]` | Compare search engine mixes on six public queries. Requires a reachable SearXNG JSON API and sends no model requests. |
+| `bun evals/repository-retrieval-live.ts [--k N] [--colgrep]` | Grade repository evidence returned by ripgrep and optionally installed ColGREP hybrid retrieval. See [Repository retrieval evaluation](Development.md#repository-retrieval-evaluation). |
 | `just eval audit` | Run the local Bonsai semantic Instruction Audit. |
 | `just eval behavior` | Run read-only, no-op and targeted-fix Behavior Evaluation once with full instructions; fall back once to low reasoning on failure. |
 | `just eval bottlenecks` | Run full-instruction cases once by default and report Bottleneck Attribution from their Perfetto-compatible traces. |

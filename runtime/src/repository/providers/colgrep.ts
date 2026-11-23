@@ -394,7 +394,29 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
   const verifiedFiles = new Map<string, VerifiedFile>();
   const deployment = options.deploymentDirectory ?? process.env.LTCOOK_COLGREP_DEPLOYMENT;
   const cache = options.cacheDirectory ?? process.env.LTCOOK_COLGREP_CACHE_DIR;
+  const timeoutMs = options.timeoutMs ?? REPO_SEARCH_TIMEOUT_MS;
   return {
+    /** Build the same native index without searching and return the native command's elapsed time. */
+    async buildIndex(workspace: RepositoryWorkspace, callerSignal: AbortSignal): Promise<number> {
+      const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(timeoutMs)]);
+      signal.throwIfAborted();
+      const assets = await loadAssets(deployment, verifiedFiles, signal);
+      const indices = await getIndexDirectory(cache, workspace.root, workspace.identity);
+      await workspace.assertUnchanged();
+      const started = performance.now();
+      const result = await execute(
+        assets,
+        ['init', '--model', assets.model, '--', workspace.root],
+        indices,
+        signal,
+      );
+      const elapsedMs = performance.now() - started;
+      await workspace.assertUnchanged();
+      signal.throwIfAborted();
+      if (result.code !== 0) throw searchFailure(result.stderr);
+      return elapsedMs;
+    },
+
     async search(
       workspace: RepositoryWorkspace,
       input: RepositorySearchRequest,
@@ -415,7 +437,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       const limit = input.limit ?? 8;
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > COLGREP_MAX_RESULTS)
         throw new Error('ColGREP result limit is outside the supported range.');
-      const timeout = AbortSignal.timeout(options.timeoutMs ?? REPO_SEARCH_TIMEOUT_MS);
+      const timeout = AbortSignal.timeout(timeoutMs);
       const signal = AbortSignal.any([callerSignal, timeout]);
       const outcome = rankedResult();
       try {

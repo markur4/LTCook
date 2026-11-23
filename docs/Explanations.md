@@ -364,6 +364,17 @@ current file. A missing file or a source mismatch marks retrieval stale.
 Verification cannot detect relevant source that the index omitted entirely.
 See the [repository search response](References.md#repository-inventory).
 
+Repository Core also provides an independent ripgrep scan through
+`createRipgrepProvider().search(workspace, request, signal)`. `exact` matches a
+case-sensitive whole word, `literal` matches a case-sensitive substring, and
+`regex` uses ripgrep's default regex engine. Requests can select literal
+workspace paths and set a limit of 1 to 100 matching lines. The provider reuses
+`rg` from the trusted executable path, uses ripgrep's hidden-file and
+repository ignore rules during traversal, and has no index. `kind: "exhaustive"`
+describes the bounded scan. A complete response has neither `partial` nor
+`truncated` set. The provider is callable from Repository Core and used by the
+[retrieval benchmark](Development.md#repository-retrieval-evaluation).
+
 Standalone Pi uses its native workspace, Team Pi uses its bound Session,
 and ordinary Paseo Pi uses its authenticated workspace grant. LTCook setup
 prepares the optional ColGREP assets. Indexing starts on the first search.
