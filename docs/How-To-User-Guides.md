@@ -7,6 +7,7 @@
   - [Install from a checkout](#install-from-a-checkout)
   - [Run the first command](#run-the-first-command)
   - [Use workspace tools in Pi or Codex](#use-workspace-tools-in-pi-or-codex)
+  - [Enable an Intel iGPU for Ollama on WSL](#enable-an-intel-igpu-for-ollama-on-wsl)
   - [Run Agent Evals](#run-agent-evals)
   - [Remove an installation](#remove-an-installation)
 - [Configure settings and paths](#configure-settings-and-paths)
@@ -183,6 +184,50 @@ Set the global [summarizer settings](References.md#environment-variables) in
 AppRC and restart the runtime to apply them. A keep-alive of `-1` keeps the model
 resident after use. Set it to `0` to unload after a request or to a positive
 number of seconds for timed residency.
+
+## Enable an Intel iGPU for Ollama on WSL
+
+Configure acceleration on the Ollama server. LTCook's summarizer uses the local
+server selected by `LTCOOK_OLLAMA_ENDPOINT`, which defaults to
+`http://127.0.0.1:11434`. The Ollama server chooses where to load each model.
+[Ollama GPU support](https://docs.ollama.com/gpu)
+
+For a systemd-managed Ollama server inside WSL 2, check that WSL exposes
+`/dev/dxg` and that your Linux distribution supplies the Mesa Dozen Vulkan
+driver. Fedora 44's `mesa-vulkan-drivers` package installs the x86-64 Dozen
+driver manifest shown below. Use the installed Dozen manifest path on other
+distributions. [Fedora package files](https://packages.fedoraproject.org/pkgs/mesa/mesa-vulkan-drivers/fedora-44.html)
+
+Edit a dedicated service drop-in:
+
+```shell
+sudo install -d /etc/systemd/system/ollama.service.d
+sudoedit /etc/systemd/system/ollama.service.d/70-igpu.conf
+```
+
+```ini
+[Service]
+Environment="OLLAMA_VULKAN=1"
+Environment="OLLAMA_IGPU_ENABLE=1"
+Environment="VK_DRIVER_FILES=/usr/share/vulkan/icd.d/dzn_icd.x86_64.json"
+Environment="OLLAMA_FLASH_ATTENTION=0"
+```
+
+The Flash Attention setting avoids a shader crash observed with the Intel
+UHD Graphics 770 on WSL. Restart the Ollama service after saving the drop-in:
+
+```shell
+sudo systemctl daemon-reload
+sudo systemctl restart ollama.service
+```
+
+Run a summary or a prompt through the configured server, then use `ollama ps`
+against that same endpoint while the model is still loaded. The `PROCESSOR`
+column shows how much of the model was offloaded. Use
+`journalctl -u ollama.service -b` to check which Vulkan device Ollama selected
+or to diagnose a runner crash. To undo this setup, remove only
+`70-igpu.conf`, reload systemd, and restart Ollama.
+[Ollama server settings and GPU verification](https://docs.ollama.com/faq#how-can-i-tell-if-my-model-was-loaded-onto-the-gpu)
 
 ## Run Agent Evals
 
@@ -671,6 +716,7 @@ Use `ltcook app paths` and `ltcook app doctor --json` for passive inspection.
 | Runtime deployment is missing | Run `just sync`, then repeat editable registration to initialize the staged payload. |
 | Model alias is empty | Configure the matching `runtime.*_model` or smart fallback and provider credentials. |
 | Provider authentication is not ready | Run `ltcook auth check --provider openai --json --no-refresh`, then use Pi login for the selected provider. |
+| Ollama uses the CPU on an Intel iGPU under WSL | Check the Ollama service's Vulkan configuration and verify offload while a model is loaded. See [Enable an Intel iGPU for Ollama on WSL](#enable-an-intel-igpu-for-ollama-on-wsl). |
 | Session reports a different team/workspace | Restore the original selection or choose a new session identifier. |
 | Database already has an owner | Stop that runtime; do not delete its lock or run another recovery owner. |
 | Browser unavailable | Inspect the installation receipt and browser prerequisites; do not confuse it with core chat/search availability. |
