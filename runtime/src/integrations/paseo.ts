@@ -256,7 +256,6 @@ export async function createPaseoAgentBackend(input: {
   deploymentNode: string;
   browserAvailable: boolean;
   browserExecutable?: string;
-  onNativeAgentClose?(id: string): Promise<void>;
   originalShellEnvironment?(
     workspaceRoot: string,
     sessionId: string,
@@ -367,7 +366,7 @@ export async function createPaseoAgentBackend(input: {
     const browserEnabled =
       input.browserAvailable && workspaceEnv.LTCOOK_BROWSER_ENABLED !== 'false';
     const codeSearchEnabled = workspaceEnv.LTCOOK_CODESEARCH_ENABLED === 'true';
-    const ownedExtensions = [...(codeSearchEnabled ? codeSearchExtensions : [])];
+    const ownedExtensions = codeSearchEnabled ? codeSearchExtensions : [];
     await configurePiExtensions(settingsPath, ownedExtensions);
     const browserHome =
       workspaceEnv.LTCOOK_BROWSER_HOME || path.join(path.dirname(agentHome), 'browser-home');
@@ -476,11 +475,7 @@ export async function createPaseoAgentBackend(input: {
       await input.api.agents.ref(id).send(message, { activeTurnBehavior: 'steer' });
     },
     async close(id: string) {
-      try {
-        await input.api.agents.ref(id).archive();
-      } finally {
-        await input.onNativeAgentClose?.(id);
-      }
+      await input.api.agents.ref(id).archive();
     },
   };
 }

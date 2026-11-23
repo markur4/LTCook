@@ -295,7 +295,7 @@ export default function contribute(server: PluginServerContext) {
       };
     }),
     server.addHook('agent.archive.after', async ({ agent }) => {
-      if (!['pi', 'codex'].includes(agent.provider)) return;
+      if (!['ltcook', 'pi', 'codex'].includes(agent.provider)) return;
       await runtimeJson('/v1/mcp/revoke', { nativeAgentId: agent.id });
     }),
   ];

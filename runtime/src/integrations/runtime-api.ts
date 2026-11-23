@@ -13,6 +13,7 @@ import { canonicalWorkspace } from '../core/workspace.js';
 import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { WorkspaceMcp } from './mcp.js';
+import { isWebTool } from '../tools/web.js';
 import { z } from 'zod';
 import { ResolvedModelSchema, type ResolvedModel } from '../models/aliases.js';
 import {
@@ -525,9 +526,10 @@ export class RuntimeApi {
           actor.kind !== 'agent' ||
           !input.sessionId ||
           !this.workspaceMcp ||
-          !['ltcook_web_search', 'ltcook_web_fetch', 'ltcook_web_content'].includes(
-            String(input.toolName),
-          )
+          !isWebTool(input.toolName) ||
+          !input.toolArgs ||
+          typeof input.toolArgs !== 'object' ||
+          Array.isArray(input.toolArgs)
         ) {
           response.writeHead(403).end('{}');
           return;
@@ -543,13 +545,31 @@ export class RuntimeApi {
           response.writeHead(403).end('{}');
           return;
         }
-        const result = await this.workspaceMcp.invokeTool(String(input.toolName), input.toolArgs, {
-          agentId: actor.nativeAgentId,
-          workspaceRoot: session.session.workspaceRoot,
-          workspaceFileAccess: false,
-          signal: AbortSignal.timeout(120000),
-        });
-        response.writeHead(200).end(JSON.stringify(result));
+        const authorization = runtime.authorizeTool(
+          input.sessionId,
+          actor.nativeAgentId,
+          input.toolName,
+          input.toolArgs as Record<string, unknown>,
+        );
+        if (!authorization.allowed) {
+          response.writeHead(403).end(JSON.stringify({ error: authorization.reason }));
+          return;
+        }
+        const controller = new AbortController();
+        const cancel = () => controller.abort();
+        response.once('close', cancel);
+        try {
+          const result = await this.workspaceMcp.invokeTool(input.toolName, input.toolArgs, {
+            agentId: actor.nativeAgentId,
+            workspaceRoot: session.session.workspaceRoot,
+            sessionId: input.sessionId,
+            workspaceFileAccess: false,
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]),
+          });
+          response.writeHead(200).end(JSON.stringify(result));
+        } finally {
+          response.off('close', cancel);
+        }
         return;
       }
       if (request.url === '/v1/ried') {

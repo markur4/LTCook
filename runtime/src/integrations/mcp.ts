@@ -99,22 +99,27 @@ export class WorkspaceMcp {
 
   async revoke(agentId: string): Promise<void> {
     const grant = this.grants.get(agentId);
-    if (!grant) return;
+    if (!grant) {
+      await this.web?.disposeAgent(agentId);
+      return;
+    }
     this.grants.delete(agentId);
     this.tokens.delete(grant.token);
-    await this.web?.disposeAgent(agentId);
-    await Promise.all(
-      [...this.connections.values()]
+    await Promise.all([
+      this.web?.disposeAgent(agentId),
+      ...[...this.connections.values()]
         .filter((connection) => connection.grant === grant)
         .map((connection) => connection.server.close()),
-    );
+    ]);
   }
 
   async close(): Promise<void> {
     this.grants.clear();
     this.tokens.clear();
-    await Promise.all([...this.connections.values()].map(({ server }) => server.close()));
-    await this.web?.close();
+    await Promise.all([
+      this.web?.close(),
+      ...[...this.connections.values()].map(({ server }) => server.close()),
+    ]);
   }
 
   private createConnection(grant: Grant): Connection {

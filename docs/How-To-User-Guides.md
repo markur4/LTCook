@@ -169,7 +169,8 @@ search. Some Codex modes ask for permission before calling an MCP tool.
 
 - Use `ltcook_web_search` for SearXNG, `ltcook_web_fetch` for URLs, and
   `ltcook_web_content` for stored search/page results. All three use the
-  shared workspace catalog in Pi and Codex.
+  shared workspace catalog in Pi and Codex. Keep the response ID in the
+  same chat to read or page through results.
 - Ask for a repository and environment inventory to use `ltcook_ried`. It can
   return a summary, inspect one section, or refresh the inventory.
 - Ask for a summary using `ltcook_summarize`. Supply text or ask Pi to summarize

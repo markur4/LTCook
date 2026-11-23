@@ -241,7 +241,14 @@ async function run(): Promise<void> {
       workspaceShellEnvironments.get(id),
     );
     api = new RuntimeApi(undefined, apiToken, apiListen, process.env, telemetry);
-    const web = new WebToolService(python, appRoot, node, process.env);
+    const web = new WebToolService(
+      python,
+      appRoot,
+      node,
+      process.env,
+      (id) => workspaceShellEnvironments.get(id),
+      ensureProjectServices,
+    );
     api.setWorkspaceMcp(new WorkspaceMcp(createTools(ried, summarization, web), apiListen, web));
     api.setEval(evals);
     const apiUrl = await api.listen();
@@ -304,7 +311,6 @@ async function run(): Promise<void> {
       deploymentNode: node,
       browserAvailable: receipt.browser_available === true,
       browserExecutable: receipt.browser_executable,
-      onNativeAgentClose: (id) => web.disposeAgent(id),
       originalShellEnvironment(_workspace, currentSessionId) {
         return workspaceShellEnvironments.get(currentSessionId);
       },
