@@ -342,14 +342,18 @@ try {
       hits,
       corpus.files,
     );
-    const correctMode = searches.some(
-      ({ mode, result }) =>
-        result.status === 'ready' &&
-        (group === 'lexical'
-          ? mode === 'exact' && result.provider === 'ripgrep'
-          : (mode === 'hybrid' || mode === 'semantic') && result.provider === 'colgrep'),
-    );
-    const usedLocateFirst = observations[0]?.tool === REPO_LOCATE_TOOL_NAME;
+    const isReadyInExpectedMode = ({ mode, result }: RepositoryCall['searches'][number]) =>
+      result.status === 'ready' &&
+      (group === 'lexical'
+        ? mode === 'exact' && result.provider === 'ripgrep'
+        : (mode === 'hybrid' || mode === 'semantic') && result.provider === 'colgrep');
+    const correctMode = searches.some(isReadyInExpectedMode);
+    const firstCall = observations[0];
+    const firstSearch = firstCall?.searches[0];
+    const usedLocateFirst =
+      firstCall?.tool === REPO_LOCATE_TOOL_NAME &&
+      firstSearch !== undefined &&
+      isReadyInExpectedMode(firstSearch);
     const abstained = run.answer?.answer.trim() === '' && citations.length === 0;
     const passed =
       run.exitCode === 0 &&
