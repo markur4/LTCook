@@ -6,6 +6,7 @@ import {
   ModelRuntime,
   SessionManager,
   SettingsManager,
+  type CreateAgentSessionOptions,
 } from '@earendil-works/pi-coding-agent';
 import { ollamaEndpoint } from '../integrations/ollama.js';
 import { EVAL_CONTEXT_WINDOW, EVAL_MODEL_COMPAT } from './setup.js';
@@ -17,15 +18,15 @@ export const DECISION_INSTRUCTIONS =
   'Reply with PROCEED only if that approval is established. Reply with one word.';
 export const DECISION_MAX_TOKENS = 512;
 
-export async function decideFromSummary(input: {
-  endpoint: string;
-  model: string;
-  directory: string;
-  summary: string;
-  signal: AbortSignal;
-}) {
-  const { endpoint, model, directory, summary, signal } = input;
-  signal.throwIfAborted();
+export async function createSummarizationPiSession(
+  input: {
+    endpoint: string;
+    model: string;
+    directory: string;
+    instructions: string;
+  } & Pick<CreateAgentSessionOptions, 'tools' | 'customTools'>,
+) {
+  const { endpoint, model, directory, instructions, tools, customTools } = input;
   await mkdir(directory, { recursive: true });
   const modelsPath = path.join(directory, 'models.json');
   await writeFile(
@@ -39,7 +40,7 @@ export async function decideFromSummary(input: {
           models: [
             {
               id: model,
-              name: 'Local rollout decision evaluation',
+              name: 'Local summarization evaluation',
               contextWindow: EVAL_CONTEXT_WINDOW,
               maxTokens: DECISION_MAX_TOKENS,
               compat: EVAL_MODEL_COMPAT,
@@ -59,7 +60,7 @@ export async function decideFromSummary(input: {
     refreshOnCreate: false,
   });
   const selectedModel = modelRuntime.getModel('ollama', model);
-  if (!selectedModel) throw new Error('The local decision model is unavailable.');
+  if (!selectedModel) throw new Error('The local Pi evaluation model is unavailable.');
   const settings = SettingsManager.inMemory({ retry: { enabled: false } });
   const resources = new DefaultResourceLoader({
     cwd: directory,
@@ -70,19 +71,34 @@ export async function decideFromSummary(input: {
     noContextFiles: true,
     noPromptTemplates: true,
     noThemes: true,
-    systemPrompt: DECISION_INSTRUCTIONS,
+    systemPrompt: instructions,
   });
   await resources.reload();
-  const { session } = await createAgentSession({
+  return createAgentSession({
     cwd: directory,
     agentDir: directory,
     modelRuntime,
     model: selectedModel,
     thinkingLevel: 'off',
-    noTools: 'all',
+    ...(tools ? { tools, customTools } : { noTools: 'all' }),
     resourceLoader: resources,
     settingsManager: settings,
     sessionManager: SessionManager.inMemory(directory),
+  });
+}
+
+export async function decideFromSummary(input: {
+  endpoint: string;
+  model: string;
+  directory: string;
+  summary: string;
+  signal: AbortSignal;
+}) {
+  const { model, summary, signal } = input;
+  signal.throwIfAborted();
+  const { session } = await createSummarizationPiSession({
+    ...input,
+    instructions: DECISION_INSTRUCTIONS,
   });
   const bounded = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
   const cancel = () => void session.abort();

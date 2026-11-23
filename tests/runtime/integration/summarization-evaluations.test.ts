@@ -14,8 +14,11 @@ import {
 import type { SummarizationReport } from '../../../runtime/src/evals/summarization.js';
 import {
   CORE_SUMMARIZATION_CASES,
+  CODING_SESSION_CASE,
   DOWNSTREAM_CASE,
+  DOWNSTREAM_CASES,
   fullSummarizationCases,
+  NEAR_LIMIT_CASE_ID,
   NEAR_LIMIT_FOCUS,
   REPEAT_SUMMARIZATION_CASES,
   SUMMARIZATION_CALIBRATION,
@@ -26,17 +29,25 @@ const candidate = 'summary-candidate:latest';
 const profile = {
   think: false,
   stream: false as const,
-  options: { num_ctx: 4096, num_predict: 128, temperature: 0.1 },
+  options: { num_ctx: 8192, num_predict: 128, temperature: 0.1 },
 };
 const profileLimit = summaryInputLimit(profile, NEAR_LIMIT_FOCUS);
 const wrongDecisionSummary =
   'Ada approved read-only smoke checks. Inez approved the production rollout.';
+const wrongCodingSummary = CODING_SESSION_CASE.source
+  .replace('RB-214 failed with E_MANIFEST', 'RB-241 failed with E_MANIFEST')
+  .replace('RB-241 passed in tests/package', 'RB-214 passed in tests/package');
 
 function scriptedGrade(fixture: SummarizationCase, summary: string) {
   const calibration = SUMMARIZATION_CALIBRATION.find((item) => item.summary === summary);
   const flagged = calibration?.expectedClaim;
   const expected: Record<string, string> =
-    calibration?.expected ?? (summary === wrongDecisionSummary ? { decision: 'contradicted' } : {});
+    calibration?.expected ??
+    (summary === wrongDecisionSummary
+      ? { decision: 'contradicted' }
+      : summary === wrongCodingSummary
+        ? { 'original-failure': 'contradicted', 'related-pass': 'contradicted' }
+        : {});
   const sample = summary.slice(0, 36);
   const facts = fixture.facts.map(({ id, sourceQuote }) => ({
     id,
@@ -81,6 +92,9 @@ async function runFixture(
     | 'truncated-control'
     | 'model-mismatch'
     | 'downstream-model-mismatch'
+    | 'always-hold'
+    | 'single-near-limit-failure'
+    | 'coding-confusion'
     | 'summarizer-retargeted'
     | 'grader-retargeted'
     | 'profile',
@@ -88,7 +102,7 @@ async function runFixture(
   const fixtures = [
     ...CORE_SUMMARIZATION_CASES,
     ...fullSummarizationCases(mode === 'profile' ? profileLimit : SUMMARY_MAX_INPUT_BYTES),
-    DOWNSTREAM_CASE,
+    ...DOWNSTREAM_CASES.map(({ fixture }) => fixture),
   ];
   const findFixture = (source: string, focus?: string) =>
     fixtures.find((item) => item.source === source && item.focus === focus)!;
@@ -138,7 +152,11 @@ async function runFixture(
       if (request.url === '/v1/chat/completions') {
         decisionCalls++;
         const decisionMode = mode === 'decision' || mode === 'truncated-control';
-        const answer = decisionMode && decisionCalls === 1 ? 'PROCEED' : 'HOLD';
+        const positive = JSON.stringify(input.messages.at(-1)?.content ?? '').includes('R-32');
+        const answer =
+          (positive && mode !== 'always-hold') || (decisionMode && decisionCalls === 1)
+            ? 'PROCEED'
+            : 'HOLD';
         const finishReason =
           mode === 'truncated-control' && decisionCalls === 2 ? 'length' : 'stop';
         response.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -187,6 +205,15 @@ async function runFixture(
         if (!fixture) throw new Error('Unexpected summarization input.');
         sources.push(fixture.id);
         content = source;
+        if (
+          mode === 'single-near-limit-failure' &&
+          fixture.id === NEAR_LIMIT_CASE_ID &&
+          sources.filter((id) => id === NEAR_LIMIT_CASE_ID).length === 2
+        ) {
+          content = 'Release remains on hold.';
+        }
+        if (mode === 'coding-confusion' && fixture === CODING_SESSION_CASE)
+          content = wrongCodingSummary;
         const missingValues =
           mode === 'self-grading' ||
           mode === 'summarizer-retargeted' ||
@@ -244,6 +271,9 @@ async function runFixture(
         'truncated-control',
         'model-mismatch',
         'downstream-model-mismatch',
+        'always-hold',
+        'single-near-limit-failure',
+        'coding-confusion',
         'profile',
       ].includes(mode)
         ? 'full'
@@ -353,12 +383,19 @@ test('full qualification repeats high-risk cases, compares a file and tests a na
     ).toHaveLength(3);
   expect(report.attempts.filter(({ input }) => input === 'file')).toHaveLength(1);
   expect(sources).toContain('near-limit-exception');
-  expect(decisionCalls).toBe(2);
+  expect(decisionCalls).toBe(3);
   expect(report.downstream).toMatchObject({
     verdict: 'failed',
-    attribution: 'summary',
-    candidate: { decision: 'PROCEED' },
-    control: { decision: 'HOLD' },
+    cases: [
+      {
+        expected: 'HOLD',
+        verdict: 'failed',
+        attribution: 'summary',
+        candidate: { decision: 'PROCEED' },
+        control: { decision: 'HOLD' },
+      },
+      { expected: 'PROCEED', verdict: 'passed', candidate: { decision: 'PROCEED' } },
+    ],
   });
 });
 
@@ -366,17 +403,67 @@ test('qualification uses the requested generation and derives its near-limit inp
   const { report } = await runFixture('profile');
   expect(report.verdict).toBe('passed');
   expect(report.settings.summarizer.generation).toEqual(profile);
-  expect(report.downstream?.candidate).not.toHaveProperty('inputTokens');
-  expect(report.downstream?.candidate).not.toHaveProperty('outputTokens');
-  const nearLimit = report.attempts.find(({ id }) => id === 'near-limit-exception')!;
-  expect(nearLimit.inputBytes).toBeLessThanOrEqual(profileLimit);
-  expect(nearLimit.inputBytes).toBeGreaterThanOrEqual(profileLimit - 1);
+  expect(
+    report.downstream?.cases.map(({ expected, candidate }) => [expected, candidate?.decision]),
+  ).toEqual([
+    ['HOLD', 'HOLD'],
+    ['PROCEED', 'PROCEED'],
+  ]);
+  expect(report.downstream?.cases[0]?.candidate).not.toHaveProperty('inputTokens');
+  expect(report.downstream?.cases[0]?.candidate).not.toHaveProperty('outputTokens');
+  const nearLimit = report.attempts.filter(({ id }) => id === NEAR_LIMIT_CASE_ID);
+  expect(nearLimit.map(({ attempt }) => attempt)).toEqual([1, 2, 3]);
+  for (const attempt of nearLimit) {
+    expect(attempt.inputBytes).toBeLessThanOrEqual(profileLimit);
+    expect(attempt.inputBytes).toBeGreaterThanOrEqual(profileLimit - 1);
+  }
+});
+
+test('an always-HOLD Pi agent fails approval despite passing the rejection case', async () => {
+  const { report, decisionCalls } = await runFixture('always-hold');
+  expect(decisionCalls).toBe(3);
+  expect(report.verdict).toBe('failed');
+  expect(report.downstream?.cases).toMatchObject([
+    { expected: 'HOLD', verdict: 'passed' },
+    {
+      expected: 'PROCEED',
+      verdict: 'failed',
+      attribution: 'agent',
+      candidate: { decision: 'HOLD' },
+      control: { decision: 'HOLD' },
+    },
+  ]);
+});
+
+test('one near-limit omission among three attempts fails full qualification', async () => {
+  const { report } = await runFixture('single-near-limit-failure');
+  expect(report.verdict).toBe('failed');
+  const attempts = report.attempts.filter(({ id }) => id === NEAR_LIMIT_CASE_ID);
+  expect(attempts.map(({ verdict }) => verdict)).toEqual(['passed', 'failed', 'passed']);
+  expect(attempts[1]?.missingExact).toMatchObject([{ values: ['AUTH-17', 'Nia'] }]);
+});
+
+test('the coding handoff fails when exact values are associated with the wrong checks', async () => {
+  const { report } = await runFixture('coding-confusion');
+  expect(report.verdict).toBe('failed');
+  expect(report.attempts.find(({ id }) => id === CODING_SESSION_CASE.id)).toMatchObject({
+    verdict: 'failed',
+    missingExact: [],
+    grading: {
+      grade: {
+        facts: expect.arrayContaining([
+          expect.objectContaining({ id: 'original-failure', verdict: 'contradicted' }),
+          expect.objectContaining({ id: 'related-pass', verdict: 'contradicted' }),
+        ]),
+      },
+    },
+  });
 });
 
 test('a truncated correct-summary control leaves downstream attribution unresolved', async () => {
   const { report, decisionCalls } = await runFixture('truncated-control');
-  expect(decisionCalls).toBe(2);
-  expect(report.downstream).toMatchObject({
+  expect(decisionCalls).toBe(3);
+  expect(report.downstream?.cases[0]).toMatchObject({
     verdict: 'failed',
     attribution: 'unresolved',
     candidate: { decision: 'PROCEED' },
@@ -397,7 +484,7 @@ test('a cutoff from a different model blocks qualification and supplies no downs
     missingExact: [],
   });
   expect(report.downstream).toMatchObject({ verdict: 'blocked' });
-  expect(decisionCalls).toBe(0);
+  expect(decisionCalls).toBe(1);
 });
 
 test('a retargeted summarizer cannot supply confirmed failures for the original candidate', async () => {
@@ -412,12 +499,12 @@ test('a retargeted summarizer cannot supply confirmed failures for the original 
 test('a decision response from a different model blocks downstream qualification', async () => {
   const { report, decisionCalls } = await runFixture('downstream-model-mismatch');
   expect(report.verdict).toBe('blocked');
-  expect(report.downstream).toMatchObject({
+  expect(report.downstream?.cases[0]).toMatchObject({
     verdict: 'blocked',
     attribution: 'unresolved',
     reason: 'Ollama returned a different downstream decision model.',
   });
-  expect(decisionCalls).toBe(1);
+  expect(decisionCalls).toBe(2);
 });
 
 test('a retargeted grader invalidates grades while confirmed deterministic failures remain', async () => {

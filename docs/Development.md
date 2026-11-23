@@ -256,9 +256,11 @@ captured during Behavior Evaluation rather than launching another agent task.
 
 The core evaluates fixed, focus-specific facts for status, negation, migration
 failures, ownership, corrections, and text that contains instructions. Full
-qualification adds a near-limit case, a file/inline comparison, and three
-attempts for selected high-risk cases. It also runs a native Pi downstream
-decision and uses a reviewed correct-summary control if that decision fails.
+qualification adds a coding-session handoff, a file/inline comparison, and
+three attempts each for the near-limit case and selected high-risk cases.
+All attempts count toward qualification. Native Pi must return `HOLD` for a
+declined rollout and `PROCEED` for an approved rollout. A failed decision
+triggers the reviewed correct-summary control for that case.
 Repetitions expose instability on the selected cases. Traditional Tests cover
 deterministic evidence validation, file access, and Ollama failures.
 
@@ -304,6 +306,26 @@ The quick preset and focused runs for other agent cases provide partial coverage
 The qualification verdict belongs to the summarization report, independently
 of whether the runner completed. Existing elapsed-time history and fallback for
 the three agent cases still use their original attempts.
+
+### Opt-in summarization utility comparison
+
+Run `bun evals/summarization-benchmark-live.ts` from a synced checkout with the
+local Ollama models available. The comparison runs two fresh native Pi sessions
+on the same fixed coding handoff with the same downstream Bonsai model and
+generation settings. The first opens the source with Pi's `read` tool. The
+second calls `ltcook_summarize` with its path and focus and can read the source
+for supporting passages. Pi invokes the shared summarizer implementation
+directly, so recorded time covers the tools and inference in this checkout.
+Each session can execute up to four tool calls before it is asked to answer.
+The report records when this budget is reached and retains rejected requests.
+
+The JSON report gives per-field correctness, ordered tool calls, actual
+summarizer invocation and usage, total elapsed time, and provider token usage
+across Pi turns. Pi's normalized cache fields use zero when the provider omits
+the split. Treat a zero cache count accordingly. Both sessions have fresh
+histories and identical source files. Ollama's runtime cache stays in place
+and the baseline runs first. This comparison is descriptive and runs only on
+request, outside CI and qualification.
 
 Bottleneck Attribution reports timings from those same executions and their
 Perfetto traces. `eval analyze` starts one set of full-instruction cases by

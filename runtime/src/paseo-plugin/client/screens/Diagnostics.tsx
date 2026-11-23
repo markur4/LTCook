@@ -287,6 +287,11 @@ export function Diagnostics({
                       {`Behavior Evaluation · downstream decision · ${value.downstream.verdict}`}
                     </Label>
                   )}
+                  {(value.downstream?.cases ?? []).map((decision: any) => (
+                    <Label key={decision.id} theme={theme} muted>
+                      {`${decision.id} · expected ${decision.expected} · returned ${decision.candidate?.decision || 'unavailable'} · ${decision.verdict}`}
+                    </Label>
+                  ))}
                 </View>
               );
             if (name === 'bottlenecks')

@@ -367,6 +367,23 @@ def test_cli_exits_unsuccessfully_when_summarization_not_qualified(
                         "scope": "full",
                         "verdict": verdict,
                         "attempts": [],
+                        "downstream": {
+                            "verdict": "passed",
+                            "cases": [
+                                {
+                                    "id": "rollout-decision",
+                                    "expected": "HOLD",
+                                    "candidate": {"decision": "HOLD"},
+                                    "verdict": "passed",
+                                },
+                                {
+                                    "id": "rollout-approval",
+                                    "expected": "PROCEED",
+                                    "candidate": {"decision": "PROCEED"},
+                                    "verdict": "passed",
+                                },
+                            ],
+                        },
                     }
                 }
             },
@@ -381,6 +398,8 @@ def test_cli_exits_unsuccessfully_when_summarization_not_qualified(
     assert result.exit_code == (0 if verdict == "passed" else 1), result.output
     assert "Agent Evals · COMPLETED" in result.output
     assert verdict.upper() in result.output
+    assert "rollout-decision · expected HOLD · returned HOLD" in result.output
+    assert "rollout-approval · expected PROCEED · returned PROCEED" in result.output
     route, params = calls[0]
     assert route == "/v1/evals/start"
     assert params["preset"] == "full"

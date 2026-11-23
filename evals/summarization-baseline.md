@@ -134,3 +134,61 @@ The runtime bundle hash was
 `8a0c57f8a126a554ce84a2bf1fcc28b5bb3733f72d886a9aa30467a5a2da128e`
 and the fixture hash was
 `ac783efe57b57e879652db622985be6b560978884ea0caa23ad3113a5de901a9`.
+
+## Expanded full qualification
+
+The coding-session fixture's required facts were checked against the fixed
+handoff. `RB-214` initially failed in the reconcile test, and `RB-241` passed
+in the cache test. The healthy rebuild rules out the cache, while the manifest
+inspection explains the failure and why the second `RB-214` attempt passed.
+The Windows check was skipped, publishing lacked approval, and `PKG-72`
+remained open. In the positive downstream control, the required owner explicitly
+approved `R-32` on Tuesday, superseding Monday's refusal. The separate `R-33`
+migration remained deferred.
+
+The first expanded run `787106d1-a136-41e9-8838-1202305adf29` used the production
+LFM3 profile and passed 20 of 21 summary attempts in 159.4 seconds. Both native
+Pi decisions matched their expected outcomes, `HOLD` and `PROCEED`. All three
+near-limit attempts and all five Bonsai calibration examples passed. The
+coding-session summary reached the generation limit before returning any text,
+so all seven of its required facts were missing and qualification failed.
+
+The repeat `607eb4f1-4274-4a29-b334-60fc55678bca` also used production settings
+and passed 19 of 21 attempts in 159.3 seconds. The coding handoff again spent
+all 4,096 generation tokens before returning a summary. Near-limit attempts 1
+and 2 passed. Attempt 3 preserved `Nia` but omitted `AUTH-17`. Both native Pi
+decisions and all five Bonsai calibration examples passed. The overall verdict
+was `failed`. The fixture hash for both expanded runs was
+`b3d8f2169e110493b3cdf162f7297142393b49f48e27fcc8673f412fed4e22b9`.
+
+## Opt-in Pi utility comparison
+
+The [fixed-task comparison](../docs/Development.md#opt-in-summarization-utility-comparison)
+used the same local Bonsai model and coding-session source in two fresh Pi
+sessions. In an exploratory trial, both agents kept calling tools until timeout.
+The checked comparison used the same four-call budget for both conditions.
+
+| Condition | Correct fields | Elapsed | Pi input tokens | Pi output tokens | LFM3 input / output tokens | Tool calls |
+| --- | ---: | ---: | --- | ---: | --- | --- |
+| Read | 11/11 | 5.2 s | 4,005 uncached + 3,522 cache reads | 312 | — | 4 reads |
+| Summarize, with fallback read | 11/11 | 18.2 s | 2,440 uncached + 3,087 cache reads | 290 | 581 / 4,096 | 1 summarize, 3 reads (1 successful) |
+
+Pi started the second condition with the real path-and-focus call. LFM3 reached
+its generation cap, so Pi recovered the source with `read` and answered from
+that evidence. The summarizer condition was incomplete. Both sessions reached
+the tool-call budget and Ollama reported zero cache-write tokens. These timings
+and token counts describe a failed summarization attempt with recovery.
+
+A repeat with the same setup completed the summary and returned all 11
+fields correctly in both conditions.
+
+| Condition | Elapsed | Pi input tokens | Pi output tokens | LFM3 input / output tokens | Tool calls |
+| --- | ---: | --- | ---: | --- | --- |
+| Read | 5.6 s | 4,001 uncached + 3,516 cache reads | 312 | — | 4 reads |
+| Summarize, then verify | 15.6 s | 3,848 uncached + 2,794 cache reads | 290 | 581 / 3,087 | 1 summarize, 3 reads (1 successful) |
+
+The completed summary reduced Pi's input by 875 tokens in this pair. The
+summarizer used 581 input tokens and generated 3,087 tokens, including
+reasoning. The condition took about 10 seconds longer and still used a
+successful source read. Ollama reported zero cache-write tokens in both
+conditions. These results describe this task, execution order, and local models.
