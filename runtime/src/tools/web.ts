@@ -43,7 +43,13 @@ export function webProcessEnvironment(
 }
 const searchSchema = Type.Object(
   {
-    query: Type.String({ minLength: 1, maxLength: 2000 }),
+    query: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+    queries: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 2000 }), {
+        minItems: 1,
+        maxItems: 4,
+      }),
+    ),
     numResults: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
     includeContent: Type.Optional(Type.Boolean()),
     recencyFilter: Type.Optional(
@@ -56,21 +62,43 @@ const searchSchema = Type.Object(
     ),
     domainFilter: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 20 })),
   },
-  { additionalProperties: false },
+  { additionalProperties: false, oneOf: [{ required: ['query'] }, { required: ['queries'] }] },
 );
 const fetchSchema = Type.Object(
   {
-    url: Type.String({ minLength: 1 }),
+    url: Type.Optional(Type.String({ minLength: 1 })),
+    urls: Type.Optional(
+      Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 5 }),
+    ),
     mode: Type.Optional(Type.Union([Type.Literal('readable'), Type.Literal('raw')])),
   },
-  { additionalProperties: false },
+  { additionalProperties: false, oneOf: [{ required: ['url'] }, { required: ['urls'] }] },
 );
 const contentSchema = Type.Object(
   {
     responseId: Type.String({ minLength: 1 }),
+    query: Type.Optional(Type.String()),
+    queryIndex: Type.Optional(Type.Integer({ minimum: 0 })),
+    url: Type.Optional(Type.String()),
+    urlIndex: Type.Optional(Type.Integer({ minimum: 0 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })),
-    findText: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+    findText: Type.Optional(
+      Type.Union([
+        Type.String({ minLength: 1, maxLength: 500 }),
+        Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
+          minItems: 1,
+          maxItems: 10,
+        }),
+      ]),
+    ),
+    findMode: Type.Optional(
+      Type.Union([
+        Type.Literal('exact'),
+        Type.Literal('case-insensitive'),
+        Type.Literal('fuzzy'),
+      ]),
+    ),
   },
   { additionalProperties: false },
 );
