@@ -1,5 +1,6 @@
 /** LTCook-owned web-tool contracts, backed by pi-web-access MCP. */
 import { execFile } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -124,10 +125,46 @@ export function isWebTool(name: unknown): name is string {
   return webDefinitions.some((definition) => definition.name === name);
 }
 
+function localSearxngHealthUrl(environment: Record<string, string>): URL | undefined {
+  if (environment.LTCOOK_SERVICE_CONNECTION !== 'local') return;
+  const url = URL.parse(environment.LTCOOK_SEARXNG_URL ?? '');
+  if (url?.protocol === 'http:' && url.hostname === '127.0.0.1' && url.href === `${url.origin}/`)
+    return new URL('/healthz', url);
+}
+
+async function waitForSearxng(url: URL, signal: AbortSignal): Promise<void> {
+  const deadline = AbortSignal.timeout(10000);
+  const waiting = AbortSignal.any([signal, deadline]);
+  try {
+    for (;;) {
+      const probeSignal = AbortSignal.any([waiting, AbortSignal.timeout(1000)]) as NonNullable<
+        RequestInit['signal']
+      >;
+      const response = await fetch(url, {
+        redirect: 'error',
+        signal: probeSignal,
+      }).catch(() => undefined);
+      await response?.body?.cancel();
+      waiting.throwIfAborted();
+      if (response?.ok) return;
+      await delay(200, undefined, { signal: waiting });
+    }
+  } catch (error) {
+    signal.throwIfAborted();
+    if (deadline.aborted) throw new Error('Local SearXNG did not become ready within 10 seconds.');
+    throw error;
+  }
+}
+
+type WebClient = {
+  client: Client;
+  searxngHealthUrl: URL | undefined;
+};
+
 type Connection = {
   workspace: string;
   controller: AbortController;
-  pending: Promise<Client>;
+  pending: Promise<WebClient>;
 };
 export class WebToolService {
   private readonly agents = new Map<string, Connection>();
@@ -141,7 +178,7 @@ export class WebToolService {
     private readonly prepareServices?: () => Promise<void>,
   ) {}
 
-  private async connect(context: ToolContext, signal: AbortSignal): Promise<Client> {
+  private async connect(context: ToolContext, signal: AbortSignal): Promise<WebClient> {
     await this.prepareServices?.();
     signal.throwIfAborted();
     const workspace = path.resolve(context.workspaceRoot);
@@ -195,13 +232,13 @@ export class WebToolService {
     const client = new Client({ name: 'ltcook-web', version: '1.0.0' });
     try {
       await client.connect(transport, { signal, timeout: 15000 });
-      return client;
+      return { client, searxngHealthUrl: localSearxngHealthUrl(env) };
     } catch (error) {
       await transport.close().catch(() => undefined);
       throw error;
     }
   }
-  private async connection(context: ToolContext): Promise<Client> {
+  private async connection(context: ToolContext): Promise<WebClient> {
     const workspace = path.resolve(context.workspaceRoot);
     const { agentId } = context;
     let existing = this.agents.get(agentId);
@@ -220,7 +257,7 @@ export class WebToolService {
       const forget = () => {
         if (this.agents.get(agentId) === current) this.agents.delete(agentId);
       };
-      void pending.then((client) => {
+      void pending.then(({ client }) => {
         client.onclose = forget;
       }, forget);
       existing = current;
@@ -235,8 +272,10 @@ export class WebToolService {
   ): Promise<string> {
     const { signal } = context;
     signal.throwIfAborted();
-    const client = await this.connection(context);
+    const { client, searxngHealthUrl } = await this.connection(context);
     signal.throwIfAborted();
+    if (upstream === 'web_search' && searxngHealthUrl)
+      await waitForSearxng(searxngHealthUrl, signal);
     const result = await client.callTool(
       {
         name: upstream,
@@ -272,8 +311,8 @@ export class WebToolService {
     if (!session) return;
     this.agents.delete(agentId);
     session.controller.abort();
-    const client = await session.pending.catch(() => undefined);
-    await client?.close();
+    const connection = await session.pending.catch(() => undefined);
+    await connection?.client.close();
   }
   async close(): Promise<void> {
     this.closing = true;

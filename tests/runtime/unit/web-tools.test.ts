@@ -90,19 +90,25 @@ test('web subprocess does not inherit runtime authentication or model credential
 });
 
 test.skipIf(process.platform === 'win32')(
-  'bundled web adapter calls the configured SearXNG service and scopes stored results',
+  'bundled web adapter waits for local SearXNG before a batch and scopes stored results',
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'ltcook-web-test-'));
     const node = Bun.which('node');
     if (!node) throw new Error('Node is required to exercise the bundled web adapter.');
     const queries: string[] = [];
+    let healthChecks = 0;
     const server = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if (url.pathname === '/healthz') {
+          healthChecks++;
+          return new Response(null, { status: healthChecks > 1 ? 200 : 503 });
+        }
         if (url.pathname !== '/search' || url.searchParams.get('format') !== 'json')
           return new Response(null, { status: 404 });
+        if (healthChecks < 2) return new Response(null, { status: 503 });
         queries.push(url.searchParams.get('q') ?? '');
         return Response.json({
           results: [
@@ -116,9 +122,14 @@ test.skipIf(process.platform === 'win32')(
       },
     });
     const preparer = join(root, 'prepare-native');
+    const environment = {
+      PI_CODING_AGENT_DIR: root,
+      LTCOOK_SERVICE_CONNECTION: 'local',
+      LTCOOK_SEARXNG_URL: String(server.url),
+    };
     await writeFile(
       preparer,
-      `#!${node}\nconsole.log(JSON.stringify({workspaceRoot:process.argv.at(-1),environment:{PI_CODING_AGENT_DIR:${JSON.stringify(root)}}}));\n`,
+      `#!${node}\nconsole.log(JSON.stringify({workspaceRoot:process.argv.at(-1),environment:${JSON.stringify(environment)}}));\n`,
       { mode: 0o700 },
     );
     await writeFile(
@@ -141,15 +152,21 @@ test.skipIf(process.platform === 'win32')(
       signal: AbortSignal.timeout(8000),
     };
     try {
-      const found = await search!.invoke({ query: 'release evidence' }, context);
+      const found = await search!.invoke(
+        { queries: ['release evidence', 'startup logs'] },
+        context,
+      );
       const content = String(found.content);
       expect(content).toContain('Recorded document');
       expect(content).toContain('ltcook_web_content');
-      expect(queries).toEqual(['release evidence']);
+      expect(queries.sort()).toEqual(['release evidence', 'startup logs']);
       const responseId = content.match(/responseId "([^"]+)"/)?.[1];
       expect(responseId).toBeTruthy();
       expect(
         String((await stored!.invoke({ responseId, queryIndex: 0 }, context)).content),
+      ).toContain('Fixture evidence');
+      expect(
+        String((await stored!.invoke({ responseId, queryIndex: 1 }, context)).content),
       ).toContain('Fixture evidence');
       await expect(
         stored!.invoke({ responseId, queryIndex: 0 }, { ...context, agentId: 'second' }),
