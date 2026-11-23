@@ -426,17 +426,31 @@ connection. The shared catalog provides `ltcook_ried`, `ltcook_summarize`,
 `ltcook_web_search`, `ltcook_web_fetch`, and `ltcook_web_content`. Clients may
 qualify these names with the server name `ltcook_workspace`.
 
-`ltcook_repo_search` is available in Team, standalone, and ordinary Paseo Pi
-workspaces. It accepts a required `query`, an optional `mode` (`hybrid` by default
-or `semantic`), an optional regular expression `pattern`, literal
-workspace-relative `paths` using forward slashes, and a `limit` from 1 to 20
-(default 8). With a pattern, use descriptive query text and put file restrictions
-in `paths`. Results carry `path`, `startLine`, `endLine`, `excerpt`, and an optional
-symbol `name`. Paths are relative to the workspace and use forward slashes.
-Line ranges are one-based and inclusive. `excerptTruncated: true` identifies a
+`ltcook_repo_search` is available in Team and standalone Pi and in authenticated
+ordinary Pi and Codex chats through LTCook's Paseo launch hook. Its search
+grant is separate from workspace file-read permission.
+
+| `mode` | Provider | Meaning of `query` |
+| --- | --- | --- |
+| `hybrid` (default) | ColGREP | Rank results using keyword and semantic signals. |
+| `semantic` | ColGREP | Rank results using semantic similarity. |
+| `exact` | ripgrep | Find a case-sensitive whole word. |
+| `literal` | ripgrep | Find a case-sensitive substring. |
+| `regex` | ripgrep | Find matching lines using ripgrep's default regex engine. |
+
+Set `paths` to literal workspace-relative paths using forward slashes. The
+`limit` ranges from 1 to 20 and defaults to 8. Ranked modes additionally accept
+`pattern` as a regular expression prefilter. In lexical modes, put the search
+text or expression directly in `query`. Source search uses RIED's exclusions
+for common credential paths and generated directories.
+
+Results carry `path`, `startLine`, `endLine`, `excerpt`, and an optional symbol
+`name`. Paths are relative to the workspace and use forward slashes. Line
+ranges are one-based and inclusive. `excerptTruncated: true` identifies a
 verified excerpt clipped to 2,000 characters.
 
-The response includes `provider: "colgrep"`, `kind: "ranked"`, `capturedAt`,
+The response identifies the provider and retrieval kind as `colgrep` and
+`ranked`, or `ripgrep` and `exhaustive`. It also includes `capturedAt`,
 `freshness`, `partial`, `truncated`, and structured `diagnostics`. `partial`
 signals that some evidence was dropped or retrieval failed to finish.
 `truncated` signals a result, candidate, or excerpt limit. `ready` includes a
@@ -445,10 +459,9 @@ being built. `unavailable` reports operational failures such as missing assets
 or a failed search. Both include a `hint`. Invalid input and denied workspace
 access still return tool errors, and cancellation aborts the call.
 
-The call has a two-minute deadline. If indexing persists, check the AppRC
-cache's storage and file locking. The current Paseo launch hook supplies no
-trusted Codex file-read scope, so Codex does not discover or invoke repository
-search.
+The outer call has a two-minute deadline. If ColGREP indexing persists, check
+the AppRC cache's storage and file locking. Lexical search uses an existing
+`rg` on the runtime's trusted executable path.
 
 LTCook setup installs ColGREP 1.8.5, ONNX Runtime 1.23.0, and the
 `lightonai/LateOn-Code-edge` snapshot

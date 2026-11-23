@@ -51,8 +51,8 @@ All notable changes to `ltcook` will be documented in this file.
   repository metadata, and live Git details with optional local base comparison.
   RIED responses include provider provenance, freshness, and structured diagnostics.
 
-- Workspace-scoped semantic repository search in Pi using ColGREP, a pinned
-  LateOn-Code-edge model, and lazy local indexing. Repository search verifies
+- Workspace-scoped repository search in Pi and Codex using ripgrep and ColGREP,
+  with a pinned LateOn-Code-edge model and lazy local indexing. Repository search verifies
   excerpts against current files and reports unavailable, partial, stale, and
   truncated retrieval separately.
 

@@ -344,13 +344,13 @@ export class RuntimeApi {
         }
         if (typeof input.workspaceRoot !== 'string')
           throw new Error('A trusted launch workspace is required.');
-        // > The authenticated launch hook identifies native Pi. Codex does not provide read scope.
-        const nativePi = 'provider' in parsed && parsed.provider === 'pi';
+        // > Only Pi receives general file-read permission from the authenticated launch hook.
+        const provider = 'provider' in parsed ? parsed.provider : undefined;
         const token = await this.workspaceMcp.grant(
           input.nativeAgentId,
           input.workspaceRoot,
-          nativePi,
-          nativePi,
+          provider === 'pi',
+          provider === 'pi' || provider === 'codex',
         );
         response.writeHead(200).end(JSON.stringify({ token }));
         return;

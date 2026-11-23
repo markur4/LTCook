@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { gradeRepositoryCitations } from '../../../evals/repository-citations.js';
 import { gradeRepositoryRetrieval } from '../../../evals/repository-retrieval.js';
 import type { RetrievalQuestion } from '../../../evals/repository-retrieval-fixtures.js';
 import type { RepositoryRetrieval } from '../../../runtime/src/repository/results.js';
@@ -19,6 +20,35 @@ const question: RetrievalQuestion = {
     { path: 'test/ledger.ts', startLine: 1, endLine: 1 },
   ],
 };
+
+test('agent citations can combine adjacent verified hits but cannot span a gap', () => {
+  const site = question.expected[0]!;
+  const source = [
+    { ...site, excerpt: 'export function allocate() {' },
+    { ...site, startLine: 3, endLine: 3, excerpt: '  return 42;' },
+  ];
+  const adjacent = { ...site, path: `./${site.path}`, endLine: 3 };
+  const gap = { ...site, endLine: 4 };
+  expect(gradeRepositoryCitations([adjacent, gap], [site], source, files)).toEqual({
+    supported: [{ ...site, endLine: 3 }],
+    unsupported: [gap],
+    missing: [],
+  });
+  expect(
+    gradeRepositoryCitations(
+      [adjacent],
+      [site],
+      [
+        source[0]!,
+        {
+          ...source[1]!,
+          excerpt: 'changed',
+        },
+      ],
+      files,
+    ),
+  ).toMatchObject({ supported: [], missing: [site] });
+});
 
 function result(hits: RepositoryRetrieval['value']['hits']): RepositoryRetrieval {
   return {

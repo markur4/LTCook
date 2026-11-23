@@ -20,14 +20,14 @@ const model = 'gpt-5.4';
 const material = 'Release R-17 passed 42 checks but did not deploy. The cause is uncertain.';
 const summary = 'R-17 passed 42 checks and did not deploy. The cause is uncertain.';
 const summaryModel = 'fixture-summary';
-const verifyRepositorySearch = Boolean(process.env.LTCOOK_COLGREP_DEPLOYMENT);
-if (verifyRepositorySearch) {
+const verifyColgrep = Boolean(process.env.LTCOOK_COLGREP_DEPLOYMENT);
+if (verifyColgrep) {
   process.env.LTCOOK_COLGREP_CACHE_DIR = path.join(fixture, 'colgrep-cache');
-  await writeFile(
-    path.join(workspace, 'checksum.ts'),
-    'export function computeReleaseChecksum(value: number) { return value % 65521; }\n',
-  );
 }
+await writeFile(
+  path.join(workspace, 'checksum.ts'),
+  'export function computeReleaseChecksum(value: number) { return value % 65521; }\n',
+);
 await writeFile(path.join(workspace, 'notes.txt'), material);
 let tool = 'ltcook_ried';
 let argumentsJson = '{"operation":"summary"}';
@@ -93,7 +93,9 @@ const provider = createServer(async (request, response) => {
         tool === 'ltcook_ried'
           ? returned.includes(workspace) && returned.includes('workspaceRoot')
           : tool === 'ltcook_repo_search'
-            ? returned.includes('checksum.ts') && returned.includes('computeReleaseChecksum')
+            ? returned.includes('checksum.ts') &&
+              returned.includes('computeReleaseChecksum') &&
+              returned.includes(marker.endsWith('_ripgrep') ? 'ripgrep' : 'colgrep')
             : returned.includes(summary) && returned.includes(summaryModel),
         `Tool result was not returned in ${marker}: ${returned.slice(0, 500)}`,
       );
@@ -102,7 +104,6 @@ const provider = createServer(async (request, response) => {
       const tools = input.tools as FixtureTool[];
       const available: FixtureTool[] = searched?.tools ?? tools;
       const names = toolNames(available);
-      if (codex) assert(!names.some((name) => name?.endsWith('ltcook_repo_search')));
       namespace = available.find(
         (candidate) =>
           candidate.name === 'mcp__ltcook_workspace' &&
@@ -295,7 +296,8 @@ async function stop() {
 async function exercise(
   agent: Awaited<ReturnType<NonNullable<typeof host>['api']['agents']['create']>>,
   phase: string,
-  toolInput?: { path: string } | { text: string } | { query: string; pattern: string },
+  toolInput?:
+    { path: string } | { text: string } | { query: string; mode?: 'exact'; pattern?: string },
 ) {
   tool =
     toolInput && 'query' in toolInput
@@ -330,7 +332,7 @@ try {
     config: { provider: `pi/fixture/${model}` },
   });
   await exercise(ordinaryPi, 'pi_fresh');
-  if (verifyRepositorySearch)
+  if (verifyColgrep)
     await exercise(ordinaryPi, 'pi_searches_repository', {
       query: 'calculate the release checksum',
       pattern: 'computeReleaseChecksum',
@@ -340,6 +342,16 @@ try {
     config: { provider: `codex/${model}` },
   });
   await exercise(ordinaryCodex, 'codex_fresh');
+  if (Bun.which('rg'))
+    await exercise(ordinaryCodex, 'codex_searches_ripgrep', {
+      query: 'computeReleaseChecksum',
+      mode: 'exact',
+    });
+  if (verifyColgrep)
+    await exercise(ordinaryCodex, 'codex_searches_colgrep', {
+      query: 'calculate the release checksum',
+      pattern: 'computeReleaseChecksum',
+    });
   await ordinaryCodex.reload();
   await exercise(ordinaryCodex, 'codex_warm_resume');
   await stop();

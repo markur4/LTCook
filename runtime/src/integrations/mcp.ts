@@ -60,6 +60,9 @@ export class WorkspaceMcp {
         description,
         inputSchema,
         outputSchema,
+        ...(name === REPO_SEARCH_TOOL_NAME
+          ? { annotations: { readOnlyHint: true, openWorldHint: false } }
+          : {}),
       }),
     );
   }

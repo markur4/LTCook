@@ -456,6 +456,25 @@ indexing response, or a failed standalone index build, yields exit status 1.
 Quality scores remain descriptive until enough comparable runs establish a
 baseline. See the [initial baseline](../evals/repository-retrieval-baseline.md).
 
+### Codex Repository Agent Behavior Evaluation
+
+With Codex CLI authenticated, `rg` on `PATH`, and `LTCOOK_COLGREP_DEPLOYMENT`
+pointing to installed assets, run the two-case evaluation explicitly.
+
+```shell
+bun evals/codex-repository-behavior-live.ts > codex-repository-behavior.json
+```
+
+Pass `--model MODEL` to select the Codex model. The runner starts an isolated
+local MCP runtime and makes two sequential model calls in fresh read-only Codex
+sessions. It disables the shell tool so the measured evidence comes from MCP.
+The labeled multi-file question grades exact-mode choice, support for citations
+in returned evidence, and coverage of the definition, caller, and test. The
+answerless conceptual question grades ranked-mode choice and abstention.
+The JSON records each verdict, cited ranges, retrieval metadata, model and
+fixture provenance. It excludes credentials and raw responses. This evaluation
+uses a live model and stays outside Traditional Tests.
+
 ## Asset packaging
 
 `src/ltcook_dev/packaging/package_assets.py` builds the canonical

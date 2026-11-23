@@ -79,8 +79,12 @@ async function walk(
 }
 
 export function assertRepositoryPathVisible(target: string): void {
-  if (target.split('/').some(excluded))
+  if (!isRepositoryPathVisible(target))
     throw new Error('Repository target is excluded from discovery');
+}
+
+export function isRepositoryPathVisible(target: string): boolean {
+  return !target.split('/').some(excluded);
 }
 
 export async function readRepositoryMap(

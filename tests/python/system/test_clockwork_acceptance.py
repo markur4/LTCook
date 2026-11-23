@@ -90,6 +90,10 @@ def _run_native_acceptance(tmp_path: Path, entry: str, *arguments: str) -> None:
         PI_OFFLINE="1",
         DO_NOT_TRACK="1",
     )
+    if entry == "paseo-workspace-mcp.ts" and (
+        colgrep := os.environ.get("LTCOOK_COLGREP_DEPLOYMENT")
+    ):
+        environment["LTCOOK_COLGREP_DEPLOYMENT"] = colgrep
     with subprocess.Popen(
         [bun, f"tests/runtime/system/{entry}", *(arguments or (str(tmp_path),))],
         cwd=root,

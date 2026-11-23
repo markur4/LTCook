@@ -5,7 +5,10 @@ type EvidenceCheck =
   | { status: 'valid'; throughLine: number }
   | { status: 'invalid-path' | 'invalid-range' | 'excerpt-mismatch' };
 
-function checkEvidence(hit: RepositoryHit, files: ReadonlyMap<string, string>): EvidenceCheck {
+export function checkRetrievedEvidence(
+  hit: RepositoryHit,
+  files: ReadonlyMap<string, string>,
+): EvidenceCheck {
   const source = files.get(hit.path);
   if (source === undefined) return { status: 'invalid-path' };
   const lines = source
@@ -49,7 +52,7 @@ export function gradeRepositoryRetrieval(
   const matched = new Set<number>();
   const foundPaths = new Set<string>();
   const results = hits.map((hit) => {
-    const evidence = checkEvidence(hit, files);
+    const evidence = checkRetrievedEvidence(hit, files);
     const matches: number[] = [];
     const fileMatch = expected.some(({ path }) => path === hit.path);
     if (evidence.status === 'valid') {

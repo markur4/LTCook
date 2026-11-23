@@ -180,14 +180,12 @@ search. Some Codex modes ask for permission before calling an MCP tool.
   workspace file access, ask for an outline of a specific source file or
   directory. Ordinary Codex chats can use maps and inventory. See the
   [RIED operations and limits](References.md#repository-inventory).
-- In Pi, ask for code by meaning to use `ltcook_repo_search`. For example, ask
-  “Where does the runtime recover an interrupted assignment?” Add a relative
-  path to narrow results. The first search builds the workspace index and can
-  take longer than later searches. If another request is populating the index,
-  retry once it finishes. If setup assets are missing or damaged, repeat the
-  [installation procedure](#install-from-a-checkout) for your installation.
-  Codex repository search requires a trusted read scope, which the current
-  Paseo launch hook does not provide.
+- In Pi or Codex, use `ltcook_repo_search` for source evidence. Ask for an
+  exact identifier to use ripgrep or ask a question by meaning to use ColGREP.
+  Add a relative path to narrow results. The first ColGREP search builds the
+  workspace index and can take longer than later searches. If another request
+  is populating the index, retry once it finishes. If ColGREP assets are missing
+  or damaged, repeat the [installation procedure](#install-from-a-checkout).
 - Ask for a summary using `ltcook_summarize`. Supply text or ask Pi to summarize
   one regular UTF-8 file from the selected workspace, up to 24 KiB. An optional
   focus tells the summarizer what to emphasize. Codex accepts text because its
