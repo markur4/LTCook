@@ -130,6 +130,19 @@ test('standalone Pi leaves chat available when the managed repository search ass
       provider: 'colgrep',
       hint: expect.stringMatching(/ColGREP.*(repair|setup)/i),
     });
+    const locate = runtime.session.getToolDefinition('ltcook_repo_locate');
+    if (!locate) throw new Error('Repository Locate was not registered');
+    const found = await locate.execute(
+      'locate',
+      { query: 'state handling' },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(found.details).toMatchObject({
+      followUp: 'initial-unavailable',
+      searches: [{ status: 'unavailable', provider: 'colgrep' }],
+    });
   } finally {
     await runtime.dispose();
   }

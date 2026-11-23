@@ -21,6 +21,7 @@ import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runti
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
+import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
 import { createWebTools, type WebToolService } from '../../../runtime/src/tools/web.js';
 import { captureShellEnvironment } from '../../../runtime/src/integrations/shell-environment.js';
 
@@ -215,12 +216,12 @@ describe('native runtime boundary', () => {
         return searchResult;
       },
     } as unknown as WebToolService;
+    const repositorySearch = createRepoSearchTool(
+      createColgrepProvider({ deploymentDirectory: '' }),
+    );
     api.setWorkspaceMcp(
       new WorkspaceMcp(
-        [
-          ...createWebTools(service),
-          createRepoSearchTool(createColgrepProvider({ deploymentDirectory: '' })),
-        ],
+        [...createWebTools(service), repositorySearch, createRepoLocateTool(repositorySearch)],
         authority,
       ),
     );
@@ -263,6 +264,14 @@ describe('native runtime boundary', () => {
       });
       expect(await (await call('unbound', 'ltcook_repo_search')).text()).toBe('{}');
       expect(authorized).toBe(3);
+      const locate = await call(nativeAgentId, 'ltcook_repo_locate');
+      expect(locate.status).toBe(200);
+      expect(await locate.json()).toMatchObject({
+        followUp: 'initial-unavailable',
+        searches: [{ mode: 'hybrid', status: 'unavailable', provider: 'colgrep' }],
+      });
+      expect((await call('unbound', 'ltcook_repo_locate')).status).toBe(403);
+      expect(authorized).toBe(4);
     } finally {
       await api.close();
     }
@@ -994,6 +1003,7 @@ describe('native runtime boundary', () => {
     expect(nativeToolAllowed(true, 'ltcook_team')).toBe(true);
     expect(nativeToolAllowed(true, 'ltcook_ried')).toBe(true);
     expect(nativeToolAllowed(true, 'ltcook_repo_search')).toBe(true);
+    expect(nativeToolAllowed(true, 'ltcook_repo_locate')).toBe(true);
     expect(nativeToolAllowed(true, 'bash')).toBe(false);
     expect(nativeToolAllowed(true, 'edit')).toBe(false);
     expect(nativeToolAllowed(true, 'web_disable')).toBe(false);

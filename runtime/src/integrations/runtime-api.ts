@@ -13,7 +13,10 @@ import { canonicalWorkspace } from '../core/workspace.js';
 import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { WorkspaceMcp } from './mcp.js';
-import { REPO_SEARCH_TIMEOUT_MS, REPO_SEARCH_TOOL_NAME } from '../tools/repo-search.js';
+import {
+  isRepositoryTool,
+  REPO_SEARCH_TIMEOUT_MS,
+} from '../paseo-plugin/shared/workspace-tools.js';
 import { isWebTool } from '../tools/web.js';
 import { validateRiedRequest } from '../repository/requests.js';
 import { z } from 'zod';
@@ -526,7 +529,7 @@ export class RuntimeApi {
       }
       if (request.url === '/v1/workspace-tool') {
         const toolName = input.toolName;
-        const repositorySearch = toolName === REPO_SEARCH_TOOL_NAME;
+        const repositorySearch = isRepositoryTool(toolName);
         if (
           actor.kind !== 'agent' ||
           !input.sessionId ||

@@ -9,11 +9,14 @@ import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { riedToolDefinition } from '../tools/ried.js';
 import { RiedService } from '../repository/discovery.js';
 import type { RiedRequest } from '../repository/requests.js';
+import { createRepoSearchTool } from '../tools/repo-search.js';
+import { createRepoLocateTool } from '../tools/repo-locate.js';
+import type { ToolDefinition } from '../tools/types.js';
 import {
-  createRepoSearchTool,
+  isRepositoryTool,
+  REPO_LOCATE_TOOL_NAME,
   REPO_SEARCH_TIMEOUT_MS,
-  REPO_SEARCH_TOOL_NAME,
-} from '../tools/repo-search.js';
+} from '../paseo-plugin/shared/workspace-tools.js';
 import { isWebTool, webDefinitions } from '../tools/web.js';
 import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
@@ -367,7 +370,7 @@ export default async function activate(
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
     // > The shared HTTP endpoint authorizes these calls once for every native caller.
-    if (isWebTool(event.toolName) || event.toolName === REPO_SEARCH_TOOL_NAME) return;
+    if (isWebTool(event.toolName) || isRepositoryTool(event.toolName)) return;
     try {
       // > Native new/resume may change cwd; authorize exactly the path the tool will use.
       const input =
@@ -492,26 +495,27 @@ export default async function activate(
       >['signal'],
     });
   };
-  const repoSearch = createRepoSearchTool();
-  registerRepoSearchTool(pi, repoSearch, async (input, signal) => {
-    const response = await invokeWorkspaceTool(
-      repoSearch.name,
-      input,
-      signal,
-      REPO_SEARCH_TIMEOUT_MS + 10_000,
-    );
-    const result: unknown = await response.json();
-    if (!response.ok) {
-      const detail =
-        typeof result === 'object' && result !== null && 'error' in result
-          ? result.error
-          : undefined;
-      throw new Error(
-        typeof detail === 'string' ? detail : `Repository search unavailable (${response.status}).`,
+  for (const tool of repositoryTools()) {
+    registerRepositoryTool(pi, tool, async (input, signal) => {
+      const response = await invokeWorkspaceTool(
+        tool.name,
+        input,
+        signal,
+        REPO_SEARCH_TIMEOUT_MS + 10_000,
       );
-    }
-    return result;
-  });
+      const result: unknown = await response.json();
+      if (!response.ok) {
+        const detail =
+          typeof result === 'object' && result !== null && 'error' in result
+            ? result.error
+            : undefined;
+        throw new Error(
+          typeof detail === 'string' ? detail : `Repository tool unavailable (${response.status}).`,
+        );
+      }
+      return result;
+    });
+  }
   for (const definition of webDefinitions) {
     pi.registerTool({
       name: definition.name,
@@ -537,15 +541,20 @@ export default async function activate(
   await activateOptionalBrowser(pi);
 }
 
-/** Register the shared search contract for managed and standalone Pi. */
-function registerRepoSearchTool(
+function repositoryTools() {
+  const search = createRepoSearchTool();
+  return [search, createRepoLocateTool(search)] as const;
+}
+
+/** Register the same repository contracts for managed and standalone Pi. */
+function registerRepositoryTool(
   pi: ExtensionAPI,
-  tool: ReturnType<typeof createRepoSearchTool>,
+  tool: ToolDefinition,
   search: (input: unknown, signal?: AbortSignal) => Promise<unknown>,
 ): void {
   pi.registerTool({
     name: tool.name,
-    label: 'Search repository',
+    label: tool.name === REPO_LOCATE_TOOL_NAME ? 'Locate in repository' : 'Search repository',
     description: tool.description,
     parameters: tool.inputSchema,
     async execute(_id, input, signal) {
@@ -568,16 +577,17 @@ export function activateStandaloneRepoSearch(
   } catch {
     return;
   }
-  const tool = createRepoSearchTool();
-  registerRepoSearchTool(pi, tool, (input, signal) =>
-    tool.invoke(input, {
-      agentId: sessionId,
-      workspaceRoot: root,
-      workspaceFileAccess: false,
-      repositorySearchAccess: true,
-      signal: signal ?? new AbortController().signal,
-    }),
-  );
+  for (const tool of repositoryTools()) {
+    registerRepositoryTool(pi, tool, (input, signal) =>
+      tool.invoke(input, {
+        agentId: sessionId,
+        workspaceRoot: root,
+        workspaceFileAccess: false,
+        repositorySearchAccess: true,
+        signal: signal ?? new AbortController().signal,
+      }),
+    );
+  }
 }
 
 /** Register the same read-only inventory contract for managed and standalone Pi. */

@@ -83,6 +83,7 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
     const codexTools = (await two.sdk.listTools()).tools;
     expect(piTools).toContain('ltcook_ried');
     expect(piTools).toContain('ltcook_repo_search');
+    expect(piTools).toContain('ltcook_repo_locate');
     expect(codexTools.map(({ name }) => name)).toContain('ltcook_ried');
     expect(codexTools.find(({ name }) => name === 'ltcook_repo_search')?.annotations).toMatchObject(
       {
@@ -99,6 +100,21 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
     });
     expect(deniedSearch.isError).toBe(true);
     expect(deniedSearch.content).toEqual([{ type: 'text', text: 'Unknown LTCook tool.' }]);
+    expect(
+      codexTools.find(({ name }) => name === 'ltcook_repo_locate')?.annotations?.readOnlyHint,
+    ).toBe(true);
+    expect((await unscoped.sdk.listTools()).tools.map(({ name }) => name)).not.toContain(
+      'ltcook_repo_locate',
+    );
+    const locate = (client: Client, args: Record<string, unknown> = {}) =>
+      client.callTool({
+        name: 'ltcook_repo_locate',
+        arguments: { symbol: 'otherWorkspace', ...args },
+      });
+    expect((await locate(unscoped.sdk)).isError).toBe(true);
+    expect((await locate(two.sdk, { paths: ['../first/source.ts'] })).isError).toBe(true);
+    expect((await locate(two.sdk, { paths: ['escape.ts'] })).isError).toBe(true);
+    expect((await locate(two.sdk, { paths: ['private.pem'] })).isError).toBe(true);
     const search = (args: Record<string, unknown>) =>
       two.sdk.callTool({
         name: 'ltcook_repo_search',
@@ -117,6 +133,14 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
             diagnostics: [{ code: 'excluded-path' }],
           }
         : { status: 'unavailable', diagnostics: [{ code: 'missing-executable' }] }),
+    });
+    const located = await locate(two.sdk);
+    expect(located.isError).not.toBe(true);
+    expect(located.structuredContent).toMatchObject({
+      followUp: 'not-needed',
+      searches: [
+        { mode: 'exact', provider: 'ripgrep', status: Bun.which('rg') ? 'ready' : 'unavailable' },
+      ],
     });
     for (const args of [
       { paths: ['../first/source.ts'] },
