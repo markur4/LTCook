@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { URL } from 'node:url';
 import {
+  retriesSummaryWithoutReasoning,
   summaryGeneration,
   type OllamaSettings,
   type OllamaUsage,
@@ -40,6 +41,7 @@ import {
   inspectEvaluationModel,
   listEvaluationModels,
   modelTag,
+  ticketIdPattern,
   type ModelIdentity,
   type SummaryGrade,
 } from './summarization-grader.js';
@@ -96,6 +98,7 @@ export type SummarizationReport = {
       inputBytes?: number;
       generation?: SummaryGeneration;
       keepAlive?: number;
+      retryIncompleteWithoutReasoning?: boolean;
     };
     grader: {
       requestedModel: string;
@@ -127,12 +130,16 @@ export function missingExactFacts(
   fixture: SummarizationCase,
   summary: string,
 ): Attempt['missingExact'] {
-  return fixture.facts.flatMap(({ id, exact = [], sourceQuote }) => {
-    const values = exact.filter((value) => {
-      const escaped = value.replace(/[.*+?^$${}()|[\]\\]/g, '\\$&');
-      const pattern = '(?<![\\p{L}\\p{N}_])' + escaped + '(?![\\p{L}\\p{N}_]|[./-][\\p{L}\\p{N}_])';
-      return !new RegExp(pattern, 'u').test(summary);
-    });
+  return fixture.facts.flatMap(({ id, exact = [], ticketIds = [], sourceQuote }) => {
+    const values = ticketIds.filter((ticket) => !ticketIdPattern(ticket).test(summary));
+    values.push(
+      ...exact.filter((value) => {
+        const escaped = value.replace(/[.*+?^$${}()|[\]\\]/g, '\\$&');
+        const pattern =
+          '(?<![\\p{L}\\p{N}_])' + escaped + '(?![\\p{L}\\p{N}_]|[./-][\\p{L}\\p{N}_])';
+        return !new RegExp(pattern, 'u').test(summary);
+      }),
+    );
     return values.length ? [{ fact: id, values, sourceQuote }] : [];
   });
 }
@@ -230,6 +237,7 @@ export async function evaluateSummarization(input: {
         inputBytes: generation ? summaryInputLimit(generation) : undefined,
         generation,
         keepAlive: settings?.keepAlive,
+        retryIncompleteWithoutReasoning: settings && retriesSummaryWithoutReasoning(settings),
       },
       grader: {
         requestedModel: EVAL_MODEL,

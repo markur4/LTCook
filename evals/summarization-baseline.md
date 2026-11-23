@@ -150,13 +150,14 @@ The first expanded run `787106d1-a136-41e9-8838-1202305adf29` used the productio
 LFM3 profile and passed 20 of 21 summary attempts in 159.4 seconds. Both native
 Pi decisions matched their expected outcomes, `HOLD` and `PROCEED`. All three
 near-limit attempts and all five Bonsai calibration examples passed. The
-coding-session summary reached the generation limit before returning any text,
-so all seven of its required facts were missing and qualification failed.
+coding-session summary reached the generation limit after an opening checksum
+fragment. All seven required facts were missing and qualification failed.
 
 The repeat `607eb4f1-4274-4a29-b334-60fc55678bca` also used production settings
 and passed 19 of 21 attempts in 159.3 seconds. The coding handoff again spent
 all 4,096 generation tokens before returning a summary. Near-limit attempts 1
-and 2 passed. Attempt 3 preserved `Nia` but omitted `AUTH-17`. Both native Pi
+and 2 passed. Attempt 3 preserved the decision but wrote `AUTH‑17` with a
+nonbreaking hyphen. The exact check rejected the variant. Both native Pi
 decisions and all five Bonsai calibration examples passed. The overall verdict
 was `failed`. The fixture hash for both expanded runs was
 `b3d8f2169e110493b3cdf162f7297142393b49f48e27fcc8673f412fed4e22b9`.
@@ -192,3 +193,30 @@ summarizer used 581 input tokens and generated 3,087 tokens, including
 reasoning. The condition took about 10 seconds longer and still used a
 successful source read. Ollama reported zero cache-write tokens in both
 conditions. These results describe this task, execution order, and local models.
+
+## Coding-handoff cutoff and ticket typography
+
+An increased reasoning limit of 6,144 tokens did not resolve the cutoff. In run
+`8c7943c4-bf52-4530-b9f2-da2a6d26153f`, the coding handoff again returned no
+summary at the limit, while the other 20 attempts passed. Both Pi decisions,
+the three near-limit attempts, and all five Bonsai calibration examples passed.
+
+The default retains its 4,096-token limit per attempt and retries once without
+reasoning when the first response is incomplete. The two requests share the
+existing timeout. For designated ticket IDs, the evaluation treats Unicode
+hyphen and nonbreaking hyphen as equivalent to the ASCII hyphen. It retains
+the original summary and quotations in the report.
+
+Run `7ebe2e3f-ff48-4208-a660-96dde4f49de1` passed the coding handoff on its
+first generation and all three near-limit attempts. An invalid quotation from
+an italicized summary label blocked the artifact-negation grade. The citation
+matcher now recognizes that Markdown emphasis and retains the original text.
+
+Run `85817681-3c5a-471c-bdfe-1295669cb5a0` hit the 4,096-token limit on the
+coding handoff. The retry returned a complete summary in 270 output tokens
+with all required exact values. All three near-limit attempts, both Pi
+decisions, and all five Bonsai calibration cases passed. Full qualification
+was blocked at 20 of 21 summary attempts because Bonsai supplied an invalid
+source quotation for a coding-handoff claim. The opt-in comparison exercised
+the retry a second time and both Pi conditions answered 11 of 11 fields
+correctly.

@@ -58,6 +58,21 @@ const gradeSchema = z.object({
 
 export type SummaryGrade = z.infer<typeof gradeSchema>;
 
+export function ticketIdPattern(id: string): RegExp {
+  const escaped = id.replace(/[.*+?^$${}()|[\]\\]/g, '\\$&').replaceAll('-', '[-\u2010\u2011]');
+  const word = '\\p{L}\\p{N}_';
+  const separators = './\u2010\u2011-';
+  return new RegExp(
+    `(?<![${word}])(?<![${word}][${separators}])${escaped}(?![${word}]|[${separators}][${word}])`,
+    'gu',
+  );
+}
+
+function normalizeTicketIds(text: string, ticketIds: readonly string[]): string {
+  for (const id of ticketIds) text = text.replace(ticketIdPattern(id), () => id);
+  return text;
+}
+
 function invalidCitation(message: string, evidence: string | undefined): Error {
   const detail = evidence === undefined ? 'no quotation' : JSON.stringify(evidence.slice(0, 120));
   return new Error(message + ' · ' + detail);
@@ -67,9 +82,10 @@ function quoteLayout(text: string) {
   const blocks = /(?:[\p{Zs}\t]*\r?\n[\p{Zs}\t]*(?:(?:[-+*]|\d+[.)])[\p{Zs}\t]+)?)+|[\p{Zs}\t]+/gu;
   const delimiters = new Set<number>();
   for (const match of text.matchAll(
-    /(\*\*|[`])(?=\S)(?:[^\r\n]|\r?\n(?![ \t]*(?:\r?\n|(?:[-+*]|\d+[.)])[ \t]+)))*?\S\1/g,
+    /(\*\*|`|(?<!\*)\*(?!\*))(?=\S)(?:[^\r\n]|\r?\n(?![ \t]*(?:\r?\n|(?:[-+*]|\d+[.)])[ \t]+)))*?\S\1/g,
   )) {
     const width = match[1]!.length;
+    if (match[1] === '*' && text[match.index + match[0].length] === '*') continue;
     for (let offset = 0; offset < width; offset++) {
       delimiters.add(match.index + offset);
       delimiters.add(match.index + match[0].length - width + offset);
@@ -96,12 +112,17 @@ function quoteLayout(text: string) {
 }
 
 /** Match contiguous text through typographic spacing, line wrapping and Markdown formatting. */
-function existingSummaryQuote(text: string, evidence: string | undefined): string | undefined {
+function existingSummaryQuote(
+  text: string,
+  evidence: string | undefined,
+  ticketIds: readonly string[],
+): string | undefined {
   if (!evidence) return undefined;
   if (text.includes(evidence)) return evidence;
   const layout = quoteLayout(text);
-  const needle = quoteLayout(evidence).normalized;
-  const start = layout.normalized.indexOf(needle);
+  // Each allowed hyphen is one code unit, so offsets still select the original excerpt.
+  const needle = normalizeTicketIds(quoteLayout(evidence).normalized, ticketIds);
+  const start = normalizeTicketIds(layout.normalized, ticketIds).indexOf(needle);
   if (start < 0) return undefined;
   return text.slice(layout.offsets[start], layout.offsets[start + needle.length - 1]! + 1);
 }
@@ -112,6 +133,7 @@ export function validateSummaryGrade(
   summary: string,
 ): SummaryGrade {
   const grade = gradeSchema.parse(value);
+  const ticketIds = fixture.facts.flatMap((fact) => fact.ticketIds ?? []);
   const hasQuoted = (text: string, evidence: string | undefined) =>
     evidence !== undefined && text.includes(evidence);
   const expected = new Map(fixture.facts.map(({ id, sourceQuote }) => [id, sourceQuote]));
@@ -123,7 +145,7 @@ export function validateSummaryGrade(
       );
     expected.delete(item.id);
     const requiresSummaryQuote = item.verdict === 'preserved' || item.verdict === 'contradicted';
-    const summaryQuote = existingSummaryQuote(summary, item.summaryQuote);
+    const summaryQuote = existingSummaryQuote(summary, item.summaryQuote, ticketIds);
     if ((requiresSummaryQuote || item.summaryQuote !== undefined) && !summaryQuote)
       throw invalidCitation(
         'Grader returned invalid summary evidence for a required fact (' + item.id + ')',
@@ -136,7 +158,7 @@ export function validateSummaryGrade(
   for (const [index, claim] of grade.claims.entries()) {
     const claimNumber = index + 1;
     const requiresSourceQuote = claim.verdict === 'supported' || claim.verdict === 'contradicted';
-    const summaryQuote = existingSummaryQuote(summary, claim.summaryQuote);
+    const summaryQuote = existingSummaryQuote(summary, claim.summaryQuote, ticketIds);
     if (!summaryQuote)
       throw invalidCitation(
         'Grader returned invalid evidence for a material claim (' + claimNumber + ', summary)',
@@ -269,6 +291,7 @@ export async function gradeSummary(input: {
   timeoutMs?: number;
 }) {
   const { endpoint, model, fixture, summary, signal, timeoutMs = 120_000 } = input;
+  const ticketIds = fixture.facts.flatMap((fact) => fact.ticketIds ?? []);
   const started = performance.now();
   const response = responseSchema.parse(
     await ollamaJson(
@@ -289,7 +312,7 @@ export async function gradeSummary(input: {
             content: JSON.stringify({
               source: fixture.source,
               focus: fixture.focus,
-              summary,
+              summary: normalizeTicketIds(summary, ticketIds),
               requiredFacts: fixture.facts.map(({ id, statement, sourceQuote }) => ({
                 id,
                 statement,

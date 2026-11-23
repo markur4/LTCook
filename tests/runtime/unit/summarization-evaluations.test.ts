@@ -5,6 +5,7 @@ import {
   summaryInputLimit,
 } from '../../../runtime/src/tools/summarize.js';
 import {
+  CODING_SESSION_CASE,
   CORE_SUMMARIZATION_CASES,
   DOWNSTREAM_CASE,
   fullSummarizationCases,
@@ -62,6 +63,69 @@ test('exact-missing checks catch changed names, paths and numeric lookalikes', (
       'M-04 passed with exit code 23 in ops/db.py. Inez decided to wait.',
     ),
   ).toEqual([]);
+});
+
+test('ticket hyphens are interchangeable only in the designated whole ticket ID', () => {
+  const nearLimit = fullSummarizationCases(SUMMARY_MAX_INPUT_BYTES).find(
+    ({ id }) => id === 'near-limit-exception',
+  )!;
+  const fact = nearLimit.facts[0]!;
+  for (const id of ['AUTH-17', 'AUTH\u201017', 'AUTH\u201117']) {
+    expect(missingExactFacts(nearLimit, fact.sourceQuote.replace('AUTH-17', id))).toEqual([]);
+  }
+  for (const id of ['AUTH-71', 'AUTH\u201317', 'PRE-AUTH\u201117', 'AUTH\u201117-1']) {
+    expect(missingExactFacts(nearLimit, fact.sourceQuote.replace('AUTH-17', id))).toMatchObject([
+      { values: ['AUTH-17'] },
+    ]);
+  }
+  const migration = CORE_SUMMARIZATION_CASES.find(({ id }) => id === 'migration-failure')!;
+  expect(missingExactFacts(migration, migration.source.replace('M-04', 'M\u201104'))).toMatchObject(
+    [{ values: ['M-04'] }],
+  );
+  const changedPath = CODING_SESSION_CASE.source.replace('reconcile-cache', 'reconcile\u2011cache');
+  expect(missingExactFacts(CODING_SESSION_CASE, changedPath)).toMatchObject([
+    { values: ['tests/package/reconcile-cache.test.ts'] },
+  ]);
+});
+
+test('the grader can cite a normalized ticket while the report preserves the original hyphen', () => {
+  const nearLimit = fullSummarizationCases(SUMMARY_MAX_INPUT_BYTES).find(
+    ({ id }) => id === 'near-limit-exception',
+  )!;
+  const { id, sourceQuote } = nearLimit.facts[0]!;
+  const grade = {
+    facts: [{ id, verdict: 'preserved', sourceQuote, summaryQuote: sourceQuote }],
+    claims: [{ verdict: 'supported', sourceQuote, summaryQuote: sourceQuote }],
+  };
+  const summary = sourceQuote.replace('AUTH-17', 'AUTH\u201117');
+  const result = validateSummaryGrade(grade, nearLimit, summary);
+  expect(result.facts[0]?.summaryQuote).toBe(summary);
+  expect(result.claims[0]?.summaryQuote).toBe(summary);
+  expect(() => validateSummaryGrade(grade, nearLimit, summary.replace('17', '71'))).toThrow(
+    'invalid summary evidence',
+  );
+});
+
+test('the grader can cite an emphasized Markdown label without its markers', () => {
+  const nearLimit = fullSummarizationCases(SUMMARY_MAX_INPUT_BYTES).find(
+    ({ id }) => id === 'near-limit-exception',
+  )!;
+  const { id, sourceQuote } = nearLimit.facts[0]!;
+  const summary = sourceQuote + '\n- *Ticket status:* blocked';
+  const grade = {
+    facts: [{ id, verdict: 'preserved', sourceQuote, summaryQuote: sourceQuote }],
+    claims: [{ verdict: 'supported', sourceQuote, summaryQuote: 'Ticket status: blocked' }],
+  };
+  expect(validateSummaryGrade(grade, nearLimit, summary).claims[0]?.summaryQuote).toBe(
+    'Ticket status:* blocked',
+  );
+  expect(() =>
+    validateSummaryGrade(
+      grade,
+      nearLimit,
+      summary.replace('status:* blocked', 'status:* approved'),
+    ),
+  ).toThrow('invalid evidence for a material claim');
 });
 
 test('grade evidence permits absent text for omissions and inventions and rejects fabricated quotations', () => {

@@ -176,7 +176,7 @@ search. Some Codex modes ask for permission before calling an MCP tool.
 
 LTCook initialization and repair that reruns initialization prepare
 `lfm3:1.7b-q8_0` in the configured local Ollama instance. The default runs
-with reasoning enabled.
+with reasoning enabled and retries an incomplete response once without reasoning.
 Run `ltcook app doctor --verbose --json` for the summarizer's readiness alongside
 Bonsai. RIED and ordinary chats are available if the summarizer model is missing.
 Set the global [summarizer settings](References.md#environment-variables) in

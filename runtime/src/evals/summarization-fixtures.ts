@@ -3,6 +3,7 @@ export type RequiredFact = {
   statement: string;
   sourceQuote: string;
   exact?: string[];
+  ticketIds?: string[];
 };
 
 export type SummarizationCase = {
@@ -75,7 +76,7 @@ const artifacts: SummarizationCase = {
       id: 'issue',
       statement: 'Ada logged issue Q-11.',
       sourceQuote: 'Ada moved 3 files to reports/weekly and logged issue Q-11.',
-      exact: ['Q-11'],
+      ticketIds: ['Q-11'],
     },
   ],
 };
@@ -193,7 +194,8 @@ function nearLimitCase(inputBytes: number): SummarizationCase {
         id: 'exception',
         statement: 'AUTH-17 remained blocked and release holds until Nia approves.',
         sourceQuote: exception,
-        exact: ['AUTH-17', 'Nia'],
+        exact: ['Nia'],
+        ticketIds: ['AUTH-17'],
       },
     ],
   };
@@ -288,7 +290,7 @@ export const CODING_SESSION_CASE: SummarizationCase = {
     },
     { id: 'skip', statement: skippedSmoke, sourceQuote: skippedSmoke, exact: ['Windows'] },
     { id: 'approval', statement: publishDecision, sourceQuote: publishDecision, exact: ['Mina'] },
-    { id: 'follow-up', statement: followUp, sourceQuote: followUp, exact: ['PKG-72'] },
+    { id: 'follow-up', statement: followUp, sourceQuote: followUp, ticketIds: ['PKG-72'] },
   ],
 };
 

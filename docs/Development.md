@@ -271,6 +271,8 @@ their resolved tags and digests. It includes a code fingerprint, hashes for
 the fixtures and prompts, effective settings, individual results, fixed-fixture
 summaries and quotations, latency, and token counts when available. Concision
 and readability are separate from the required-fact verdict.
+When the default LFM3 profile retries without reasoning, the report identifies
+the initial reasoning attempt and includes both requests in the token totals.
 
 The engine fingerprints its runtime bundle at startup. Source checkouts
 fingerprint the evaluation and summarizer source files and the Bun lockfile
@@ -293,8 +295,11 @@ Each run checks Bonsai against development and held-out fixtures with fixed
 expected judgments. Keep the held-out cases separate when refining the grading prompt.
 Calibration requires Bonsai to flag the expected claims and cite their wording.
 Evidence validation checks each required fact against its supplied quotation.
+For ticket IDs explicitly marked in the fixture, qualification accepts a Unicode
+hyphen or nonbreaking hyphen in place of the ASCII hyphen. Other exact values,
+including paths and machine identifiers, retain exact matching.
 Summary citations can span line wrapping, typographic spacing, and Markdown
-formatting such as lists, bold text, and inline code. The report retains the
+formatting such as lists, emphasis, and inline code. The report retains the
 exact excerpt as it appeared in the candidate summary.
 Critical disagreements can be adjudicated manually against the fixed source and
 candidate. An unavailable, uncalibrated, or self-grading model blocks semantic

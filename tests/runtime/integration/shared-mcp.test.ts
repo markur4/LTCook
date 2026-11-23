@@ -8,7 +8,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
-import { LFM3_SUMMARIZER_MODEL } from '../../../runtime/src/integrations/ollama.js';
+import {
+  LFM3_SUMMARIZER_MODEL,
+  ollamaChat,
+  type OllamaUsage,
+} from '../../../runtime/src/integrations/ollama.js';
 import { createTools } from '../../../runtime/src/tools/catalog.js';
 import { RiedService } from '../../../runtime/src/tools/ried.js';
 import { createSummarizeTool } from '../../../runtime/src/tools/summarize.js';
@@ -160,18 +164,22 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
     model: string;
     messages: Array<{ role: string; content: string }>;
     keep_alive: number;
+    think?: boolean;
     options: { num_predict: number };
   }> = [];
   let mode = 'length';
   const ollama = createHttpServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
-    requests.push(JSON.parse(body));
-    if (mode === 'abort') {
+    const input = JSON.parse(body) as (typeof requests)[number];
+    requests.push(input);
+    if (mode === 'abort' || (mode === 'retry-abort' && input.think === false)) {
       response.once('close', () => canceled.resolve());
       started.resolve();
       return;
     }
+    const cutoff =
+      mode === 'empty-length' || mode === 'retry-abort' || (mode === 'recover' && input.think);
     response.writeHead(mode === 'missing' ? 404 : 200, { 'content-type': 'application/json' });
     response.end(
       JSON.stringify(
@@ -180,10 +188,12 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
           : {
               model: LFM3_SUMMARIZER_MODEL,
               message: {
-                content: mode === 'empty-length' ? '' : 'R-17 passed 42 checks and did not deploy.',
+                content: cutoff ? '' : 'R-17 passed 42 checks and did not deploy.',
               },
               done: true,
-              done_reason: mode === 'empty-length' ? 'length' : mode,
+              done_reason: cutoff ? 'length' : mode === 'recover' ? 'stop' : mode,
+              prompt_eval_count: 35,
+              eval_count: cutoff ? input.options.num_predict : 16,
             },
       ),
     );
@@ -257,6 +267,43 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
     });
     expect(requests[0]?.messages[1]?.content).toContain(material);
     expect(requests[0]?.messages[1]?.content).toContain('Deployment decision');
+    expect(requests.map(({ think }) => think)).toEqual([true, false]);
+    mode = 'recover';
+    let before = requests.length;
+    expect((await summarize(codex, { text: material })).structuredContent).toMatchObject({
+      incomplete: false,
+      summary: 'R-17 passed 42 checks and did not deploy.',
+    });
+    expect(requests.slice(before).map(({ think }) => think)).toEqual([true, false]);
+    const settings = {
+      endpoint: `http://127.0.0.1:${address.port}`,
+      model: LFM3_SUMMARIZER_MODEL,
+      keepAlive: 0,
+    };
+    const prompt = [{ role: 'user', content: material }] as const;
+    const usages: OllamaUsage[] = [];
+    await ollamaChat(settings, [...prompt], AbortSignal.timeout(1000), (usage) =>
+      usages.push(usage),
+    );
+    expect(usages).toEqual([
+      {
+        inputTokens: 70,
+        outputTokens: 4112,
+        initialReasoningAttempt: { inputTokens: 35, outputTokens: 4096 },
+      },
+    ]);
+    before = requests.length;
+    const override = {
+      ...settings,
+      generation: JSON.stringify({
+        think: true,
+        options: { num_ctx: 4096, num_predict: 128, temperature: 0.1 },
+      }),
+    };
+    expect(await ollamaChat(override, [...prompt], AbortSignal.timeout(1000))).toMatchObject({
+      incomplete: true,
+    });
+    expect(requests.slice(before).map(({ think }) => think)).toEqual([true]);
     mode = 'stop';
     expect((await summarize(codex, { text: material })).structuredContent).toMatchObject({
       incomplete: false,
@@ -275,7 +322,8 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
       (await codex.callTool({ name: 'ltcook_ried', arguments: { operation: 'summary' } }))
         .structuredContent,
     ).toMatchObject({ value: { workspaceRoot: workspace } });
-    mode = 'abort';
+    mode = 'retry-abort';
+    before = requests.length;
     const controller = new AbortController();
     const result = summarize(codex, { text: material }, controller.signal);
     const rejected = result.then(
@@ -290,7 +338,9 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
     expect(
       await Promise.race([canceled.promise.then(() => true), Bun.sleep(1000).then(() => false)]),
     ).toBe(true);
+    expect(requests.slice(before).map(({ think }) => think)).toEqual([true, false]);
 
+    mode = 'abort';
     started = Promise.withResolvers<void>();
     canceled = Promise.withResolvers<void>();
     const pendingResponse = fetch(`http://${authority}/mcp`, {

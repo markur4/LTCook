@@ -205,6 +205,8 @@ async function runFixture(
         if (!fixture) throw new Error('Unexpected summarization input.');
         sources.push(fixture.id);
         content = source;
+        if (mode === 'profile' && fixture.id === NEAR_LIMIT_CASE_ID)
+          content = fixture.facts[0]!.sourceQuote.replace('AUTH-17', 'AUTH\u201117');
         if (
           mode === 'single-near-limit-failure' &&
           fixture.id === NEAR_LIMIT_CASE_ID &&
@@ -232,6 +234,8 @@ async function runFixture(
         graderCalls++;
         const data = JSON.parse(input.messages[1].content);
         const fixture = findFixture(data.source, data.focus);
+        if (mode === 'profile' && fixture.id === NEAR_LIMIT_CASE_ID)
+          expect(data.summary).toBe(fixture.facts[0]!.sourceQuote);
         if (mode === 'blocked' || (mode === 'bad-calibration' && graderCalls === 2)) content = '{}';
         else content = JSON.stringify(scriptedGrade(fixture, data.summary));
       } else throw new Error('Unexpected Ollama model.');
@@ -416,6 +420,7 @@ test('qualification uses the requested generation and derives its near-limit inp
   for (const attempt of nearLimit) {
     expect(attempt.inputBytes).toBeLessThanOrEqual(profileLimit);
     expect(attempt.inputBytes).toBeGreaterThanOrEqual(profileLimit - 1);
+    expect(attempt.summary).toContain('AUTH\u201117');
   }
 });
 

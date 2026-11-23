@@ -251,6 +251,9 @@ All notable changes to `ltcook` will be documented in this file.
 ### 🔨 Fixed
 
 <br>
+- The default LFM3 summarizer retries incomplete generation once without
+  reasoning. Summarization qualification accepts typographic hyphens for
+  designated ticket IDs and retains the original quoted evidence.
 - Agent Evals preserves coordination command labels and execution Pass guidance
   when Ollama renders tool schemas, and reports a finished scheduling handoff
   with no registered work without waiting for the time limit.
