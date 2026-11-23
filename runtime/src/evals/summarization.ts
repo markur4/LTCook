@@ -26,6 +26,7 @@ import {
   DOWNSTREAM_CASES,
   FILE_SUMMARIZATION_CASE,
   fullSummarizationCases,
+  NEAR_LIMIT_CASE_ID,
   NEAR_LIMIT_FOCUS,
   REPEAT_SUMMARIZATION_CASES,
   SUMMARIZATION_CALIBRATION,
@@ -48,6 +49,8 @@ import {
   type SummaryGrade,
 } from './summarization-grader.js';
 import { EVAL_MODEL, hash } from './setup.js';
+
+const NEAR_LIMIT_OUTPUT_TOKENS = 4096;
 
 type Attempt = {
   id: string;
@@ -99,6 +102,7 @@ export type SummarizationReport = {
       promptSha256: string;
       inputBytes?: number;
       generation?: SummaryGeneration;
+      nearLimit?: { inputBytes: number; generation: SummaryGeneration };
       keepAlive?: number;
       retryIncompleteWithoutReasoning?: boolean;
     };
@@ -168,6 +172,17 @@ function generationFailure(result: Attempt): string | undefined {
   if (result.missingExact.length) return 'Required exact values are missing.';
 }
 
+function nearLimitProfile(generation: SummaryGeneration) {
+  const options = generation.options;
+  // > Limit the increase to half the context so small profiles still have room for input.
+  const outputReserve = Math.min(NEAR_LIMIT_OUTPUT_TOKENS, Math.floor(options.num_ctx / 2));
+  const profile = {
+    ...generation,
+    options: { ...options, num_predict: Math.max(options.num_predict, outputReserve) },
+  };
+  return { generation: profile, inputBytes: summaryInputLimit(profile, NEAR_LIMIT_FOCUS) };
+}
+
 const errorReason = (error: unknown) =>
   sanitizeEvaluationText(
     error instanceof Error ? error.message : 'Local inference did not complete.',
@@ -223,10 +238,8 @@ export async function evaluateSummarization(input: {
       configurationError = errorReason(error);
     }
   }
-  const fullCases =
-    full && generation
-      ? fullSummarizationCases(summaryInputLimit(generation, NEAR_LIMIT_FOCUS))
-      : [];
+  const nearLimit = full && generation ? nearLimitProfile(generation) : undefined;
+  const fullCases = nearLimit ? fullSummarizationCases(nearLimit.inputBytes) : [];
   const report: SummarizationReport = {
     scope,
     verdict: 'blocked',
@@ -248,6 +261,7 @@ export async function evaluateSummarization(input: {
         promptSha256: hash(SUMMARY_INSTRUCTIONS),
         inputBytes: generation ? summaryInputLimit(generation) : undefined,
         generation,
+        nearLimit,
         keepAlive: settings?.keepAlive,
         retryIncompleteWithoutReasoning: settings && retriesSummaryWithoutReasoning(settings),
       },
@@ -368,9 +382,17 @@ export async function evaluateSummarization(input: {
     await writeFile(path.join(directory, 'fixture-notes.txt'), FILE_SUMMARIZATION_CASE.source);
   }
   let usage: OllamaUsage | undefined;
-  const tool = createSummarizeTool(settings, (value) => {
+  const recordUsage = (value: OllamaUsage) => {
     usage = value;
-  });
+  };
+  const tool = createSummarizeTool(settings, recordUsage);
+  const nearLimitTool =
+    nearLimit && nearLimit.generation.options.num_predict > generation.options.num_predict
+      ? createSummarizeTool(
+          { ...settings, generation: JSON.stringify(nearLimit.generation) },
+          recordUsage,
+        )
+      : tool;
   const generated: Array<{ fixture: SummarizationCase; result: Attempt }> = [];
 
   for (const job of cases) {
@@ -392,7 +414,8 @@ export async function evaluateSummarization(input: {
     const begin = performance.now();
     usage = undefined;
     try {
-      const summary = await tool.execute(
+      const summarizerTool = fixture.id === NEAR_LIMIT_CASE_ID ? nearLimitTool : tool;
+      const summary = await summarizerTool.execute(
         kind === 'file'
           ? { path: 'fixture-notes.txt', focus: fixture.focus }
           : { text: fixture.source, focus: fixture.focus },

@@ -281,16 +281,20 @@ at engine creation.
 
 Set the global AppRC model and generation options before starting the evaluation
 runtime to compare a candidate. Leave both settings unset to qualify the
-current default. To reproduce the initial LFM3 baseline, use
-`LTCOOK_SUMMARIZER_MODEL=lfm3:1.7b-q8_0` and the following generation value.
+current default. The initial LFM3 baseline used
+`LTCOOK_SUMMARIZER_MODEL=lfm3:1.7b-q8_0` with this generation value.
 
 ```shell
 export LTCOOK_SUMMARIZER_GENERATION='{"think":false,"stream":false,"options":{"temperature":0.1,"num_ctx":4096,"num_predict":128}}'
 ```
 
-The near-limit fixture measures the effective tool budget for the configured
-context and focus. Compare runs with different context settings using that budget
-and the recorded fixture hash. See the [first full LFM3 baseline](../evals/summarization-baseline.md).
+The near-limit attempts raise the output budget to 4,096 tokens or half the
+configured context, whichever is smaller, while preserving any higher
+configured budget. Other attempts use the configured generation settings.
+The fixture fills the input allowance left after reserving output and prompt
+space. The report records the effective near-limit budget and fixture hash.
+Historical runs used their configured output budget for all fixtures. See the
+[first full LFM3 baseline](../evals/summarization-baseline.md).
 
 Add `--summarization-grader gpt-6-luna` to opt into hosted OpenAI grading and
 downstream decisions at high reasoning. The report identifies the hosted

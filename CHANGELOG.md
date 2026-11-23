@@ -139,7 +139,9 @@ All notable changes to `ltcook` will be documented in this file.
   three near-limit attempts. An opt-in Pi utility comparison reports the
   cost and correctness of reading directly and using a summary. Focused
   summarization runs can opt into GPT-6 Luna with high reasoning for grading
-  and rollout decisions.
+  and rollout decisions. Near-limit attempts reserve additional output within
+  the configured context, and grader calibration checks contextual paraphrases
+  and exact citations.
 
 - Add workspace inventory and local Ollama summarization over authenticated MCP
   for ordinary Pi and Codex chats in Paseo.

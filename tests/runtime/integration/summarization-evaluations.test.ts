@@ -29,9 +29,10 @@ const candidate = 'summary-candidate:latest';
 const profile = {
   think: false,
   stream: false as const,
-  options: { num_ctx: 8192, num_predict: 128, temperature: 0.1 },
+  options: { num_ctx: 4096, num_predict: 128, temperature: 0.1 },
 };
-const profileLimit = summaryInputLimit(profile, NEAR_LIMIT_FOCUS);
+const nearLimitGeneration = { ...profile, options: { ...profile.options, num_predict: 2048 } };
+const profileLimit = summaryInputLimit(nearLimitGeneration, NEAR_LIMIT_FOCUS);
 const wrongDecisionSummary =
   'Ada approved read-only smoke checks. Inez approved the production rollout.';
 const wrongCodingSummary = CODING_SESSION_CASE.source
@@ -193,19 +194,19 @@ async function runFixture(
       let returnedModel = input.model;
       let doneReason = 'stop';
       if (input.model === candidate) {
-        if (mode === 'profile') {
-          expect({
-            think: input.think,
-            stream: input.stream,
-            options: input.options,
-          }).toEqual(profile);
-        }
         const material = String(input.messages[1].content);
         const hasFocus = material.startsWith('Focus: ');
         const [header, ...parts] = hasFocus ? material.split('\n\nMaterial:\n') : ['', material];
         const source = parts.join('\n\nMaterial:\n');
         const fixture = findFixture(source, hasFocus ? header!.slice(7) : undefined);
         if (!fixture) throw new Error('Unexpected summarization input.');
+        if (mode === 'profile') {
+          expect({
+            think: input.think,
+            stream: input.stream,
+            options: input.options,
+          }).toEqual(fixture.id === NEAR_LIMIT_CASE_ID ? nearLimitGeneration : profile);
+        }
         sources.push(fixture.id);
         content = source;
         if (mode === 'profile' && fixture.id === NEAR_LIMIT_CASE_ID)
@@ -406,6 +407,7 @@ test('full qualification repeats high-risk cases, compares a file and tests a na
     summarizationQualification: 'failed',
   });
   expect(report.scope).toBe('full');
+  expect(report.settings.summarizer.nearLimit?.generation.options.num_predict).toBe(4096);
   for (const id of REPEAT_SUMMARIZATION_CASES)
     expect(
       report.attempts.filter((item) => item.id === id && item.input === 'inline'),
@@ -428,10 +430,14 @@ test('full qualification repeats high-risk cases, compares a file and tests a na
   });
 });
 
-test('qualification uses the requested generation and derives its near-limit input from the tool budget', async () => {
+test('qualification reserves extra output only for near-limit attempts and sizes their input accordingly', async () => {
   const { report } = await runFixture('profile');
   expect(report.verdict).toBe('passed');
   expect(report.settings.summarizer.generation).toEqual(profile);
+  expect(report.settings.summarizer.nearLimit).toEqual({
+    generation: nearLimitGeneration,
+    inputBytes: profileLimit,
+  });
   expect(
     report.downstream?.cases.map(({ expected, candidate }) => [expected, candidate?.decision]),
   ).toEqual([
