@@ -177,6 +177,18 @@ test('keyword retrieval ranks distinct query terms and retains scan order on tie
   expect(rankKeywordHits([first, second, third], keywords)).toEqual([second, first, third]);
 });
 
+test('an empty clipped excerpt fails evidence integrity', () => {
+  const grade = gradeRepositoryRetrieval(
+    question,
+    result([
+      { path: 'src/ledger.ts', startLine: 1, endLine: 1, excerpt: '', excerptTruncated: true },
+    ]),
+    files,
+  );
+  expect(grade.invalidEvidence).toBe(1);
+  expect(retrievalObservationFailed(grade)).toBe(true);
+});
+
 test('the top-K budget limits recall without hiding invalid candidates', () => {
   const retrieved = result([
     { path: 'src/ledger.ts', startLine: 2, endLine: 2, excerpt: 'export function allocate() {' },

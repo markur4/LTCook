@@ -3,6 +3,7 @@ import type { Static } from 'typebox';
 import {
   addVerifiedSourceLines,
   gradeRepositoryBehavior,
+  searchesForCreditCardValidation,
   type RepositoryBehaviorAnswer,
 } from '../../../evals/repository-behavior-grade.js';
 import type { RepositoryHit } from '../../../runtime/src/repository/results.js';
@@ -145,6 +146,7 @@ test('negative answers distinguish reviewed irrelevant evidence and unavailable 
     kind: 'ranked',
     freshness: 'cached',
     truncated: true,
+    relevantToNegative: true,
     results,
   } as const;
   const negative: Answer = { outcome: 'not-found', facts: [] };
@@ -156,6 +158,18 @@ test('negative answers distinguish reviewed irrelevant evidence and unavailable 
     evidenceValidity: 'valid',
     taskSuccess: 'passed',
     retrieval: { recall: null, reviewedEvidence: true },
+  });
+  expect(
+    gradeRepositoryBehavior({
+      answer: negative,
+      expected: [],
+      searches: [{ ...complete, results: [], relevantToNegative: false }],
+      files,
+    }),
+  ).toMatchObject({
+    evidenceValidity: 'unverified',
+    taskSuccess: 'unverified',
+    retrieval: { reviewedEvidence: false },
   });
   for (const answer of [negative, insufficient]) {
     expect(
@@ -177,6 +191,16 @@ test('negative answers distinguish reviewed irrelevant evidence and unavailable 
   expect(
     gradeRepositoryBehavior({ answer: correct, expected: [], searches: [ranked], files }),
   ).toMatchObject({ factualCorrectness: 'incorrect', taskSuccess: 'failed' });
+});
+
+test('negative fixture relevance can be established without prescribing a search mode', () => {
+  expect(
+    searchesForCreditCardValidation('Does this repository validate credit card checksums?'),
+  ).toBe(true);
+  expect(searchesForCreditCardValidation('validateCreditCardChecksum')).toBe(true);
+  expect(searchesForCreditCardValidation('luhn')).toBe(true);
+  expect(searchesForCreditCardValidation('computeReleaseChecksum')).toBe(false);
+  expect(searchesForCreditCardValidation('allocateTicket')).toBe(false);
 });
 
 test('only new, complete verified lines count toward the tool yield', () => {

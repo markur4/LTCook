@@ -21,6 +21,7 @@ import {
   gradeRepositoryBehavior,
   RepositoryBehaviorAnswer,
   RepositoryCitation,
+  searchesForCreditCardValidation,
   type ExpectedRepositoryFact,
 } from './repository-behavior-grade.js';
 import { firstVerifiedCitationMs, gradeRepositoryCitations } from './repository-citations.js';
@@ -40,7 +41,7 @@ type Variant = 'search-only' | 'locate';
 type RepositoryCall = {
   tool: RepositoryToolName;
   mode?: SearchMode;
-  searches: { mode: SearchMode; result: SearchResult }[];
+  searches: { mode: SearchMode; result: SearchResult; relevantToNegative?: boolean }[];
   followUp?: Static<LocateTool['outputSchema']>['followUp'];
   started: number;
   finished?: number;
@@ -76,24 +77,34 @@ function autonomousPrompt(question: string, factFields: readonly string[]) {
   ].join('\n');
 }
 
-function requestKey(
+function describeRequest(
   input: unknown,
   search: SearchTool,
   locate: LocateTool,
   tool: RepositoryToolName,
 ) {
   if (tool === REPO_SEARCH_TOOL_NAME && Value.Check(search.inputSchema, input)) {
-    return JSON.stringify([
-      tool,
-      input.mode ?? 'hybrid',
-      input.query,
-      input.pattern,
-      (input.paths ?? []).toSorted(),
-      input.limit ?? 8,
-    ]);
+    const paths = (input.paths ?? []).toSorted();
+    return {
+      key: JSON.stringify([
+        tool,
+        input.mode ?? 'hybrid',
+        input.query,
+        input.pattern,
+        paths,
+        input.limit ?? 8,
+      ]),
+      workspaceWide: paths.every((scope) => scope === '.' || scope === 'fixture'),
+      query: [input.query, input.pattern].filter(Boolean).join(' '),
+    };
   }
   if (tool === REPO_LOCATE_TOOL_NAME && Value.Check(locate.inputSchema, input)) {
-    return JSON.stringify([tool, input.symbol, input.query, (input.paths ?? []).toSorted()]);
+    const paths = (input.paths ?? []).toSorted();
+    return {
+      key: JSON.stringify([tool, input.symbol, input.query, paths]),
+      workspaceWide: paths.every((scope) => scope === '.' || scope === 'fixture'),
+      query: input.symbol ?? input.query ?? '',
+    };
   }
 }
 
@@ -127,7 +138,10 @@ function summarizeAutonomousCalls(
       startedMs: call.started - started,
       completedMs: call.finished === undefined ? undefined : call.finished - started,
       elapsedMs: call.finished === undefined ? undefined : call.finished - call.started,
-      searches: call.searches.map(({ mode, result }) => summarizeSearch(mode, result)),
+      searches: call.searches.map(({ mode, result, relevantToNegative }) => ({
+        ...summarizeSearch(mode, result),
+        relevantToNegative,
+      })),
     };
   });
 }
@@ -303,18 +317,26 @@ async function evaluateWithCodex(
 }
 
 const {
-  values: { model: requestedModel, 'compare-locate': compareLocate, autonomous, pi },
+  values: {
+    model: requestedModel,
+    'compare-locate': compareLocate,
+    autonomous,
+    pi,
+    case: selectedCase,
+  },
 } = parseArgs({
   options: {
     model: { type: 'string' },
     'compare-locate': { type: 'boolean' },
     autonomous: { type: 'boolean' },
     pi: { type: 'boolean' },
+    case: { type: 'string' },
   },
 });
 if (autonomous && compareLocate)
   throw new Error('Choose either --autonomous or the guided --compare-locate.');
 if (pi && !autonomous) throw new Error('--pi requires --autonomous.');
+if (selectedCase !== undefined && !autonomous) throw new Error('--case requires --autonomous.');
 const paired = compareLocate || autonomous;
 const model = requestedModel ?? (paired && !pi ? 'gpt-6.2-sol' : undefined);
 const executable = pi ? undefined : (Bun.which('codex') ?? undefined);
@@ -412,21 +434,26 @@ if (autonomous) {
     searchFirst: !conceptual.searchFirst,
   });
 }
-const runs = schedule.flatMap(({ scenario, caseId, repetition, searchFirst, unavailable }) => {
-  const variants: readonly (Variant | undefined)[] = !paired
-    ? [undefined]
-    : searchFirst
-      ? ['search-only', 'locate']
-      : ['locate', 'search-only'];
-  return variants.map((variant, order) => ({
-    scenario,
-    caseId,
-    variant,
-    repetition,
-    order: order + 1,
-    unavailable,
-  }));
-});
+const selectedSchedule =
+  selectedCase === undefined ? schedule : schedule.filter(({ caseId }) => caseId === selectedCase);
+if (!selectedSchedule.length) throw new Error('Unknown autonomous evaluation case.');
+const runs = selectedSchedule.flatMap(
+  ({ scenario, caseId, repetition, searchFirst, unavailable }) => {
+    const variants: readonly (Variant | undefined)[] = !paired
+      ? [undefined]
+      : searchFirst
+        ? ['search-only', 'locate']
+        : ['locate', 'search-only'];
+    return variants.map((variant, order) => ({
+      scenario,
+      caseId,
+      variant,
+      repetition,
+      order: order + 1,
+      unavailable,
+    }));
+  },
+);
 const root = await realpath(await mkdtemp(path.join(tmpdir(), 'ltcook-codex-retrieval-')));
 const controller = new AbortController();
 const cancel = () => controller.abort();
@@ -496,12 +523,13 @@ try {
           : undefined;
       const observations = calls.get(context.agentId);
       if (!observations || (!paired && !mode)) return tool.invoke(input, context);
+      const request = autonomous ? describeRequest(input, search, locate, name) : undefined;
       const call: RepositoryCall = {
         tool: name,
         mode,
         searches: [],
         started: performance.now(),
-        requestKey: autonomous ? requestKey(input, search, locate, name) : undefined,
+        requestKey: request?.key,
       };
       observations.push(call);
       try {
@@ -511,9 +539,21 @@ try {
         if (autonomous) call.resultBytes = Buffer.byteLength(JSON.stringify(result));
         if (name === REPO_LOCATE_TOOL_NAME && Value.Check(locate.outputSchema, result)) {
           call.followUp = result.followUp;
-          call.searches = result.searches.map((entry) => ({ mode: entry.mode, result: entry }));
+          call.searches = result.searches.map((entry) => ({
+            mode: entry.mode,
+            result: entry,
+            relevantToNegative:
+              request?.workspaceWide && searchesForCreditCardValidation(entry.query),
+          }));
         } else if (mode && Value.Check(search.outputSchema, result)) {
-          call.searches = [{ mode, result }];
+          call.searches = [
+            {
+              mode,
+              result,
+              relevantToNegative:
+                request?.workspaceWide && searchesForCreditCardValidation(request.query),
+            },
+          ];
         }
         return result;
       } catch (error) {
@@ -629,7 +669,10 @@ try {
       const grading = gradeRepositoryBehavior({
         answer,
         expected: scenario.expectedFacts,
-        searches: searches.map(({ result }) => result),
+        searches: searches.map(({ result, relevantToNegative }) => ({
+          ...result,
+          relevantToNegative,
+        })),
         files: corpus.files,
       });
       const toolCalls = summarizeAutonomousCalls(observations, turnStarted, corpus.files);

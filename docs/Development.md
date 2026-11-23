@@ -512,7 +512,8 @@ bun evals/codex-repository-behavior-live.ts --autonomous --pi > pi-autonomous.js
 Both runs use a warmed disposable index and repeat a selected pair in the
 opposite order. A separate pair tests the response to deliberately unavailable
 retrieval for a question with a known answer. The answer schema ties each
-factual assertion to citations.
+factual assertion to citations. Use `--case CASE_ID` to rerun that case's
+scheduled pairs, such as `--case absent-concept` for the negative.
 The report separates factual correctness, evidence validity, retrieval
 coverage, and tool selection. It records tool calls, repeated or low-yield
 requests, context size, and elapsed times without making them task-success

@@ -38,7 +38,20 @@ export type ExpectedRepositoryFact = {
 type ObservedSearch = Pick<
   Static<typeof RepositorySearchOutputSchema>,
   'status' | 'kind' | 'freshness' | 'partial' | 'truncated' | 'results'
->;
+> & { relevantToNegative?: boolean };
+
+/** Check whether the negative fixture's search addresses card validation. */
+export function searchesForCreditCardValidation(query: string): boolean {
+  const normalized = query
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ');
+  return (
+    /\bluhn\b/.test(normalized) ||
+    (/\b(?:card|pan)\b/.test(normalized) &&
+      /\b(?:checksums?|validat\w*|check digits?)\b/.test(normalized))
+  );
+}
 
 export function gradeRepositoryBehavior({
   answer,
@@ -91,6 +104,7 @@ export function gradeRepositoryBehavior({
   const reviewedEvidence = searches.some(
     (search) =>
       search.status === 'ready' &&
+      (expected.length > 0 || search.relevantToNegative === true) &&
       (search.freshness === 'current' || search.freshness === 'cached') &&
       !search.partial &&
       (search.kind === 'ranked' || !search.truncated) &&

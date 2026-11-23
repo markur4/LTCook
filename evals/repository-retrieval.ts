@@ -55,6 +55,7 @@ export function checkRetrievedEvidence(
   }
   if (
     hit.excerptTruncated &&
+    hit.excerpt.length > 0 &&
     hit.excerpt.length < expected.length &&
     expected.startsWith(hit.excerpt)
   ) {
