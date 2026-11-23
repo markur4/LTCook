@@ -20,16 +20,16 @@ test('web tools are LTCook-owned and expose a bounded schema', () => {
     expect(Value.Check(definition.inputSchema, { proxy: 'http://untrusted' })).toBe(false);
   }
   expect(Value.Check(webDefinitions[0]!.inputSchema, { query: 'test' })).toBe(true);
-  expect(Value.Check(webDefinitions[0]!.inputSchema, { queries: ['first', 'second'] })).toBe(
-    true,
-  );
+  expect(Value.Check(webDefinitions[0]!.inputSchema, { queries: ['first', 'second'] })).toBe(true);
   expect(Value.Check(webDefinitions[0]!.inputSchema, { query: 'first', queries: ['second'] })).toBe(
     false,
   );
   expect(Value.Check(webDefinitions[1]!.inputSchema, { url: 'https://example.org' })).toBe(true);
-  expect(Value.Check(webDefinitions[1]!.inputSchema, {
-    urls: ['https://example.org/a', 'https://example.org/b'],
-  })).toBe(true);
+  expect(
+    Value.Check(webDefinitions[1]!.inputSchema, {
+      urls: ['https://example.org/a', 'https://example.org/b'],
+    }),
+  ).toBe(true);
   expect(Value.Check(webDefinitions[2]!.inputSchema, { responseId: 'abc' })).toBe(true);
 });
 

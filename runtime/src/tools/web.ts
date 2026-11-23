@@ -67,9 +67,7 @@ const searchSchema = Type.Object(
 const fetchSchema = Type.Object(
   {
     url: Type.Optional(Type.String({ minLength: 1 })),
-    urls: Type.Optional(
-      Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 5 }),
-    ),
+    urls: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 5 })),
     mode: Type.Optional(Type.Union([Type.Literal('readable'), Type.Literal('raw')])),
   },
   { additionalProperties: false, oneOf: [{ required: ['url'] }, { required: ['urls'] }] },
@@ -93,11 +91,7 @@ const contentSchema = Type.Object(
       ]),
     ),
     findMode: Type.Optional(
-      Type.Union([
-        Type.Literal('exact'),
-        Type.Literal('case-insensitive'),
-        Type.Literal('fuzzy'),
-      ]),
+      Type.Union([Type.Literal('exact'), Type.Literal('case-insensitive'), Type.Literal('fuzzy')]),
     ),
   },
   { additionalProperties: false },
