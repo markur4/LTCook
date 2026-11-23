@@ -101,3 +101,20 @@ test('standalone Pi without resolved AppRC inventory configuration exposes no RI
     await runtime.dispose();
   }
 });
+
+test('standalone Pi leaves chat available when the managed repository search assets are missing', async () => {
+  const f = fixture();
+  process.env.LTCOOK_COLGREP_DEPLOYMENT = join(f.root, 'missing-colgrep');
+  process.env.LTCOOK_COLGREP_CACHE_DIR = join(f.root, 'search-cache');
+  const runtime = await createPiRpcRuntime(['--offline', '--no-session']);
+  try {
+    expect(runtime.session.getActiveToolNames()).toContain('ltcook_ried');
+    const search = runtime.session.getToolDefinition('ltcook_repo_search');
+    if (!search) throw new Error('Repository search was not registered');
+    await expect(
+      search.execute('search', { query: 'state handling' }, undefined, undefined, {} as never),
+    ).rejects.toThrow(/ColGREP.*(repair|setup)/i);
+  } finally {
+    await runtime.dispose();
+  }
+});

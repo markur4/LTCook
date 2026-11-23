@@ -10,7 +10,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EVAL_MODEL } from '../evals/setup.js';
 import { ReasoningEffortSchema, ResolvedModelSchema } from '../models/aliases.js';
 import { piThinking } from '../models/adapters.js';
-import { WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
+import {
+  REPO_SEARCH_TIMEOUT_MS,
+  WORKSPACE_MCP_SERVER,
+} from '../paseo-plugin/shared/workspace-tools.js';
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
@@ -254,13 +257,18 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
                     workspaceMcpExtension({
                       ...pi,
                       getMcpServers: () =>
-                        pi
-                          .getMcpServers()
-                          .map((server) =>
-                            server.name === WORKSPACE_MCP_SERVER
-                              ? { ...server, config: { ...server.config, exposure: 'direct' } }
-                              : server,
-                          ),
+                        pi.getMcpServers().map((server) =>
+                          server.name === WORKSPACE_MCP_SERVER
+                            ? {
+                                ...server,
+                                config: {
+                                  ...server.config,
+                                  exposure: 'direct',
+                                  timeout: (REPO_SEARCH_TIMEOUT_MS + 10_000) / 1000,
+                                },
+                              }
+                            : server,
+                        ),
                     }),
                 },
               ]
@@ -272,12 +280,19 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
                     path.dirname(fileURLToPath(import.meta.url)),
                     import.meta.url.endsWith('.ts') ? 'pi-extension.ts' : 'pi-extension.js',
                   );
-                  const { default: activate, activateStandaloneRied } = (await import(
+                  const {
+                    default: activate,
+                    activateStandaloneRied,
+                    activateStandaloneRepoSearch,
+                  } = (await import(
                     pathToFileURL(extensionFile).href
                   )) as typeof import('./pi-extension.js');
                   if (managed) await activate(pi, () => guidance!.inspection);
-                  else if (!injectedWorkspaceTools)
-                    activateStandaloneRied(pi, cwd, sessionManager.getSessionId());
+                  else if (!injectedWorkspaceTools) {
+                    const sessionId = sessionManager.getSessionId();
+                    activateStandaloneRied(pi, cwd, sessionId);
+                    activateStandaloneRepoSearch(pi, cwd, sessionId);
+                  }
                 },
               ]
             : []),

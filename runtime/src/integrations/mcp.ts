@@ -12,6 +12,7 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolDefinition, ToolContext } from '../tools/types.js';
+import { REPO_SEARCH_TOOL_NAME } from '../tools/repo-search.js';
 import type { WebToolService } from '../tools/web.js';
 
 type Grant = {
@@ -19,6 +20,7 @@ type Grant = {
   workspaceRoot: string;
   workspaceIdentity: string;
   workspaceFileAccess: boolean;
+  repositorySearchAccess: boolean;
   token: string;
 };
 
@@ -62,7 +64,12 @@ export class WorkspaceMcp {
     );
   }
 
-  async grant(agentId: string, cwd: string, workspaceFileAccess: boolean): Promise<string> {
+  async grant(
+    agentId: string,
+    cwd: string,
+    workspaceFileAccess: boolean,
+    repositorySearchAccess = false,
+  ): Promise<string> {
     if (!isAbsolute(cwd)) throw new Error('MCP requires an absolute workspace directory.');
     const workspaceRoot = realpathSync(cwd);
     const workspaceIdentity = directoryIdentity(workspaceRoot);
@@ -70,7 +77,8 @@ export class WorkspaceMcp {
     if (
       existing?.workspaceRoot === workspaceRoot &&
       existing.workspaceIdentity === workspaceIdentity &&
-      existing.workspaceFileAccess === workspaceFileAccess
+      existing.workspaceFileAccess === workspaceFileAccess &&
+      existing.repositorySearchAccess === repositorySearchAccess
     )
       return existing.token;
     const previous = this.revoke(agentId);
@@ -79,6 +87,7 @@ export class WorkspaceMcp {
       workspaceRoot,
       workspaceIdentity,
       workspaceFileAccess,
+      repositorySearchAccess,
       token: randomBytes(32).toString('base64url'),
     };
     this.grants.set(agentId, grant);
@@ -134,7 +143,11 @@ export class WorkspaceMcp {
     transport.onclose = () => {
       this.connections.delete(id);
     };
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: this.catalog }));
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: grant.repositorySearchAccess
+        ? this.catalog
+        : this.catalog.filter(({ name }) => name !== REPO_SEARCH_TOOL_NAME),
+    }));
     server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal }) => {
       try {
         if (
@@ -145,11 +158,13 @@ export class WorkspaceMcp {
           throw new Error('The authorized workspace is no longer available.');
         }
         const tool = this.tools.get(params.name);
-        if (!tool) throw new Error('Unknown LTCook tool.');
+        if (!tool || (params.name === REPO_SEARCH_TOOL_NAME && !grant.repositorySearchAccess))
+          throw new Error('Unknown LTCook tool.');
         const output = await tool.invoke(params.arguments ?? {}, {
           agentId: grant.agentId,
           workspaceRoot: grant.workspaceRoot,
           workspaceFileAccess: grant.workspaceFileAccess,
+          repositorySearchAccess: grant.repositorySearchAccess,
           signal,
         });
         return {
