@@ -18,7 +18,7 @@ export const DECISION_INSTRUCTIONS =
   'Reply with PROCEED only if that approval is established. Reply with one word.';
 export const DECISION_MAX_TOKENS = 512;
 
-export async function createSummarizationPiSession(
+export async function createLocalPiEvaluationSession(
   input: {
     endpoint: string;
     model: string;
@@ -40,7 +40,7 @@ export async function createSummarizationPiSession(
           models: [
             {
               id: model,
-              name: 'Local summarization evaluation',
+              name: 'Local evaluation model',
               contextWindow: EVAL_CONTEXT_WINDOW,
               maxTokens: DECISION_MAX_TOKENS,
               compat: EVAL_MODEL_COMPAT,
@@ -96,7 +96,7 @@ export async function decideFromSummary(input: {
 }) {
   const { model, summary, signal } = input;
   signal.throwIfAborted();
-  const { session } = await createSummarizationPiSession({
+  const { session } = await createLocalPiEvaluationSession({
     ...input,
     instructions: DECISION_INSTRUCTIONS,
   });

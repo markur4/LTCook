@@ -3,7 +3,12 @@ import {
   firstVerifiedCitationMs,
   gradeRepositoryCitations,
 } from '../../../evals/repository-citations.js';
-import { gradeRepositoryRetrieval } from '../../../evals/repository-retrieval.js';
+import {
+  gradeRepositoryRetrieval,
+  rankKeywordHits,
+  retrievalKeywords,
+  retrievalObservationFailed,
+} from '../../../evals/repository-retrieval.js';
 import type { RetrievalQuestion } from '../../../evals/repository-retrieval-fixtures.js';
 import type { RepositoryRetrieval } from '../../../runtime/src/repository/results.js';
 
@@ -149,9 +154,10 @@ test('retrieval evaluation rejects changed evidence, missing files, and invalid 
     expectedFilesFound: 1,
     recallAtK: 0,
     reciprocalRank: 0,
-    falsePositives: 4,
+    falsePositives: 1,
     invalidEvidence: 3,
   });
+  expect(retrievalObservationFailed(grade)).toBe(true);
   expect(
     grade.results.map(({ evidence, fileMatch, matches }) => ({ evidence, fileMatch, matches })),
   ).toEqual([
@@ -160,6 +166,53 @@ test('retrieval evaluation rejects changed evidence, missing files, and invalid 
     { evidence: 'invalid-range', fileMatch: true, matches: [] },
     { evidence: 'invalid-path', fileMatch: false, matches: [] },
   ]);
+});
+
+test('keyword retrieval ranks distinct query terms and retains scan order on ties', () => {
+  const keywords = retrievalKeywords('Wo ist die RETRY-Wartezeit für Retry auf 30 begrenzt?');
+  expect(keywords).toEqual(['retry', 'wartezeit', '30', 'begrenzt']);
+  const first = { path: 'a.ts', startLine: 1, endLine: 1, excerpt: 'retry(); retry();' };
+  const second = { path: 'b.py', startLine: 1, endLine: 1, excerpt: 'retry_interval = 30' };
+  const third = { path: 'c.py', startLine: 1, endLine: 1, excerpt: 'retry_interval = 60' };
+  expect(rankKeywordHits([first, second, third], keywords)).toEqual([second, first, third]);
+});
+
+test('an empty clipped excerpt fails evidence integrity', () => {
+  const grade = gradeRepositoryRetrieval(
+    question,
+    result([
+      { path: 'src/ledger.ts', startLine: 1, endLine: 1, excerpt: '', excerptTruncated: true },
+    ]),
+    files,
+  );
+  expect(grade.invalidEvidence).toBe(1);
+  expect(retrievalObservationFailed(grade)).toBe(true);
+});
+
+test('the top-K budget limits recall without hiding invalid candidates', () => {
+  const retrieved = result([
+    { path: 'src/ledger.ts', startLine: 2, endLine: 2, excerpt: 'export function allocate() {' },
+    {
+      path: 'test/ledger.ts',
+      startLine: 1,
+      endLine: 1,
+      excerpt: 'test("allocates", () => allocate());',
+    },
+  ]);
+  const bounded = gradeRepositoryRetrieval(question, retrieved, files, 1);
+  expect(bounded).toMatchObject({ recallAtK: 0.5, candidateCount: 2, incomplete: true });
+  expect(bounded.results).toHaveLength(1);
+  expect(retrievalObservationFailed(bounded)).toBe(false);
+
+  retrieved.value.hits[1]!.excerpt = 'stale test text';
+  const invalid = gradeRepositoryRetrieval(question, retrieved, files, 1);
+  expect(invalid).toMatchObject({
+    recallAtK: 0.5,
+    status: 'ready',
+    invalidEvidence: 1,
+    invalidCandidates: [{ path: 'test/ledger.ts', evidence: 'excerpt-mismatch' }],
+  });
+  expect(retrievalObservationFailed(invalid)).toBe(true);
 });
 
 test('a truncated excerpt supports only the complete labeled lines it retains', () => {
@@ -194,10 +247,12 @@ test('an answerless question requires a completed empty response', () => {
   });
   for (const status of ['unavailable', 'indexing'] as const) {
     retrieved.value.status = status;
-    expect(gradeRepositoryRetrieval(missing, retrieved, files)).toMatchObject({
+    const grade = gradeRepositoryRetrieval(missing, retrieved, files);
+    expect(grade).toMatchObject({
       status,
       cleanNegative: false,
       incomplete: true,
     });
+    expect(retrievalObservationFailed(grade)).toBe(true);
   }
 });

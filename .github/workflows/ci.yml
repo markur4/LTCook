@@ -41,7 +41,7 @@ jobs:
         run: |
           bun install --frozen-lockfile
           uv sync --locked --all-groups --no-install-project
-      - name: Type-check JavaScript workspaces
+      - name: Type-check JavaScript workspaces and evaluation scripts
         run: bun run check
       - name: Run quick JavaScript contracts
         run: bun run test

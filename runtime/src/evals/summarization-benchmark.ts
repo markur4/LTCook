@@ -6,7 +6,7 @@ import type { OllamaSettings, OllamaUsage } from '../integrations/ollama.js';
 import { createSummarizeTool } from '../tools/summarize.js';
 import { sanitizeEvaluationText } from './diagnostics.js';
 import { EVAL_MODEL, hash } from './setup.js';
-import { createSummarizationPiSession } from './summarization-decision.js';
+import { createLocalPiEvaluationSession } from './summarization-decision.js';
 import { CODING_SESSION_CASE } from './summarization-fixtures.js';
 import { modelTag } from './summarization-grader.js';
 
@@ -125,7 +125,7 @@ export async function runSummarizationBenchmark(settings: OllamaSettings, signal
           }
         },
       });
-      const { session } = await createSummarizationPiSession({
+      const { session } = await createLocalPiEvaluationSession({
         endpoint: settings.endpoint,
         model: EVAL_MODEL,
         directory,

@@ -427,9 +427,10 @@ connection. The shared catalog provides `ltcook_ried`, `ltcook_summarize`,
 `ltcook_web_search`, `ltcook_web_fetch`, and `ltcook_web_content`. Clients may
 qualify these names with the server name `ltcook_workspace`.
 
-`ltcook_repo_search` is available in Team and standalone Pi and in authenticated
-ordinary Pi and Codex chats through LTCook's Paseo launch hook. Its search
-grant is separate from workspace file-read permission.
+`ltcook_repo_search` is available in Team and standalone Pi and in ordinary Pi
+chats through LTCook's Paseo launch hook. The hook does not report Codex's
+effective host read scope, so ordinary Codex chats receive inventory, text
+summarization, and web tools through this connection.
 
 | `mode` | Provider | Meaning of `query` |
 | --- | --- | --- |
