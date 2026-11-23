@@ -514,6 +514,8 @@ opposite order. A separate pair tests the response to deliberately unavailable
 retrieval for a question with a known answer. The answer schema ties each
 factual assertion to citations. Use `--case CASE_ID` to rerun that case's
 scheduled pairs, such as `--case absent-concept` for the negative.
+The Pi runner caps each attempt at 16 tool calls and records when it reaches
+that budget.
 The report separates factual correctness, evidence validity, retrieval
 coverage, and tool selection. It records tool calls, repeated or low-yield
 requests, context size, and elapsed times without making them task-success

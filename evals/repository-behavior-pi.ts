@@ -10,6 +10,7 @@ import {
 import type { ToolDefinition } from '../runtime/src/tools/types.js';
 
 const endpoint = process.env.LTCOOK_OLLAMA_ENDPOINT ?? 'http://127.0.0.1:11434';
+const toolCallLimit = 16;
 
 /** Identify the installed Ollama model before running either arm. */
 export async function repositoryPiModel(model: string | undefined, signal: AbortSignal) {
@@ -40,6 +41,7 @@ export async function evaluateRepositoryWithPi({
 }) {
   const started = performance.now();
   const bounded = AbortSignal.any([signal, AbortSignal.timeout(150_000)]);
+  let toolCalls = 0;
   const customTools = tools.map((tool) =>
     defineTool({
       name: tool.name,
@@ -47,6 +49,9 @@ export async function evaluateRepositoryWithPi({
       description: tool.description,
       parameters: tool.inputSchema,
       async execute(_id, input, toolSignal) {
+        if (toolCalls >= toolCallLimit)
+          throw new Error('Repository evaluation tool budget reached.');
+        toolCalls++;
         const result = await tool.invoke(input, {
           agentId,
           workspaceRoot: workspace,
@@ -67,6 +72,15 @@ export async function evaluateRepositoryWithPi({
     customTools,
   });
   const cancel = () => void session.abort();
+  let budgetReached = false;
+  const unsubscribe = session.subscribe((event) => {
+    if (event.type !== 'tool_execution_end' || toolCalls < toolCallLimit || budgetReached) return;
+    budgetReached = true;
+    session.setActiveToolsByName([]);
+    void session
+      .steer('Use the evidence already returned to produce the requested JSON.')
+      .catch(cancel);
+  });
   bounded.addEventListener('abort', cancel, { once: true });
   try {
     bounded.throwIfAborted();
@@ -110,6 +124,7 @@ export async function evaluateRepositoryWithPi({
       exitCode: 0,
       observedModel,
       usage,
+      toolBudgetReached: budgetReached,
     };
   } catch (error) {
     signal.throwIfAborted();
@@ -119,12 +134,14 @@ export async function evaluateRepositoryWithPi({
       started,
       exitCode: 1,
       observedModel: null,
+      toolBudgetReached: budgetReached,
       error: sanitizeEvaluationText(
         error instanceof Error ? error.message : 'Pi evaluation failed.',
       ),
     };
   } finally {
     bounded.removeEventListener('abort', cancel);
+    unsubscribe();
     session.dispose();
   }
 }
