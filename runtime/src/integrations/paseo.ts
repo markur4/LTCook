@@ -290,7 +290,6 @@ export async function createPaseoAgentBackend(input: {
   if (!isWithin(appRoot, extensionPath)) {
     throw new Error('LTCook Pi extension is outside the installed app.');
   }
-  const webAccessExtensions = await piPackageExtensions(input.appNodeModules, 'pi-web-access');
   const codeSearchExtensions = await piPackageExtensions(
     input.appNodeModules,
     '@nicknisi/pi-codesearch',
@@ -367,10 +366,7 @@ export async function createPaseoAgentBackend(input: {
     const browserEnabled =
       input.browserAvailable && workspaceEnv.LTCOOK_BROWSER_ENABLED !== 'false';
     const codeSearchEnabled = workspaceEnv.LTCOOK_CODESEARCH_ENABLED === 'true';
-    const ownedExtensions = [
-      ...webAccessExtensions,
-      ...(codeSearchEnabled ? codeSearchExtensions : []),
-    ];
+    const ownedExtensions = codeSearchEnabled ? codeSearchExtensions : [];
     await configurePiExtensions(settingsPath, ownedExtensions);
     const browserHome =
       workspaceEnv.LTCOOK_BROWSER_HOME || path.join(path.dirname(agentHome), 'browser-home');

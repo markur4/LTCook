@@ -11,7 +11,8 @@ import {
   ToolSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import type { ToolDefinition } from '../tools/types.js';
+import type { ToolDefinition, ToolContext } from '../tools/types.js';
+import type { WebToolService } from '../tools/web.js';
 
 type Grant = {
   agentId: string;
@@ -48,6 +49,7 @@ export class WorkspaceMcp {
   constructor(
     tools: readonly ToolDefinition[],
     private readonly authority: string,
+    private readonly web?: WebToolService,
   ) {
     this.tools = new Map(tools.map((tool) => [tool.name, tool]));
     this.catalog = tools.map(({ name, description, inputSchema, outputSchema }) =>
@@ -85,22 +87,39 @@ export class WorkspaceMcp {
     return grant.token;
   }
 
+  async invokeTool(
+    name: string,
+    args: unknown,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
+    const tool = this.tools.get(name);
+    if (!tool) throw new Error('Unknown LTCook tool.');
+    return tool.invoke(args, context);
+  }
+
   async revoke(agentId: string): Promise<void> {
     const grant = this.grants.get(agentId);
-    if (!grant) return;
+    if (!grant) {
+      await this.web?.disposeAgent(agentId);
+      return;
+    }
     this.grants.delete(agentId);
     this.tokens.delete(grant.token);
-    await Promise.all(
-      [...this.connections.values()]
+    await Promise.all([
+      this.web?.disposeAgent(agentId),
+      ...[...this.connections.values()]
         .filter((connection) => connection.grant === grant)
         .map((connection) => connection.server.close()),
-    );
+    ]);
   }
 
   async close(): Promise<void> {
     this.grants.clear();
     this.tokens.clear();
-    await Promise.all([...this.connections.values()].map(({ server }) => server.close()));
+    await Promise.all([
+      this.web?.close(),
+      ...[...this.connections.values()].map(({ server }) => server.close()),
+    ]);
   }
 
   private createConnection(grant: Grant): Connection {

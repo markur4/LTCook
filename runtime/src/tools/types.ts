@@ -4,6 +4,7 @@ import { Value } from 'typebox/value';
 export interface ToolContext {
   agentId: string;
   workspaceRoot: string;
+  sessionId?: string;
   workspaceFileAccess: boolean;
   signal: AbortSignal;
 }

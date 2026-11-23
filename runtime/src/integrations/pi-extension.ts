@@ -6,6 +6,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { RiedService, riedToolDefinition, type RiedRequest } from '../tools/ried.js';
+import { isWebTool, webDefinitions } from '../tools/web.js';
 import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
@@ -357,6 +358,8 @@ export default async function activate(
   pi.on('tool_call', async (event, ctx) => {
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
+    // > The shared HTTP endpoint authorizes these calls once for every native caller.
+    if (isWebTool(event.toolName)) return;
     try {
       // > Native new/resume may change cwd; authorize exactly the path the tool will use.
       const input =
@@ -465,6 +468,38 @@ export default async function activate(
     if (!response.ok) throw new Error(`RIED request failed (${response.status})`);
     return response.json();
   });
+  for (const definition of webDefinitions) {
+    pi.registerTool({
+      name: definition.name,
+      label: definition.name.replace('ltcook_', '').replaceAll('_', ' '),
+      description: definition.description,
+      parameters: definition.inputSchema,
+      async execute(_id, input, signal) {
+        const response = await fetch(`${endpoint}/v1/workspace-tool`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            nativeAgentId,
+            toolName: definition.name,
+            toolArgs: input,
+          }),
+          signal: (signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(120000)])
+            : AbortSignal.timeout(120000)) as NonNullable<Parameters<typeof fetch>[1]>['signal'],
+        });
+        const result = (await response.json().catch(() => undefined)) as
+          { content?: unknown; error?: unknown } | undefined;
+        if (!response.ok || typeof result?.content !== 'string')
+          throw new Error(
+            typeof result?.error === 'string'
+              ? result.error
+              : `Web tool unavailable (${response.status}).`,
+          );
+        return { content: [{ type: 'text', text: result.content }], details: result };
+      },
+    });
+  }
   await activateOptionalBrowser(pi);
 }
 

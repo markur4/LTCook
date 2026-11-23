@@ -11,6 +11,9 @@ const READ_ONLY_TOOLS = new Set([
   'ltcook_team',
   'ltcook_ried',
   'web_enable',
+  'ltcook_web_search',
+  'ltcook_web_fetch',
+  'ltcook_web_content',
 ]);
 
 export function nativeToolAllowed(readOnly: boolean, toolName: string): boolean {

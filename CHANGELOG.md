@@ -47,6 +47,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- Shared SearXNG search, URL retrieval, and stored-result tools for managed
+  Pi and workspace Pi and Codex chats in Paseo.
+
 - Explicit GitHub Release workflow for beta, release candidate, and stable
   versions. Release preparation uses cumulative changelog notes. Publishing
   stages and verifies Linux assets locally, with a separately configurable

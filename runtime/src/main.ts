@@ -5,6 +5,7 @@ import type { SessionSnapshot } from './workflow-api/index.js';
 import { TeamRegistry } from './integrations/team-loader.js';
 import { RiedService } from './tools/ried.js';
 import { createTools } from './tools/catalog.js';
+import { WebToolService } from './tools/web.js';
 import { WorkspaceMcp } from './integrations/mcp.js';
 import { isWithin } from './path-containment.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
@@ -240,7 +241,15 @@ async function run(): Promise<void> {
       workspaceShellEnvironments.get(id),
     );
     api = new RuntimeApi(undefined, apiToken, apiListen, process.env, telemetry);
-    api.setWorkspaceMcp(new WorkspaceMcp(createTools(ried, summarization), apiListen));
+    const web = new WebToolService(
+      python,
+      appRoot,
+      node,
+      process.env,
+      (id) => workspaceShellEnvironments.get(id),
+      ensureProjectServices,
+    );
+    api.setWorkspaceMcp(new WorkspaceMcp(createTools(ried, summarization, web), apiListen, web));
     api.setEval(evals);
     const apiUrl = await api.listen();
     apiListening = true;

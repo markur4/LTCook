@@ -18,6 +18,8 @@ import {
 import { panelSnapshot } from '../../../runtime/src/paseo-plugin/shared/panel-snapshot.js';
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { createWebTools, type WebToolService } from '../../../runtime/src/tools/web.js';
 import { captureShellEnvironment } from '../../../runtime/src/integrations/shell-environment.js';
 
 const directories: string[] = [];
@@ -176,6 +178,55 @@ describe('native runtime boundary', () => {
       });
       expect(snapshotResponse.status).toBe(200);
       expect(actors).toHaveLength(2);
+    } finally {
+      await api.close();
+    }
+  });
+  test('managed web tools enforce the runtime authorization before invoking the catalog', async () => {
+    const master = 'test-master';
+    const nativeAgentId = 'bound-web-agent';
+    let allowed = false;
+    let authorized = 0;
+    let invoked = 0;
+    const controller = {
+      snapshot: () => snapshotFor(nativeAgentId),
+      authorizeTool() {
+        authorized++;
+        return { allowed, reason: 'Tool budget exhausted' };
+      },
+    } as unknown as RuntimeController;
+    const authority = `127.0.0.1:${await freePort()}`;
+    const api = new RuntimeApi(controller, master, authority);
+    const service = {
+      async call() {
+        invoked++;
+        return 'Search result';
+      },
+    } as unknown as WebToolService;
+    api.setWorkspaceMcp(new WorkspaceMcp(createWebTools(service), authority));
+    const endpoint = await api.listen();
+    const call = (agentId: string = nativeAgentId) =>
+      fetch(`${endpoint}/v1/workspace-tool`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${agentBearer(master, agentId)}` },
+        body: JSON.stringify({
+          sessionId: 'session-1',
+          nativeAgentId: agentId,
+          toolName: 'ltcook_web_search',
+          toolArgs: { query: 'release evidence' },
+        }),
+      });
+    try {
+      const denied = await call();
+      expect(denied.status).toBe(403);
+      expect(await denied.json()).toEqual({ error: 'Tool budget exhausted' });
+      expect(authorized).toBe(1);
+      expect(invoked).toBe(0);
+      allowed = true;
+      expect((await call('unbound')).status).toBe(403);
+      expect(await (await call()).json()).toEqual({ content: 'Search result' });
+      expect(authorized).toBe(2);
+      expect(invoked).toBe(1);
     } finally {
       await api.close();
     }

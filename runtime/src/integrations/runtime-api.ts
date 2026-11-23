@@ -13,6 +13,7 @@ import { canonicalWorkspace } from '../core/workspace.js';
 import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { WorkspaceMcp } from './mcp.js';
+import { isWebTool } from '../tools/web.js';
 import { z } from 'zod';
 import { ResolvedModelSchema, type ResolvedModel } from '../models/aliases.js';
 import {
@@ -221,6 +222,7 @@ export class RuntimeApi {
           '/v1/runtime/stop',
           '/v1/tool/authorize',
           '/v1/ried',
+          '/v1/workspace-tool',
           '/v1/mcp/grant',
           '/v1/mcp/revoke',
           '/v1/evaluation/observe',
@@ -309,6 +311,7 @@ export class RuntimeApi {
         leaderAgentId?: string;
         shellEnvironment?: unknown;
         toolName?: unknown;
+        toolArgs?: unknown;
         input?: unknown;
         operation?: unknown;
         section?: unknown;
@@ -515,6 +518,57 @@ export class RuntimeApi {
               };
             });
           response.writeHead(200).end(JSON.stringify({ sessions }));
+        }
+        return;
+      }
+      if (request.url === '/v1/workspace-tool') {
+        if (
+          actor.kind !== 'agent' ||
+          !input.sessionId ||
+          !this.workspaceMcp ||
+          !isWebTool(input.toolName) ||
+          !input.toolArgs ||
+          typeof input.toolArgs !== 'object' ||
+          Array.isArray(input.toolArgs)
+        ) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        const session = runtime.snapshot(input.sessionId);
+        if (
+          !session.members.some(
+            (member) =>
+              member.binding?.nativeAgentId === actor.nativeAgentId &&
+              member.binding.state === 'bound',
+          )
+        ) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        const authorization = runtime.authorizeTool(
+          input.sessionId,
+          actor.nativeAgentId,
+          input.toolName,
+          input.toolArgs as Record<string, unknown>,
+        );
+        if (!authorization.allowed) {
+          response.writeHead(403).end(JSON.stringify({ error: authorization.reason }));
+          return;
+        }
+        const controller = new AbortController();
+        const cancel = () => controller.abort();
+        response.once('close', cancel);
+        try {
+          const result = await this.workspaceMcp.invokeTool(input.toolName, input.toolArgs, {
+            agentId: actor.nativeAgentId,
+            workspaceRoot: session.session.workspaceRoot,
+            sessionId: input.sessionId,
+            workspaceFileAccess: false,
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]),
+          });
+          response.writeHead(200).end(JSON.stringify(result));
+        } finally {
+          response.off('close', cancel);
         }
         return;
       }

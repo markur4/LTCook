@@ -396,9 +396,15 @@ LTCook issues a workspace-scoped bearer during an authenticated launch or
 resume. A warm reopen in the same workspace reuses the grant. Archiving the
 chat or changing its authorized workspace revokes the grant. Restarting the
 runtime clears in-memory credentials, and reopening a chat configures a new
-connection. The shared tool schemas use the names `ltcook_ried` and
-`ltcook_summarize`. Clients may qualify them with the server name
-`ltcook_workspace`.
+connection. The shared catalog provides `ltcook_ried`, `ltcook_summarize`,
+`ltcook_web_search`, `ltcook_web_fetch`, and `ltcook_web_content`. Clients may
+qualify these names with the server name `ltcook_workspace`.
+
+Web tools resolve the authorized workspace's AppRC settings. Search uses
+SearXNG and URL retrieval uses the HTTP/Crawl4AI settings. Read stored results
+with `ltcook_web_content` and the response ID from the same agent. Select a
+search with `queryIndex` or a fetched page with `urlIndex`. Archiving
+the agent or restarting the runtime ends access to those results.
 
 `ltcook_summarize` takes one of `text` or `path` plus an optional `focus`.
 Pi's workspace grant allows regular UTF-8 files within its resolved workspace.
