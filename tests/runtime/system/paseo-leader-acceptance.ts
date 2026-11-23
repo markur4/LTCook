@@ -10,6 +10,7 @@ import {
   createPaseoAgentBackend,
   startPaseoHost,
 } from '../../../runtime/src/integrations/paseo.js';
+import { catalogModelAliases } from '../../../runtime/src/models/aliases.js';
 import { TeamRegistry } from '../../../runtime/src/integrations/team-loader.js';
 
 const root = path.resolve(import.meta.dir, '../../..');
@@ -48,6 +49,7 @@ const provider = createHttpServer(async (request, response) => {
       messages: Array<{ role: string; content: string }>;
     };
     modelCalls++;
+    assert.equal(input.model, 'test', 'Saved physical model must survive alias edits');
     assert(
       runtime!.snapshot(leaderId).members.every(({ binding }) => binding?.state === 'bound'),
       'First inference began before persistent member reconciliation',
@@ -127,7 +129,8 @@ const environment = {
   PI_OFFLINE: '1',
   LTCOOK_MODEL_SMART: 'fixture/test',
   LTCOOK_MODEL_SMOL: 'fixture/test',
-  LTCOOK_MODEL_PLAN: 'fixture/test',
+  LTCOOK_MODEL_EXPENSIVE: 'fixture/test',
+  LTCOOK_MODEL_TINY_LOCAL: 'fixture-model',
   LTCOOK_GUIDANCE_DIR: path.join(directory, 'guidance'),
   LTCOOK_BROWSER_ENABLED: 'false',
   LTCOOK_CODESEARCH_ENABLED: 'false',
@@ -194,6 +197,17 @@ try {
       ...(request.leaderAgentId ? { leaderAgentId: request.leaderAgentId } : {}),
     }),
   );
+  const leaderFor = (selection: string) => {
+    const { definition } = teams.resolve(selection);
+    const leader = definition.members.find((member) => member.key === definition.leaderKey);
+    assert(leader);
+    return leader;
+  };
+  api.setModelSelectionHandlers({
+    catalog: ({ teamSelection }) => catalogModelAliases(leaderFor(teamSelection), environment),
+    resolve: ({ teamSelection, workspaceRoot, alias, reasoning }) =>
+      backend.resolveSelection(workspaceRoot, leaderFor(teamSelection), alias, reasoning),
+  });
   api.setPrepareSessionHandler(async (request) => {
     const snapshot = runtime!.snapshot(request.sessionId);
     const member = snapshot.definition.members.find((member) => member.key === 'leader');
@@ -207,6 +221,7 @@ try {
         workspaceRoot: request.workspaceRoot,
       },
       request.leaderAgentId,
+      request.savedModel,
     );
     return {
       env: prepared.env,
@@ -217,8 +232,8 @@ try {
     agentId: leaderId,
     idempotencyKey: leaderId,
     cwd: workspace,
-    config: { provider: 'ltcook/fixture/test', thinkingOptionId: 'off' },
-    metadata: { 'ltcook.team': 'default-minimal' },
+    config: { provider: 'ltcook/fixture/draft-placeholder' },
+    metadata: { 'ltcook.team': 'default-minimal', 'ltcook.reasoning': 'none' },
   });
   assert.equal(leader.id, leaderId);
   assert(
@@ -252,6 +267,8 @@ try {
     (await host.api.agents.list()).entries.filter(({ agent }) => ids.includes(agent.id)).length,
     2,
   );
+  // > The previous physical model remains registered, as it does in an AppRC workspace.
+  environment.LTCOOK_MODEL_SMART = 'fixture/replacement';
   await runtime.close();
   runtime = createController();
   api.setRuntime(runtime);
@@ -263,6 +280,16 @@ try {
   });
   nativeUnavailable = true;
   await leader.reload();
+  assert.deepEqual(
+    (await host.api.agents.ref(leaderId).refresh())?.agent.metadata?.['ltcook.resolved-model'],
+    {
+      alias: 'smart',
+      provider: 'fixture',
+      model: 'test',
+      reasoning: 'none',
+      reasoningSource: 'session',
+    },
+  );
   const callsBeforeUnavailablePrompt = modelCalls;
   await leader.run('Inspect while native initialization is unavailable.', { timeoutMs: 30_000 });
   assert.equal(

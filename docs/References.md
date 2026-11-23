@@ -34,7 +34,7 @@
 | [package.json](../package.json) | Bun workspaces, root scripts, and JavaScript development dependencies. |
 | [src/ltcook/config/app.py](../src/ltcook/config/app.py) | The single AppRC application declaration. |
 | [src/ltcook/config/sections](../src/ltcook/config/sections) | Registered settings declarations grouped by owning component and environment prefix. |
-| [src/ltcook/config/pi_config.py](../src/ltcook/config/pi_config.py) | Writes only the private Pi `web-search.json` native configuration. |
+| [src/ltcook/config/pi_config.py](../src/ltcook/config/pi_config.py) | Writes the private Pi `web-search.json` and `models.json` configuration. |
 | [src/ltcook/launch.py](../src/ltcook/launch.py) | Global server settings, optional project overrides, and native process launch commands. |
 | [runtime/src/team-api](../runtime/src/team-api) | Team API v3 definitions and routing. |
 | [runtime/src/guidance-api](../runtime/src/guidance-api) | Guidance discovery, selection and inspection contract. |
@@ -67,10 +67,11 @@ commands provide launch operations and diagnostics:
 | `ltcook config edit` | Open the AppRC terminal configuration editor. |
 | `ltcook workspace add NAME ROOT --yes` | Optionally register a project and initialize its AppRC settings marker. |
 | `ltcook launch runtime [--workspace ROOT]` | Browser-free foreground server, or explicit project activation; reuse does not take over the owner. |
+| `ltcook launch model HARNESS @ALIAS [--reasoning EFFORT] [--workspace ROOT] [-- NATIVE_ARGS]` | Start a native Pi or Codex conversation with the resolved model alias. |
 | `ltcook auth login PROVIDER [--api-key \| --no-browser]` | Delegate interactive authentication to the installed Pi CLI and shared user credential home. |
 | `ltcook auth logout PROVIDER` | Remove that provider's credential through Pi; affects other Pi instances using the same home. |
 | `ltcook auth check [--provider PROVIDER] [--model MODEL] [--json] [--no-refresh]` | Report native Pi credential readiness without printing credentials; exit statuses are 0 ready, 1 not ready, and 2 invalid. |
-| `ltcook launch write-native-config --workspace ROOT` | Write the private Pi `web-search.json` under `PI_CODING_AGENT_DIR`; the Paseo config is not written by this command. |
+| `ltcook launch write-native-config --workspace ROOT` | Write the private Pi settings and model registration under `PI_CODING_AGENT_DIR`; the Paseo config is not written by this command. |
 | `ltcook planning start --session SESSION --design PATH --title TITLE` | Request Plan prefill/finalization for a Design. |
 | `ltcook planning show --session SESSION --plan PLAN_ID [--json]` | Read current Plan Markdown and workflow state, or raw state with `--json`. |
 | `ltcook planning questions --session SESSION --plan PLAN_ID` | Inspect registered user decisions. |
@@ -93,7 +94,7 @@ commands provide launch operations and diagnostics:
 | `ltcook eval report RUN_ID --json` | Print the structured Agent Evals report, including fixed-fixture summaries and evidence when summarization ran. |
 | `python -m ltcook.launch runtime [--workspace ROOT]` | Internal module entry point for the same global or project launch. |
 | `python -m ltcook.launch environment --workspace ROOT` | Emit raw workspace-specific child environment JSON; may contain secrets. |
-| `python -m ltcook.launch write-native-config --workspace ROOT` | Internal entry point for the private Pi-only `web-search.json` writer. |
+| `python -m ltcook.launch write-native-config --workspace ROOT` | Internal entry point for the private Pi configuration writer. |
 
 `--workspace` accepts an existing project directory without registration or an
 AppRC marker. An existing marker enables normal project settings and secret
@@ -212,10 +213,10 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_DATABASE` | Global `runtime.database`; defaults to `<LTCOOK_RUNTIME_STATE_DIR>/coordination.sqlite`. Incompatible schemas are rejected unchanged. |
 | `LTCOOK_GUIDANCE_DIR` | Global `runtime.guidance_dir`; defaults to `<AppRC config>/guidance` with `rules/` and `skills/`. |
 | `LTCOOK_RIED_CACHE_DIR` | Launch-derived `<AppRC cache>/projects`, holding the single versioned RIED cache. |
-| `LTCOOK_OLLAMA_ENDPOINT` | Global `runtime.ollama_endpoint`. Ollama loopback HTTP URL with a port, default `http://127.0.0.1:11434`. Used for summarization, readiness, and the setup CLI pull. |
-| `LTCOOK_SUMMARIZER_MODEL` | Global `runtime.summarizer_model`. Defaults to `lfm3:1.7b-q8_0`. |
+| `LTCOOK_OLLAMA_ENDPOINT` | Global `runtime.ollama_endpoint`. Ollama loopback HTTP URL with a port, default `http://127.0.0.1:11434`. Used by the tiny-local adapters, summarization, and readiness. |
+| `LTCOOK_MODEL_TINY_LOCAL` | Global `runtime.tiny_local_model`. Ollama tag for `@tiny-local` and `ltcook_summarize`. Defaults to `hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0`. Pull it explicitly. |
 | `LTCOOK_SUMMARIZER_KEEP_ALIVE` | Global `runtime.summarizer_keep_alive`. Default `-1` keeps the loaded model resident. Use `0` to unload or a positive number of seconds. |
-| `LTCOOK_SUMMARIZER_GENERATION` | Global `runtime.summarizer_generation`. Optional JSON object with `options` containing `num_ctx`, `num_predict`, and `temperature`. Supports optional `think`, `top_k`, and `repeat_penalty` (the latter two inside `options`). Streaming is disabled. With an empty value, LFM3 uses reasoning, a 32,768-token context, a 4,096-token generation limit per attempt, and temperature 0.1. An incomplete response gets one retry without reasoning within the same two-minute timeout. An explicit generation profile is used as supplied. A smaller context reduces the supported source byte limit. |
+| `LTCOOK_SUMMARIZER_GENERATION` | Global `runtime.summarizer_generation`. Optional JSON object with `options` containing `num_ctx`, `num_predict`, and `temperature`. Supports optional `think`, `top_k`, and `repeat_penalty` (the latter two inside `options`). Streaming is disabled. The default Spark profile uses reasoning off, a 32,768-token context, a 512-token generation limit, and temperature 0.1. An explicit generation profile is used as supplied. A smaller context reduces the supported source byte limit. |
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
 | `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |
@@ -223,9 +224,9 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_JS_ROOT` | JavaScript runtime root; source development uses the checkout root, and installed launches use `<deployment>/app`. |
 | `LTCOOK_WORKSPACE` | Project path supplied for an explicit project launch; absent for idle server startup. |
 | `LTCOOK_DEPLOYMENT_DIR` | LTCook-owned deployment location, normally beneath AppRC appdata. |
-| `LTCOOK_MODEL_SMART` | Provider model selected by the `smart` team alias. |
-| `LTCOOK_MODEL_SMOL` | Provider model selected by the `smol` alias; falls back to smart when empty. |
-| `LTCOOK_MODEL_PLAN` | Provider model selected by the `plan` alias; falls back to smart when empty. |
+| `LTCOOK_MODEL_SMART` | `runtime.smart_model` sets `@smart` and `@plan`. Defaults to `openai-codex/gpt-6.2-sol`. |
+| `LTCOOK_MODEL_SMOL` | `runtime.smol_model` sets `@smol` and `@tiny`. Defaults to `openai-codex/gpt-6-luna`. |
+| `LTCOOK_MODEL_EXPENSIVE` | `runtime.expensive_model` sets `@expensive` and `@review-art`. Defaults to `openai-codex/gpt-6-astra`. |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Optional provider credentials declared as secrets. Configure only the provider in use. |
 | `LTCOOK_API_TOKEN` | Runtime API credential, created in AppRC secret storage during explicit setup. |
 | `LTCOOK_PASEO_PASSWORD` | Optional secret for Paseo API and WebSocket authentication; it does not protect the static web UI. Never include it in a URL. |
@@ -298,9 +299,14 @@ The public import is `@ltcook/runtime/team-api`, authored in
 | `definition` | `TeamDefinition` | Identity, members, separate rule/skill refs, routing and review policy. |
 | `selectAssignee(context, eligible)` | optional function | Returns an eligible member key; Core validates and persists before dispatch. |
 
-Members declare keys, names, roles, eligible `workTypes`, model alias, thinking,
+Members declare keys, names, roles, eligible `workTypes`, model alias, optional `thinking`,
 lifetime, read-only policy, `rules` and `skills`. Resources have path, URL and
-rule/skill kind. Teams have one default route per work type:
+rule/skill kind. Use unprefixed `modelAlias` values such as `plan`. Omit
+`thinking` to inherit the alias preset or provider default. Use `none` for
+explicitly disabled reasoning. A session selection affects its Leader only.
+See the [model alias table](How-To-User-Guides.md#choose-a-model-alias).
+
+Teams have one default route per work type:
 
 | Work type | `default-minimal` | `default` |
 | --- | --- | --- |

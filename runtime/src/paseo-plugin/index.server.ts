@@ -4,6 +4,14 @@ import { z } from 'zod';
 import { defineRpc } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
+import {
+  ModelCatalogRequestSchema,
+  ModelCatalogResponseSchema,
+  ResolvedModelSchema,
+  MODEL_ALIAS_METADATA_KEY,
+  MODEL_REASONING_METADATA_KEY,
+  RESOLVED_MODEL_METADATA_KEY,
+} from './shared/models';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import {
   PanelDetailSourceSchema,
@@ -40,6 +48,11 @@ const teamCatalog = defineRpc({
   name: 'ltcook.team.catalog',
   input: TeamCatalogRequestSchema,
   output: TeamCatalogResponseSchema,
+});
+const modelCatalog = defineRpc({
+  name: 'ltcook.model.catalog',
+  input: ModelCatalogRequestSchema,
+  output: ModelCatalogResponseSchema,
 });
 const sessionList = defineRpc({
   name: 'ltcook.session.list',
@@ -204,14 +217,24 @@ export default function contribute(server: PluginServerContext) {
       const selection = request.metadata?.['ltcook.team'];
       if (typeof selection !== 'string' || !selection)
         throw new Error('Choose an installed Team before starting LTCook.');
-      const catalog = z
-        .object({ teams: z.array(z.object({ selection: z.string(), status: z.string() })) })
-        .parse(await runtimeJson('/v1/team/catalog', {}));
-      if (
-        !catalog.teams.some((team) => team.selection === selection && team.status === 'installed')
-      )
-        throw new Error('Selected Team is unavailable. Choose an installed Team.');
-      return request;
+      const selected = ResolvedModelSchema.parse(
+        await runtimeJson('/v1/model/resolve', {
+          teamSelection: selection,
+          workspaceRoot: request.config.cwd,
+          alias: request.metadata?.[MODEL_ALIAS_METADATA_KEY],
+          reasoning: request.metadata?.[MODEL_REASONING_METADATA_KEY],
+        }),
+      );
+      return {
+        ...request,
+        config: {
+          ...request.config,
+          provider: 'ltcook',
+          model: `${selected.provider}/${selected.model}`,
+          thinkingOptionId: selected.reasoning === 'none' ? 'off' : selected.reasoning,
+        },
+        metadata: { ...request.metadata, [RESOLVED_MODEL_METADATA_KEY]: selected },
+      };
     }),
     server.addHook('agent.open.before', async ({ request }) => {
       if (request.purpose !== 'interactive') return;
@@ -254,8 +277,17 @@ export default function contribute(server: PluginServerContext) {
         workspaceRoot: request.cwd,
         teamSelection,
       };
+      const savedModel = ResolvedModelSchema.safeParse(
+        request.metadata[RESOLVED_MODEL_METADATA_KEY],
+      );
+      if (!savedModel.success)
+        throw new Error(
+          'This conversation has no saved LTCook model selection. Start a new Session.',
+        );
       await runtimeJson('/v1/session/open', identity);
-      const prepared = preparedSession.parse(await runtimeJson('/v1/session/prepare', identity));
+      const prepared = preparedSession.parse(
+        await runtimeJson('/v1/session/prepare', { ...identity, savedModel: savedModel.data }),
+      );
       return {
         ...request,
         env: { ...request.env, ...prepared.env },
@@ -269,6 +301,9 @@ export default function contribute(server: PluginServerContext) {
   ];
   server.handle(teamCatalog, async () =>
     TeamCatalogResponseSchema.parse(await runtimeJson('/v1/team/catalog', {})),
+  );
+  server.handle(modelCatalog, async (input) =>
+    ModelCatalogResponseSchema.parse(await runtimeJson('/v1/model/catalog', input)),
   );
   server.handle(sessionList, async (input, { paseo }) => listSessions(input, paseo));
   server.handle(evalsDiagnostics, async (input) => {

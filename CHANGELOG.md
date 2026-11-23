@@ -46,6 +46,12 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 💥 Breaking changes
 
+- **Breaking:** 💥 Set `LTCOOK_MODEL_TINY_LOCAL` in place of
+  `LTCOOK_SUMMARIZER_MODEL`. `@plan` now shares the smart model slot, so
+  remove `LTCOOK_MODEL_PLAN`. Use plain `provider/model` settings and put
+  explicit reasoning in the Team or session. Start a new LTCook conversation
+  for existing Paseo profile records that predate saved alias selections.
+
 - **Breaking:** 💥 LTCook now uses AppRC 0.39.1b1 (commit `84b6b8`).
   `app uninstall --keep-config` replaces `--keep-data` and retains the
   configuration directory, including settings and secrets. Uninstall removes
@@ -131,6 +137,11 @@ All notable changes to `ltcook` will be documented in this file.
   and authentication checks remain read-only.
 
 ### ➕ Added
+
+- Shared model aliases for Teams, Paseo, and the native Pi and Codex launcher.
+  Paseo saves the effective model and reasoning with each new conversation.
+  The summarizer uses Spark X2.6 4B Q8_0 with reasoning off. Pull Spark
+  explicitly when needed.
 
 - Behavior Evaluation includes mandatory core summarization evaluations with
   independent Bonsai grading. The CLI and Paseo diagnostics show the

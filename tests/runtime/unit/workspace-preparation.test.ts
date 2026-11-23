@@ -85,8 +85,8 @@ test.skipIf(process.platform === 'win32')(
           workspaceRoot: workspace,
           environment: {
             PI_CODING_AGENT_DIR: path.join(root, 'pi'),
-            LTCOOK_MODEL_SMART: 'smart-model',
-            LTCOOK_MODEL_SMOL: 'small-model',
+            LTCOOK_MODEL_SMART: 'fixture/smart-model',
+            LTCOOK_MODEL_SMOL: 'fixture/small-model',
             PATH: process.env.PATH,
           },
           dependencies: [dependency],
@@ -127,13 +127,15 @@ test.skipIf(process.platform === 'win32')(
       expect(readFileSync(count, 'utf8')).toBe('x');
       expect(first.env.LTCOOK_AGENT_API_TOKEN).toBe('token-one');
       expect(second.env.LTCOOK_AGENT_API_TOKEN).toBe('token-two');
-      expect(first.model).toBe('smart-model');
-      expect(second.model).toBe('small-model');
+      expect(first.model).toMatchObject({ provider: 'fixture', model: 'smart-model' });
+      expect(second.model).toMatchObject({ provider: 'fixture', model: 'small-model' });
       writeFileSync(dependency, 'two');
       const changedResponse = JSON.parse(readFileSync(response, 'utf8'));
-      changedResponse.environment.LTCOOK_MODEL_SMART = 'updated-model';
+      changedResponse.environment.LTCOOK_MODEL_SMART = 'fixture/updated-model';
       writeFileSync(response, JSON.stringify(changedResponse));
-      expect((await backend.prepare(options, 'three')).model).toBe('updated-model');
+      expect((await backend.prepare(options, 'three')).model.model).toBe('updated-model');
+      const reopened = await backend.prepare(options, 'one', first.model);
+      expect(JSON.parse(reopened.env.LTCOOK_RESOLVED_MODEL!)).toEqual(first.model);
       expect(readFileSync(count, 'utf8')).toBe('xx');
       await backend.prepare({ ...options, sessionId: 'another' }, 'four');
       expect(readFileSync(count, 'utf8')).toBe('xxx');

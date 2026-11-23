@@ -10,6 +10,7 @@ import { isWithin } from './path-containment.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
 import { EvalRunService } from './evals/service.js';
 import { createEvalEngine } from './evals/engine.js';
+import { catalogModelAliases, resolveModel } from './models/aliases.js';
 const EX_TEMPFAIL = 75;
 function isListenAddressInUse(error: unknown): boolean {
   return (
@@ -54,6 +55,11 @@ async function runServiceAction(action: string | undefined): Promise<void> {
 
 async function run(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args[0] === 'model-launch') {
+    const { launchModel } = await import('./models/launcher.js');
+    await launchModel(args.slice(1));
+    return;
+  }
   if (metadataCommand(args)) return;
   if (args[0] === 'service-action') {
     await runServiceAction(args[1]);
@@ -210,9 +216,10 @@ async function run(): Promise<void> {
         'AppRC did not resolve required native runtime paths; launch through `ltcook launch runtime`.',
       );
     }
+    const summarizer = resolveModel('tiny-local', process.env);
     const summarization = {
       endpoint: process.env.LTCOOK_OLLAMA_ENDPOINT ?? '',
-      model: process.env.LTCOOK_SUMMARIZER_MODEL ?? '',
+      model: summarizer.model,
       keepAlive: Number(process.env.LTCOOK_SUMMARIZER_KEEP_ALIVE ?? '-1'),
       generation: process.env.LTCOOK_SUMMARIZER_GENERATION,
     };
@@ -347,6 +354,20 @@ async function run(): Promise<void> {
         throw error;
       }
     });
+    const leaderFor = (teamSelection: string) => {
+      const { definition } = teams.resolve(teamSelection);
+      const leader = definition.members.find((member) => member.key === definition.leaderKey);
+      if (!leader) throw new Error('Selected Team has no Leader');
+      return leader;
+    };
+    api.setModelSelectionHandlers({
+      catalog({ teamSelection }) {
+        return catalogModelAliases(leaderFor(teamSelection), process.env);
+      },
+      async resolve({ teamSelection, workspaceRoot, alias, reasoning }) {
+        return backend.resolveSelection(workspaceRoot, leaderFor(teamSelection), alias, reasoning);
+      },
+    });
     api.setPrepareSessionHandler(async (request) => {
       const snapshot = runtimeController.snapshot(request.sessionId);
       const leader = snapshot.definition.members.find(
@@ -362,6 +383,7 @@ async function run(): Promise<void> {
           workspaceRoot: snapshot.session.workspaceRoot,
         },
         request.leaderAgentId,
+        request.savedModel,
       );
       return {
         env: prepared.env,

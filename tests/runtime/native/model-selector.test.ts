@@ -1,0 +1,71 @@
+import { describe, expect, test } from 'bun:test';
+import {
+  ModelCatalogRequestSchema,
+  ModelCatalogResponseSchema,
+  ResolvedModelSchema,
+} from '../../../runtime/src/paseo-plugin/shared/models.js';
+
+describe('Paseo model selection contract', () => {
+  test('accepts a resolved model with session reasoning and rejects incomplete settings', () => {
+    const resolved = {
+      alias: 'tiny-local',
+      provider: 'ollama',
+      model: 'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
+      reasoning: 'none',
+      preset: 'none',
+      reasoningSource: 'session',
+    };
+
+    expect(ResolvedModelSchema.parse(resolved)).toEqual(resolved);
+    expect(ResolvedModelSchema.safeParse({ ...resolved, provider: undefined }).success).toBe(false);
+    expect(
+      ResolvedModelSchema.safeParse({ ...resolved, reasoningSource: 'provider' }).success,
+    ).toBe(false);
+  });
+
+  test('validates the selected Team and exposes each alias resolved for its Leader', () => {
+    const response = {
+      teamAlias: 'smart',
+      aliases: [
+        {
+          alias: 'smart',
+          provider: 'openai-codex',
+          model: 'gpt-6.2-sol',
+          reasoning: 'xhigh',
+          preset: 'xhigh',
+          reasoningSource: 'alias',
+        },
+        {
+          alias: 'tiny-local',
+          provider: 'ollama',
+          model: 'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
+          reasoning: 'none',
+          preset: 'none',
+          reasoningSource: 'alias',
+          reasoningOptions: ['none', 'low', 'high'],
+          configurationError: 'The Team effort is unavailable for this alias.',
+        },
+      ],
+    };
+
+    expect(ModelCatalogRequestSchema.safeParse({ teamSelection: '' }).success).toBe(false);
+    expect(ModelCatalogRequestSchema.parse({ teamSelection: 'default' })).toEqual({
+      teamSelection: 'default',
+    });
+    expect(ModelCatalogResponseSchema.parse(response)).toEqual(response);
+    expect(
+      ModelCatalogResponseSchema.safeParse({
+        ...response,
+        aliases: response.aliases.slice(1),
+      }).success,
+    ).toBe(false);
+    expect(
+      ModelCatalogResponseSchema.safeParse({
+        ...response,
+        aliases: response.aliases.map((item) =>
+          item.alias === 'tiny-local' ? { ...item, reasoningOptions: ['unsupported'] } : item,
+        ),
+      }).success,
+    ).toBe(false);
+  });
+});

@@ -8,7 +8,6 @@ import pytest
 
 from ltcook.cli.app import _ollama_resource_diagnostics
 from ltcook_distr.payload.app_lifecycle import prepare_ollama
-from ltcook_distr.payload.app_lifecycle._common import SetupError
 
 
 def test_existing_eval_model_is_reused_without_the_base_tag(tmp_path, monkeypatch):
@@ -82,7 +81,7 @@ def test_missing_derived_model_is_created_from_exact_bonsai_source(
     monkeypatch.setattr(prepare_ollama, "run", run)
 
     receipt = prepare_ollama.prepare_ollama(
-        tmp_path, environment={"PATH": "", "LTCOOK_SUMMARIZER_MODEL": summary_model}
+        tmp_path, environment={"PATH": "", "LTCOOK_MODEL_TINY_LOCAL": summary_model}
     )
 
     pull = (
@@ -104,20 +103,19 @@ def test_missing_derived_model_is_created_from_exact_bonsai_source(
     assert json.loads(receipt.read_text())["eval_model"] == prepare_ollama.EVAL_MODEL
 
 
-def test_summarizer_pull_targets_the_resolved_endpoint_and_is_optional(
+def test_installation_and_doctor_report_missing_tiny_local_without_pulling(
     tmp_path, monkeypatch
 ):
     endpoint = "http://127.0.0.1:34239"
     model = "fixture-summarizer"
     settings = {
         "LTCOOK_OLLAMA_ENDPOINT": endpoint,
-        "LTCOOK_SUMMARIZER_MODEL": model,
+        "LTCOOK_MODEL_TINY_LOCAL": model,
         "LTCOOK_OLLAMA_EXECUTABLE": "/usr/bin/ollama",
         "OLLAMA_HOST": "http://127.0.0.1:12345",
         "PATH": "",
     }
     polls = []
-    pulls = []
     installed = False
 
     def json_response(url, **_):
@@ -131,27 +129,29 @@ def test_summarizer_pull_targets_the_resolved_endpoint_and_is_optional(
         assert url == f"{prepare_ollama.ENDPOINT}/api/tags"
         return {"models": [{"name": prepare_ollama.EVAL_MODEL}]}
 
-    def fail_summary_pull(arguments, *, environment):
-        pulls.append((arguments, environment["OLLAMA_HOST"]))
-        raise SetupError("ollama pull failed (exit 1)")
+    def reject_summary_pull(*_args, **_kwargs):
+        pytest.fail("Setup must leave tiny-local provisioning explicit")
 
     monkeypatch.setattr(prepare_ollama, "_json", json_response)
-    monkeypatch.setattr(prepare_ollama, "run", fail_summary_pull)
+    monkeypatch.setattr(prepare_ollama, "run", reject_summary_pull)
     receipt = prepare_ollama.prepare_ollama(tmp_path, environment=settings)
     result = json.loads(receipt.read_text())
     assert result["ready"] is True
-    assert result["summarizer"]["error"] == "ollama pull failed (exit 1)"
-    assert pulls == [(["/usr/bin/ollama", "pull", model], endpoint)]
+    missing = {
+        "ready": False,
+        "model": model,
+        "endpoint": endpoint,
+        "error": (
+            f"The tiny-local model is missing. Run `ollama pull {model}` "
+            f"against {endpoint}."
+        ),
+    }
+    assert result["summarizer"] == missing
     for name, value in settings.items():
         monkeypatch.setenv(name, value)
     diagnostics = _ollama_resource_diagnostics(tmp_path)
     assert diagnostics["ollama"]["ready"] is True
-    assert diagnostics["summarizer"] == {
-        "ready": False,
-        "model": model,
-        "endpoint": endpoint,
-        "error": "ollama pull failed (exit 1)",
-    }
+    assert diagnostics["summarizer"] == missing
     installed = True
     assert _ollama_resource_diagnostics(tmp_path)["summarizer"]["ready"] is True
     assert polls == [f"{endpoint}/api/tags"] * 3

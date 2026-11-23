@@ -12,6 +12,7 @@
   - [Remove an installation](#remove-an-installation)
 - [Configure settings and paths](#configure-settings-and-paths)
   - [Initialize saved preferences](#initialize-saved-preferences)
+  - [Choose a model alias](#choose-a-model-alias)
   - [Authenticate with Pi](#authenticate-with-pi)
   - [Choose application paths](#choose-application-paths)
   - [Select a team and resume a session](#select-a-team-and-resume-a-session)
@@ -144,9 +145,8 @@ Opening the UI does not create a Session or start agents. In Paseo, use
 **+ → LTCook**, choose an installed **Team**, and send a message. The native
 agent is the Leader; its chat opens directly. On desktop, use the Team dropdown.
 On narrow screens, open the composer controls and select a Team from the native
-sheet before sending. Before starting agents,
-[choose their models](#initialize-saved-preferences) and
-[authenticate with Pi](#authenticate-with-pi).
+sheet before sending. Use the Model control to [choose an alias](#choose-a-model-alias)
+for the Leader. For hosted models, [authenticate with Pi](#authenticate-with-pi).
 
 The contextual **Team** panel is secondary to the Leader chat:
 
@@ -175,15 +175,19 @@ search. Some Codex modes ask for permission before calling an MCP tool.
   file-read policy is outside the workspace connection's authority. Check
   consequential details such as identifiers and negated actions against the source.
 
-LTCook initialization and repair that reruns initialization prepare
-`lfm3:1.7b-q8_0` in the configured local Ollama instance. The default runs
-with reasoning enabled and retries an incomplete response once without reasoning.
-Run `ltcook app doctor --verbose --json` for the summarizer's readiness alongside
-Bonsai. RIED and ordinary chats are available if the summarizer model is missing.
-Set the global [summarizer settings](References.md#environment-variables) in
-AppRC and restart the runtime to apply them. A keep-alive of `-1` keeps the model
-resident after use. Set it to `0` to unload after a request or to a positive
-number of seconds for timed residency.
+The summarizer uses `@tiny-local`, which defaults to Spark X2.6 4B Q8_0 with
+reasoning off. Pull it on the configured Ollama instance before the first
+summary. Setup checks readiness without downloading Spark.
+
+```shell
+ollama pull hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0
+```
+
+Run `ltcook app doctor --verbose --json` to check readiness. RIED and ordinary
+hosted chats work without Spark. AppRC's global
+[summarizer settings](References.md#environment-variables) apply when the runtime
+starts. A keep-alive of `-1` keeps the model resident after use. Set it to `0`
+to unload after a request or to a positive number of seconds for timed residency.
 
 ## Enable an Intel iGPU for Ollama on WSL
 
@@ -395,16 +399,11 @@ ltcook config edit
 ltcook config show --json
 ```
 
-`app.team` uses `LTCOOK_TEAM` and defaults to `default-minimal`. Set
-`runtime.smart_model`, `runtime.smol_model`, and, for the full team,
-`runtime.plan_model` in the editor using model identifiers supported by the
-installed Pi provider. An empty non-smart alias falls back to the smart selection.
-These selections are required when creating agents, not when opening the idle
-server/UI. Provider account login belongs to Pi, as described
-[below](#authenticate-with-pi). An API key may instead be supplied through the
-provider's AppRC secret field or native environment variable such as
-`OPENAI_API_KEY`. `config show --json` reports application settings, not provider
-OAuth credentials. Store only revocable credentials agents may read.
+`app.team` uses `LTCOOK_TEAM` and defaults to `default-minimal`.
+[Model aliases](#choose-a-model-alias) have defaults. Use AppRC to replace a
+physical model when needed. Provider credentials come from native login or a
+provider secret field such as `OPENAI_API_KEY`. `config show --json` reports
+application settings without exposing OAuth credentials.
 
 Explicit runtime and service starts create only missing runtime, Crawl4AI and
 SearXNG secrets after installation is Ready, preserving existing values. They do
@@ -416,6 +415,47 @@ user defaults, registered workspace overrides, and deliberate shell exports.
 AppRC does not take ownership of arbitrary repository `.env` files. Use
 `ltcook config --help` for the installed version's workspace and secret-file
 management commands rather than inventing another configuration editor.
+
+## Choose a model alias
+
+| Alias | Model | Preset reasoning |
+| --- | --- | --- |
+| `@smol` | GPT-6 Luna | Provider default |
+| `@tiny` | GPT-6 Luna | Low |
+| `@tiny-local` | Spark X2.6 4B Q8_0 on Ollama | Off |
+| `@smart` | GPT-6.2 Sol | Provider default |
+| `@plan` | GPT-6.2 Sol | Xhigh |
+| `@expensive` | GPT-6 Astra | Provider default |
+| `@review-art` | GPT-6 Astra | Medium |
+
+In a new Paseo LTCook conversation, choose a Team, then choose a Model for its
+Leader. **Team assignment** uses the Leader's declared alias. An explicit
+session reasoning choice takes priority over the Team member setting, the alias
+preset, and the provider default, in that order. The composer shows when a
+setting overrides the alias preset. For example, the default Team's Reviewer
+uses `@plan` with its explicit high effort. Spark supports off, low, and high.
+
+The draft previews runtime defaults. Workspace AppRC settings are applied at
+launch. Paseo saves the resolved provider, model, and reasoning with the
+conversation. Reopening it uses that saved selection even after an alias changes.
+
+Use the terminal launcher to start a new native conversation:
+
+```shell
+ltcook launch model pi @plan
+ltcook launch model codex @tiny
+ltcook launch model pi @tiny-local --reasoning high
+```
+
+Pi uses the configured provider and the native Pi login. Codex uses its installed
+CLI and its current login for hosted models. Pass other native launch arguments
+after `--`. For managed conversation history, reopen the Session in Paseo.
+
+Change the physical model slots in
+[AppRC](References.md#environment-variables). For hosted slots enter
+`provider/model` and set effort through the Team or session. Drop any previous
+`:effort` suffix. `@plan` shares the smart slot. The tiny-local slot accepts the
+Ollama model tag, including its quantization suffix.
 
 ## Authenticate with Pi
 

@@ -167,7 +167,7 @@ def _ollama_resource_diagnostics(appdata: Path) -> dict[str, object]:
                 "context_tokens": CONTEXT_TOKENS,
                 "endpoint": ENDPOINT,
             },
-            "summarizer": summarizer_readiness(previous=data.get("summarizer")),
+            "summarizer": summarizer_readiness(),
         }
     except (OSError, RuntimeError, ValueError) as error:
         raise ValueError(f"Ollama readiness check failed: {error}") from error
@@ -188,6 +188,7 @@ runtime = rc.cli.CliRuntime(
             "launch": rc.cli.RuntimeIndependentCommand(
                 action_prefixes={
                     ("runtime",),
+                    ("model",),
                     ("environment",),
                     ("write-native-config",),
                 },

@@ -1,12 +1,13 @@
 import type { GuidanceResource } from '../guidance-api/index.js';
+import type { ModelAlias, ReasoningEffort } from '../models/aliases.js';
+export type { ModelAlias } from '../models/aliases.js';
 export type WorkType = 'design' | 'plan.prefill' | 'plan.finalize' | 'task.execute';
-export type ModelAlias = 'smart' | 'smol' | 'plan';
 export interface TeamMember {
   key: string;
   name: string;
   lifetime: 'persistent' | 'temporary';
   modelAlias: ModelAlias;
-  thinking: string;
+  thinking?: ReasoningEffort;
   readOnly: boolean;
   roles: readonly string[];
   workTypes: readonly WorkType[];

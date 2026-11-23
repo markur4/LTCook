@@ -177,7 +177,7 @@ def resolve_launch(
         _user_path(global_config.runtime.pi_auth_dir, home)
     )
     environment["LTCOOK_OLLAMA_ENDPOINT"] = global_config.runtime.ollama_endpoint
-    environment["LTCOOK_SUMMARIZER_MODEL"] = global_config.runtime.summarizer_model
+    environment["LTCOOK_MODEL_TINY_LOCAL"] = global_config.runtime.tiny_local_model
     environment["LTCOOK_SUMMARIZER_KEEP_ALIVE"] = str(
         global_config.runtime.summarizer_keep_alive
     )
@@ -299,7 +299,9 @@ def evaluation_context(
     launch = resolve_launch(workspace)
     config = launch.configuration
     documents = pi_documents(
-        config, owned_dir=Path(launch.environment["LTCOOK_DEPLOYMENT_DIR"]) / "app"
+        config,
+        owned_dir=Path(launch.environment["LTCOOK_DEPLOYMENT_DIR"]) / "app",
+        runtime_environment=launch.environment,
     )
     web = next(
         value for target, value in documents.items() if target.name == "web-search.json"
@@ -313,7 +315,7 @@ def evaluation_context(
                 "webConfiguration": web,
                 "summarization": {
                     "endpoint": launch.environment["LTCOOK_OLLAMA_ENDPOINT"],
-                    "model": launch.environment["LTCOOK_SUMMARIZER_MODEL"],
+                    "model": launch.environment["LTCOOK_MODEL_TINY_LOCAL"],
                     "keepAlive": int(
                         launch.environment["LTCOOK_SUMMARIZER_KEEP_ALIVE"]
                     ),
@@ -342,6 +344,56 @@ def environment_command(
             }
         )
     )
+
+
+@launch_cli.command("model", context_settings={"allow_extra_args": True})
+def launch_model(
+    ctx: typer.Context,
+    harness: Annotated[str, typer.Argument(help="Native harness: pi or codex.")],
+    alias: Annotated[str, typer.Argument(help="LTCook model alias, such as @plan.")],
+    reasoning: Annotated[
+        str | None,
+        typer.Option("--reasoning", help="Override the alias reasoning preset."),
+    ] = None,
+    workspace: Annotated[Path, typer.Option("--workspace")] = Path("."),
+) -> None:
+    """Launch Pi or Codex with a resolved model alias. Pass native arguments after --."""
+    if harness not in {"pi", "codex"}:
+        raise typer.BadParameter("The harness must be pi or codex.")
+    try:
+        launch = resolve_launch(workspace)
+        environment = launch.environment
+        node = environment["LTCOOK_NODE_EXECUTABLE"]
+        native = Path(environment["LTCOOK_JS_ROOT"]) / "runtime" / "dist" / "main.js"
+        if not Path(node).is_file() or not native.is_file():
+            raise ValueError(
+                "Runtime prerequisites are not prepared; re-run the LTCook installer."
+            )
+        if harness == "pi":
+            pi_paths = _write_launch_pi_config(launch)
+            models_path = next(path for path in pi_paths if path.name == "models.json")
+            environment["LTCOOK_PI_MODELS_PATH"] = str(models_path)
+        completed = subprocess.run(
+            [
+                node,
+                str(native),
+                "model-launch",
+                harness,
+                alias,
+                reasoning or "",
+                "--",
+                *ctx.args,
+            ],
+            cwd=launch.workspace_root,
+            env=environment,
+            check=False,
+        )
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    except KeyboardInterrupt:
+        raise typer.Exit(130) from None
+    if completed.returncode:
+        raise typer.Exit(completed.returncode)
 
 
 def _open_existing_runtime(
@@ -602,14 +654,10 @@ def services_logs(
 def write_native_command(
     workspace: Annotated[Path, typer.Option("--workspace")],
 ) -> None:
-    """Generate the Pi web-access JSON in the AppRC-owned deployment."""
+    """Generate Pi model and web-access files in the AppRC-owned deployment."""
     launch = resolve_launch(workspace, original_environment=os.environ)
     try:
-        paths = write_pi_config(
-            launch.configuration,
-            owned_dir=Path(launch.environment["LTCOOK_DEPLOYMENT_DIR"]) / "app",
-            pi_home=launch.environment["PI_CODING_AGENT_DIR"],
-        )
+        paths = _write_launch_pi_config(launch)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(json.dumps([str(path) for path in paths]))
@@ -625,11 +673,7 @@ def prepare_native_command(
         workspace, original_environment=os.environ, preparation_inputs=inputs
     )
     try:
-        outputs = write_pi_config(
-            launch.configuration,
-            owned_dir=Path(launch.environment["LTCOOK_DEPLOYMENT_DIR"]) / "app",
-            pi_home=launch.environment["PI_CODING_AGENT_DIR"],
-        )
+        outputs = _write_launch_pi_config(launch)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     inputs.dependencies.update(outputs)
@@ -644,6 +688,17 @@ def prepare_native_command(
                 "reusable": inputs.reusable,
             }
         )
+    )
+
+
+def _write_launch_pi_config(launch: LaunchConfig) -> tuple[Path, ...]:
+    """Write native files from the same effective settings sent to Pi."""
+    environment = launch.environment
+    return write_pi_config(
+        launch.configuration,
+        owned_dir=Path(environment["LTCOOK_DEPLOYMENT_DIR"]) / "app",
+        pi_home=environment["PI_CODING_AGENT_DIR"],
+        runtime_environment=environment,
     )
 
 

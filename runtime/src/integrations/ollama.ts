@@ -45,7 +45,7 @@ export function summaryGeneration(settings: OllamaSettings): SummaryGeneration {
   if (!settings.generation?.trim()) {
     if (retriesSummaryWithoutReasoning(settings))
       return { think: true, options: { num_ctx: 32768, num_predict: 4096, temperature: 0.1 } };
-    return { options: SUMMARY_GENERATION_OPTIONS };
+    return { think: false, options: SUMMARY_GENERATION_OPTIONS };
   }
   try {
     return generationSchema.parse(JSON.parse(settings.generation));
@@ -131,7 +131,7 @@ export async function ollamaChat(
       await response.body?.cancel();
       if (response.status === 404)
         throw new Error(
-          `Ollama summarizer model "${modelName}" is unavailable. Run LTCook setup or repair.`,
+          `Ollama summarizer model "${modelName}" is unavailable. Run ollama pull ${modelName} on the configured Ollama instance.`,
         );
       throw new Error(`Ollama summarization failed (HTTP ${response.status}).`);
     }

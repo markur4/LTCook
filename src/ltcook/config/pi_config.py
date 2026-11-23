@@ -11,7 +11,12 @@ from apprc import ResolveOptions
 
 from ltcook.config.app import APP_RC
 from ltcook.config.bundle import LtcookConfig
-from ltcook_distr.payload.app_lifecycle.prepare_ollama import CONTEXT_TOKENS, EVAL_MODEL
+from ltcook_distr.payload.app_lifecycle.prepare_ollama import (
+    CONTEXT_TOKENS,
+    ENDPOINT,
+    EVAL_MODEL,
+    local_ollama_endpoint,
+)
 
 
 def resolve_global_config(*, environment: Mapping[str, str] | None = None):
@@ -56,12 +61,14 @@ def pi_documents(
     *,
     owned_dir: str | Path,
     pi_home: str | Path | None = None,
+    runtime_environment: Mapping[str, str] | None = None,
 ) -> dict[Path, dict[str, object]]:
     """Build the Pi web configuration under LTCook-owned paths only.
 
     :param config: Settings resolved for one workspace.
     :param owned_dir: AppRC-owned deployment application directory.
     :param pi_home: AppRC-owned Pi home specific to this workspace.
+    :param runtime_environment: Launch settings after applying global model scope.
     :return: Exact native target and JSON body.
     """
     deployment_root = Path(owned_dir).expanduser().parent.resolve()
@@ -96,30 +103,113 @@ def pi_documents(
             ]
         },
     }
+    sol = {
+        "id": "gpt-6.2-sol",
+        "name": "GPT-6.2 Sol",
+        "reasoning": True,
+        "input": ["text", "image"],
+        "thinkingLevelMap": {
+            "off": None,
+            "minimal": None,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max",
+        },
+    }
+    effective = runtime_environment or {}
+    ollama_endpoint = local_ollama_endpoint(
+        effective.get("LTCOOK_OLLAMA_ENDPOINT", config.runtime.ollama_endpoint)
+    )
+    tiny_local_model = effective.get(
+        "LTCOOK_MODEL_TINY_LOCAL", config.runtime.tiny_local_model
+    ).strip()
+    ollama_models: list[dict[str, object]] = [
+        {
+            "id": EVAL_MODEL,
+            "name": "LTCook Bonsai 2 27B (65536 context)",
+            "contextWindow": CONTEXT_TOKENS,
+            "maxTokens": 2048,
+            "reasoning": True,
+            "thinkingLevelMap": {"off": "none", "low": "low", "high": "high"},
+        }
+    ]
+    if tiny_local_model and tiny_local_model != EVAL_MODEL:
+        ollama_models.append(
+            {
+                "id": tiny_local_model,
+                "baseUrl": f"{ollama_endpoint}/v1",
+                "contextWindow": 32768,
+                "maxTokens": 4096,
+                "reasoning": True,
+                "compat": {"supportsReasoningEffort": True},
+                "thinkingLevelMap": {
+                    "off": "none",
+                    "minimal": None,
+                    "low": "low",
+                    "medium": None,
+                    "high": "high",
+                    "xhigh": None,
+                    "max": None,
+                },
+            }
+        )
     models: dict[str, object] = {
         "providers": {
-            "ollama": {
-                "baseUrl": "http://127.0.0.1:11434/v1",
-                "api": "openai-completions",
-                "apiKey": "ollama",
+            "openai-codex": {
                 "models": [
                     {
-                        "id": EVAL_MODEL,
-                        "name": "LTCook Bonsai 2 27B (65536 context)",
-                        "contextWindow": CONTEXT_TOKENS,
-                        "maxTokens": 2048,
-                        "reasoning": True,
-                        "thinkingLevelMap": {
-                            "off": "none",
-                            "low": "low",
-                            "high": "high",
-                        },
+                        **sol,
+                        "api": "openai-codex-responses",
+                        "baseUrl": "https://chatgpt.com/backend-api",
                     }
                 ],
-            }
+            },
+            "openai": {
+                "models": [
+                    {
+                        **sol,
+                        "api": "openai-responses",
+                        "baseUrl": "https://api.openai.com/v1",
+                    }
+                ],
+            },
+            "ollama": {
+                "baseUrl": f"{ENDPOINT}/v1",
+                "api": "openai-completions",
+                "apiKey": "ollama",
+                "models": ollama_models,
+            },
         }
     }
     return {agent_home / "web-search.json": web, agent_home / "models.json": models}
+
+
+def _merge_model_providers(old: dict, new: dict) -> dict:
+    """Keep existing model IDs usable when a configured alias is edited."""
+    providers = {**old}
+    for name, managed in new.items():
+        existing = old.get(name)
+        if not isinstance(existing, dict):
+            providers[name] = managed
+            continue
+        configured = existing.get("models")
+        managed_models = managed["models"]
+        if isinstance(configured, list):
+            managed_ids = {model["id"] for model in managed_models}
+            managed_models = [
+                *(
+                    entry
+                    for entry in configured
+                    if isinstance(entry, dict)
+                    and isinstance(entry.get("id"), str)
+                    and entry["id"] not in managed_ids
+                ),
+                *managed_models,
+            ]
+        providers[name] = {**existing, **managed, "models": managed_models}
+    return providers
 
 
 def write_pi_config(
@@ -127,12 +217,14 @@ def write_pi_config(
     *,
     owned_dir: str | Path,
     pi_home: str | Path | None = None,
+    runtime_environment: Mapping[str, str] | None = None,
 ) -> tuple[Path, ...]:
     """Atomically publish AppRC-derived Pi settings with private permissions.
 
     :param config: Settings for the selected workspace.
     :param owned_dir: AppRC-owned deployment application directory.
     :param pi_home: Workspace-specific AppRC-owned Pi home.
+    :param runtime_environment: Launch settings after applying global model scope.
     :return: Pi configuration paths written by LTCook.
     """
     import tempfile
@@ -142,6 +234,7 @@ def write_pi_config(
         config,
         owned_dir=owned_dir,
         pi_home=pi_home,
+        runtime_environment=runtime_environment,
     ).items():
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if path.name == "models.json" and path.exists():
@@ -157,7 +250,9 @@ def write_pi_config(
                 ):
                     document = {
                         **existing,
-                        "providers": {**existing_providers, **new_providers},
+                        "providers": _merge_model_providers(
+                            existing_providers, new_providers
+                        ),
                     }
         fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
         try:

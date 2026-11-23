@@ -3,6 +3,7 @@ import type { PluginClientContext } from '@getpaseo/plugin/client';
 import { TeamsBrowser } from './client/screens/TeamsBrowser';
 import { TeamStatus } from './client/screens/TeamStatus';
 import { TeamComposerItem } from './client/components/TeamComposerItem';
+import { ModelComposerItem } from './client/components/ModelComposerItem';
 
 export default function contribute(client: PluginClientContext) {
   const cleanup = [
@@ -34,6 +35,7 @@ export default function contribute(client: PluginClientContext) {
       Component: TeamStatus,
     }),
     client.addComposerItem({ id: 'team-selector', Component: TeamComposerItem }),
+    client.addComposerItem({ id: 'model-selector', Component: ModelComposerItem }),
     client.addCommandCenterItem({
       id: 'open-team-panel',
       title: 'Open Team panel',

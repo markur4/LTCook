@@ -14,6 +14,7 @@ import {
   createPaseoAgentBackend,
   startPaseoHost,
 } from '../../../runtime/src/integrations/paseo.js';
+import { catalogModelAliases } from '../../../runtime/src/models/aliases.js';
 import { TeamRegistry } from '../../../runtime/src/integrations/team-loader.js';
 
 const root = path.resolve(import.meta.dir, '../../..');
@@ -258,7 +259,8 @@ const environment = {
   PI_OFFLINE: '1',
   LTCOOK_MODEL_SMART: 'fixture/test',
   LTCOOK_MODEL_SMOL: 'fixture/test',
-  LTCOOK_MODEL_PLAN: 'fixture/test',
+  LTCOOK_MODEL_EXPENSIVE: 'fixture/test',
+  LTCOOK_MODEL_TINY_LOCAL: 'fixture-model',
   LTCOOK_GUIDANCE_DIR: path.join(directory, 'guidance'),
   LTCOOK_BROWSER_ENABLED: 'false',
   LTCOOK_CODESEARCH_ENABLED: 'false',
@@ -337,6 +339,17 @@ try {
       ...(request.leaderAgentId ? { leaderAgentId: request.leaderAgentId } : {}),
     }),
   );
+  const leaderFor = (selection: string) => {
+    const { definition } = teams.resolve(selection);
+    const leader = definition.members.find((member) => member.key === definition.leaderKey);
+    assert(leader);
+    return leader;
+  };
+  api.setModelSelectionHandlers({
+    catalog: ({ teamSelection }) => catalogModelAliases(leaderFor(teamSelection), environment),
+    resolve: ({ teamSelection, workspaceRoot, alias, reasoning }) =>
+      backend.resolveSelection(workspaceRoot, leaderFor(teamSelection), alias, reasoning ?? 'none'),
+  });
   api.setPrepareSessionHandler(async (request) => {
     const snapshot = runtime!.snapshot(request.sessionId);
     const member = snapshot.definition.members.find((member) => member.key === 'leader');
@@ -350,6 +363,7 @@ try {
         workspaceRoot: request.workspaceRoot,
       },
       request.leaderAgentId,
+      request.savedModel,
     );
     return {
       env: prepared.env,

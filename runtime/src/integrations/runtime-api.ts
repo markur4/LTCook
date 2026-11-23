@@ -13,6 +13,12 @@ import { canonicalWorkspace } from '../core/workspace.js';
 import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { WorkspaceMcp } from './mcp.js';
+import { z } from 'zod';
+import { ResolvedModelSchema, type ResolvedModel } from '../models/aliases.js';
+import {
+  ModelCatalogRequestSchema,
+  type ModelCatalogResponseSchema,
+} from '../paseo-plugin/shared/models.js';
 import {
   EvalDeleteRequestSchema,
   EvalRunIdSchema,
@@ -36,6 +42,12 @@ export interface WorkspaceSessionRequest {
   shellEnvironment: Record<string, string>;
   leaderAgentId?: string;
 }
+
+const modelSelectionRequest = ModelCatalogRequestSchema.extend({
+  workspaceRoot: z.string().min(1),
+  alias: z.string().optional(),
+  reasoning: z.string().optional(),
+});
 
 export interface EvaluationExecutionScope {
   sessionId: string;
@@ -64,11 +76,22 @@ export class RuntimeApi {
     ((request: WorkspaceSessionRequest) => Promise<SessionSnapshot>) | undefined;
   private prepareSession:
     | ((
-        request: WorkspaceSessionRequest & { leaderAgentId: string },
+        request: WorkspaceSessionRequest & { leaderAgentId: string; savedModel?: ResolvedModel },
       ) => Promise<{ env: Record<string, string>; mcpServers?: Record<string, unknown> }>)
     | undefined;
   setPrepareSessionHandler(handler: NonNullable<RuntimeApi['prepareSession']>): void {
     this.prepareSession = handler;
+  }
+  private modelSelection:
+    | {
+        catalog(
+          input: z.infer<typeof ModelCatalogRequestSchema>,
+        ): z.infer<typeof ModelCatalogResponseSchema>;
+        resolve(input: z.infer<typeof modelSelectionRequest>): Promise<ResolvedModel>;
+      }
+    | undefined;
+  setModelSelectionHandlers(handlers: NonNullable<RuntimeApi['modelSelection']>): void {
+    this.modelSelection = handlers;
   }
   private lifecycle: RuntimeLifecycleIdentity | undefined;
   private shutdown: (() => Promise<void>) | undefined;
@@ -191,6 +214,8 @@ export class RuntimeApi {
           '/v1/snapshot',
           '/v1/session/open',
           '/v1/team/catalog',
+          '/v1/model/catalog',
+          '/v1/model/resolve',
           '/v1/session/list',
           '/v1/session/prepare',
           '/v1/runtime/stop',
@@ -387,6 +412,19 @@ export class RuntimeApi {
         response.writeHead(503).end('{"error":"LTCook runtime is not ready"}');
         return;
       }
+      if (request.url === '/v1/model/catalog' || request.url === '/v1/model/resolve') {
+        if (actor.kind !== 'user') {
+          response.writeHead(403).end('{"error":"user authentication required"}');
+          return;
+        }
+        if (!this.modelSelection) throw new Error('Model selection is not ready');
+        const result =
+          request.url === '/v1/model/catalog'
+            ? this.modelSelection.catalog(ModelCatalogRequestSchema.parse(parsed))
+            : await this.modelSelection.resolve(modelSelectionRequest.parse(parsed));
+        response.writeHead(200).end(JSON.stringify(result));
+        return;
+      }
       if (request.url === '/v1/session/prepare') {
         if (actor.kind !== 'user') {
           response.writeHead(403).end('{"error":"user authentication required"}');
@@ -422,6 +460,13 @@ export class RuntimeApi {
           workspaceRoot: snapshot.session.workspaceRoot,
           teamSelection: input.teamSelection,
           leaderAgentId: input.leaderAgentId!,
+          ...(Object.hasOwn(parsed, 'savedModel')
+            ? {
+                savedModel: ResolvedModelSchema.parse(
+                  (parsed as Record<string, unknown>).savedModel,
+                ),
+              }
+            : {}),
           shellEnvironment: this.startupShellEnvironment,
         });
         response.writeHead(200).end(JSON.stringify(prepared));

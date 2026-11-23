@@ -7,6 +7,7 @@ import logging
 import os
 import platform
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -54,17 +55,35 @@ def _json(url: str, *, timeout: float = 3, data: object | None = None) -> dict:
     return value
 
 
+def local_ollama_endpoint(value: str) -> str:
+    """Validate and normalize the Ollama origin used for local models.
+
+    :param value: AppRC's Ollama endpoint.
+    :return: HTTP loopback origin with an explicit port.
+    """
+    parsed = urlsplit(value.strip())
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or not parsed.port
+    ):
+        raise ValueError(
+            "Configure the Ollama endpoint as an HTTP loopback URL with a port."
+        )
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 def summarizer_readiness(
-    *,
-    environment: Mapping[str, str] | None = None,
-    pull_with: str | None = None,
-    previous: object = None,
+    *, environment: Mapping[str, str] | None = None
 ) -> dict[str, str | bool]:
-    """Probe the AppRC-configured summarizer and optionally prepare its model.
+    """Probe the AppRC-configured local model used for summarization.
 
     :param environment: Original shell environment for global AppRC resolution.
-    :param pull_with: Ollama CLI to use during explicit installation initialization.
-    :param previous: Previous setup diagnostic for the same endpoint and model.
     :return: Readiness properties independent of Bonsai preparation.
     """
     from ltcook.config.pi_config import resolve_global_config
@@ -73,58 +92,31 @@ def summarizer_readiness(
     status: dict[str, str | bool] = {"ready": False}
     try:
         settings = resolve_global_config(environment=environment).build(RuntimeSettings)
-        model = settings.summarizer_model.strip()
-        parsed = urlsplit(settings.ollama_endpoint.strip())
-        if (
-            parsed.scheme != "http"
-            or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.path not in {"", "/"}
-            or parsed.query
-            or parsed.fragment
-            or not parsed.port
-        ):
-            raise SetupError(
-                "Configure the Ollama endpoint as an HTTP loopback URL with a port."
-            )
+        model = settings.tiny_local_model.strip()
         if not model or settings.summarizer_keep_alive < -1:
             raise SetupError(
-                "Configure a summarizer model and a keep-alive of -1 or nonnegative seconds."
+                "Configure a tiny-local model and a summarizer keep-alive "
+                "of -1 or nonnegative seconds."
             )
-        endpoint = f"{parsed.scheme}://{parsed.netloc}"
+        endpoint = local_ollama_endpoint(settings.ollama_endpoint)
         status.update(endpoint=endpoint, model=model)
         installed_names = {model}
         if ":" not in model.rsplit("/", 1)[-1]:
             installed_names.add(f"{model}:latest")
 
-        def model_available() -> bool:
-            models = _json(f"{endpoint}/api/tags").get("models")
-            if not isinstance(models, list):
-                raise SetupError("Ollama returned an invalid model inventory.")
-            return any(
-                isinstance(item, dict)
-                and isinstance(name := item.get("name"), str)
-                and name in installed_names
-                for item in models
+        models = _json(f"{endpoint}/api/tags").get("models")
+        if not isinstance(models, list):
+            raise SetupError("Ollama returned an invalid model inventory.")
+        if not any(
+            isinstance(item, dict)
+            and isinstance(name := item.get("name"), str)
+            and name in installed_names
+            for item in models
+        ):
+            raise SetupError(
+                f"The tiny-local model is missing. Run `ollama pull {shlex.quote(model)}` "
+                f"against {endpoint}."
             )
-
-        ready = model_available()
-        if not ready and pull_with is not None:
-            env = dict(os.environ if environment is None else environment)
-            run(
-                [pull_with, "pull", model], environment={**env, "OLLAMA_HOST": endpoint}
-            )
-            ready = model_available()
-        if not ready:
-            if (
-                isinstance(previous, dict)
-                and previous.get("model") == model
-                and previous.get("endpoint") == endpoint
-                and isinstance(previous.get("error"), str)
-            ):
-                raise SetupError(previous["error"])
-            raise SetupError("Summarizer model is missing. Run LTCook setup or repair.")
         status["ready"] = True
     except (OSError, RuntimeError, ValueError) as error:
         status["error"] = str(error)
@@ -240,7 +232,7 @@ def prepare_ollama(appdata: Path, *, environment: dict[str, str] | None = None) 
     show = _json(f"{ENDPOINT}/api/show", data={"name": EVAL_MODEL, "verbose": False})
     if not _has_expected_context(show.get("modelfile")):
         raise SetupError("Ollama did not confirm the 65536-token Bonsai configuration.")
-    summarizer = summarizer_readiness(environment=env, pull_with=executable)
+    summarizer = summarizer_readiness(environment=env)
     if not summarizer["ready"]:
         LOG.warning("Ollama summarizer is unavailable: %s", summarizer.get("error"))
     write_json(
