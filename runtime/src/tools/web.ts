@@ -54,7 +54,7 @@ export class WebToolService {
       command: this.node,
       args: [path.join(this.appRoot, 'node_modules', 'pi-web-access', 'dist', 'mcp-cli.js')],
       env: {...this.environment, ...env} as Record<string,string>,
-      stderr: 'pipe',
+      stderr: 'inherit',
     });
     const client = new Client({name: 'ltcook-web', version: '1.0.0'});
     try {
