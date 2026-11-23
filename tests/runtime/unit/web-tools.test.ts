@@ -145,7 +145,11 @@ test.skipIf(process.platform === 'win32')(
       },
     });
     const preparer = join(root, 'prepare-native');
-    const service = new WebToolService(preparer, root, node, { PATH: process.env.PATH });
+    const service = new WebToolService(
+      preparer,
+      { command: node, entrypoint: join(root, 'runtime/dist/tools/web-mcp.js') },
+      { PATH: process.env.PATH },
+    );
     try {
       await symlink(join(repoRoot, 'node_modules'), join(root, 'node_modules'), 'dir');
       await writeFile(join(root, 'package.json'), '{"type":"module"}');

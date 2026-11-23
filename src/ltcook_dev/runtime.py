@@ -6,7 +6,6 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -48,17 +47,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     launch.environment["LTCOOK_SHELL_PROVENANCE"] = json.dumps(original_environment)
     bun = options.bun or original_environment.get("BUN") or "bun"
     os.chdir(source_root)
-    try:
-        subprocess.run(
-            [bun, "run", "--cwd", "runtime", "build:web-mcp"],
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        print(f"Cannot build the web MCP bridge: {exc}", file=sys.stderr)
-        return 127 if isinstance(exc, OSError) else exc.returncode
     command = [bun]
     if options.watch:
-        command.append("--watch")
+        command.extend(
+            (
+                "--watch",
+                "--preload",
+                "./runtime/src/watch-web-mcp.mjs",
+            )
+        )
     command.extend(("runtime/src/main.ts", *runtime_arguments))
     try:
         os.execvpe(bun, command, launch.environment)

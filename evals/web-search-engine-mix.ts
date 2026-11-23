@@ -128,7 +128,8 @@ function publicResultUrl(value: unknown): { href: string; host: string; path: st
       !['http:', 'https:'].includes(url.protocol) ||
       url.username ||
       url.password ||
-      isIP(host) ||
+      isIP(host.replace(/^\[|\]$/g, '')) ||
+      !host.includes('.') ||
       ['localhost', 'local', 'internal', 'lan', 'home.arpa'].some(
         (suffix) => host === suffix || host.endsWith(`.${suffix}`),
       )

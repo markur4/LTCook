@@ -226,8 +226,7 @@ export class WebToolService {
   private closing = false;
   constructor(
     private readonly python: string,
-    private readonly appRoot: string,
-    private readonly node: string,
+    private readonly launcher: { command: string; entrypoint: string },
     private readonly environment: NodeJS.ProcessEnv = process.env,
     private readonly sessionShell?: (sessionId: string) => Record<string, string> | undefined,
     private readonly prepareServices?: () => Promise<void>,
@@ -279,8 +278,8 @@ export class WebToolService {
     if (!env.PI_CODING_AGENT_DIR || !path.isAbsolute(env.PI_CODING_AGENT_DIR))
       throw new Error('Web tool configuration requires an absolute Pi home.');
     const transport = new StdioClientTransport({
-      command: this.node,
-      args: [path.join(this.appRoot, 'runtime', 'dist', 'tools', 'web-mcp.js')],
+      command: this.launcher.command,
+      args: [this.launcher.entrypoint],
       env: webProcessEnvironment(env, this.environment),
       stderr: 'inherit',
     });
