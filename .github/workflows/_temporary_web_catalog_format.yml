@@ -1,0 +1,30 @@
+name: Temporary format web catalog
+on:
+  push:
+    branches:
+      - feat/shared-web-tools-catalog
+permissions:
+  contents: write
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - name: Format only web catalog changes
+        run: |
+          bunx prettier --write runtime/src/tools/web.ts runtime/src/tools/catalog.ts runtime/src/core/runtime.ts runtime/src/core/planning.ts runtime/src/integrations/mcp.ts runtime/src/integrations/runtime-api.ts runtime/src/integrations/pi-extension.ts runtime/src/integrations/paseo.ts runtime/src/main.ts runtime/src/integrations/native-policy.ts tests/runtime/unit/web-tools.test.ts
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add runtime/src tests/runtime/unit/web-tools.test.ts
+            git commit -m "Format shared web catalog contracts"
+            git push
+          fi
+      - name: Typecheck runtime
+        run: bun run --cwd runtime check
