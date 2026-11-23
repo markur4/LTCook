@@ -59,6 +59,18 @@ interface VerifiedFile {
   digest: string;
 }
 
+class ColgrepCommandLimitError extends Error {
+  constructor(readonly code: 'output-limit' | 'diagnostic-limit') {
+    super(
+      code === 'output-limit'
+        ? 'ColGREP output exceeded its size limit.'
+        : 'ColGREP diagnostics exceeded their size limit.',
+    );
+  }
+}
+
+class ColgrepPatternError extends Error {}
+
 function confinedPath(root: string, relative: string): string {
   const candidate = path.resolve(root, relative);
   if (path.isAbsolute(relative) || !isWithin(root, candidate)) {
@@ -236,14 +248,14 @@ function execute(
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
       if (failure) return;
       stdoutBytes += Buffer.byteLength(chunk);
-      if (stdoutBytes > MAX_STDOUT) stop(new Error('ColGREP output exceeded its size limit.'));
+      if (stdoutBytes > MAX_STDOUT) stop(new ColgrepCommandLimitError('output-limit'));
       else stdout += chunk;
     });
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
       if (failure) return;
       stderrBytes += Buffer.byteLength(chunk);
       if (stderrBytes > MAX_STDERR) {
-        stop(new Error('ColGREP diagnostics exceeded their size limit.'));
+        stop(new ColgrepCommandLimitError('diagnostic-limit'));
         return;
       }
       stderr += chunk;
@@ -263,7 +275,7 @@ function execute(
   });
 }
 
-function searchFailure(stderr: string): Error {
+function searchFailure(stderr: string, pattern?: string): Error {
   if (
     /index lock|permission denied|read.only file system|not a directory|no space left/i.test(stderr)
   ) {
@@ -271,8 +283,8 @@ function searchFailure(stderr: string): Error {
       'ColGREP could not access its index or lock. Check AppRC cache permissions, disk space, and competing searches.',
     );
   }
-  if (/regex|regular expression|look.around/i.test(stderr)) {
-    return new Error(
+  if (pattern && /regex|regular expression|look.around/i.test(stderr)) {
+    return new ColgrepPatternError(
       'ColGREP could not search with the supplied regular expression. Check the pattern.',
     );
   }
@@ -480,7 +492,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
               'Retry when indexing finishes. If this status persists, check that AppRC cache storage supports file locking.',
             );
           } else {
-            throw searchFailure(result.stderr);
+            throw searchFailure(result.stderr, input.pattern);
           }
         } else {
           await workspace.assertUnchanged();
@@ -496,13 +508,16 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         }
       } catch (error) {
         callerSignal.throwIfAborted();
+        if (error instanceof ColgrepPatternError) throw error;
         if (!outcome.value.hits.length) {
           outcome.value.status = 'unavailable';
           outcome.freshness = 'unknown';
         }
+        const limitError = error instanceof ColgrepCommandLimitError ? error : undefined;
+        if (limitError) outcome.truncated = true;
         report(
           outcome,
-          timeout.aborted ? 'timeout' : 'unavailable',
+          timeout.aborted ? 'timeout' : (limitError?.code ?? 'unavailable'),
           timeout.aborted
             ? 'ColGREP exceeded its time limit. Retry the search.'
             : error instanceof Error

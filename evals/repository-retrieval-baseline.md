@@ -15,9 +15,9 @@ three conceptual answers. Both providers returned only valid source excerpts.
 | Conceptual mean reciprocal rank | — | 0.11 |
 | Complete empty responses for answerless questions | 2/2 | 0/2 |
 | Invalid excerpts across initial and edit checks | 0 | 0 |
-| Cold first query | 6.3 ms | 1,902 ms |
-| Warm repeat of the same query | 3.5 ms | 142 ms |
-| Native build on a separate fresh index | — | 966 ms |
+| Cold first query | 5.7 ms | 1,843 ms |
+| Warm repeat of the same query | 3.3 ms | 139 ms |
+| Native build on a separate fresh index | — | 960 ms |
 | Separate build cache size | — | 554,161 bytes |
 | Serialized first response | 308 bytes | 1,022 bytes |
 
@@ -56,11 +56,11 @@ choosing thresholds.
 
 ## Provenance
 
-- Run `9cbd52da-3919-41ff-9bd3-6a259bd9b61d`
-- Source fixture revision `9d919b`
+- Run `3465073f-90da-4b92-85f6-888335ca2cc4`
+- Source fixture revision `447477`
 - Corpus SHA-256 `f564f5a460f32064b55f25c1cc75fbdb06d59287a6728b0738a9d7a9854a7016`
 - Labels SHA-256 `3895d8fc4af7ceb2e230ce196dd974f678cff95941b50fddbcd1b9d7c952207d`
-- Implementation SHA-256 `a0436aa2a31193ae8d4dbea851e6b6b6d38cfc81bb6214819f2d8330afe1e938`
+- Implementation SHA-256 `30418a9650477ea16feace359594f2ec442380a5626b84d096cf4fb51e01329e`
 - Bun 1.4.4, ripgrep 15.2.0, ColGREP 1.8.5, and ONNX Runtime 1.23.0
 - LateOn-Code-edge revision `4bcdf5ed93f791259eb130b577a240f753d68dd8`
 

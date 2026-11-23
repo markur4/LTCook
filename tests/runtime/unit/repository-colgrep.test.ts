@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
+import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
 
 async function fixture(run: (root: string, source: string) => Promise<void>) {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), 'ltcook-retrieval-')));
@@ -39,7 +40,19 @@ test.skipIf(process.platform === 'win32')(
       await asset('library', 'asset');
       await asset(
         'colgrep',
-        `#!${process.execPath}\nconsole.log(await Bun.file(${JSON.stringify(path.join(root, 'native.json'))}).text());\n`,
+        `#!${process.execPath}
+if (process.argv.includes('--pattern=[')) {
+  console.error('regex parse error: unclosed character class');
+  process.exit(2);
+}
+if (process.argv.includes('large output')) {
+  console.log('x'.repeat(4 * 1024 * 1024 + 1));
+} else if (process.argv.includes('large diagnostics')) {
+  console.error('x'.repeat(64 * 1024 + 1));
+} else {
+  console.log(await Bun.file(${JSON.stringify(path.join(root, 'native.json'))}).text());
+}
+`,
         0o700,
       );
       await writeFile(
@@ -83,14 +96,13 @@ test.skipIf(process.platform === 'win32')(
           { unit: unit(path.join(source, 'b.ts'), longLine) },
         ]),
       );
-      const result = await createColgrepProvider({
+      const provider = createColgrepProvider({
         deploymentDirectory: root,
         cacheDirectory: path.join(root, 'cache'),
-      }).search(
-        await openRepositoryWorkspace(source),
-        { query: 'cache' },
-        new AbortController().signal,
-      );
+      });
+      const workspace = await openRepositoryWorkspace(source);
+      const signal = new AbortController().signal;
+      const result = await provider.search(workspace, { query: 'cache' }, signal);
       expect(result).toMatchObject({
         provider: 'colgrep',
         partial: true,
@@ -119,5 +131,31 @@ test.skipIf(process.platform === 'win32')(
         'invalid-hit',
       ]);
       expect(JSON.stringify(result)).not.toContain(outside);
+
+      const tool = createRepoSearchTool(provider);
+      const context = {
+        agentId: 'fixture',
+        workspaceRoot: source,
+        workspaceFileAccess: false,
+        repositorySearchAccess: true,
+        signal,
+      };
+      for (const [query, code] of [
+        ['large output', 'output-limit'],
+        ['large diagnostics', 'diagnostic-limit'],
+      ]) {
+        const unavailable = await tool.invoke({ query }, context);
+        expect(unavailable).toMatchObject({
+          status: 'unavailable',
+          partial: true,
+          truncated: true,
+          freshness: 'unknown',
+          diagnostics: [{ source: 'colgrep', code }],
+        });
+        expect(unavailable.results).toBeUndefined();
+      }
+      await expect(tool.invoke({ query: 'cache', pattern: '[' }, context)).rejects.toThrow(
+        'ColGREP could not search with the supplied regular expression.',
+      );
     }),
 );
