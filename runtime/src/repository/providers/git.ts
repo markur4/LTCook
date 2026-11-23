@@ -1,4 +1,5 @@
 import { realpath } from 'node:fs/promises';
+import { devNull } from 'node:os';
 import { isAbsolute, relative, sep } from 'node:path';
 import { isWithin } from '../../path-containment.js';
 import {
@@ -61,10 +62,10 @@ const MAX_DETAIL_ENTRIES = 128;
 const MAX_DETAIL_BYTES = 16 * 1024;
 const MAX_FILTER_DRIVERS = 24;
 const GIT_CONFIG = [
-  'core.attributesFile=/dev/null',
+  `core.attributesFile=${devNull}`,
   'core.fsmonitor=false',
   'core.untrackedCache=false',
-  'diff.orderFile=/dev/null',
+  `diff.orderFile=${devNull}`,
   'protocol.allow=never',
   'submodule.recurse=false',
 ];
@@ -330,6 +331,8 @@ export async function readGit(
           maxBytes: options.maxBytes ?? 1024 * 1024,
           env: {
             GIT_ATTR_NOSYSTEM: '1',
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: devNull,
             GIT_OPTIONAL_LOCKS: '0',
             GIT_NO_LAZY_FETCH: '1',
             GIT_NO_REPLACE_OBJECTS: '1',
