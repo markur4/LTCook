@@ -86,6 +86,7 @@ async function runFixture(
     | 'pass'
     | 'self-grading'
     | 'unavailable-grader'
+    | 'unavailable-luna'
     | 'bad-calibration'
     | 'blocked'
     | 'decision'
@@ -108,6 +109,7 @@ async function runFixture(
     fixtures.find((item) => item.source === source && item.focus === focus)!;
   const root = await mkdtemp(path.join(os.tmpdir(), 'ltcook-summary-eval-'));
   let graderCalls = 0;
+  let bonsaiInspections = 0;
   let decisionCalls = 0;
   let inventoryCalls = 0;
   const sources: string[] = [];
@@ -141,6 +143,7 @@ async function runFixture(
       for await (const chunk of request) body += chunk;
       const input = JSON.parse(body);
       if (request.url === '/api/show') {
+        if (input.model === EVAL_MODEL) bonsaiInspections++;
         const usesCandidateWeights = input.model === candidate || mode === 'self-grading';
         response.end(
           JSON.stringify({
@@ -259,6 +262,7 @@ async function runFixture(
     root,
     createEvalEngine({
       resources: root,
+      ...(mode === 'unavailable-luna' ? { codexExecutable: path.join(root, 'missing-codex') } : {}),
       summarization: {
         endpoint: 'http://127.0.0.1:' + address.port,
         model: candidate,
@@ -279,11 +283,13 @@ async function runFixture(
         'single-near-limit-failure',
         'coding-confusion',
         'profile',
+        'unavailable-luna',
       ].includes(mode)
         ? 'full'
         : 'behavior',
       scenario: 'summarization',
       setup: 'synthetic',
+      ...(mode === 'unavailable-luna' ? { summarizationGrader: 'gpt-6-luna' } : {}),
     });
     for (let i = 0; i < 1000; i++) {
       const status = await service.status(runId);
@@ -302,6 +308,7 @@ async function runFixture(
           graderCalls,
           sources,
           decisionCalls,
+          bonsaiInspections,
         };
       }
       await Bun.sleep(5);
@@ -356,6 +363,24 @@ test('same-weights grader is blocked and a confirmed omission still fails qualif
     }),
   );
   expect(report.attempts.some(({ verdict }) => verdict === 'blocked')).toBe(true);
+});
+
+test('an unavailable Luna opt-in preserves generation evidence without consulting Bonsai', async () => {
+  const { report, graderCalls, decisionCalls, bonsaiInspections } =
+    await runFixture('unavailable-luna');
+  expect(report).toMatchObject({ scope: 'full', verdict: 'blocked', complete: true });
+  expect(report.settings.grader).toMatchObject({
+    requestedModel: 'gpt-6-luna',
+    provider: 'openai-codex',
+    generation: { reasoning: 'high' },
+  });
+  expect(report.blockers).toContain('GPT-6 Luna requires a signed-in Codex CLI on PATH.');
+  expect(report.attempts).toHaveLength(21);
+  expect(report.attempts.every(({ summary }) => Boolean(summary))).toBe(true);
+  expect(report.downstream).toMatchObject({ verdict: 'blocked' });
+  expect(graderCalls).toBe(0);
+  expect(decisionCalls).toBe(0);
+  expect(bonsaiInspections).toBe(0);
 });
 
 for (const mode of ['unavailable-grader', 'bad-calibration', 'blocked'] as const) {

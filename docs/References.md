@@ -89,6 +89,7 @@ commands provide launch operations and diagnostics:
 | `ltcook eval report RUN_ID` | Show a persisted evaluation report. |
 | `ltcook eval list`, `watch`, `status`, `cancel`, `delete` | Manage shared Agent Evals runs and history. |
 | `ltcook eval run --all --setup synthetic --case summarization` | Run full summarization qualification for the configured local summarizer. A failed or blocked verdict exits with status 1. |
+| `ltcook eval run --case summarization --summarization-grader gpt-6-luna` | Opt into OpenAI GPT-6 Luna with high reasoning for grading and, with `--all`, the rollout decisions. Requires a signed-in Codex CLI on PATH. |
 | `ltcook eval report RUN_ID --json` | Print the structured Agent Evals report, including fixed-fixture summaries and evidence when summarization ran. |
 | `python -m ltcook.launch runtime [--workspace ROOT]` | Internal module entry point for the same global or project launch. |
 | `python -m ltcook.launch environment --workspace ROOT` | Emit raw workspace-specific child environment JSON; may contain secrets. |

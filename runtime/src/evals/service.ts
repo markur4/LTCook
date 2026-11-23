@@ -26,6 +26,7 @@ import {
   type EvalReportResponse,
   type EvalScenario,
   type EvalSummary,
+  type SummarizationGrader,
 } from './contracts.js';
 
 type EvalMetadata = Partial<
@@ -109,6 +110,7 @@ export type EvalEngine = (input: {
   checkpoint?(output: EvalOutput): Promise<void>;
   repetitions?: number;
   scenario?: EvalScenario;
+  summarizationGrader?: SummarizationGrader;
   timingHardware?: string;
   budget?(identity: EvalTimingIdentity): EvalBudget;
   learned?(
@@ -307,6 +309,7 @@ export class EvalRunService {
         staticOnly: summary.staticOnly,
         repetitions: request.repetitions,
         scenario: request.scenario,
+        summarizationGrader: request.summarizationGrader,
         timingHardware: hardware,
         budget: (identity) => this.budget(identity),
         learned: async (identity, sample) => {

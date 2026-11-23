@@ -4,8 +4,10 @@ import {
   EvalPresetSchema,
   EvalSetupSchema,
   EvalScenarioSchema,
+  SummarizationGraderSchema,
   summarizationScope,
   type EvalScenario,
+  type SummarizationGrader,
 } from '../runtime/src/evals/contracts.js';
 import { createEvalEngine } from '../runtime/src/evals/engine.js';
 import { EvalRunService } from '../runtime/src/evals/service.js';
@@ -14,11 +16,14 @@ import { resolveEvaluationContext } from '../runtime/src/evals/setup.js';
 const [setupInput, presetInput, stateInput, ...argumentsInput] = process.argv.slice(2);
 let workspaceRoot: string | undefined;
 let scenario: EvalScenario | undefined;
+let summarizationGrader: SummarizationGrader | undefined;
 let repetitions = 1;
 for (let index = 0; index < argumentsInput.length; index++) {
   const argument = argumentsInput[index]!;
   if (argument === '--case') {
     scenario = EvalScenarioSchema.parse(argumentsInput[++index]);
+  } else if (argument === '--summarization-grader') {
+    summarizationGrader = SummarizationGraderSchema.parse(argumentsInput[++index]);
   } else if (argument === '--repetitions') {
     repetitions = Number(argumentsInput[++index]);
     if (!Number.isSafeInteger(repetitions) || repetitions < 1)
@@ -28,7 +33,7 @@ for (let index = 0; index < argumentsInput.length; index++) {
 }
 if (!setupInput || !presetInput || !stateInput)
   throw new Error(
-    'Usage: bun evals/evaluation-live.ts current|synthetic quick|audit|behavior|bottlenecks|full PRIVATE_STATE_DIRECTORY [REGISTERED_WORKSPACE] [--case read-only|no-op|targeted-fix|summarization] [--repetitions N]',
+    'Usage: bun evals/evaluation-live.ts current|synthetic quick|audit|behavior|bottlenecks|full PRIVATE_STATE_DIRECTORY [REGISTERED_WORKSPACE] [--case read-only|no-op|targeted-fix|summarization] [--repetitions N] [--summarization-grader gpt-6-luna]',
   );
 const setup = EvalSetupSchema.parse(setupInput);
 const preset = EvalPresetSchema.parse(presetInput);
@@ -36,8 +41,8 @@ const root = path.resolve(import.meta.dir, '..');
 const state = path.resolve(stateInput);
 const python = path.join(root, '.venv/bin/python');
 const teamSelection = process.env.LTCOOK_TEAM ?? 'default-minimal';
-const summarization = summarizationScope({ preset, scenario })
-  ? resolveEvaluationContext({ python, setup: 'current', teamSelection }).summarization
+const context = summarizationScope({ preset, scenario })
+  ? resolveEvaluationContext({ python, setup: 'current', teamSelection })
   : undefined;
 const service = new EvalRunService(
   state,
@@ -46,7 +51,7 @@ const service = new EvalRunService(
     appRoot: root,
     python,
     teamSelection,
-    summarization,
+    summarization: context?.summarization,
   }),
 );
 await service.initialize();
@@ -61,6 +66,7 @@ try {
     preset,
     repetitions,
     ...(scenario ? { scenario } : {}),
+    ...(summarizationGrader ? { summarizationGrader } : {}),
     ...(workspaceRoot ? { workspaceRoot } : {}),
   });
   let current;

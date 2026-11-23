@@ -137,7 +137,9 @@ All notable changes to `ltcook` will be documented in this file.
   qualification verdict and provide a focused full qualification run.
   Full qualification covers both rollout decisions, a coding handoff, and
   three near-limit attempts. An opt-in Pi utility comparison reports the
-  cost and correctness of reading directly and using a summary.
+  cost and correctness of reading directly and using a summary. Focused
+  summarization runs can opt into GPT-6 Luna with high reasoning for grading
+  and rollout decisions.
 
 - Add workspace inventory and local Ollama summarization over authenticated MCP
   for ordinary Pi and Codex chats in Paseo.

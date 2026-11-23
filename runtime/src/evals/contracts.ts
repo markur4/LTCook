@@ -7,6 +7,8 @@ export const EvalPresetSchema = z.enum(['quick', 'audit', 'behavior', 'bottlenec
 export type EvalPreset = z.infer<typeof EvalPresetSchema>;
 export const EvalScenarioSchema = z.enum(['read-only', 'no-op', 'targeted-fix', 'summarization']);
 export type EvalScenario = z.infer<typeof EvalScenarioSchema>;
+export const SummarizationGraderSchema = z.literal('gpt-6-luna');
+export type SummarizationGrader = z.infer<typeof SummarizationGraderSchema>;
 export const SummarizationQualificationSchema = z.enum(['passed', 'failed', 'blocked']);
 export type SummarizationQualification = z.infer<typeof SummarizationQualificationSchema>;
 
@@ -40,6 +42,7 @@ export const EvalStartRequestSchema = z
     staticOnly: z.boolean().optional(),
     repetitions: z.number().int().positive().default(1),
     scenario: EvalScenarioSchema.optional(),
+    summarizationGrader: SummarizationGraderSchema.optional(),
     environmentOverrides: EvalEnvironmentOverridesSchema.optional(),
   })
   .refine((input) => !input.staticOnly || input.preset === 'audit', {
@@ -59,6 +62,9 @@ export const EvalStartRequestSchema = z
   )
   .refine((input) => !input.environmentOverrides || input.setup === 'current', {
     message: 'Environment overrides require Current Setup',
+  })
+  .refine((input) => !input.summarizationGrader || input.scenario === 'summarization', {
+    message: 'Selecting a summarization grader requires the summarization case',
   });
 export type EvalStartRequest = z.input<typeof EvalStartRequestSchema>;
 

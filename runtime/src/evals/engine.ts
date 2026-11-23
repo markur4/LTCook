@@ -43,6 +43,7 @@ type EngineOptions = {
   context?: EvaluationContext;
   endpoint?: string;
   summarization?: OllamaSettings;
+  codexExecutable?: string;
 };
 
 type EvaluationAttempt = Omit<EvaluationResult, 'trace'> & {
@@ -67,6 +68,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
     progress,
     repetitions = 1,
     scenario: selectedScenario,
+    summarizationGrader,
     checkpoint,
     budget,
     learned,
@@ -105,6 +107,8 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
           scope,
           code: summarizationCode,
           settings: options.summarization,
+          summarizationGrader,
+          codexExecutable: options.codexExecutable,
           directory: path.join(temporary, 'summarization'),
           signal,
           async onProgress(candidate, current) {

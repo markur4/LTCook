@@ -14,7 +14,7 @@ import {
   SUMMARY_INSTRUCTIONS,
   summaryInputLimit,
 } from '../tools/summarize.js';
-import type { SummarizationQualification } from './contracts.js';
+import type { SummarizationGrader, SummarizationQualification } from './contracts.js';
 import { sanitizeEvaluationText } from './diagnostics.js';
 import {
   DECISION_INSTRUCTIONS,
@@ -33,6 +33,7 @@ import {
 } from './summarization-fixtures.js';
 import {
   calibrationMatches,
+  createLunaGrader,
   GRADER_INSTRUCTIONS,
   GRADER_KEEP_ALIVE,
   GRADER_OPTIONS,
@@ -40,6 +41,7 @@ import {
   gradingModelsIndependent,
   inspectEvaluationModel,
   listEvaluationModels,
+  LUNA_GRADER,
   modelTag,
   ticketIdPattern,
   type ModelIdentity,
@@ -103,13 +105,19 @@ export type SummarizationReport = {
     grader: {
       requestedModel: string;
       promptSha256: string;
-      generation: typeof GRADER_OPTIONS;
-      keepAlive: number;
+    } & (
+      | { generation: typeof GRADER_OPTIONS; keepAlive: number }
+      | { provider: typeof LUNA_GRADER.provider; generation: { reasoning: 'high' } }
+    );
+    decision?: {
+      promptSha256: string;
+      maxTokens?: number;
+      thinking: 'off' | 'high';
+      temperature?: 0;
     };
-    decision?: { promptSha256: string; maxTokens: number; thinking: 'off'; temperature: 0 };
   };
   summarizer?: ModelIdentity;
-  grader?: ModelIdentity;
+  grader?: ModelIdentity | { name: string; provider: typeof LUNA_GRADER.provider };
   calibration: Calibration[];
   attempts: Attempt[];
   downstream?: { verdict: SummarizationQualification; cases: Decision[] };
@@ -193,6 +201,8 @@ export function captureSummarizationCode(): SummarizationReport['code'] {
 
 export async function evaluateSummarization(input: {
   settings?: OllamaSettings;
+  summarizationGrader?: SummarizationGrader;
+  codexExecutable?: string;
   scope: 'core' | 'full';
   directory: string;
   signal: AbortSignal;
@@ -201,6 +211,8 @@ export async function evaluateSummarization(input: {
 }): Promise<SummarizationReport> {
   const { settings, scope, directory, signal, code, onProgress } = input;
   const full = scope === 'full';
+  const useLuna = input.summarizationGrader === LUNA_GRADER.model;
+  const graderLabel = useLuna ? 'GPT-6 Luna' : 'Bonsai';
   const started = performance.now();
   let generation: SummaryGeneration | undefined;
   let configurationError: string | undefined;
@@ -240,18 +252,26 @@ export async function evaluateSummarization(input: {
         retryIncompleteWithoutReasoning: settings && retriesSummaryWithoutReasoning(settings),
       },
       grader: {
-        requestedModel: EVAL_MODEL,
+        requestedModel: useLuna ? LUNA_GRADER.model : EVAL_MODEL,
         promptSha256: hash(GRADER_INSTRUCTIONS),
-        generation: GRADER_OPTIONS,
-        keepAlive: GRADER_KEEP_ALIVE,
+        ...(useLuna
+          ? {
+              provider: LUNA_GRADER.provider,
+              generation: { reasoning: LUNA_GRADER.reasoning },
+            }
+          : { generation: GRADER_OPTIONS, keepAlive: GRADER_KEEP_ALIVE }),
       },
       ...(full
         ? {
             decision: {
               promptSha256: hash(DECISION_INSTRUCTIONS),
-              maxTokens: DECISION_MAX_TOKENS,
-              temperature: 0,
-              thinking: 'off',
+              ...(useLuna
+                ? { thinking: LUNA_GRADER.reasoning }
+                : {
+                    maxTokens: DECISION_MAX_TOKENS,
+                    temperature: 0 as const,
+                    thinking: 'off' as const,
+                  }),
             },
           }
         : {}),
@@ -288,6 +308,18 @@ export async function evaluateSummarization(input: {
   }
   const { endpoint } = settings;
   const list = () => listEvaluationModels(endpoint, signal);
+  let localGrader: ModelIdentity | undefined;
+  let luna: Awaited<ReturnType<typeof createLunaGrader>> | undefined;
+  await mkdir(directory, { recursive: true });
+  if (useLuna) {
+    try {
+      luna = await createLunaGrader(directory, signal, input.codexExecutable);
+      report.grader = { name: LUNA_GRADER.model, provider: LUNA_GRADER.provider };
+    } catch (error) {
+      signal.throwIfAborted();
+      report.blockers.push(errorReason(error));
+    }
+  }
   try {
     const inventory = await list();
     const inspect = (name: string) => {
@@ -296,21 +328,26 @@ export async function evaluateSummarization(input: {
     };
     const [summarizer, grader] = await Promise.allSettled([
       inspect(settings.model),
-      inspect(EVAL_MODEL),
+      useLuna ? undefined : inspect(EVAL_MODEL),
     ]);
     signal.throwIfAborted();
     if (summarizer.status === 'fulfilled') report.summarizer = summarizer.value;
-    if (grader.status === 'fulfilled') report.grader = grader.value;
+    if (!useLuna && grader.status === 'fulfilled') {
+      localGrader = grader.value;
+      report.grader = localGrader;
+    }
     if (!report.summarizer) report.blockers.push('The summarizer identity could not be resolved.');
-    if (!report.grader) report.blockers.push('The Bonsai grader identity could not be resolved.');
+    if (!useLuna && !localGrader)
+      report.blockers.push('The Bonsai grader identity could not be resolved.');
   } catch {
     signal.throwIfAborted();
     report.blockers.push('Ollama model identities could not be resolved.');
   }
-  const grader = report.grader;
   const summarizer = report.summarizer;
-  const independent = Boolean(grader && summarizer && gradingModelsIndependent(summarizer, grader));
-  if (grader && summarizer && !independent)
+  const grader = luna ?? (localGrader ? { endpoint, model: localGrader } : undefined);
+  const independent =
+    summarizer && (luna || (localGrader && gradingModelsIndependent(summarizer, localGrader)));
+  if (localGrader && summarizer && !independent)
     report.blockers.push('The grader and summarizer weights could not be verified as independent.');
 
   const fixtures = full
@@ -326,7 +363,6 @@ export async function evaluateSummarization(input: {
       }),
     ),
   );
-  await mkdir(directory, { recursive: true });
   if (full) {
     cases.push({ fixture: FILE_SUMMARIZATION_CASE, attempt: 1, input: 'file' });
     await writeFile(path.join(directory, 'fixture-notes.txt'), FILE_SUMMARIZATION_CASE.source);
@@ -393,7 +429,7 @@ export async function evaluateSummarization(input: {
   if (independent && grader) {
     for (const example of SUMMARIZATION_CALIBRATION) {
       signal.throwIfAborted();
-      await update('Calibrating Bonsai · ' + example.id);
+      await update('Calibrating ' + graderLabel + ' · ' + example.id);
       const result: Calibration = {
         id: example.id,
         set: example.set,
@@ -403,8 +439,7 @@ export async function evaluateSummarization(input: {
       };
       try {
         result.grading = await gradeSummary({
-          endpoint,
-          model: grader,
+          grader,
           fixture: example.document,
           summary: example.summary,
           signal,
@@ -420,7 +455,8 @@ export async function evaluateSummarization(input: {
       await update();
     }
     calibrated = report.calibration.every(({ verdict }) => verdict === 'passed');
-    if (!calibrated) report.blockers.push('Bonsai did not pass all grader calibration examples.');
+    if (!calibrated)
+      report.blockers.push(graderLabel + ' did not pass all grader calibration examples.');
   }
 
   for (const { fixture, result } of generated) {
@@ -429,8 +465,7 @@ export async function evaluateSummarization(input: {
       await update('Grading · ' + fixture.id);
       try {
         result.grading = await gradeSummary({
-          endpoint,
-          model: grader,
+          grader,
           fixture,
           summary: result.summary!,
           signal,
@@ -461,15 +496,26 @@ export async function evaluateSummarization(input: {
         attribution: 'unresolved',
       };
       decisions.push(downstream);
-      if (source?.summary && grader) {
-        const decide = (summary: string, name: string) =>
-          decideFromSummary({
+      if (source?.summary && (luna || localGrader)) {
+        const selectedLuna = luna;
+        const selectedLocalModel = localGrader?.name;
+        const decide = async (summary: string, name: string) => {
+          if (selectedLuna) {
+            const response = await selectedLuna.complete(
+              DECISION_INSTRUCTIONS,
+              JSON.stringify({ summary }),
+              signal,
+            );
+            return { ...response, decision: response.content, incomplete: false };
+          }
+          return decideFromSummary({
             endpoint,
-            model: grader.name,
+            model: selectedLocalModel!,
             directory: path.join(directory, fixture.id, name),
             summary,
             signal,
           });
+        };
         try {
           await update('Behavior Evaluation · ' + fixture.id);
           downstream.candidate = await decide(source.summary, 'candidate');
@@ -479,8 +525,8 @@ export async function evaluateSummarization(input: {
           } else {
             downstream.verdict = 'failed';
             downstream.reason = downstream.candidate.incomplete
-              ? 'The native Pi candidate response did not complete.'
-              : `The native Pi agent did not return the required ${expected} decision.`;
+              ? 'The candidate decision response did not complete.'
+              : `The decision model did not return the required ${expected} decision.`;
             try {
               const control = await decide(controlSummary, 'control');
               downstream.control = control;
@@ -506,13 +552,12 @@ export async function evaluateSummarization(input: {
           signal.throwIfAborted();
           downstream.reason = errorReason(error);
         }
-      } else
-        downstream.reason = 'The fixed-fixture summary or local decision model was unavailable.';
+      } else downstream.reason = 'The fixed-fixture summary or decision model was unavailable.';
       await update();
     }
   }
 
-  if (summarizer || grader) {
+  if (summarizer || localGrader) {
     try {
       const inventory = await list();
       const changed = (model: ModelIdentity | undefined) =>
@@ -521,7 +566,7 @@ export async function evaluateSummarization(input: {
           ({ name, digest }) => modelTag(name) === modelTag(model.name) && digest === model.digest,
         );
       const summarizerChanged = changed(summarizer);
-      const graderChanged = changed(grader);
+      const graderChanged = changed(localGrader);
       const summarizerReason = 'The summarizer identity changed during evaluation.';
       const graderReason = 'The Bonsai identity changed during evaluation.';
       if (summarizerChanged) {

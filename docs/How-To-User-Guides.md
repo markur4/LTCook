@@ -216,9 +216,9 @@ ltcook eval cancel RUN_ID
 ltcook eval delete RUN_ID
 ```
 
-Static Instruction Audit works without Ollama. LLM-dependent evaluations require
-local Ollama and the prepared Bonsai model; they never select another model when
-it is unavailable. Existing installations prepared for another model need the normal
+Static Instruction Audit works without Ollama. The team Behavior Evaluation and
+semantic Instruction Audit require local Ollama and the prepared Bonsai model.
+Existing installations prepared for another model need the normal
 setup or repair flow to prepare Bonsai. `ollama ps` shows the context and GPU
 allocation while the model is loaded. Behavior Evaluation uses full instructions in the selected setup. It runs the
 read-only, no-op and targeted-fix agent cases once each unless `--case` selects
@@ -242,6 +242,14 @@ diagnostics panel choose **Synthetic Setup**, **Summarization only**, then
 **Run full qualification**. The command exits unsuccessfully for both failed
 and blocked qualification. Use `ltcook eval report RUN_ID --json` or the panel's
 structured data to inspect fixed-fixture summaries, evidence, and model versions.
+
+Add `--summarization-grader gpt-6-luna` to a CLI run with
+`--case summarization` to use hosted GPT-6 Luna with high reasoning for grading
+and the full qualification rollout decisions. This requires a signed-in
+Codex CLI on PATH. Only the fixed fixtures and
+the summaries generated from them are sent to OpenAI. Candidate generation
+still uses the AppRC-configured local Ollama model. If Luna is unavailable,
+semantic grading is blocked.
 
 Bottleneck Attribution uses the timings and traces from the same executions;
 it does not repeat the agent's work just to measure time. Instruction Audit is

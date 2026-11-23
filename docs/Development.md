@@ -208,8 +208,9 @@ handoff. Model storage stays under Ollama's own platform-specific location.
 Windows and macOS installation behavior requires verification on those platforms.
 
 Agent Evals uses the shared installed CLI and Paseo run service. Static audit
-needs no model; LLM-dependent runs require the prepared local Bonsai model
-`ltcook-bonsai-2-27b-ctx65536:latest` and do not install or pull models.
+needs no model. Team Behavior Evaluation and semantic Instruction Audit use the
+prepared local Bonsai model `ltcook-bonsai-2-27b-ctx65536:latest`. Evaluation
+runs use models that are already available.
 If the configured model is missing, setup uses `bonsai-2:27b` to create it with
 `num_ctx` set to 65,536, pulling the base tag if needed. Once the configured model
 exists, setup and `ltcook app doctor` work with that tag alone.
@@ -266,8 +267,8 @@ deterministic evidence validation, file access, and Ollama failures.
 
 Run `ltcook eval run --all --setup synthetic --case summarization` for changes
 to the recommended summarizer, its prompt, generation settings, or preparation
-of input. The report identifies the configured model and Bonsai grader by
-their resolved tags and digests. It includes a code fingerprint, hashes for
+of input. The report identifies local models by their resolved tags and
+digests. It includes a code fingerprint, hashes for
 the fixtures and prompts, effective settings, individual results, fixed-fixture
 summaries and quotations, latency, and token counts when available. Concision
 and readability are separate from the required-fact verdict.
@@ -291,9 +292,16 @@ The near-limit fixture measures the effective tool budget for the configured
 context and focus. Compare runs with different context settings using that budget
 and the recorded fixture hash. See the [first full LFM3 baseline](../evals/summarization-baseline.md).
 
-Each run checks Bonsai against development and held-out fixtures with fixed
+Add `--summarization-grader gpt-6-luna` to opt into hosted OpenAI grading and
+downstream decisions at high reasoning. The report identifies the hosted
+provider, model, and reasoning setting. The opt-in also works with the source
+runner, `bun evals/evaluation-live.ts synthetic full STATE_DIRECTORY --case summarization --summarization-grader gpt-6-luna`.
+It uses the signed-in Codex CLI on PATH for both grading and rollout decisions.
+Codex receives only fixed fixture inputs and candidate summaries from LTCook.
+
+Each run checks the selected grader against development and held-out fixtures with fixed
 expected judgments. Keep the held-out cases separate when refining the grading prompt.
-Calibration requires Bonsai to flag the expected claims and cite their wording.
+Calibration requires the grader to flag the expected claims and cite their wording.
 Evidence validation checks each required fact against its supplied quotation.
 For ticket IDs explicitly marked in the fixture, qualification accepts a Unicode
 hyphen or nonbreaking hyphen in place of the ASCII hyphen. Other exact values,

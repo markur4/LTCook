@@ -393,7 +393,16 @@ def test_cli_exits_unsuccessfully_when_summarization_not_qualified(
     monkeypatch.setattr(cli, "_call", call)
     result = CliRunner().invoke(
         cli.eval_cli,
-        ["run", "--all", "--case", "summarization", "--setup", "synthetic"],
+        [
+            "run",
+            "--all",
+            "--case",
+            "summarization",
+            "--setup",
+            "synthetic",
+            "--summarization-grader",
+            "gpt-6-luna",
+        ],
     )
     assert result.exit_code == (0 if verdict == "passed" else 1), result.output
     assert "Agent Evals · COMPLETED" in result.output
@@ -404,3 +413,4 @@ def test_cli_exits_unsuccessfully_when_summarization_not_qualified(
     assert route == "/v1/evals/start"
     assert params["preset"] == "full"
     assert params["scenario"] == "summarization"
+    assert params["summarizationGrader"] == "gpt-6-luna"

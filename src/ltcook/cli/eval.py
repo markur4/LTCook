@@ -72,6 +72,10 @@ class EvalSetup(StrEnum):
     synthetic = "synthetic"
 
 
+class SummarizationGrader(StrEnum):
+    luna = "gpt-6-luna"
+
+
 def _runtime():
     shell = _shell_environment(os.environ)
     launch = resolve_launch(None, original_environment=shell)
@@ -286,6 +290,7 @@ def _start_and_follow(
     static_only: bool = False,
     repetitions: int = 1,
     scenario: EvalCase | None = None,
+    summarization_grader: SummarizationGrader | None = None,
 ) -> None:
     try:
         environment, _ = _runtime()
@@ -303,6 +308,8 @@ def _start_and_follow(
         }
         if scenario is not None:
             request["scenario"] = scenario.value
+        if summarization_grader is not None:
+            request["summarizationGrader"] = summarization_grader.value
         if workspace is not None:
             request["workspaceRoot"] = str(workspace.root)
         if setup == EvalSetup.current:
@@ -348,6 +355,13 @@ def run(
     case: Annotated[
         EvalCase | None, typer.Option("--case", help="Run one selected case.")
     ] = None,
+    summarization_grader: Annotated[
+        SummarizationGrader | None,
+        typer.Option(
+            "--summarization-grader",
+            help="Use hosted GPT-6 Luna with high reasoning for fixed summarization fixtures.",
+        ),
+    ] = None,
 ):
     """Run Behavior Evaluation with full instructions and report Bottleneck Attribution."""
     if all_categories and (quick or behavior_only):
@@ -358,11 +372,16 @@ def run(
         raise typer.BadParameter("--quick and --behavior-only cannot be combined.")
     if quick and case is not None:
         raise typer.BadParameter("--quick and --case cannot be combined.")
+    if summarization_grader is not None and case != EvalCase.summarization:
+        raise typer.BadParameter(
+            "--summarization-grader requires --case summarization."
+        )
     _start_and_follow(
         "full" if all_categories else "quick" if quick else "behavior",
         setup=setup,
         repetitions=repetitions,
         scenario=case,
+        summarization_grader=summarization_grader,
     )
 
 
