@@ -1,5 +1,8 @@
 import { expect, test } from 'bun:test';
-import { gradeRepositoryCitations } from '../../../evals/repository-citations.js';
+import {
+  firstVerifiedCitationMs,
+  gradeRepositoryCitations,
+} from '../../../evals/repository-citations.js';
 import { gradeRepositoryRetrieval } from '../../../evals/repository-retrieval.js';
 import type { RetrievalQuestion } from '../../../evals/repository-retrieval-fixtures.js';
 import type { RepositoryRetrieval } from '../../../runtime/src/repository/results.js';
@@ -48,6 +51,23 @@ test('agent citations can combine adjacent verified hits but cannot span a gap',
       files,
     ),
   ).toMatchObject({ supported: [], missing: [site] });
+});
+
+test('citation timing uses reply completion and waits for every cited line', () => {
+  const site = question.expected[0]!;
+  const citation = { ...site, endLine: 3 };
+  const declaration = { ...site, excerpt: 'export function allocate() {' };
+  const body = { ...site, startLine: 3, endLine: 3, excerpt: '  return 42;' };
+  const replies = [
+    { elapsedMs: 30, hits: [body] },
+    { elapsedMs: 10, hits: [{ ...body, excerpt: '  return 41;' }] },
+    { elapsedMs: 20, hits: [declaration] },
+  ];
+
+  expect(firstVerifiedCitationMs([citation], [site], replies, files)).toBe(30);
+  expect(firstVerifiedCitationMs([citation], [site], replies.slice(1), files)).toBeNull();
+  expect(firstVerifiedCitationMs([], [site], replies, files)).toBeNull();
+  expect(firstVerifiedCitationMs([citation], [], replies, files)).toBeNull();
 });
 
 function result(hits: RepositoryRetrieval['value']['hits']): RepositoryRetrieval {

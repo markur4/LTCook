@@ -12,7 +12,7 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolDefinition, ToolContext } from '../tools/types.js';
-import { REPO_SEARCH_TOOL_NAME } from '../tools/repo-search.js';
+import { isRepositoryTool } from '../paseo-plugin/shared/workspace-tools.js';
 import type { WebToolService } from '../tools/web.js';
 
 type Grant = {
@@ -60,7 +60,7 @@ export class WorkspaceMcp {
         description,
         inputSchema,
         outputSchema,
-        ...(name === REPO_SEARCH_TOOL_NAME
+        ...(isRepositoryTool(name)
           ? { annotations: { readOnlyHint: true, openWorldHint: false } }
           : {}),
       }),
@@ -149,7 +149,7 @@ export class WorkspaceMcp {
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: grant.repositorySearchAccess
         ? this.catalog
-        : this.catalog.filter(({ name }) => name !== REPO_SEARCH_TOOL_NAME),
+        : this.catalog.filter(({ name }) => !isRepositoryTool(name)),
     }));
     server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal }) => {
       try {
@@ -161,7 +161,7 @@ export class WorkspaceMcp {
           throw new Error('The authorized workspace is no longer available.');
         }
         const tool = this.tools.get(params.name);
-        if (!tool || (params.name === REPO_SEARCH_TOOL_NAME && !grant.repositorySearchAccess))
+        if (!tool || (isRepositoryTool(params.name) && !grant.repositorySearchAccess))
           throw new Error('Unknown LTCook tool.');
         const output = await tool.invoke(params.arguments ?? {}, {
           agentId: grant.agentId,

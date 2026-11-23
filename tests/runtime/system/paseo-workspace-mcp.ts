@@ -92,10 +92,11 @@ const provider = createServer(async (request, response) => {
       assert(
         tool === 'ltcook_ried'
           ? returned.includes(workspace) && returned.includes('workspaceRoot')
-          : tool === 'ltcook_repo_search'
+          : tool === 'ltcook_repo_search' || tool === 'ltcook_repo_locate'
             ? returned.includes('checksum.ts') &&
               returned.includes('computeReleaseChecksum') &&
-              returned.includes(marker.endsWith('_ripgrep') ? 'ripgrep' : 'colgrep')
+              returned.includes(marker.endsWith('_ripgrep') ? 'ripgrep' : 'colgrep') &&
+              (tool !== 'ltcook_repo_locate' || returned.includes('searches'))
             : returned.includes(summary) && returned.includes(summaryModel),
         `Tool result was not returned in ${marker}: ${returned.slice(0, 500)}`,
       );
@@ -297,14 +298,19 @@ async function exercise(
   agent: Awaited<ReturnType<NonNullable<typeof host>['api']['agents']['create']>>,
   phase: string,
   toolInput?:
-    { path: string } | { text: string } | { query: string; mode?: 'exact'; pattern?: string },
+    | { path: string }
+    | { text: string }
+    | { symbol: string }
+    | { query: string; mode?: 'exact'; pattern?: string },
 ) {
   tool =
-    toolInput && 'query' in toolInput
-      ? 'ltcook_repo_search'
-      : toolInput
-        ? 'ltcook_summarize'
-        : 'ltcook_ried';
+    toolInput && 'symbol' in toolInput
+      ? 'ltcook_repo_locate'
+      : toolInput && 'query' in toolInput
+        ? 'ltcook_repo_search'
+        : toolInput
+          ? 'ltcook_summarize'
+          : 'ltcook_ried';
   argumentsJson = JSON.stringify(toolInput ?? { operation: 'summary' });
   marker = `call_${phase}`;
   const before = calls;
@@ -332,6 +338,8 @@ try {
     config: { provider: `pi/fixture/${model}` },
   });
   await exercise(ordinaryPi, 'pi_fresh');
+  if (Bun.which('rg'))
+    await exercise(ordinaryPi, 'pi_locate_ripgrep', { symbol: 'computeReleaseChecksum' });
   if (verifyColgrep)
     await exercise(ordinaryPi, 'pi_searches_repository', {
       query: 'calculate the release checksum',
@@ -342,6 +350,8 @@ try {
     config: { provider: `codex/${model}` },
   });
   await exercise(ordinaryCodex, 'codex_fresh');
+  if (Bun.which('rg'))
+    await exercise(ordinaryCodex, 'codex_locate_ripgrep', { symbol: 'computeReleaseChecksum' });
   if (Bun.which('rg'))
     await exercise(ordinaryCodex, 'codex_searches_ripgrep', {
       query: 'computeReleaseChecksum',

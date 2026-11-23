@@ -25,7 +25,7 @@ import { CoordinationStore } from '../storage/coordination.js';
 import { canonicalWorkspace } from './workspace.js';
 import type { RiedService } from '../repository/discovery.js';
 import type { RiedRequest } from '../repository/requests.js';
-import { REPO_SEARCH_TOOL_NAME } from '../tools/repo-search.js';
+import { REPOSITORY_TOOL_NAMES } from '../paseo-plugin/shared/workspace-tools.js';
 
 type RuntimeOptions = {
   databasePath: string;
@@ -1358,7 +1358,7 @@ Task to register: ${input.description}`,
         'code_fetch',
         'ltcook_team',
         'ltcook_ried',
-        REPO_SEARCH_TOOL_NAME,
+        ...REPOSITORY_TOOL_NAMES,
         'web_enable',
       ].includes(toolName)
     )

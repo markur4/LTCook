@@ -1,4 +1,4 @@
-import { REPO_SEARCH_TOOL_NAME } from '../tools/repo-search.js';
+import { REPOSITORY_TOOL_NAMES } from '../paseo-plugin/shared/workspace-tools.js';
 const READ_ONLY_TOOLS = new Set([
   'read',
   'grep',
@@ -11,7 +11,7 @@ const READ_ONLY_TOOLS = new Set([
   'code_fetch',
   'ltcook_team',
   'ltcook_ried',
-  REPO_SEARCH_TOOL_NAME,
+  ...REPOSITORY_TOOL_NAMES,
   'web_enable',
   'ltcook_web_search',
   'ltcook_web_fetch',

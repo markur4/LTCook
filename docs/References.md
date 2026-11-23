@@ -469,6 +469,31 @@ LTCook setup installs ColGREP 1.8.5, ONNX Runtime 1.23.0, and the
 search only. Repeat [LTCook setup](How-To-User-Guides.md#install-from-a-checkout)
 for your installation to restore the managed assets.
 
+#### Repository Locate
+
+`ltcook_repo_locate` uses the same repository-search grant and evidence checks
+as `ltcook_repo_search`. Supply exactly one nonempty, single-line `symbol` or
+`query`. Optional literal, workspace-relative `paths` constrain every search.
+
+| Input | Search stages |
+| --- | --- |
+| `symbol` | One exact ripgrep search. |
+| `query` | One ColGREP hybrid search, followed by at most one exact ripgrep search. |
+
+The follow-up uses the first ranked hit with a simple identifier that occurs
+as a whole identifier in its verified, unclipped excerpt. Each search uses the
+eight-result default. The ordered `searches` repeat the original search status,
+provider, diagnostics, and evidence fields and identify the `mode` and `query`.
+Use the excerpts to decide which locations establish a definition, caller, or
+test. A search may return a valid mention that establishes none of those roles.
+
+`followUp` is `not-needed` for a symbol request, `attempted` after an exact
+follow-up returns an outcome, and `no-verified-symbol` when ranked evidence
+contains no eligible name. `initial-unavailable` covers an initial indexing or
+unavailable outcome. `failed` covers a follow-up that failed before returning
+a search outcome. `deadline` identifies work interrupted by the overall search
+deadline. Completed searches remain available in partial responses.
+
 Web tools resolve the authorized workspace's AppRC settings. Search uses
 SearXNG and URL retrieval uses the HTTP/Crawl4AI settings.
 
