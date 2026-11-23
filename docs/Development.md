@@ -522,6 +522,9 @@ requests, context size, and elapsed times without making them task-success
 requirements. These live comparisons are opt-in. Normal CI type-checks the
 scripts and runs the deterministic graders.
 
+See the [Repository Intelligence evaluation report](../evals/repository-intelligence-report.md)
+for the measured results and coverage gaps.
+
 ## Asset packaging
 
 `src/ltcook_dev/packaging/package_assets.py` builds the canonical

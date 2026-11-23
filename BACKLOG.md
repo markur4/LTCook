@@ -98,6 +98,14 @@ Treat this as the parking lot for actionable problems discovered while working b
 - **Context:** Search and Locate read source through LTCook's host-side providers. The workspace root limits filesystem traversal but does not establish that the host authorized all reads inside the root.
 - **Suggested next step:** Use a supported host-provided read grant when available. Verify that indexing and search both stay inside that grant before exposing the tools again.
 
+## P2 / E2 [Tooling] - *Qualify repository-agent stopping behavior*
+- **Area:** Repository Agent Behavior Evaluation and repository discovery guidance.
+- **Observed while:** Comparing Search and Locate with a fixed local Pi model.
+- **Why not fixed now:** This pass measures agent behavior. It leaves workflow and instruction changes for a separate comparison.
+- **Evidence:** All ten bounded Pi attempts reached the 16-call cap, and both simulated outages were reported as not found. See the [evaluation report](evals/repository-intelligence-report.md#pi).
+- **Context:** A repeated search can consume context without adding evidence. A provider outage leaves the question unresolved.
+- **Suggested next step:** Qualify a bounded stopping rule and an explicit insufficient-evidence response before enabling more autonomous conceptual workflows.
+
 <br>
 
 # 2026-11-22
