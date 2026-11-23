@@ -88,6 +88,18 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 <br>
 
+# 2026-11-24
+
+## P2 / E2 [Tooling] - *Restore repository tools to Codex with a host read grant*
+- **Area:** `runtime/src/paseo-plugin/index.server.ts` and `runtime/src/integrations/runtime-api.ts`.
+- **Observed while:** Auditing Search and Locate authorization.
+- **Why not fixed now:** Paseo's installed plugin contract provides the launch directory and provider without the effective Codex read policy.
+- **Evidence:** The interactive launch hook could issue a host-side repository grant without knowing which files the Codex session may read. The runtime now withholds the repository grant for that hook's Codex sessions.
+- **Context:** Search and Locate read source through LTCook's host-side providers. The workspace root limits filesystem traversal but does not establish that the host authorized all reads inside the root.
+- **Suggested next step:** Use a supported host-provided read grant when available. Verify that indexing and search both stay inside that grant before exposing the tools again.
+
+<br>
+
 # 2026-11-22
 
 ## P2 / E2 [Tools] - *Improve local summarizer fidelity on operational notes*

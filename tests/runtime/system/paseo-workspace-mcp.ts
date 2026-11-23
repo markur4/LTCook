@@ -338,8 +338,13 @@ try {
     config: { provider: `pi/fixture/${model}` },
   });
   await exercise(ordinaryPi, 'pi_fresh');
-  if (Bun.which('rg'))
+  if (Bun.which('rg')) {
     await exercise(ordinaryPi, 'pi_locate_ripgrep', { symbol: 'computeReleaseChecksum' });
+    await exercise(ordinaryPi, 'pi_searches_ripgrep', {
+      query: 'computeReleaseChecksum',
+      mode: 'exact',
+    });
+  }
   if (verifyColgrep)
     await exercise(ordinaryPi, 'pi_searches_repository', {
       query: 'calculate the release checksum',
@@ -350,18 +355,6 @@ try {
     config: { provider: `codex/${model}` },
   });
   await exercise(ordinaryCodex, 'codex_fresh');
-  if (Bun.which('rg'))
-    await exercise(ordinaryCodex, 'codex_locate_ripgrep', { symbol: 'computeReleaseChecksum' });
-  if (Bun.which('rg'))
-    await exercise(ordinaryCodex, 'codex_searches_ripgrep', {
-      query: 'computeReleaseChecksum',
-      mode: 'exact',
-    });
-  if (verifyColgrep)
-    await exercise(ordinaryCodex, 'codex_searches_colgrep', {
-      query: 'calculate the release checksum',
-      pattern: 'computeReleaseChecksum',
-    });
   await ordinaryCodex.reload();
   await exercise(ordinaryCodex, 'codex_warm_resume');
   await stop();

@@ -51,7 +51,7 @@ All notable changes to `ltcook` will be documented in this file.
   repository metadata, and live Git details with optional local base comparison.
   RIED responses include provider provenance, freshness, and structured diagnostics.
 
-- Workspace-scoped repository search in Pi and Codex using ripgrep and ColGREP,
+- Workspace-scoped repository search in Pi using ripgrep and ColGREP,
   with a pinned LateOn-Code-edge model and lazy local indexing. Repository search verifies
   excerpts against current files and reports unavailable, partial, stale, and
   truncated retrieval separately.
@@ -59,7 +59,7 @@ All notable changes to `ltcook` will be documented in this file.
 - Repository Core includes a standalone ripgrep provider for bounded lexical
   scans and a labeled retrieval benchmark with opt-in ColGREP comparison.
 
-- Codex and Pi can use `ltcook_repo_locate` to find verified implementation,
+- Pi can use `ltcook_repo_locate` to find verified implementation,
   caller, and test candidates with bounded follow-up search.
 
 - Shared SearXNG search, URL retrieval, and stored-result tools for managed

@@ -186,19 +186,21 @@ search. Some Codex modes ask for permission before calling an MCP tool.
   workspace file access, ask for an outline of a specific source file or
   directory. Ordinary Codex chats can use maps and inventory. See the
   [RIED operations and limits](References.md#repository-inventory).
-- In Pi or Codex, use `ltcook_repo_search` for source evidence. Ask for an
+- In Pi, use `ltcook_repo_search` for source evidence. Ask for an
   exact identifier to use ripgrep or ask a question by meaning to use ColGREP.
   Add a relative path to narrow results. The first ColGREP search builds the
   workspace index and can take longer than later searches. If another request
   is populating the index, retry once it finishes. If ColGREP assets are missing
   or damaged, repeat the [installation procedure](#install-from-a-checkout).
-- Ask Pi or Codex to use `ltcook_repo_locate` when you want source locations
+- Ask Pi to use `ltcook_repo_locate` when you want source locations
   for a definition, caller, or test. For example, ask “Locate the implementation
   and callers of `resolveLaunch`.” For an unfamiliar symbol, describe the behavior
   instead. Locate returns evidence candidates that the agent can inspect and
   cite. A conceptual search may be followed by exact search for a verified
   identifier. Reopen the chat through Paseo after launching the updated runtime
   to discover Locate. See the [Locate contract](References.md#repository-locate).
+  The Paseo launch hook does not provide Codex's effective read scope, so the
+  workspace tool connection omits Search and Locate in ordinary Codex chats.
 - Ask for a summary using `ltcook_summarize`. Supply text or ask Pi to summarize
   one regular UTF-8 file from the selected workspace, up to 24 KiB. An optional
   focus tells the summarizer what to emphasize. Codex accepts text because its
