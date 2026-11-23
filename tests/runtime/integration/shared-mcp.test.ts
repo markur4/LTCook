@@ -317,7 +317,7 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
     mode = 'missing';
     const missing = await summarize(codex, { text: material });
     expect(missing.isError).toBe(true);
-    expect(JSON.stringify(missing.content)).toContain(LFM3_SUMMARIZER_MODEL);
+    expect(JSON.stringify(missing.content)).toContain(`ollama pull ${LFM3_SUMMARIZER_MODEL}`);
     expect(
       (await codex.callTool({ name: 'ltcook_ried', arguments: { operation: 'summary' } }))
         .structuredContent,

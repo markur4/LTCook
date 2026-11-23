@@ -8,8 +8,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from typer.testing import CliRunner
 
 from ltcook import launch
+from ltcook.config.bundle import LtcookConfig
 from ltcook.config.pi_config import pi_documents, write_pi_config
 
 
@@ -216,6 +218,8 @@ def _native_config():
             api_token="secret-value",
             paseo_listen="127.0.0.1:6767",
             paseo_password="secret-value",
+            ollama_endpoint="http://localhost:11435/",
+            tiny_local_model="hf.co/Test/model:Q8_0",
         ),
         crawl4ai=SimpleNamespace(api_token="secret-value"),
         searxng=SimpleNamespace(secret="secret-value"),
@@ -254,7 +258,7 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
             guidance_dir="",
             database="",
             ollama_endpoint="http://127.0.0.1:11434",
-            summarizer_model="fixture-model",
+            tiny_local_model="fixture-model",
             summarizer_keep_alive=-1,
             summarizer_generation="",
         ),
@@ -287,6 +291,7 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
         source_root / "node_modules" / ".bin"
     )
     assert result.environment["LTCOOK_MODEL_SMOL"] == "workspace-model"
+    assert result.environment["LTCOOK_MODEL_TINY_LOCAL"] == "fixture-model"
     assert result.environment["SHELL_ONLY"] == "preserved"
     assert "LTCOOK_SHELL_PROVENANCE" not in result.environment
     next_launch = launch.resolve_launch(
@@ -320,7 +325,7 @@ def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_p
             guidance_dir="",
             database="",
             ollama_endpoint="http://127.0.0.1:11434",
-            summarizer_model="fixture-model",
+            tiny_local_model="fixture-model",
             summarizer_keep_alive=-1,
             summarizer_generation="",
         ),
@@ -405,6 +410,27 @@ def test_pi_documents_keep_secrets_out_of_json_and_write_private_files(tmp_path)
     assert documents[pi_home / "models.json"]["providers"]["ollama"]["models"][0][
         "thinkingLevelMap"
     ] == {"off": "none", "low": "low", "high": "high"}
+    providers = documents[pi_home / "models.json"]["providers"]
+    local = providers["ollama"]["models"][1]
+    assert local["id"] == config.runtime.tiny_local_model
+    assert local["baseUrl"] == "http://localhost:11435/v1"
+    assert local["thinkingLevelMap"] == {
+        "off": "none",
+        "minimal": None,
+        "low": "low",
+        "medium": None,
+        "high": "high",
+        "xhigh": None,
+        "max": None,
+    }
+    for provider, api in (
+        ("openai", "openai-responses"),
+        ("openai-codex", "openai-codex-responses"),
+    ):
+        sol = providers[provider]["models"][0]
+        assert sol["id"] == "gpt-6.2-sol"
+        assert sol["api"] == api
+        assert sol["thinkingLevelMap"]["xhigh"] == "xhigh"
     assert "$CRAWL4AI_API_TOKEN" in rendered
     assert "secret-value" not in rendered
     assert all("context7" not in document for document in documents.values())
@@ -433,6 +459,102 @@ def test_pi_writer_preserves_unrelated_local_models(tmp_path):
     models = json.loads(models_path.read_text())
     assert "custom" in models["providers"]
     assert "ollama" in models["providers"]
+
+
+def test_pi_writer_retains_the_prior_local_model_after_alias_edit(tmp_path):
+    config = _native_config()
+    deployment = tmp_path / "deployment"
+    pi_home = deployment / "workspaces" / "workspace" / "pi"
+    write_pi_config(config, owned_dir=deployment / "app", pi_home=pi_home)
+
+    write_pi_config(
+        config,
+        owned_dir=deployment / "app",
+        pi_home=pi_home,
+        runtime_environment={
+            "LTCOOK_MODEL_TINY_LOCAL": "hf.co/Other/model:Q8_0",
+            "LTCOOK_OLLAMA_ENDPOINT": "http://127.0.0.1:11436",
+        },
+    )
+
+    providers = json.loads((pi_home / "models.json").read_text())["providers"]
+    models = {model["id"]: model for model in providers["ollama"]["models"]}
+    assert models["hf.co/Test/model:Q8_0"]["baseUrl"] == "http://localhost:11435/v1"
+    assert models["hf.co/Other/model:Q8_0"]["baseUrl"] == "http://127.0.0.1:11436/v1"
+    assert len(providers["ollama"]["models"]) == 3
+
+
+@pytest.mark.parametrize("harness", ["pi", "codex"])
+def test_model_launcher_forwards_native_arguments_and_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    deployment = tmp_path / "deployment"
+    js_root = deployment / "app"
+    node = deployment / "node"
+    native = js_root / "runtime/dist/main.js"
+    native.parent.mkdir(parents=True)
+    node.touch()
+    native.touch()
+    pi_home = deployment / "pi"
+    environment = {
+        "LTCOOK_NODE_EXECUTABLE": str(node),
+        "LTCOOK_JS_ROOT": str(js_root),
+        "LTCOOK_DEPLOYMENT_DIR": str(deployment),
+        "PI_CODING_AGENT_DIR": str(pi_home),
+    }
+    monkeypatch.setattr(
+        launch,
+        "resolve_launch",
+        lambda path: launch.LaunchConfig(environment, LtcookConfig(), path.resolve()),
+    )
+    calls = []
+
+    def run(arguments, *, cwd, env, check):
+        calls.append((arguments, cwd, dict(env)))
+        assert check is False
+        return SimpleNamespace(returncode=17)
+
+    monkeypatch.setattr(launch.subprocess, "run", run)
+    result = CliRunner().invoke(
+        launch.launch_cli,
+        [
+            "model",
+            harness,
+            "@plan",
+            "--workspace",
+            str(workspace),
+            "--reasoning",
+            "high",
+            "--",
+            "--fixture-option",
+            "prompt with spaces",
+        ],
+    )
+
+    assert result.exit_code == 17, result.output
+    [(arguments, cwd, child_environment)] = calls
+    assert cwd == workspace
+    assert arguments == [
+        str(node),
+        str(native),
+        "model-launch",
+        harness,
+        "@plan",
+        "high",
+        "--",
+        "--fixture-option",
+        "prompt with spaces",
+    ]
+    if harness == "pi":
+        assert child_environment["LTCOOK_PI_MODELS_PATH"] == str(
+            pi_home / "models.json"
+        )
+        assert (pi_home / "models.json").is_file()
+    else:
+        assert "LTCOOK_PI_MODELS_PATH" not in child_environment
+        assert not pi_home.exists()
 
 
 def test_pi_writer_refuses_external_home_without_overwriting_files(tmp_path):
@@ -990,7 +1112,7 @@ def test_evaluation_context_excludes_credentials_and_does_not_write_native_state
     assert context["sharedSkillsDirectory"]
     assert context["guidanceDirectory"]
     assert "webConfiguration" in context
-    assert context["summarization"]["model"] == "lfm3:1.7b-q8_0"
+    assert context["summarization"]["model"] == "hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0"
     assert (
         json.loads(context["summarization"]["generation"])["options"]["num_ctx"] == 4096
     )

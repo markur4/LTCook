@@ -15,7 +15,7 @@ Run `ltcook eval run --all --setup synthetic --case summarization` against a
 runtime configured with these global AppRC settings.
 
 ```shell
-export LTCOOK_SUMMARIZER_MODEL=lfm3:1.7b-q8_0
+export LTCOOK_MODEL_TINY_LOCAL=lfm3:1.7b-q8_0
 export LTCOOK_SUMMARIZER_GENERATION='{"think":false,"stream":false,"options":{"temperature":0.1,"num_ctx":4096,"num_predict":128}}'
 ```
 

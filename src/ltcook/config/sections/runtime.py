@@ -18,9 +18,16 @@ class RuntimeSettings(rc.Config):
     paseo_password: str = rc.field("LTCOOK_PASEO_PASSWORD", default="", secret=True)
     js_root: str = rc.field("LTCOOK_JS_ROOT", default="")
     pi_auth_dir: str = rc.field("LTCOOK_PI_AUTH_DIR", default="~/.pi/agent")
-    smart_model: str = rc.field("LTCOOK_MODEL_SMART", default="")
-    smol_model: str = rc.field("LTCOOK_MODEL_SMOL", default="")
-    plan_model: str = rc.field("LTCOOK_MODEL_PLAN", default="")
+    smart_model: str = rc.field(
+        "LTCOOK_MODEL_SMART", default="openai-codex/gpt-6.2-sol"
+    )
+    smol_model: str = rc.field("LTCOOK_MODEL_SMOL", default="openai-codex/gpt-6-luna")
+    expensive_model: str = rc.field(
+        "LTCOOK_MODEL_EXPENSIVE", default="openai-codex/gpt-6-astra"
+    )
+    tiny_local_model: str = rc.field(
+        "LTCOOK_MODEL_TINY_LOCAL", default="hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0"
+    )
     logs: str = rc.field("LTCOOK_LOGS", default="")
     traces: str = rc.field("LTCOOK_TRACES", default="")
     browser_enabled: bool = rc.field("LTCOOK_BROWSER_ENABLED", default=True)
@@ -32,9 +39,6 @@ class RuntimeSettings(rc.Config):
     )
     ollama_endpoint: str = rc.field(
         "LTCOOK_OLLAMA_ENDPOINT", default="http://127.0.0.1:11434"
-    )
-    summarizer_model: str = rc.field(
-        "LTCOOK_SUMMARIZER_MODEL", default="lfm3:1.7b-q8_0"
     )
     summarizer_keep_alive: int = rc.field("LTCOOK_SUMMARIZER_KEEP_ALIVE", default=-1)
     summarizer_generation: str = rc.field("LTCOOK_SUMMARIZER_GENERATION", default="")

@@ -272,7 +272,7 @@ digests. It includes a code fingerprint, hashes for
 the fixtures and prompts, effective settings, individual results, fixed-fixture
 summaries and quotations, latency, and token counts when available. Concision
 and readability are separate from the required-fact verdict.
-When the default LFM3 profile retries without reasoning, the report identifies
+When an LFM3 comparison uses its built-in profile and retries without reasoning, the report identifies
 the initial reasoning attempt and includes both requests in the token totals.
 
 The engine fingerprints its runtime bundle at startup. Source checkouts
@@ -282,7 +282,7 @@ at engine creation.
 Set the global AppRC model and generation options before starting the evaluation
 runtime to compare a candidate. Leave both settings unset to qualify the
 current default. The initial LFM3 baseline used
-`LTCOOK_SUMMARIZER_MODEL=lfm3:1.7b-q8_0` with this generation value.
+the LFM3 tag (set `LTCOOK_MODEL_TINY_LOCAL=lfm3:1.7b-q8_0` to reproduce it) with this generation value.
 
 ```shell
 export LTCOOK_SUMMARIZER_GENERATION='{"think":false,"stream":false,"options":{"temperature":0.1,"num_ctx":4096,"num_predict":128}}'

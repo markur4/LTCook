@@ -7,7 +7,15 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { chmod, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { AgentBackend, CreateAgentOptions, NativeAgent } from '../workflow-api/index.js';
+import type {
+  AgentBackend,
+  CreateAgentOptions,
+  NativeAgent,
+  TeamMember,
+} from '../workflow-api/index.js';
+import { resolveModel, type ResolvedModel } from '../models/aliases.js';
+import { piThinking } from '../models/adapters.js';
+import { RESOLVED_MODEL_METADATA_KEY } from '../paseo-plugin/shared/models.js';
 import { agentEnvironment } from './native-policy.js';
 import { configurePiExtensions } from './pi-settings.js';
 import { isWithin } from '../path-containment.js';
@@ -258,12 +266,19 @@ export async function createPaseoAgentBackend(input: {
   identity(agentId: string): AgentRpcIdentity;
 }): Promise<
   AgentBackend & {
+    resolveSelection(
+      workspaceRoot: string,
+      member: TeamMember,
+      alias?: string,
+      reasoning?: string,
+    ): Promise<ResolvedModel>;
     prepare(
       options: CreateAgentOptions,
       nativeAgentId: string,
+      savedModel?: ResolvedModel,
     ): Promise<{
       env: Record<string, string>;
-      model: string;
+      model: ResolvedModel;
       mcpServers:
         | NonNullable<Parameters<PaseoApi['agents']['create']>[0]['config']['mcpServers']>
         | undefined;
@@ -289,23 +304,19 @@ export async function createPaseoAgentBackend(input: {
     return shell ? { ...process.env, LTCOOK_SHELL_PROVENANCE: JSON.stringify(shell) } : process.env;
   };
   const preparations = new WorkspacePreparationCache();
-  const prepare = async (options: CreateAgentOptions, nativeAgentId: string) => {
-    const helperEnv = helperEnvironment(options.workspaceRoot, options.sessionId);
+  const environmentFor = async (workspaceRoot: string, sessionId: string) => {
+    const helperEnv = helperEnvironment(workspaceRoot, sessionId);
     const shellIdentity = createHash('sha256')
       .update(JSON.stringify(helperEnv.LTCOOK_SHELL_PROVENANCE ?? helperEnv))
       .digest('hex');
-    const cacheKey = JSON.stringify([
-      path.resolve(options.workspaceRoot),
-      options.sessionId,
-      shellIdentity,
-    ]);
-    const workspaceEnv =
+    const cacheKey = JSON.stringify([path.resolve(workspaceRoot), sessionId, shellIdentity]);
+    return (
       input.preparedEnvironment ??
       (
         await preparations.get(cacheKey, () => {
           const result = spawnSync(
             input.python,
-            ['-m', 'ltcook.launch', 'prepare-native', '--workspace', options.workspaceRoot],
+            ['-m', 'ltcook.launch', 'prepare-native', '--workspace', workspaceRoot],
             { encoding: 'utf8', env: helperEnv, windowsHide: true },
           );
           if (result.status !== 0)
@@ -317,7 +328,7 @@ export async function createPaseoAgentBackend(input: {
             identityPaths: string[];
             reusable: boolean;
           };
-          if (path.resolve(response.workspaceRoot) !== path.resolve(options.workspaceRoot))
+          if (path.resolve(response.workspaceRoot) !== path.resolve(workspaceRoot))
             throw new Error('AppRC resolved a different native-agent workspace');
           if (
             !Array.isArray(response.dependencies) ||
@@ -334,7 +345,21 @@ export async function createPaseoAgentBackend(input: {
             reusable: response.reusable,
           };
         })
-      ).environment;
+      ).environment
+    );
+  };
+  const prepare = async (
+    options: CreateAgentOptions,
+    nativeAgentId: string,
+    savedModel?: ResolvedModel,
+  ) => {
+    const workspaceEnv = await environmentFor(options.workspaceRoot, options.sessionId);
+    const model =
+      savedModel ??
+      resolveModel(options.member.modelAlias, workspaceEnv, {
+        teamReasoning: options.member.thinking,
+        sessionReasoning: input.thinking,
+      });
     const identity = input.identity(nativeAgentId);
     const agentHome = workspaceEnv.PI_CODING_AGENT_DIR || input.piHome;
     await mkdir(agentHome, { recursive: true, mode: 0o700 });
@@ -347,10 +372,6 @@ export async function createPaseoAgentBackend(input: {
       ...(codeSearchEnabled ? codeSearchExtensions : []),
     ];
     await configurePiExtensions(settingsPath, ownedExtensions);
-    const model =
-      workspaceEnv[`LTCOOK_MODEL_${options.member.modelAlias.toUpperCase()}`] ||
-      workspaceEnv.LTCOOK_MODEL_SMART;
-    if (!model) throw new Error(`No model configured for alias ${options.member.modelAlias}`);
     const browserHome =
       workspaceEnv.LTCOOK_BROWSER_HOME || path.join(path.dirname(agentHome), 'browser-home');
     const appBin = path.join(input.appNodeModules, '.bin');
@@ -363,6 +384,7 @@ export async function createPaseoAgentBackend(input: {
       LTCOOK_RUNTIME_API_URL: input.runtimeApiUrl,
       LTCOOK_AGENT_API_TOKEN: identity.token,
       LTCOOK_NATIVE_AGENT_ID: nativeAgentId,
+      LTCOOK_RESOLVED_MODEL: JSON.stringify(model),
       LTCOOK_SESSION: options.sessionId,
       LTCOOK_SESSION_ID: options.sessionId,
       LTCOOK_TEAM_INSTANCE_ID: options.teamInstanceId,
@@ -397,6 +419,13 @@ export async function createPaseoAgentBackend(input: {
   };
   return {
     prepare,
+    async resolveSelection(workspaceRoot, member, alias, reasoning) {
+      const environment = await environmentFor(workspaceRoot, '');
+      return resolveModel(alias ?? member.modelAlias, environment, {
+        teamReasoning: member.thinking,
+        sessionReasoning: reasoning,
+      });
+    },
     async list() {
       const result = await input.api.agents.list();
       return result.entries.map((entry) => state(entry.agent));
@@ -410,6 +439,7 @@ export async function createPaseoAgentBackend(input: {
       try {
         const nativeAgentId = randomUUID();
         const { env: agentEnv, model, mcpServers } = await prepare(options, nativeAgentId);
+        const thinkingOptionId = piThinking(model.reasoning);
         const handle = await input.api.agents.create({
           agentId: nativeAgentId,
           idempotencyKey: nativeAgentId,
@@ -422,11 +452,12 @@ export async function createPaseoAgentBackend(input: {
             ? { parent: options.leaderAgentId }
             : {}),
           config: {
-            provider: `pi/${model}`,
-            thinkingOptionId: input.thinking ?? options.member.thinking,
+            provider: `pi/${model.provider}/${model.model}`,
+            ...(thinkingOptionId ? { thinkingOptionId } : {}),
             ...(mcpServers ? { mcpServers } : {}),
           },
           env: agentEnv,
+          metadata: { [RESOLVED_MODEL_METADATA_KEY]: model },
           labels: {
             'ltcook.session': options.sessionId,
             'ltcook.team-instance': options.teamInstanceId,

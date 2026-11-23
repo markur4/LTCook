@@ -31,6 +31,14 @@ function hooks() {
   } as unknown as PluginServerContext);
   return <Name extends keyof PluginHooks>(name: Name) => registered.get(name) as Hook<Name>;
 }
+const savedModel = {
+  alias: 'plan',
+  provider: 'openai-codex',
+  model: 'gpt-6.2-sol',
+  reasoning: 'high',
+  preset: 'xhigh',
+  reasoningSource: 'team',
+} as const;
 const openRequest = {
   agentId: 'native-leader',
   workspaceId: 'workspace',
@@ -41,7 +49,7 @@ const openRequest = {
   title: 'Work title',
   background: false,
   labels: {},
-  metadata: { 'ltcook.team': 'default' },
+  metadata: { 'ltcook.team': 'default', 'ltcook.resolved-model': savedModel },
   tools: [],
   env: {},
   mcpServers: {},
@@ -60,7 +68,7 @@ test('adopts the actual Leader before obtaining scoped environment without creat
         })
       : Response.json({ sessionId: 'native-leader' });
   }) as typeof fetch;
-  const result = await hook({ request: openRequest });
+  const result = await hook({ request: { ...openRequest, reason: 'resume' } });
   expect(calls.map((call) => call.path)).toEqual([
     'http://runtime.invalid/v1/session/open',
     'http://runtime.invalid/v1/session/prepare',
@@ -71,6 +79,7 @@ test('adopts the actual Leader before obtaining scoped environment without creat
     workspaceRoot: '/workspace',
     teamSelection: 'default',
   });
+  expect(calls[1]?.body).toMatchObject({ savedModel });
   expect(result?.env.LTCOOK_NATIVE_AGENT_ID).toBe('native-leader');
   expect(result?.title).toBe('Work title');
 });

@@ -8,6 +8,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EVAL_MODEL } from '../evals/setup.js';
+import { ReasoningEffortSchema, ResolvedModelSchema } from '../models/aliases.js';
+import { piThinking } from '../models/adapters.js';
 import { WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
 import {
   createAgentSessionFromServices,
@@ -153,6 +155,8 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
     throw new Error('--session-id cannot be combined with --session, --continue, or --resume.');
   }
   const managed = Boolean(process.env.LTCOOK_NATIVE_AGENT_ID);
+  const recorded = managed && process.env.LTCOOK_RESOLVED_MODEL;
+  const selection = recorded ? ResolvedModelSchema.parse(JSON.parse(recorded)) : undefined;
   if (managed && (parsed.noExtensions || parsed.noSkills || parsed.noContextFiles))
     throw new Error(
       'Managed LTCook sessions require Core extensions, skills, and standing context.',
@@ -302,28 +306,48 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
     const scope = patterns?.length
       ? await resolveModelScopeWithDiagnostics(patterns, modelRuntime)
       : { scopedModels: [], diagnostics: [] };
-    const resolved = parsed.model
-      ? resolveCliModel({
-          cliProvider: parsed.provider,
-          cliModel: parsed.model,
-          cliThinking: parsed.thinking,
-          inlineApiKey: Boolean(parsed.apiKey),
-          modelRuntime,
-        })
+    const history = sessionManager.buildSessionContext();
+    const recordedModel = selection
+      ? (history.model ?? { provider: selection.provider, modelId: selection.model })
       : undefined;
+    const savedReasoning = ReasoningEffortSchema.safeParse(
+      history.thinkingLevel === 'off' ? 'none' : history.thinkingLevel,
+    ).data;
+    // > Paseo passes its saved effort on resume. Pi's history records any live model change.
+    const selectedThinking =
+      selection && !history.model
+        ? piThinking(selection.reasoning)
+        : (parsed.thinking ?? (selection ? piThinking(savedReasoning) : undefined));
+    const savedModel = recordedModel
+      ? modelRuntime.getModel(recordedModel.provider, recordedModel.modelId)
+      : undefined;
+    if (recordedModel && !savedModel)
+      throw new Error(
+        `Pi cannot resolve the saved model ${recordedModel.provider}/${recordedModel.modelId}.`,
+      );
+    const resolved =
+      !selection && parsed.model
+        ? resolveCliModel({
+            cliProvider: parsed.provider,
+            cliModel: parsed.model,
+            cliThinking: parsed.thinking,
+            inlineApiKey: Boolean(parsed.apiKey),
+            modelRuntime,
+          })
+        : undefined;
     if (resolved?.error) throw new Error(resolved.error);
     if (resolved?.warning) console.error(resolved.warning);
     const scopedDefault =
-      sessionManager.buildSessionContext().messages.length === 0
+      history.messages.length === 0
         ? (scope.scopedModels.find(
             ({ model }) =>
               model.provider === settingsManager.getDefaultProvider() &&
               model.id === settingsManager.getDefaultModel(),
           ) ?? scope.scopedModels[0])
         : undefined;
-    const model = resolved?.model ?? scopedDefault?.model;
+    const model = savedModel ?? resolved?.model ?? scopedDefault?.model;
     const thinkingLevel =
-      parsed.thinking ?? resolved?.thinkingLevel ?? scopedDefault?.thinkingLevel;
+      selectedThinking ?? resolved?.thinkingLevel ?? scopedDefault?.thinkingLevel;
     if (parsed.apiKey) {
       if (!model) throw new Error('--api-key requires an explicitly selected model.');
       await modelRuntime.setRuntimeApiKey(model.provider, parsed.apiKey);
@@ -343,7 +367,16 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
       excludeTools: parsed.excludeTools,
       noTools: parsed.noTools ? 'all' : parsed.noBuiltinTools ? 'builtin' : undefined,
     });
-    if (created.session.model && (parsed.thinking !== undefined || resolved?.thinkingLevel)) {
+    if (
+      recordedModel &&
+      selectedThinking !== undefined &&
+      created.session.thinkingLevel !== selectedThinking
+    ) {
+      throw new Error(
+        `Pi cannot run ${recordedModel.provider}/${recordedModel.modelId} with ${selectedThinking} reasoning.`,
+      );
+    }
+    if (created.session.model && (selectedThinking !== undefined || resolved?.thinkingLevel)) {
       created.session.setThinkingLevel(created.session.thinkingLevel);
     }
     return { ...created, services, diagnostics };

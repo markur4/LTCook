@@ -2,6 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { ModelAliasSchema, ReasoningEffortSchema } from '../models/aliases.js';
 import type { TeamPackage } from '../team-api/index.js';
 
 export interface TeamCatalogEntry {
@@ -30,8 +31,8 @@ const packageSchema = z.object({
         key: z.string().min(1),
         name: z.string().min(1),
         lifetime: z.enum(['persistent', 'temporary']),
-        modelAlias: z.enum(['smart', 'smol', 'plan']),
-        thinking: z.string(),
+        modelAlias: ModelAliasSchema,
+        thinking: ReasoningEffortSchema.optional(),
         readOnly: z.boolean(),
         roles: strings,
         workTypes: z.array(workType),
