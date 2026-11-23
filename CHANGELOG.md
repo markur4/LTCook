@@ -135,6 +135,9 @@ All notable changes to `ltcook` will be documented in this file.
 - Behavior Evaluation includes mandatory core summarization evaluations with
   independent Bonsai grading. The CLI and Paseo diagnostics show the
   qualification verdict and provide a focused full qualification run.
+  Full qualification covers both rollout decisions, a coding handoff, and
+  three near-limit attempts. An opt-in Pi utility comparison reports the
+  cost and correctness of reading directly and using a summary.
 
 - Add workspace inventory and local Ollama summarization over authenticated MCP
   for ordinary Pi and Codex chats in Paseo.

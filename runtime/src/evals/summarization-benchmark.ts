@@ -41,6 +41,7 @@ const expected = {
 };
 
 type SummaryCall = {
+  toolCallId: string;
   pathAndFocusMatched: boolean;
   completed: boolean;
   elapsedMs: number;
@@ -56,18 +57,28 @@ export async function runSummarizationBenchmark(settings: OllamaSettings, signal
       const started = performance.now();
       const directory = path.join(root, condition);
       const fixturePath = path.join(directory, sourceFile);
+      let reservedCalls = 0;
+      const reserveCall = () => {
+        if (reservedCalls >= toolCallLimit) throw new Error('The tool budget is used. Answer now.');
+        reservedCalls++;
+      };
       const fixtureOnly = (absolutePath: string) => {
         if (absolutePath !== fixturePath) throw new Error('Read the fixed benchmark source file.');
         return absolutePath;
       };
-      const readTool = defineTool(
-        createReadToolDefinition(directory, {
-          operations: {
-            access: async (file) => access(fixtureOnly(file)),
-            readFile: async (file) => readFile(fixtureOnly(file)),
-          },
-        }),
-      );
+      const read = createReadToolDefinition(directory, {
+        operations: {
+          access: async (file) => access(fixtureOnly(file)),
+          readFile: async (file) => readFile(fixtureOnly(file)),
+        },
+      });
+      const readTool = defineTool({
+        ...read,
+        async execute(...args) {
+          reserveCall();
+          return read.execute(...args);
+        },
+      });
       const summaryCalls: SummaryCall[] = [];
       let measurement: SummaryCall | undefined;
       const tool = createSummarizeTool(settings, (usage) => {
@@ -79,10 +90,15 @@ export async function runSummarizationBenchmark(settings: OllamaSettings, signal
         description: tool.description,
         parameters: tool.inputSchema,
         executionMode: 'sequential',
-        async execute(_id, args, toolSignal) {
+        async execute(toolCallId, args, toolSignal) {
+          reserveCall();
           const begin = performance.now();
           const call: SummaryCall = {
-            pathAndFocusMatched: args.path === sourceFile && args.focus === focus,
+            toolCallId,
+            pathAndFocusMatched:
+              args.path !== undefined &&
+              path.resolve(directory, args.path) === fixturePath &&
+              args.focus === focus,
             completed: false,
             elapsedMs: 0,
           };
@@ -121,20 +137,25 @@ export async function runSummarizationBenchmark(settings: OllamaSettings, signal
       const cancel = () => void session.abort();
       bounded.addEventListener('abort', cancel, { once: true });
       let executedCalls = 0;
+      let turn = 0;
+      let budgetTurn: number | undefined;
       let failure: string | undefined;
       const unsubscribe = session.subscribe((event) => {
+        if (event.type === 'turn_start') turn++;
         if (event.type !== 'tool_execution_end') return;
         executedCalls++;
-        if (executedCalls === toolCallLimit) {
+        if (executedCalls >= toolCallLimit && budgetTurn === undefined) {
+          budgetTurn = turn;
           session.setActiveToolsByName([]);
           void session.steer(finish).catch(() => {
             failure = 'Pi could not request a final answer after the tool budget.';
             void session.abort();
           });
-        } else if (executedCalls > toolCallLimit) {
+        } else if (budgetTurn !== undefined && turn > budgetTurn) {
           failure = 'Pi continued calling tools after the tool budget.';
           void session.abort();
         } else if (
+          budgetTurn === undefined &&
           event.toolName === summaryTool.name &&
           summaryCalls.some((call) => call.completed)
         )
@@ -195,7 +216,9 @@ export async function runSummarizationBenchmark(settings: OllamaSettings, signal
       const requiredToolUsed =
         condition === 'baseline'
           ? calls.some((call) => call.toolName === 'read' && !call.isError)
-          : firstCall?.toolName === summaryTool.name && summaryCalls.some((call) => call.completed);
+          : firstCall?.toolName === summaryTool.name &&
+            !firstCall.isError &&
+            summaryCalls.some((call) => call.toolCallId === firstCall.toolCallId && call.completed);
       if (!requiredToolUsed) failure ??= 'Pi did not complete the required tool call.';
       const provider = turns.reduce(
         (usage, { usage: turn }) => ({

@@ -95,6 +95,7 @@ Treat this as the parking lot for actionable problems discovered while working b
 - **Observed while:** Checking the default LFM2.5 1.2B summarizer alongside Bonsai.
 - **Evidence:** Both models remained loaded, but the summarizer sometimes omitted a filename, identifier, or negated action from the three fixed passages.
 - **Qualification:** The first full LFM3 run passed 14 of 17 summary attempts. A cutoff and a reversed recovery decision failed. One semantic grade was blocked by invalid evidence. See the [baseline report](evals/summarization-baseline.md).
+- **Current evidence:** The expanded production-profile runs exposed a repeatable generation cutoff on the coding handoff and an intermittent near-limit omission of `AUTH-17`. Both rollout decisions passed. See the [expanded qualification](evals/summarization-baseline.md#expanded-full-qualification).
 - **Suggested next step:** Compare candidate prompts or generation settings against the full qualification suite before promoting a new default.
 
 <br>

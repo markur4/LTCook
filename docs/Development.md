@@ -316,8 +316,8 @@ generation settings. The first opens the source with Pi's `read` tool. The
 second calls `ltcook_summarize` with its path and focus and can read the source
 for supporting passages. Pi invokes the shared summarizer implementation
 directly, so recorded time covers the tools and inference in this checkout.
-After four tool calls, each session loses access to tools for subsequent turns
-so it can return an answer. The report records when this budget is reached.
+Each session can execute up to four tool calls before it is asked to answer.
+The report records when this budget is reached and retains rejected requests.
 
 The JSON report gives per-field correctness, ordered tool calls, actual
 summarizer invocation and usage, total elapsed time, and provider token usage
