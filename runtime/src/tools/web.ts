@@ -8,6 +8,39 @@ import { Type } from 'typebox';
 import { defineTool } from './types.js';
 
 const exec = promisify(execFile);
+
+// Web retrieval needs its own configuration and Crawl4AI credential, not the
+// runtime bearer, provider-model credentials, or unrelated workspace secrets.
+const WEB_PROCESS_KEYS = [
+  'PATH',
+  'HOME',
+  'USERPROFILE',
+  'SYSTEMROOT',
+  'WINDIR',
+  'COMSPEC',
+  'TEMP',
+  'TMP',
+  'TMPDIR',
+  'NODE_EXTRA_CA_CERTS',
+  'SSL_CERT_FILE',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'PI_CODING_AGENT_DIR',
+  'CRAWL4AI_API_TOKEN',
+] as const;
+
+export function webProcessEnvironment(
+  prepared: Record<string, string>,
+  parent: NodeJS.ProcessEnv,
+): Record<string, string> {
+  const output: Record<string, string> = {};
+  for (const key of WEB_PROCESS_KEYS) {
+    const value = prepared[key] ?? parent[key];
+    if (value !== undefined) output[key] = value;
+  }
+  return output;
+}
 const searchSchema = Type.Object(
   {
     query: Type.String({ minLength: 1, maxLength: 2000 }),
@@ -103,7 +136,7 @@ export class WebToolService {
     const transport = new StdioClientTransport({
       command: this.node,
       args: [path.join(this.appRoot, 'node_modules', 'pi-web-access', 'dist', 'mcp-cli.js')],
-      env: { ...this.environment, ...env } as Record<string, string>,
+      env: webProcessEnvironment(env, this.environment),
       stderr: 'inherit',
     });
     const client = new Client({ name: 'ltcook-web', version: '1.0.0' });
