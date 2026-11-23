@@ -307,6 +307,26 @@ The qualification verdict belongs to the summarization report, independently
 of whether the runner completed. Existing elapsed-time history and fallback for
 the three agent cases still use their original attempts.
 
+### Opt-in summarization utility comparison
+
+Run `bun evals/summarization-benchmark-live.ts` from a synced checkout with the
+local Ollama models available. The comparison runs two fresh native Pi sessions
+on the same fixed coding handoff with the same downstream Bonsai model and
+generation settings. The first opens the source with Pi's `read` tool. The
+second calls `ltcook_summarize` with its path and focus and can read the source
+for supporting passages. Pi invokes the shared summarizer implementation
+directly, so recorded time covers the tools and inference in this checkout.
+After four tool calls, each session loses access to tools for subsequent turns
+so it can return an answer. The report records when this budget is reached.
+
+The JSON report gives per-field correctness, ordered tool calls, actual
+summarizer invocation and usage, total elapsed time, and provider token usage
+across Pi turns. Pi's normalized cache fields use zero when the provider omits
+the split. Treat a zero cache count accordingly. Both sessions have fresh
+histories and identical source files. Ollama's runtime cache stays in place
+and the baseline runs first. This comparison is descriptive and runs only on
+request, outside CI and qualification.
+
 Bottleneck Attribution reports timings from those same executions and their
 Perfetto traces. `eval analyze` starts one set of full-instruction cases by
 default, or uses its explicit `--case` and `--repetitions` selections. It does
