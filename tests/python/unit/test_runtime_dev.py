@@ -12,6 +12,18 @@ import pytest
 from ltcook_dev import runtime
 
 
+@pytest.fixture(autouse=True)
+def bridge_builds(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def build(command: list[str], *, check: bool) -> None:
+        assert check
+        calls.append(command)
+
+    monkeypatch.setattr(runtime.subprocess, "run", build)
+    return calls
+
+
 def _checkout(tmp_path: Path) -> Path:
     root = tmp_path / "checkout"
     entrypoint = root / "runtime" / "src" / "main.ts"
@@ -21,7 +33,7 @@ def _checkout(tmp_path: Path) -> Path:
 
 
 def test_runtime_dev_resolves_source_root_and_forwards_application_help(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bridge_builds: list[list[str]]
 ) -> None:
     root = _checkout(tmp_path)
     workspace = tmp_path / "workspace"
@@ -52,6 +64,7 @@ def test_runtime_dev_resolves_source_root_and_forwards_application_help(
 
     assert result == 0
     assert working_directories == [root]
+    assert bridge_builds == [["bun", "run", "--cwd", "runtime", "build:web-mcp"]]
     assert calls == [
         (
             "bun",

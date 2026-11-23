@@ -16,6 +16,8 @@ from setuptools.command.build_py import build_py as BuildPyBase
 ROOT_DECLARATIONS = ("package.json", "package-lock.json", ".node-version")
 REQUIRED_RUNTIME_ENTRIES = (
     "dist/main.js",
+    "dist/tools/web-mcp.js",
+    "dist/tools/pi-web-access.LICENSE",
     "dist/evals/worker.js",
     "resources/evals/manifest.json",
     "resources/evals/verify.cjs",

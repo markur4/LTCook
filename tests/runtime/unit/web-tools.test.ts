@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { Value } from 'typebox/value';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createTools } from '../../../runtime/src/tools/catalog.js';
@@ -23,6 +23,7 @@ test('web tools are LTCook-owned and expose a bounded schema', () => {
     expect(Value.Check(definition.inputSchema, { proxy: 'http://untrusted' })).toBe(false);
   }
   expect(Value.Check(webDefinitions[0]!.inputSchema, { query: 'test' })).toBe(true);
+  expect(Value.Check(webDefinitions[0]!.inputSchema, { query: '  ' })).toBe(false);
   expect(Value.Check(webDefinitions[0]!.inputSchema, { queries: ['first', 'second'] })).toBe(true);
   expect(Value.Check(webDefinitions[0]!.inputSchema, { query: 'first', queries: ['second'] })).toBe(
     false,
@@ -33,7 +34,16 @@ test('web tools are LTCook-owned and expose a bounded schema', () => {
       urls: ['https://example.org/a', 'https://example.org/b'],
     }),
   ).toBe(true);
-  expect(Value.Check(webDefinitions[2]!.inputSchema, { responseId: 'abc' })).toBe(true);
+  expect(
+    Value.Check(webDefinitions[2]!.inputSchema, { responseId: 'abc', findText: ['a quote'] }),
+  ).toBe(true);
+  expect(
+    Value.Check(webDefinitions[0]!.outputSchema, {
+      responseId: 'abc',
+      content: 'No sources',
+      queries: [{ query: 'test', error: 'failed', sources: [] }],
+    }),
+  ).toBe(false);
 });
 
 test('shared catalog delegates to one service with authorized agent and workspace', async () => {
@@ -41,7 +51,11 @@ test('shared catalog delegates to one service with authorized agent and workspac
   const service = {
     async call(...args: unknown[]) {
       seen.push(args);
-      return 'Source: https://example.org';
+      return {
+        content: 'No sources',
+        responseId: 'abc',
+        queries: [{ query: 'subject', sources: [] }],
+      };
     },
   } as unknown as WebToolService;
   const tools = createWebTools(service);
@@ -53,8 +67,12 @@ test('shared catalog delegates to one service with authorized agent and workspac
     signal: controller.signal,
   };
   const response = await tools[0]!.invoke({ query: 'subject' }, ctx);
-  expect(response).toEqual({ content: 'Source: https://example.org' });
-  expect(seen).toEqual([[ctx, 'web_search', { query: 'subject' }]]);
+  expect(response).toEqual({
+    content: 'No sources',
+    responseId: 'abc',
+    queries: [{ query: 'subject', sources: [] }],
+  });
+  expect(seen).toEqual([[ctx, 'ltcook_web_search', { query: 'subject' }]]);
   await expect(tools[0]!.invoke({ query: 'x', provider: 'openai' }, ctx)).rejects.toThrow(
     'Invalid tool arguments',
   );
@@ -90,11 +108,12 @@ test('web subprocess does not inherit runtime authentication or model credential
 });
 
 test.skipIf(process.platform === 'win32')(
-  'bundled web adapter waits for local SearXNG before a batch and scopes stored results',
+  'web tools wait for local SearXNG, return a structured batch, and read agent-scoped results',
   async () => {
-    const root = await mkdtemp(join(tmpdir(), 'ltcook-web-test-'));
     const node = Bun.which('node');
     if (!node) throw new Error('Node is required to exercise the bundled web adapter.');
+    const repoRoot = resolve(import.meta.dir, '../../..');
+    const root = await mkdtemp(join(tmpdir(), 'ltcook-web-test-'));
     const queries: string[] = [];
     let healthChecks = 0;
     const server = Bun.serve({
@@ -106,15 +125,19 @@ test.skipIf(process.platform === 'win32')(
           healthChecks++;
           return new Response(null, { status: healthChecks > 1 ? 200 : 503 });
         }
+        if (url.pathname === '/report')
+          return new Response('Release notes\n\nThe fixture contains a searchable passage.');
         if (url.pathname !== '/search' || url.searchParams.get('format') !== 'json')
           return new Response(null, { status: 404 });
         if (healthChecks < 2) return new Response(null, { status: 503 });
-        queries.push(url.searchParams.get('q') ?? '');
+        const query = url.searchParams.get('q') ?? '';
+        queries.push(query);
+        if (query === 'startup logs') return new Response('Fixture error', { status: 503 });
         return Response.json({
           results: [
             {
               title: 'Recorded document',
-              url: 'https://example.org/report',
+              url: `${url.origin}/report`,
               content: 'Fixture evidence',
             },
           ],
@@ -122,52 +145,88 @@ test.skipIf(process.platform === 'win32')(
       },
     });
     const preparer = join(root, 'prepare-native');
-    const environment = {
-      PI_CODING_AGENT_DIR: root,
-      LTCOOK_SERVICE_CONNECTION: 'local',
-      LTCOOK_SEARXNG_URL: String(server.url),
-    };
-    await writeFile(
-      preparer,
-      `#!${node}\nconsole.log(JSON.stringify({workspaceRoot:process.argv.at(-1),environment:${JSON.stringify(environment)}}));\n`,
-      { mode: 0o700 },
-    );
-    await writeFile(
-      join(root, 'web-search.json'),
-      JSON.stringify({
-        provider: 'searxng',
-        webSearch: { allowedProviders: ['searxng'] },
-        searxngBaseUrl: String(server.url),
-        workflow: 'none',
-      }),
-    );
-    const service = new WebToolService(preparer, resolve(import.meta.dir, '../../..'), node, {
-      PATH: process.env.PATH,
-    });
-    const [search, , stored] = createWebTools(service);
-    const context = {
-      agentId: 'first',
-      workspaceRoot: root,
-      workspaceFileAccess: false,
-      signal: AbortSignal.timeout(8000),
-    };
+    const service = new WebToolService(preparer, root, node, { PATH: process.env.PATH });
     try {
+      await symlink(join(repoRoot, 'node_modules'), join(root, 'node_modules'), 'dir');
+      await writeFile(join(root, 'package.json'), '{"type":"module"}');
+      const build = await Bun.build({
+        entrypoints: [join(repoRoot, 'runtime/src/tools/web-mcp.mjs')],
+        outdir: join(root, 'runtime/dist/tools'),
+        naming: 'web-mcp.js',
+        target: 'node',
+        format: 'esm',
+        packages: 'external',
+      });
+      if (!build.success) throw new Error(build.logs.map((log) => log.message).join('\n'));
+      const environment = {
+        PI_CODING_AGENT_DIR: root,
+        LTCOOK_SERVICE_CONNECTION: 'local',
+        LTCOOK_SEARXNG_URL: String(server.url),
+      };
+      await writeFile(
+        preparer,
+        `#!${node}\nconsole.log(JSON.stringify({workspaceRoot:process.argv.at(-1),environment:${JSON.stringify(environment)}}));\n`,
+        { mode: 0o700 },
+      );
+      await writeFile(
+        join(root, 'web-search.json'),
+        JSON.stringify({
+          provider: 'searxng',
+          webSearch: { allowedProviders: ['searxng'] },
+          searxngBaseUrl: String(server.url),
+          workflow: 'none',
+          ssrf: { allowRanges: ['127.0.0.1/32'] },
+        }),
+      );
+      const [search, fetchPage, stored] = createWebTools(service);
+      const context = {
+        agentId: 'first',
+        workspaceRoot: root,
+        workspaceFileAccess: false,
+        signal: AbortSignal.timeout(8000),
+      };
+      const reportUrl = new URL('/report', server.url).href;
       const found = await search!.invoke(
-        { queries: ['release evidence', 'startup logs'] },
+        { queries: [' release evidence ', 'startup logs'] },
         context,
       );
-      const content = String(found.content);
-      expect(content).toContain('Recorded document');
-      expect(content).toContain('ltcook_web_content');
+      expect(found.content).toContain('Recorded document');
+      expect(found.content).toContain('ltcook_web_content');
+      expect(found.content).not.toContain('get_search_content(');
       expect(queries.sort()).toEqual(['release evidence', 'startup logs']);
-      const responseId = content.match(/responseId "([^"]+)"/)?.[1];
-      expect(responseId).toBeTruthy();
+      expect(found.responseId).toEqual(expect.any(String));
+      expect(found.fetchId).toBeUndefined();
+      expect(found.queries).toEqual([
+        {
+          query: ' release evidence ',
+          sources: [{ title: 'Recorded document', url: reportUrl, snippet: 'Fixture evidence' }],
+        },
+        { query: 'startup logs', error: expect.stringContaining('503') },
+      ]);
+      const { responseId } = found;
       expect(
-        String((await stored!.invoke({ responseId, queryIndex: 0 }, context)).content),
+        (await stored!.invoke({ responseId, query: ' release evidence ' }, context)).content,
       ).toContain('Fixture evidence');
+      await expect(stored!.invoke({ responseId, queryIndex: 1 }, context)).rejects.toThrow('503');
+      const foundWithPages = await search!.invoke(
+        { query: 'release evidence', includeContent: true },
+        context,
+      );
+      expect(foundWithPages.fetchId).toEqual(expect.any(String));
       expect(
-        String((await stored!.invoke({ responseId, queryIndex: 1 }, context)).content),
-      ).toContain('Fixture evidence');
+        (await stored!.invoke({ responseId: foundWithPages.fetchId, url: reportUrl }, context))
+          .content,
+      ).toContain('searchable passage');
+      const fetched = await fetchPage!.invoke({ url: reportUrl, mode: 'raw' }, context);
+      expect(fetched).toEqual({
+        content: expect.stringContaining('searchable passage'),
+        responseId: expect.any(String),
+      });
+      const passage = await stored!.invoke(
+        { responseId: fetched.responseId, findText: 'SEARCHABLE PASSAGE' },
+        context,
+      );
+      expect(passage.content).toContain('searchable passage');
       await expect(
         stored!.invoke({ responseId, queryIndex: 0 }, { ...context, agentId: 'second' }),
       ).rejects.toThrow(/no stored results/i);

@@ -401,10 +401,19 @@ connection. The shared catalog provides `ltcook_ried`, `ltcook_summarize`,
 qualify these names with the server name `ltcook_workspace`.
 
 Web tools resolve the authorized workspace's AppRC settings. Search uses
-SearXNG and URL retrieval uses the HTTP/Crawl4AI settings. Read stored results
-with `ltcook_web_content` and the response ID from the same agent. Select a
-search with `queryIndex` or a fetched page with `urlIndex`. Archiving
-the agent or restarting the runtime ends access to those results.
+SearXNG and URL retrieval uses the HTTP/Crawl4AI settings.
+
+- `ltcook_web_search` returns a `responseId` and query outcomes in input order.
+  Each successful query includes `sources` with a title, URL, and snippet.
+  A failed query in a mixed batch includes an `error`. If `includeContent`
+  returns a `fetchId`, use that ID to read the fetched pages.
+- Pass a source URL to `ltcook_web_fetch`. Use its `responseId` with
+  `ltcook_web_content` and `findText` to find a passage. For instance,
+  `{"responseId":"FETCH_ID","urlIndex":0,"findText":"experimental support"}`
+  searches the first fetched page.
+- Use `queryIndex` to inspect a stored search and `urlIndex` to select a fetched
+  page. Both indexes start at zero. Use the response ID from the same agent.
+  Archiving the agent or restarting the runtime ends access to stored results.
 
 `ltcook_summarize` takes one of `text` or `path` plus an optional `focus`.
 Pi's workspace grant allows regular UTF-8 files within its resolved workspace.
@@ -477,6 +486,7 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just runtime build` | Compile the runtime, Pi SDK/RPC launcher, Pi extension, and Paseo plugin. |
 | `just eval probe` | Run the opt-in quick Agent Evals preset; requires normal app setup and the exact local model. |
 | `just eval audit-static` | Run model-free instruction inventory checks. |
+| `bun evals/web-search-engine-mix.ts [SEARXNG_BASE_URL]` | Compare search engine mixes on six public queries. Requires a reachable SearXNG JSON API and sends no model requests. |
 | `just eval audit` | Run the local Bonsai semantic Instruction Audit. |
 | `just eval behavior` | Run read-only, no-op and targeted-fix Behavior Evaluation once with full instructions; fall back once to low reasoning on failure. |
 | `just eval bottlenecks` | Run full-instruction cases once by default and report Bottleneck Attribution from their Perfetto-compatible traces. |
