@@ -4,19 +4,20 @@ All notable changes to `ltcook` will be documented in this file.
 
 > [!IMPORTANT]
 > ## Rules
-> 1) Do not remove or change this header and TOC without very good reason. 
-> 1) When bumping version, move the sub-sections from `[Unreleased]` to
->    the new version -section. Remove empty sub-sections under released
->    versions. Provide a new `[Unreleased]` section at the top of the
->    changelog with all sections empty (don't remove those).
-> 1) Do not remove emojis and use `<br>` and `---`.
-> 1) Changelog entries must describe the final net difference from the
->    previous released version. Do not list intermediate pre-release
->    names, helper shapes, fixes, or refactors that were overwritten
->    before release.
-> 1) Use `🔨 Fixed` only for defects in previously released behavior.
->    For new features, describe the final shipped behavior under `➕
->    Added`, even if the implementation went through pre-release fixes.
+> This changelog follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) and
+> [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0/).
+>
+> Keep one cumulative section per target version. Start with `## [X.Y.Z] - YYYY-MM-DD (b1)`,
+> update the date, entries, and marker for `rc1`, and remove the marker for
+> stable. The notes describe what ships since the previous stable version.
+> Link the section to that stable tag once one exists. Include only stable
+> `X.Y.0` releases in the table of contents.
+>
+> Keep all six category headings under `[Unreleased]` and empty them before a
+> release. Omit empty categories from versioned sections. Preserve the emojis
+> and layout markers. Prefix breaking entries with `**Breaking:** 💥` in the
+> applicable category. Describe the final shipped behavior under Added for a
+> new feature. Use Fixed for defects in previously released behavior.
 
 
 
@@ -40,103 +41,16 @@ All notable changes to `ltcook` will be documented in this file.
 
 <!-- ======================================================== -->
 
-# [Unreleased]
+## [Unreleased]
 
 <br>
 
-### 💥 Breaking changes
+### ✨ Added
 
-- **Breaking:** 💥 Set `LTCOOK_MODEL_TINY_LOCAL` in place of
-  `LTCOOK_SUMMARIZER_MODEL`. `@plan` now shares the smart model slot, so
-  remove `LTCOOK_MODEL_PLAN`. Use plain `provider/model` settings and put
-  explicit reasoning in the Team or session. Start a new LTCook conversation
-  for existing Paseo profile records that predate saved alias selections.
-
-- **Breaking:** 💥 LTCook now uses AppRC 0.39.1rc1 (commit `054685`).
-  `app uninstall --keep-config` replaces `--keep-data` and retains the
-  configuration directory, including settings and secrets. Uninstall removes
-  appdata, cache, and state even when configuration is retained. Review
-  `app uninstall --dry-run` for selected paths.
-  Editable repositories remain unless `--remove-repository` selects them.
-  Replace `ltcook diagnose --json` with `ltcook app doctor --verbose --json`.
-  Lifecycle hooks are declared only in `pyproject.toml`; cleanup stops the
-  owned Compose project before AppRC removes managed directories.
-
-- Breaking: Team API v3 uses `leaderKey` and the canonical `leader` member.
-  Custom Teams must replace coordinator/Main identities and declare API v3.
-  Coordination schema 4 rejects older stores unchanged: stop the runtime,
-  preserve the old database, and select a new empty `runtime.database`. No
-  migration or automatic deletion is provided. See PR #5.
-
-- Breaking: Agent Evals uses run-record schema 3 with saved repetitions, timing history and partial diagnostics, and requires Bubblewrap for Linux/WSL execution. Existing evaluation histories are unsupported and left unchanged. Users can preserve old results, stop the runtime, remove its `evals/runs` directory, and restart to reset history. See PR #2.
-
-<br>
-- Breaking: personal clear-writing, TypeScript, React/Vite, reader-load and Modes planning guidance are no longer bundled by Core. Affected: installations relying on those defaults or the `ltcook-typescript`, `ltcook-react-vite` and `ltcook-reader-load` names. Migration: supply personal rules and native skill directories under the configured User guidance root; use the shared OMP skill names when using the chezmoi configuration. Core planning operations, approval gates, lookup and explore remain available without personal guidance.
-
-- Breaking: IBB is renamed to Agent Evals. Affected: CLI users and developers
-  using `ltcook ibb`, `just ibb`, `LTCOOK_IBB_RESULTS`, or IBB runtime/cache paths.
-  Migration: use `ltcook eval`, `just eval`, `LTCOOK_EVAL_RESULTS`, and the new
-  `evals` paths. Existing generated cache files and the old Ollama receipt are
-  left untouched; rerun the supported LTCook setup/repair flow to write the new
-  `eval_model` receipt field. No aliases, readers, or automatic data migration
-  are provided.
-
-- Breaking: Coordination schema 4 adds scheduled Task graphs, gates and assignment
-  attempts. Affected: users with older prototype coordination stores and custom
-  command consumers. Migration: preserve the old store, select a new empty
-  `runtime.database`, and adopt the extended Task/result/retry contracts. No
-  database conversion or automatic uncertain-action replay is provided.
-- Breaking: RIED replaces the Python project-context scanner and its JSON
-  format. Affected: callers of `ltcook.project_context`, `LTCOOK_PROJECT_CACHE_DIR`
-  and Team API v2 `WorkContext.projectContext`. Migration: use the authenticated
-  `ltcook_ried` tool or `/v1/ried` API and discard old cache files; no reader or
-  conversion is provided.
-- Breaking: Team packages require API v3 and the purpose-named `team-api`,
-  `guidance-api` and `workflow-api` imports. The generic `api` export and activation
-  hooks are removed. Custom Teams must implement the new declarations; no adapter
-  or automatic rewrite is supplied.
-- Breaking: Execution requires a registered, approved Plan and active Pass. Runtime
-  coordination uses a new schema and defaults to `<AppRC state>/runtime/coordination.sqlite`.
-  Existing prototype databases are rejected unchanged; select a new empty store
-  while preserving old files. No database conversion is provided.
-
-- Breaking: The `ltcook version` command is replaced with the eager root option
-  `ltcook --version` (alias `ltcook -V`). Affected: users and scripts invoking
-  the former subcommand. Migration: use `ltcook --version` or `ltcook -V`;
-  version output exits before AppRC runtime preparation.
-- Breaking: Opening a project with unset `LTCOOK_SESSION` now starts a new chat
-  instead of selecting a workspace-derived Session. To resume, set `LTCOOK_SESSION`
-  to an existing saved identifier; current-schema IDs and native bindings remain stable on restart.
-- Breaking: Team command consumers must create Passes explicitly, handle optional
-  `Task.passId`, and submit `review.create` with `passId` instead of `reportId`.
-  Review now gates the current whole-Pass revision. Teams must remove
-  `workflows.register` calls and use `TeamDefinition` as the policy authority.
-- Breaking: Python callers must import `ltcook.config.pi_config` instead of
-  `ltcook.config.native`. The unused `ltcook.utils` scaffold exports are removed.
-- Breaking: Pi agents now use a shared user-level authentication home instead of
-  credentials stored in each workspace Pi home. Users with workspace-only logins
-  must run `ltcook auth login PROVIDER` once, or set user-level `runtime.pi_auth_dir` to
-  an existing Pi auth home. Project settings and conversation histories stay
-  separate; credentials are not copied automatically.
-- Breaking: Bare `ltcook` now starts or attaches to the runtime instead of printing
-  help. Scripts requiring help must use `ltcook --help`; headless foreground users
-  should retain `ltcook launch runtime`.
-- Breaking: Maintenance commands move to `ltcook app ...`. Use `config setup`
-  and replace the optional terminal `ltcook launcher` with bare `ltcook` for
-  Paseo or `app doctor|paths|repair`.
-  Retire schema-2 installations with matching old tools and remove their
-  LTCook-owned resources before registering the checkout with
-  `uv run --locked ltcook app install -e`. Follow the
-  [clean reinstall guide](docs/How-To-User-Guides.md#install-from-a-checkout).
-- Breaking: Native distribution authors now build a committed-source Linux setup
-  with `just build-native`, rather than generated shell/Python installers or
-  adjacent-wheel PyApp bundles. Release staging requires schema-2 native manifests;
-  regenerate legacy manifests and assets from the intended immutable source commit.
-- Missing service secrets are generated only at explicit runtime/service starts
-  after installation is Ready, serialized across simultaneous starts; inspection
-  and authentication checks remain read-only.
-
-### ➕ Added
+- Explicit GitHub Release workflow for beta, release candidate, and stable
+  versions. Release preparation uses cumulative changelog notes. Publishing
+  stages and verifies Linux assets locally, with a separately configurable
+  hosted CI gate.
 
 - Shared model aliases for Teams, Paseo, and the native Pi and Codex launcher.
   Paseo saves the effective model and reasoning with each new conversation.
@@ -228,8 +142,7 @@ All notable changes to `ltcook` will be documented in this file.
   validation used by the installer builder and release tooling. Authenticated
   runtime requests stay on loopback and reject redirects.
 - Restored Buildben scaffold development recipes with checkout-local uv
-  environments and LTCook's asset-aware setup. Release recipes retain asset-only
-  behavior and disabled PyPI publication. `just clean` removes project-local
+  environments and LTCook's asset-aware setup. `just clean` removes project-local
   artifacts; `just clean-uv-cache` explicitly prunes the shared uv cache.
 - Added pinned Prettier development formatting and Ruff format checks for authored
   source, with generated AppRC assets excluded and marked generated.
@@ -246,29 +159,116 @@ All notable changes to `ltcook` will be documented in this file.
   includes diagnostic context and error stacks. Raw diagnostic files remain
   unchanged, and redirected output stays uncolored.
 
-### 💔 Changed
+### 🛠️ Changed
 
 <br>
-- Local summarization defaults to LFM3 1.7B Q8 with reasoning enabled.
-  Setup and repair prepare the new model in the configured Ollama instance.
+
+- **Breaking:** 💥 Set `LTCOOK_MODEL_TINY_LOCAL` in place of
+  `LTCOOK_SUMMARIZER_MODEL`. `@plan` now shares the smart model slot, so
+  remove `LTCOOK_MODEL_PLAN`. Use plain `provider/model` settings and put
+  explicit reasoning in the Team or session. Start a new LTCook conversation
+  for existing Paseo profile records that predate saved alias selections.
+
+- **Breaking:** 💥 LTCook now uses AppRC 0.39.1rc1 (commit `054685`).
+  `app uninstall --keep-config` replaces `--keep-data` and retains the
+  configuration directory, including settings and secrets. Uninstall removes
+  appdata, cache, and state even when configuration is retained. Review
+  `app uninstall --dry-run` for selected paths.
+  Editable repositories remain unless `--remove-repository` selects them.
+  Replace `ltcook diagnose --json` with `ltcook app doctor --verbose --json`.
+  Lifecycle hooks are declared only in `pyproject.toml`; cleanup stops the
+  owned Compose project before AppRC removes managed directories.
+
+- **Breaking:** 💥 Team API v3 uses `leaderKey` and the canonical `leader` member.
+  Custom Teams must replace coordinator/Main identities and declare API v3.
+  Coordination schema 4 rejects older stores unchanged: stop the runtime,
+  preserve the old database, and select a new empty `runtime.database`. No
+  migration or automatic deletion is provided. See PR #5.
+
+- **Breaking:** 💥 Agent Evals uses run-record schema 3 with saved repetitions, timing history and partial diagnostics, and requires Bubblewrap for Linux/WSL execution. Existing evaluation histories are unsupported and left unchanged. Users can preserve old results, stop the runtime, remove its `evals/runs` directory, and restart to reset history. See PR #2.
+
+<br>
+- **Breaking:** 💥 personal clear-writing, TypeScript, React/Vite, reader-load and Modes planning guidance are no longer bundled by Core. Affected: installations relying on those defaults or the `ltcook-typescript`, `ltcook-react-vite` and `ltcook-reader-load` names. Migration: supply personal rules and native skill directories under the configured User guidance root; use the shared OMP skill names when using the chezmoi configuration. Core planning operations, approval gates, lookup and explore remain available without personal guidance.
+
+- **Breaking:** 💥 IBB is renamed to Agent Evals. Affected: CLI users and developers
+  using `ltcook ibb`, `just ibb`, `LTCOOK_IBB_RESULTS`, or IBB runtime/cache paths.
+  Migration: use `ltcook eval`, `just eval`, `LTCOOK_EVAL_RESULTS`, and the new
+  `evals` paths. Existing generated cache files and the old Ollama receipt are
+  left untouched; rerun the supported LTCook setup/repair flow to write the new
+  `eval_model` receipt field. No aliases, readers, or automatic data migration
+  are provided.
+
+- **Breaking:** 💥 Coordination schema 4 adds scheduled Task graphs, gates and assignment
+  attempts. Affected: users with older prototype coordination stores and custom
+  command consumers. Migration: preserve the old store, select a new empty
+  `runtime.database`, and adopt the extended Task/result/retry contracts. No
+  database conversion or automatic uncertain-action replay is provided.
+- **Breaking:** 💥 RIED replaces the Python project-context scanner and its JSON
+  format. Affected: callers of `ltcook.project_context`, `LTCOOK_PROJECT_CACHE_DIR`
+  and Team API v2 `WorkContext.projectContext`. Migration: use the authenticated
+  `ltcook_ried` tool or `/v1/ried` API and discard old cache files; no reader or
+  conversion is provided.
+- **Breaking:** 💥 Team packages require API v3 and the purpose-named `team-api`,
+  `guidance-api` and `workflow-api` imports. The generic `api` export and activation
+  hooks are removed. Custom Teams must implement the new declarations; no adapter
+  or automatic rewrite is supplied.
+- **Breaking:** 💥 Execution requires a registered, approved Plan and active Pass. Runtime
+  coordination uses a new schema and defaults to `<AppRC state>/runtime/coordination.sqlite`.
+  Existing prototype databases are rejected unchanged; select a new empty store
+  while preserving old files. No database conversion is provided.
+
+- **Breaking:** 💥 The `ltcook version` command is replaced with the eager root option
+  `ltcook --version` (alias `ltcook -V`). Affected: users and scripts invoking
+  the former subcommand. Migration: use `ltcook --version` or `ltcook -V`;
+  version output exits before AppRC runtime preparation.
+- **Breaking:** 💥 Opening a project with unset `LTCOOK_SESSION` now starts a new chat
+  instead of selecting a workspace-derived Session. To resume, set `LTCOOK_SESSION`
+  to an existing saved identifier; current-schema IDs and native bindings remain stable on restart.
+- **Breaking:** 💥 Team command consumers must create Passes explicitly, handle optional
+  `Task.passId`, and submit `review.create` with `passId` instead of `reportId`.
+  Review now gates the current whole-Pass revision. Teams must remove
+  `workflows.register` calls and use `TeamDefinition` as the policy authority.
+- **Breaking:** 💥 Python callers must import `ltcook.config.pi_config` instead of
+  `ltcook.config.native`. The unused `ltcook.utils` scaffold exports are removed.
+- **Breaking:** 💥 Pi agents now use a shared user-level authentication home instead of
+  credentials stored in each workspace Pi home. Users with workspace-only logins
+  must run `ltcook auth login PROVIDER` once, or set user-level `runtime.pi_auth_dir` to
+  an existing Pi auth home. Project settings and conversation histories stay
+  separate; credentials are not copied automatically.
+- **Breaking:** 💥 Bare `ltcook` now starts or attaches to the runtime instead of printing
+  help. Scripts requiring help must use `ltcook --help`; headless foreground users
+  should retain `ltcook launch runtime`.
+- **Breaking:** 💥 Maintenance commands move to `ltcook app ...`. Use `config setup`
+  and replace the optional terminal `ltcook launcher` with bare `ltcook` for
+  Paseo or `app doctor|paths|repair`.
+  Retire schema-2 installations with matching old tools and remove their
+  LTCook-owned resources before registering the checkout with
+  `uv run --locked ltcook app install -e`. Follow the
+  [clean reinstall guide](docs/How-To-User-Guides.md#install-from-a-checkout).
+- **Breaking:** 💥 Native distribution authors now build a committed-source Linux setup
+  with `just build-native`, rather than generated shell/Python installers or
+  adjacent-wheel PyApp bundles. Release staging requires schema-2 native manifests;
+  regenerate legacy manifests and assets from the intended immutable source commit.
+- Missing service secrets are generated only at explicit runtime/service starts
+  after installation is Ready, serialized across simultaneous starts; inspection
+  and authentication checks remain read-only.
 
 - Updated the locked AppRC Git revision to include the central host-first,
   colored help renderer, preserving the CLI presentation after dependency sync.
 
-### ⚠️ Deprecated
+### 🗑️ Deprecated
 
 <br>
 
-### 🗑️ Removed
+### 🔥 Removed
 
 <br>
 
-### 🔨 Fixed
+### 🐛 Fixed
 
 <br>
-- The default LFM3 summarizer retries incomplete generation once without
-  reasoning. Summarization qualification accepts typographic hyphens for
-  designated ticket IDs and retains the original quoted evidence.
+- Summarization qualification accepts typographic hyphens for designated ticket
+  IDs and retains the original quoted evidence.
 - Agent Evals preserves coordination command labels and execution Pass guidance
   when Ollama renders tool schemas, and reports a finished scheduling handoff
   with no registered work without waiting for the time limit.

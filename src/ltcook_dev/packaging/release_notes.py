@@ -8,20 +8,25 @@ from collections.abc import Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION_RE = re.compile(r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$")
+_BASE_VERSION = r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}"
+_PREVIEW = r"(?:b|rc)[1-9][0-9]*"
+VERSION_RE = re.compile(
+    rf"(?P<base>{_BASE_VERSION})(?:(?P<phase>b|rc)(?P<serial>[1-9][0-9]*))?"
+)
 RELEASE_HEADING_RE = re.compile(
-    r"^# \[(?P<version>\d+\.\d+\.\d+)\] - "
-    r"(?P<date>\d{4}-\d{2}-\d{2})$",
+    rf"^## \[(?P<version>{_BASE_VERSION})\] - "
+    rf"(?P<date>\d{{4}}-\d{{2}}-\d{{2}})(?: \((?P<preview>{_PREVIEW})\))?"
+    r"(?P<yanked> \[YANKED\])?$",
     re.MULTILINE,
 )
-UNRELEASED_HEADING = "# [Unreleased]"
+UNRELEASED_HEADING = "## [Unreleased]"
 UNRELEASED_SECTIONS = (
-    "### 💥 Breaking Change Summary",
-    "### ➕ Added",
-    "### 💔 Changed",
-    "### ⚠️ Deprecated",
-    "### 🗑️ Removed",
-    "### 🔨 Fixed",
+    "### ✨ Added",
+    "### 🛠️ Changed",
+    "### 🗑️ Deprecated",
+    "### 🔥 Removed",
+    "### 🐛 Fixed",
+    "### 🔒 Security",
 )
 
 
@@ -37,10 +42,10 @@ def build_release_notes(
     :return: GitHub Release body.
     """
     validate_version(version)
-    validate_unreleased_section(markdown, allow_entries=allow_unreleased_entries)
     match = _release_heading(markdown, version)
+    validate_unreleased_section(markdown, allow_entries=allow_unreleased_entries)
     _validate_toc_entry(markdown, match)
-    next_heading = re.search(r"^# \[", markdown[match.end() :], re.MULTILINE)
+    next_heading = re.search(r"^## \[", markdown[match.end() :], re.MULTILINE)
     section_end = (
         match.end() + next_heading.start()
         if next_heading is not None
@@ -53,21 +58,41 @@ def build_release_notes(
 
 
 def validate_version(version: str) -> None:
-    """Reject identifiers outside the three-part version scheme.
+    """Require a canonical stable, beta, or release candidate version.
 
     :param version: Candidate version without a leading ``v``.
     :return: None.
     """
-    if VERSION_RE.fullmatch(version) is None:
+    _version_match(version)
+
+
+def _version_match(version: str) -> re.Match[str]:
+    match = VERSION_RE.fullmatch(version)
+    if match is None:
         raise ValueError(
-            f"Invalid release version {version!r}; expected MAJOR.MINOR.PATCH."
+            f"Invalid release version {version!r}. Expected MAJOR.MINOR.PATCH "
+            "with an optional bN or rcN suffix."
         )
+    return match
+
+
+def version_key(version: str) -> tuple[int, int, int, int, int]:
+    """Order canonical versions by numeric target, release channel, and serial."""
+    match = _version_match(version)
+    major, minor, patch = (int(part) for part in match["base"].split("."))
+    phase = {"b": 0, "rc": 1, None: 2}[match["phase"]]
+    return major, minor, patch, phase, int(match["serial"] or 0)
+
+
+def release_channel(version: str) -> str:
+    """Return the publication channel for a canonical project version."""
+    return ("beta", "pre-release", "stable")[version_key(version)[3]]
 
 
 def validate_tag_version(tag: str, project_version: str) -> None:
     """Require a pushed tag to name the checked-out project version.
 
-    :param tag: Git tag expected to use the ``vMAJOR.MINOR.PATCH`` form.
+    :param tag: Canonical project version prefixed with ``v``.
     :param project_version: Version read from project metadata.
     :return: None.
     """
@@ -87,11 +112,7 @@ def validate_next_version(current_version: str, next_version: str) -> None:
     :param next_version: Version prepared in the changelog for release.
     :return: None.
     """
-    validate_version(current_version)
-    validate_version(next_version)
-    current_key = tuple(int(part) for part in current_version.split("."))
-    next_key = tuple(int(part) for part in next_version.split("."))
-    if next_key <= current_key:
+    if version_key(next_version) <= version_key(current_version):
         raise ValueError(
             f"Prepared release {next_version!r} must be newer than the "
             f"current project version {current_version!r}."
@@ -104,13 +125,10 @@ def latest_release_version(markdown: str) -> str:
     :param markdown: Complete changelog text.
     :return: Highest released semantic version.
     """
-    matches = list(RELEASE_HEADING_RE.finditer(markdown))
+    matches = _release_headings(markdown)
     if not matches:
         raise ValueError("Changelog has no versioned release heading.")
-    return max(
-        (match.group("version") for match in matches),
-        key=lambda value: tuple(int(part) for part in value.split(".")),
-    )
+    return max((_heading_version(match) for match in matches), key=version_key)
 
 
 def validate_unreleased_section(markdown: str, *, allow_entries: bool = False) -> None:
@@ -120,28 +138,26 @@ def validate_unreleased_section(markdown: str, *, allow_entries: bool = False) -
     :param allow_entries: Whether build-only note extraction may tolerate entries.
     :return: None.
     """
-    if markdown.count(UNRELEASED_HEADING) != 1:
+    headings = list(
+        re.finditer(rf"^{re.escape(UNRELEASED_HEADING)}$", markdown, re.MULTILINE)
+    )
+    if len(headings) != 1:
         raise ValueError("Changelog must contain exactly one [Unreleased] heading.")
-    start = markdown.index(UNRELEASED_HEADING) + len(UNRELEASED_HEADING)
+    start = headings[0].end()
     next_release = RELEASE_HEADING_RE.search(markdown, start)
     if next_release is None:
         raise ValueError("Changelog has no released section after [Unreleased].")
     section = markdown[start : next_release.start()]
-    for heading in UNRELEASED_SECTIONS:
-        if section.count(heading) != 1:
-            raise ValueError(
-                "The [Unreleased] section must contain each release category "
-                f"exactly once; invalid heading: {heading!r}."
-            )
-    if not allow_entries:
-        content_lines = [
-            line for line in _content_lines(section) if not line.startswith("### ")
-        ]
-        if content_lines:
-            raise ValueError(
-                "The [Unreleased] section still contains release entries; move "
-                "them into the prepared version before tagging."
-            )
+    content = _content_lines(section)
+    categories = tuple(line for line in content if line.startswith("### "))
+    if categories != UNRELEASED_SECTIONS:
+        raise ValueError(
+            "The [Unreleased] section must contain the six release categories in order."
+        )
+    if not allow_entries and any(line not in categories for line in content):
+        raise ValueError(
+            "Move the [Unreleased] entries into the prepared version before tagging."
+        )
 
 
 def write_release_notes(
@@ -169,29 +185,58 @@ def write_release_notes(
     )
 
 
+def _release_headings(markdown: str) -> list[re.Match[str]]:
+    headings = []
+    for candidate in re.finditer(r"^## \[[0-9].*$", markdown, re.MULTILINE):
+        match = RELEASE_HEADING_RE.fullmatch(markdown, *candidate.span())
+        if match is None:
+            raise ValueError(f"Invalid cumulative release heading {candidate[0]!r}.")
+        headings.append(match)
+    return headings
+
+
+def _heading_version(match: re.Match[str]) -> str:
+    return match["version"] + (match["preview"] or "")
+
+
 def _release_heading(markdown: str, version: str) -> re.Match[str]:
     """Return the unique heading for one released version."""
-    matches = [
-        match
-        for match in RELEASE_HEADING_RE.finditer(markdown)
-        if match.group("version") == version
-    ]
+    headings = _release_headings(markdown)
+    matches = [match for match in headings if _heading_version(match) == version]
     if len(matches) != 1:
         raise ValueError(
             f"Changelog must contain exactly one release heading for {version}; "
             f"found {len(matches)}."
         )
-    return matches[0]
+    match = matches[0]
+    target = match["version"]
+    if sum(heading["version"] == target for heading in headings) != 1:
+        raise ValueError(f"Changelog must use one cumulative heading for {target}.")
+    return match
 
 
 def _validate_toc_entry(markdown: str, match: re.Match[str]) -> None:
-    """Require the released heading to appear once in the table of contents."""
-    version = match.group("version")
-    date = match.group("date")
-    entry = f"[\\[{version}\\] - {date}](#{version.replace('.', '')}---{date})"
-    if markdown.count(entry) != 1:
+    """Require a TOC entry for stable major and minor releases."""
+    version, date = match["version"], match["date"]
+    preview, yanked = match["preview"], match["yanked"] or ""
+    anchor = f"#{version.replace('.', '')}---{date}"
+    if preview:
+        anchor += f"-{preview}"
+    if yanked:
+        anchor += "-yanked"
+    stage = f" ({preview})" if preview else ""
+    entry = rf"[\[{version}\] - {date}{stage}{yanked}]({anchor})"
+    toc = f"\n{markdown}".partition(f"\n{UNRELEASED_HEADING}\n")[0]
+    if preview is None and version.endswith(".0"):
+        if toc.count(entry) == 1:
+            return
         raise ValueError(
             f"Changelog table of contents must contain exactly one {entry!r} entry."
+        )
+    if f"]({anchor})" in toc:
+        raise ValueError(
+            f"Patch or preview release {_heading_version(match)} must be omitted "
+            "from the changelog table of contents."
         )
 
 
@@ -274,6 +319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if project_version is None:
             raise ValueError("--tag requires --project-version.")
         validate_tag_version(args.tag, project_version)
+        validate_tag_version(args.tag, args.version)
     write_release_notes(
         args.changelog.read_text(encoding="utf-8"),
         args.version,

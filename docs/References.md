@@ -481,12 +481,15 @@ the checkout's TypeScript entrypoint. They do not launch the packaged runtime.
 | `just test-system` | Run system checks, including required Linux real Pi/Paseo scripted acceptance. |
 | `just build` | Build/stage runtime, team, and service production assets and the Python wheel/source distribution. |
 | `just sync`, `just install` | Prepare the checkout-local uv environment, install frozen locks, build, stage assets, and register the Python application. Does not provision Ollama. |
+| `just release-check` | Rehearse local source checks and build release packages. |
+| `just release-prepare VERSION` | Validate cumulative notes, set the project version, and create the local annotated tag. |
+| `just release-push TAG` | Verify the tagged Linux bundle and explicitly publish it to GitHub. |
 | `just build-native` | Build committed-source Linux setup and SDK checksums with uv >=0.11.6 and Rust/LLVM. |
 | `just format`, `just format-check` | Format authored TypeScript/Python or check the existing formatting. |
 | `just run -- COMMAND ...` | Run a command with preserved arguments in the locked uv environment. |
 
-Additional restored scaffold environment, worktree, lock, and asset-only release
-recipes are described in [Development](Development.md#maintainer-environment).
+The [release procedure](Development.md#releases) describes version preparation,
+the independent hosted CI gate, local verification, and GitHub publication.
 
 Bun is selected by the root/runtime `BUN` variable; set `BUN=/absolute/path/to/bun`
 if the executable is not available by its default name. Development uses `bun.lock`;

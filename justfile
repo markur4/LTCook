@@ -17,8 +17,9 @@
 # Let recipes use Bash features and fail-fast in pipelines
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Include PyPI in normal tag releases. Keep this policy in version control.
+# Keep publication and hosted CI gates independent in the committed policy.
 RELEASE_PYPI := "false"
+RELEASE_REQUIRE_CI := "false"
 export RELEASE_REPOSITORY := "markur4/LTCook"
 
 BUN := env_var_or_default("BUN", "bun")
@@ -286,10 +287,12 @@ _check-gh:
     }
 
 [private]
-_committed-release-pypi-policy ref:
+_committed-release-policy ref setting:
     #!/usr/bin/env bash
     set -euo pipefail
-    ref="{{ ref }}"
+    ref={{quote(ref)}}
+    setting={{quote(setting)}}
+    case "$setting" in RELEASE_PYPI|RELEASE_REQUIRE_CI) ;; *) exit 2 ;; esac
     if [[ "$ref" == "HEAD" ]]; then
         policy_commit="$(git rev-parse --verify --end-of-options 'HEAD^{commit}')"
     else
@@ -307,21 +310,17 @@ _committed-release-pypi-policy ref:
         echo "Resolved release policy target is not an immutable commit SHA." >&2
         exit 1
     fi
-    committed_justfile="$(mktemp)"
-    trap 'rm -f "$committed_justfile"' EXIT
-    if ! git show "${policy_commit}:justfile" > "$committed_justfile"; then
-        echo "Could not read justfile from commit ${policy_commit}." >&2
+    if ! source="$(git show "$policy_commit:justfile")"; then
+        echo "Could not read justfile from commit $policy_commit." >&2
         exit 1
     fi
-    if ! release_pypi="$(just --no-dotenv --justfile "$committed_justfile" --evaluate RELEASE_PYPI)"; then
-        echo "Could not evaluate RELEASE_PYPI in the committed justfile at ${policy_commit}." >&2
+    mapfile -t definitions < <(grep -E "^$setting[[:blank:]]*:=" <<< "$source")
+    literal="^$setting[[:blank:]]*:=[[:blank:]]*\"(true|false)\"[[:blank:]]*$"
+    if (( ${#definitions[@]} != 1 )) || [[ ! "${definitions[0]}" =~ $literal ]]; then
+        echo "$setting must be declared once as a true or false literal in commit $policy_commit." >&2
         exit 1
     fi
-    if [[ "$release_pypi" != "true" && "$release_pypi" != "false" ]]; then
-        echo "RELEASE_PYPI must be \"true\" or \"false\" in the committed justfile at ${policy_commit}, found '${release_pypi}'." >&2
-        exit 1
-    fi
-    printf '%s\n' "$release_pypi"
+    printf '%s\n' "${BASH_REMATCH[1]}"
 
 [private]
 _check-clean-worktree action="publishing":
@@ -492,8 +491,10 @@ _release-artifact-check notes_output build_only="false" notes_input="":
     notes_output="{{notes_output}}"
     notes_input={{quote(notes_input)}}
     rm -rf dist
-    mkdir -p "$(dirname "$notes_output")"
-    if [[ -n "$notes_input" ]]; then
+    if [[ -z "$notes_output" ]]; then
+        : # > An unprepared release rehearsal still checks the package artifacts.
+    elif [[ -n "$notes_input" ]]; then
+        mkdir -p "$(dirname "$notes_output")"
         if [[ ! -f "$notes_input" ]]; then
             echo "Release notes input must be a regular file: $notes_input" >&2
             exit 1
@@ -534,8 +535,8 @@ check-native:
     (cd dist && sha256sum -c SHA256SUMS)
 
 # -- Stage versioned installer assets without publishing them.
-stage-release-assets tag commit:
-    PYTHONPATH=src uv run --locked --group dev python -m ltcook_dev.packaging.release_stage {{quote(tag)}} {{quote(commit)}}
+stage-release-assets tag commit destination="release/assets":
+    PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.release_stage {{quote(tag)}} {{quote(commit)}} --destination {{quote(destination)}}
 
 # Build standard wheel and sdist once without running the full source matrix.
 build-release-inputs notes_file="":
@@ -560,8 +561,9 @@ release-wheel-smoke:
     trap 'rm -rf "$smoke_root"' EXIT
     (cd "$smoke_root"; uv run --isolated --python 3.12 --with "ltcook @ $artifact_uri" python "$smoke_script" --expected-version "$version")
 
-release-install-smoke:
-    LTCOOK_NATIVE_SETUP="$(realpath dist/ltcook-setup-linux-x86_64)" PYTHONPATH=src uv run --locked --no-sync pytest tests/python/system/test_native_setup.py::test_native_and_editable_uninstall_remove_selected_resources
+release-install-smoke setup="dist/ltcook-setup-linux-x86_64":
+    test -f {{quote(setup)}}
+    LTCOOK_NATIVE_SETUP="$(realpath {{quote(setup)}})" PYTHONPATH=src uv run --locked --no-sync pytest tests/python/system/test_native_setup.py::test_native_and_editable_uninstall_remove_selected_resources
 
 # Rehearse the release gate. It does not upload anything.
 release-check:
@@ -570,28 +572,13 @@ release-check:
     just _check-uv
     check_root="$(mktemp -d)"
     trap 'rm -rf "$check_root"' EXIT
-    current_version="$(uv version --short)"
-    prepared_version="$(PYTHONPATH=src python -c 'from pathlib import Path; from ltcook_dev.packaging.release_notes import latest_release_version; print(latest_release_version(Path("CHANGELOG.md").read_text(encoding="utf-8")))')"
-    if [[ "${PROJECT_RELEASE_IN_PROGRESS:-}" != 1 && "$prepared_version" != "$current_version" ]]; then
-        PYTHONPATH=src python -c 'import sys; from ltcook_dev.packaging.release_notes import validate_next_version; validate_next_version(*sys.argv[1:])' "$current_version" "$prepared_version"
-        version_root="$check_root/version"
-        mkdir -p "$version_root"
-        cp pyproject.toml uv.lock pylock.toml "$version_root/"
-        restore_version_files=true
-        cleanup() { exit_code=$?; trap - EXIT; if [[ "$restore_version_files" == true ]]; then cp "$version_root/pyproject.toml" pyproject.toml; cp "$version_root/uv.lock" uv.lock; cp "$version_root/pylock.toml" pylock.toml; fi; rm -rf "$check_root"; exit "$exit_code"; }
-        trap cleanup EXIT
-        uv version "$prepared_version" --no-sync
-        uv export -o pylock.toml --all-extras --all-groups --quiet
-        PROJECT_RELEASE_IN_PROGRESS=1 just release-check
-        exit $?
-    fi
+    just sync
+    {{quote(BUN)}} run check
+    {{quote(BUN)}} run test
     for python_version in 3.12 3.13; do just _ci-check-python "$python_version" "$check_root/python-${python_version}/.venv"; done
-    just _release-artifact-check "$check_root/release-notes.md"
-    if [[ "${PROJECT_RELEASE_IN_PROGRESS:-}" == 1 ]]; then
-        echo "Local release rehearsal passed; nothing was published."
-    else
-        echo "Asset rehearsal passed. No tags, pushes, or publication were performed."
-    fi
+    UV_PROJECT_ENVIRONMENT="$check_root/artifacts/.venv" just _release-artifact-check ""
+    echo "Local release rehearsal passed. No refs or artifacts were published."
+
 
 # Prepare a checked version commit and annotated local release tag.
 release-prepare level="patch":
@@ -599,14 +586,19 @@ release-prepare level="patch":
     set -euo pipefail
     just _check-uv
     just _check-clean-worktree "preparing the release"
-    next_version="$(uv version --bump "{{level}}" --dry-run --short)"
+    requested={{quote(level)}}
+    case "$requested" in
+        major|minor|patch) next_version="$(uv version --bump "$requested" --dry-run --short)" ;;
+        *) next_version="$requested" ;;
+    esac
+    PYTHONPATH=src python -c 'import sys; from ltcook_dev.packaging.release_notes import validate_next_version; validate_next_version(*sys.argv[1:])' "$(uv version --short)" "$next_version"
     tag="v${next_version}"
     if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
         echo "Tag ${tag} already exists. Choose another release level." >&2
         exit 1
     fi
 
-    echo "Preparing ${tag} locally. The release workflow builds assets only."
+    echo "Preparing ${tag} locally."
     release_root="$(mktemp -d)"
     notes_file="$release_root/release-notes.md"
     restore_version_files=false
@@ -615,12 +607,14 @@ release-prepare level="patch":
     python src/ltcook_dev/packaging/release_notes.py "$next_version" --output "$notes_file"
     cp pyproject.toml uv.lock pylock.toml "$release_root/"
     restore_version_files=true
-    uv version --bump "{{level}}" --no-sync
+    uv version "$next_version" --no-sync
     uv export -o pylock.toml --all-extras --all-groups --quiet
     uv lock --check
-    just _release-artifact-check "$notes_file"
-    git commit --only pyproject.toml uv.lock pylock.toml -m "Bump version to ${next_version}"
+    # > Isolate the release index so a failed commit cannot leave version files staged.
+    GIT_INDEX_FILE="$release_root/index" git read-tree HEAD
+    GIT_INDEX_FILE="$release_root/index" git commit --only -m "Bump version to ${next_version}" -- pyproject.toml uv.lock pylock.toml
     restore_version_files=false
+    git restore --staged --source=HEAD -- pyproject.toml uv.lock pylock.toml
     if ! git tag -a "$tag" -m "Release ${tag}"; then
         echo "Version commit succeeded, but tag creation failed. Retry with:" >&2
         echo "git tag -a ${tag} -m 'Release ${tag}'" >&2
@@ -638,52 +632,95 @@ release-prepare level="patch":
     echo
     echo "  just release-push ${tag}"
     echo
-    echo "release-push pushes the prepared ref and requests the manual asset build."
-    echo "It creates no GitHub Release and publishes no package."
+    echo "release-push checks, stages and publishes the Linux assets to GitHub."
     echo "================================================================="
 
-# Push a prepared release commit and tag as one remote operation.
+[private]
+_wait-release-ci tag commit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for attempt in {1..30}; do
+        run_id="$(gh run list --repo "$RELEASE_REPOSITORY" --workflow ci.yml --event push --branch {{quote(tag)}} --commit {{quote(commit)}} --json databaseId --jq '.[0].databaseId // empty')"
+        if [[ -n "$run_id" ]]; then
+            gh run watch --repo "$RELEASE_REPOSITORY" "$run_id" --exit-status
+            exit 0
+        fi
+        sleep 2
+    done
+    echo "No hosted CI run for this tag and commit. Retry release-push after CI starts." >&2
+    exit 1
+
+# Build and verify the tagged Linux bundle locally, then publish it to GitHub.
 release-push tag:
     #!/usr/bin/env bash
     set -euo pipefail
     just _check-clean-worktree "pushing the release"
-    tag="{{ tag }}"
-
-    if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-        echo "Invalid release tag '${tag}'; expected vMAJOR.MINOR.PATCH." >&2
-        exit 1
-    fi
-    if [[ "$(git branch --show-current)" != "main" ]]; then
+    just _check-gh
+    tag={{quote(tag)}}
+    version="$(uv version --short)"
+    PYTHONPATH=src python -c 'import sys; from ltcook_dev.packaging.release_notes import validate_tag_version; validate_tag_version(*sys.argv[1:])' "$tag" "$version"
+    if [[ "$(git branch --show-current)" != main ]]; then
         echo "Release pushes must run from the main branch." >&2
         exit 1
     fi
-    if ! git cat-file -e "refs/tags/${tag}^{tag}" 2>/dev/null; then
-        echo "Annotated local tag ${tag} does not exist." >&2
+    ref="refs/tags/$tag"
+    commit="$(git rev-parse HEAD)"
+    if ! annotated_tag="$(git rev-parse --verify --end-of-options "$ref^{tag}" 2>/dev/null)" ||
+       [[ "$(git rev-parse "$ref^{commit}")" != "$commit" ]]; then
+        echo "Annotated tag $tag must point to the current main commit." >&2
         exit 1
     fi
-    if [[ "$(git rev-list -n 1 "refs/tags/${tag}")" != "$(git rev-parse --verify --end-of-options 'HEAD^{commit}')" ]]; then
-        echo "Tag ${tag} does not point to the current main commit." >&2
+    if [[ "$(just _committed-release-policy "$tag" RELEASE_PYPI)" != false ]]; then
+        echo "LTCook release commands require RELEASE_PYPI=false." >&2
         exit 1
     fi
-    release_pypi="$(just _committed-release-pypi-policy "$tag")"
-    if [[ "$release_pypi" != "false" ]]; then
-        echo "This repository supports asset builds only; RELEASE_PYPI must remain false." >&2
-        exit 1
-    fi
-    just _check-gh
-    git push --atomic origin refs/heads/main:refs/heads/main "refs/tags/${tag}:refs/tags/${tag}"
-    gh workflow run release.yml --repo "{{RELEASE_REPOSITORY}}" --ref "$tag"
-    echo "Requested the manual asset build. No GitHub Release or PyPI publication is created."
+    require_ci="$(just _committed-release-policy "$tag" RELEASE_REQUIRE_CI)"
 
-# -- Prepare a version and request the manual asset-only build after a push.
+    export PYTHONPATH=src
+    publisher=(uv run --locked --no-sync python -m ltcook_dev.packaging.release_assets)
+    identity=(--repository "$RELEASE_REPOSITORY" --tag "$tag" --commit "$commit")
+    cache=".cache/apprc/releases"
+    bundle="$cache/$tag-$commit"
+    mkdir -p "$cache"
+    exec 9>"$cache/.lock"
+    flock 9
+    if [[ ! -d "$bundle" ]]; then
+        stage="$(mktemp -d "$cache/.staging.XXXXXXXX")"
+        trap 'rm -rf "$stage"' EXIT
+        python src/ltcook_dev/packaging/release_notes.py "$version" --tag "$tag" \
+            --project-version "$version" --output "$stage/release-notes.md"
+        just release-check
+        just build-native
+        just check-native
+        just stage-release-assets "$tag" "$commit" "$stage/assets"
+        "${publisher[@]}" verify "${identity[@]}" --directory "$stage/assets"
+        just release-install-smoke "$stage/assets/ltcook-setup-linux-x86_64"
+        (cd "$stage"; sha256sum release-notes.md assets/* > bundle.sha256)
+        mv -T --no-clobber "$stage" "$bundle"
+    fi
+    (cd "$bundle"; sha256sum --strict --check bundle.sha256)
+    "${publisher[@]}" verify "${identity[@]}" --directory "$bundle/assets"
+    just _check-clean-worktree "publishing the verified release"
+    if [[ "$(git branch --show-current)" != main || "$(git rev-parse HEAD)" != "$commit" ||
+          "$(git rev-parse --verify --end-of-options "$ref^{tag}")" != "$annotated_tag" ]]; then
+        echo "The prepared main commit or annotated tag changed while checking the bundle." >&2
+        exit 1
+    fi
+    git push --atomic origin "$commit:refs/heads/main" "$annotated_tag:$ref"
+    if [[ "$require_ci" == true ]]; then
+        just _wait-release-ci "$tag" "$commit"
+    fi
+    "${publisher[@]}" publish "${identity[@]}" --directory "$bundle/assets" \
+        --notes "$bundle/release-notes.md"
+
+# Prepare and publish a release using the normal local checks.
 release level="patch":
     #!/usr/bin/env bash
     set -euo pipefail
-    just release-prepare "{{ level }}"
+    just release-prepare {{quote(level)}}
     tag="v$(uv version --short)"
     if ! just release-push "$tag"; then
-        echo "Release ${tag} remains prepared locally." >&2
-        echo "Retry with: just release-push ${tag}" >&2
+        echo "Retry once the reported problem is fixed: just release-push $tag" >&2
         exit 1
     fi
 

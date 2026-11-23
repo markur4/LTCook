@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import tarfile
 import zipfile
 from dataclasses import replace
@@ -178,10 +179,13 @@ def test_release_stage_preserves_sdk_checksums_and_stages_exact_assets(
 
     inputs = _release_inputs(tmp_path)
     monkeypatch.chdir(tmp_path)
-    names = stage_release(f"v{VERSION}", COMMIT, root=tmp_path)
-    payload = {
-        name: (tmp_path / "release/assets" / name).read_bytes() for name in names
-    }
+    if os.name == "posix":
+        (tmp_path / "dist" / SETUP).chmod(0o755)
+    destination = tmp_path / "staged/assets"
+    names = stage_release(f"v{VERSION}", COMMIT, root=tmp_path, destination=destination)
+    if os.name == "posix":
+        assert (destination / SETUP).stat().st_mode & 0o111
+    payload = {name: (destination / name).read_bytes() for name in names}
     assert {
         name: data for name, data in payload.items() if name != MANIFEST_NAME
     } == inputs

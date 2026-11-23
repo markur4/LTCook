@@ -471,29 +471,44 @@ from WSL.
 
 ## Releases
 
-The root `justfile` sets `RELEASE_PYPI := "false"`; do not recommend or run PyPI
-publication commands. There is currently no published LTCook release. The manual
-GitHub Actions release workflow builds Linux wheel/sdist, committed-source native
-setup and SDK checksums. It uploads workflow artifacts but creates no tag,
-GitHub Release or PyPI publication. Neither an asset build nor a passing
-fixture-based check establishes a live installation or model-backed session.
+The committed `RELEASE_REQUIRE_CI` setting controls the hosted CI gate.
+With its default value `false`, the release command relies on successful local
+tests and artifact verification. Set it to `true` to also require hosted CI on
+the exact tag and commit. Raw version tag pushes trigger CI. The independent
+`RELEASE_PYPI` setting is `false` for LTCook.
 
-The scaffold's local release commands are adapted to this asset-only policy.
-`just build-release-inputs` builds packages and notes; `just release-check`
-rehearses the local checks without uploading. `just release-prepare LEVEL` creates
-a local version commit and annotated tag. `just release-push TAG` explicitly
-pushes the prepared refs and dispatches the manual asset workflow, while
-`just release LEVEL` combines those two operations. None creates a GitHub Release
-or publishes to PyPI. These mutation and remote operations require separate
-authorization; they are not ordinary checks. The incompatible scaffold
-`publish-pypi` recipe is deliberately absent.
+Keep one cumulative changelog section per target version. Start the section
+with a heading such as `## [0.2.0] - YYYY-MM-DD (b1)`, then update the same
+heading and entries for `(rc1)`. Remove the stage marker for the stable
+version. One beta and one release candidate are the default. Use `b2` or
+`rc2` when a fix needs another preview. Move the entries out of `[Unreleased]`
+before preparing the release. Each tag preserves its changelog snapshot.
 
-Release staging checks the setup's embedded binding against application,
-distribution, version, command and requested source commit, then verifies its
-exact SDK checksum entry. The schema-2 manifest hashes the final package/native
-assets without hashing itself; stale setup binaries and legacy script/zipapp
-manifests are rejected. Windows/macOS native behavior needs independent native
-verification; never run Windows verification executables from WSL.
+```shell
+just release-check
+just release-prepare 0.2.0rc1
+just release-push v0.2.0rc1
+```
+
+`release-check` runs the source checks and verifies the built wheel and source
+archive. `release-prepare` accepts an explicit version or `patch`, `minor`,
+and `major`. It validates the prepared notes, updates project metadata and locks,
+and creates an annotated local tag on the version commit.
+
+`release-push` runs the local checks, builds the committed Linux setup, and
+smoke-tests the staged installer. It uses its embedded binding and checksum to
+verify the app, distribution, command, version, and source commit. The command
+caches the verified bundle under `.cache/apprc/releases/`, pushes `main` and
+the tag together, and publishes the matching GitHub Release. Run it again to
+retry the checked bundle. `just release VERSION` combines preparation and
+publication. Git pushes and release publication require explicit authorization.
+
+GitHub marks beta and RC builds as prereleases. Publishing keeps the newest
+beta and the three newest release candidates. Retention removes older preview
+releases and their downloads, while Git tags and stable releases stay available.
+The published-release workflow verifies and starts the uploaded Linux setup.
+The manual workflow remains available for building downloadable GitHub Actions
+artifacts. Native Windows and macOS behavior requires checks on those platforms.
 
 
 ## Shared personal skill discovery

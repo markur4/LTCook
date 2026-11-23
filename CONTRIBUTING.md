@@ -85,8 +85,8 @@ scenario prerequisites are available.
 Do not run installation smoke tests as a default loop. They require an explicitly
 built native setup and its immutable source commit, plus compiler/download prerequisites.
 Windows and macOS behavior is not established by Linux execution. The guides explain these
-limits; the [release guide](docs/Development.md#releases) describes the current
-Linux-only manual asset build, not publication.
+limits; the [release guide](docs/Development.md#releases) covers the Linux asset
+rehearsal and explicit publication commands.
 
 ---
 

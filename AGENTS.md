@@ -5,7 +5,8 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
 
 ## Release policy
 - Treat the committed `RELEASE_PYPI` value in `justfile` as a hard gate. When it is `"false"`, do not recommend or run a manual PyPI publish or retry command.
-- The current manual asset-build workflow creates no tags, GitHub Releases or PyPI publications.
+- Treat the committed `RELEASE_REQUIRE_CI` value independently from PyPI. Require successful local checks and artifact verification. When the value is `true`, also wait for hosted CI on the exact prepared tag and commit.
+- The manual asset-build workflow stages workflow artifacts. The explicit local release command publishes verified Linux artifacts to GitHub.
 - Publishing requires separate explicit authorization; do not turn repository push permission into release permission.
 
 ## Repo routing and project rules
