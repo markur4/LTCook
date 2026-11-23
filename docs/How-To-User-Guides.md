@@ -437,7 +437,9 @@ uses `@plan` with its explicit high effort. Spark supports off, low, and high.
 
 The draft previews runtime defaults. Workspace AppRC settings are applied at
 launch. Paseo saves the resolved provider, model, and reasoning with the
-conversation. Reopening it uses that saved selection even after an alias changes.
+conversation. Reopening it uses the last saved native settings even after an
+alias changes. A live change through Paseo's native controls updates the
+settings shown in the running conversation.
 
 Use the terminal launcher to start a new native conversation:
 
@@ -449,7 +451,12 @@ ltcook launch model pi @tiny-local --reasoning high
 
 Pi uses the configured provider and the native Pi login. Codex uses its installed
 CLI and its current login for hosted models. Pass other native launch arguments
-after `--`. For managed conversation history, reopen the Session in Paseo.
+after `--`. Reopen managed Sessions in Paseo. To resume a terminal
+conversation, use the native CLI. For a Pi session with a custom model, such as
+Spark, register the saved provider and exact model ID in the native Pi
+`models.json` before resuming. Copy the relevant model entry from the workspace
+Pi configuration, which `ltcook launch write-native-config --workspace ROOT`
+can generate.
 
 Change the physical model slots in
 [AppRC](References.md#environment-variables). For hosted slots enter
@@ -463,13 +470,13 @@ LTCook exposes the installed Pi authentication CLI without implementing another
 login flow:
 
 ```shell
-ltcook auth login openai
-ltcook auth check --provider openai --json --no-refresh
-ltcook auth logout openai
+ltcook auth login openai-codex
+ltcook auth check --provider openai-codex --json --no-refresh
+ltcook auth logout openai-codex
 ```
 
 `login` requires an interactive terminal. For a headless machine, use
-`ltcook auth login openai --no-browser` and follow Pi's instructions. To store an
+`ltcook auth login openai-codex --no-browser` and follow Pi's instructions. To store an
 OpenAI API key rather than sign in with an account, use
 `ltcook auth login openai --api-key`. Account OAuth and API billing credentials
 are different methods; configuring `OPENAI_API_KEY` is not a ChatGPT login.

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
+  catalogModelAliases,
   reasoningOptions,
   resolveModel,
   ResolvedModelSchema,
@@ -48,6 +49,24 @@ test('session reasoning wins over a Team setting, which wins over the preset', (
     reasoningSource: 'session',
   });
   expect(resolveModel('smol', environment, { teamReasoning: '' })).not.toHaveProperty('reasoning');
+});
+
+test('catalog evaluates the Team override before the alias preset', () => {
+  const localSmart = { ...environment, LTCOOK_MODEL_SMART: 'ollama/custom' };
+  const valid = catalogModelAliases({ modelAlias: 'plan', thinking: 'high' }, localSmart);
+  expect(valid.aliases.find(({ alias }) => alias === 'plan')).toMatchObject({
+    model: 'custom',
+    preset: 'xhigh',
+    reasoning: 'high',
+    reasoningSource: 'team',
+  });
+
+  const invalid = catalogModelAliases({ modelAlias: 'plan' }, localSmart);
+  expect(invalid.aliases.find(({ alias }) => alias === 'plan')).toMatchObject({
+    configurationError: expect.stringContaining('supports none, low, high'),
+    reasoningOptions: ['none', 'low', 'high'],
+  });
+  expect(invalid.aliases.find(({ alias }) => alias === 'tiny')?.reasoning).toBe('low');
 });
 
 test('saved settings retain the resolved provider, model, and reasoning when settings change', () => {
@@ -143,4 +162,7 @@ test.each([
     env: { CODEX_OSS_BASE_URL: 'http://127.0.0.1:21434/v1' },
   });
   expect(() => modelCommand('codex', selected, {})).toThrow('LTCOOK_OLLAMA_ENDPOINT');
+  expect(() =>
+    modelCommand('codex', selected, { LTCOOK_OLLAMA_ENDPOINT: 'https://ollama.example' }),
+  ).toThrow('HTTP loopback');
 });

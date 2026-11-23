@@ -8,6 +8,7 @@ import {
   MODEL_REASONING_METADATA_KEY,
   RESOLVED_MODEL_METADATA_KEY,
   ResolvedModelSchema,
+  effectiveRunningModel,
   type ReasoningEffort,
   type ResolvedModel,
 } from '../../shared/models';
@@ -29,12 +30,15 @@ function reasoningLabel(reasoning: ReasoningEffort | undefined) {
 function resolutionLabel(model: ResolvedModel) {
   const effort = reasoningLabel(model.reasoning);
   if (model.reasoningSource === 'session')
-    return `${effort} · Session setting overrides alias preset`;
+    return model.preset && model.preset !== model.reasoning
+      ? `${effort} · Session setting overrides alias preset`
+      : `${effort} · Session setting`;
   if (model.reasoningSource === 'team')
     return model.preset && model.preset !== model.reasoning
       ? `${effort} · Team setting overrides alias preset`
       : `${effort} · Team setting`;
-  if (model.reasoningSource === 'default') return effort;
+  if (model.reasoningSource === 'default')
+    return model.reasoning ? `${effort} · provider default` : effort;
   return `${effort} · alias preset`;
 }
 
@@ -77,7 +81,9 @@ export function ModelComposerItem({ theme }: PluginComposerItemProps) {
   );
 
   if (composer.context === 'agent' && storedModel.success)
-    return <ModelBadge theme={theme} model={storedModel.data} />;
+    return (
+      <ModelBadge theme={theme} model={effectiveRunningModel(storedModel.data, composer.agent)} />
+    );
   if (!canChooseModel) return null;
 
   const selectedAlias = stringMetadata(composer.agent.metadata, MODEL_ALIAS_METADATA_KEY);
@@ -184,7 +190,7 @@ export function ModelComposerItem({ theme }: PluginComposerItemProps) {
           onValueChange={({ value }) => chooseReasoning(value)}
         />
       )}
-      {preview && (
+      {preview && !configurationError && !overrideError && (
         <Text style={{ color: theme.colors.foregroundMuted }}>
           @{preview.alias} · {preview.provider}/{preview.model} · {resolutionLabel(preview)}
         </Text>

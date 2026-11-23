@@ -3,6 +3,7 @@ import {
   ModelCatalogRequestSchema,
   ModelCatalogResponseSchema,
   ResolvedModelSchema,
+  effectiveRunningModel,
 } from '../../../runtime/src/paseo-plugin/shared/models.js';
 
 describe('Paseo model selection contract', () => {
@@ -67,5 +68,27 @@ describe('Paseo model selection contract', () => {
         ),
       }).success,
     ).toBe(false);
+  });
+});
+
+test('running Paseo settings display a native override while retaining the alias', () => {
+  const selected = ResolvedModelSchema.parse({
+    alias: 'plan',
+    provider: 'openai-codex',
+    model: 'gpt-6.2-sol',
+    preset: 'xhigh',
+    reasoning: 'high',
+    reasoningSource: 'team',
+  });
+  expect(
+    effectiveRunningModel(selected, {
+      model: 'ollama/hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
+      thinking: 'off',
+    }),
+  ).toMatchObject({
+    alias: 'plan',
+    provider: 'ollama',
+    reasoning: 'none',
+    reasoningSource: 'session',
   });
 });

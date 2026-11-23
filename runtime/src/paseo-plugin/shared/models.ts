@@ -60,3 +60,27 @@ export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
 export type ModelResolutionSource = z.infer<typeof ModelResolutionSourceSchema>;
 export type ResolvedModel = z.infer<typeof ResolvedModelSchema>;
 export type ModelCatalogResponse = z.infer<typeof ModelCatalogResponseSchema>;
+
+/** Keep the saved alias when a user changes the model or effort through Paseo's native controls. */
+export function effectiveRunningModel(
+  saved: ResolvedModel,
+  native: { model: string | null; thinking: string | null },
+): ResolvedModel {
+  const separator = native.model?.indexOf('/') ?? -1;
+  const physical =
+    native.model && separator > 0
+      ? { provider: native.model.slice(0, separator), model: native.model.slice(separator + 1) }
+      : {};
+  const reasoning = ReasoningEffortSchema.safeParse(
+    native.thinking === 'off' ? 'none' : native.thinking,
+  ).data;
+  return {
+    ...saved,
+    ...physical,
+    reasoning: reasoning ?? saved.reasoning,
+    reasoningSource:
+      reasoning !== undefined && saved.reasoning !== undefined && reasoning !== saved.reasoning
+        ? 'session'
+        : saved.reasoningSource,
+  };
+}

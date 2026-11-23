@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EVAL_MODEL } from '../evals/setup.js';
-import { ResolvedModelSchema } from '../models/aliases.js';
+import { ReasoningEffortSchema, ResolvedModelSchema } from '../models/aliases.js';
 import { piThinking } from '../models/adapters.js';
 import { WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
 import {
@@ -306,35 +306,46 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
     const scope = patterns?.length
       ? await resolveModelScopeWithDiagnostics(patterns, modelRuntime)
       : { scopedModels: [], diagnostics: [] };
-    const selectedModel = selection?.model ?? parsed.model;
-    const selectedThinking = selection ? piThinking(selection.reasoning) : parsed.thinking;
-    const resolved = selectedModel
-      ? resolveCliModel({
-          cliProvider: selection?.provider ?? parsed.provider,
-          cliModel: selectedModel,
-          cliThinking: selectedThinking,
-          inlineApiKey: Boolean(parsed.apiKey),
-          modelRuntime,
-        })
+    const history = sessionManager.buildSessionContext();
+    const recordedModel = selection
+      ? (history.model ?? { provider: selection.provider, modelId: selection.model })
       : undefined;
-    if (resolved?.error) throw new Error(resolved.error);
-    if (
-      selection &&
-      (resolved?.model?.id !== selection.model || resolved.model.provider !== selection.provider)
-    )
+    const savedReasoning = ReasoningEffortSchema.safeParse(
+      history.thinkingLevel === 'off' ? 'none' : history.thinkingLevel,
+    ).data;
+    // > Paseo passes its saved effort on resume. Pi's history records any live model change.
+    const selectedThinking =
+      selection && !history.model
+        ? piThinking(selection.reasoning)
+        : (parsed.thinking ?? (selection ? piThinking(savedReasoning) : undefined));
+    const savedModel = recordedModel
+      ? modelRuntime.getModel(recordedModel.provider, recordedModel.modelId)
+      : undefined;
+    if (recordedModel && !savedModel)
       throw new Error(
-        `Pi cannot resolve the saved model ${selection.provider}/${selection.model}.`,
+        `Pi cannot resolve the saved model ${recordedModel.provider}/${recordedModel.modelId}.`,
       );
+    const resolved =
+      !selection && parsed.model
+        ? resolveCliModel({
+            cliProvider: parsed.provider,
+            cliModel: parsed.model,
+            cliThinking: parsed.thinking,
+            inlineApiKey: Boolean(parsed.apiKey),
+            modelRuntime,
+          })
+        : undefined;
+    if (resolved?.error) throw new Error(resolved.error);
     if (resolved?.warning) console.error(resolved.warning);
     const scopedDefault =
-      sessionManager.buildSessionContext().messages.length === 0
+      history.messages.length === 0
         ? (scope.scopedModels.find(
             ({ model }) =>
               model.provider === settingsManager.getDefaultProvider() &&
               model.id === settingsManager.getDefaultModel(),
           ) ?? scope.scopedModels[0])
         : undefined;
-    const model = resolved?.model ?? scopedDefault?.model;
+    const model = savedModel ?? resolved?.model ?? scopedDefault?.model;
     const thinkingLevel =
       selectedThinking ?? resolved?.thinkingLevel ?? scopedDefault?.thinkingLevel;
     if (parsed.apiKey) {
@@ -357,12 +368,12 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
       noTools: parsed.noTools ? 'all' : parsed.noBuiltinTools ? 'builtin' : undefined,
     });
     if (
-      selection &&
+      recordedModel &&
       selectedThinking !== undefined &&
       created.session.thinkingLevel !== selectedThinking
     ) {
       throw new Error(
-        `Pi cannot run ${selection.provider}/${selection.model} with ${selection.reasoning} reasoning.`,
+        `Pi cannot run ${recordedModel.provider}/${recordedModel.modelId} with ${selectedThinking} reasoning.`,
       );
     }
     if (created.session.model && (selectedThinking !== undefined || resolved?.thinkingLevel)) {

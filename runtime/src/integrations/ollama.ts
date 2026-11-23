@@ -83,7 +83,9 @@ export function ollamaEndpoint(value: string): URL {
     }
     return endpoint;
   } catch {
-    throw new Error('Configure the AppRC Ollama endpoint as an HTTP loopback URL with a port.');
+    throw new Error(
+      'Configure LTCOOK_OLLAMA_ENDPOINT in AppRC as an HTTP loopback URL with a port.',
+    );
   }
 }
 

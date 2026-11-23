@@ -82,12 +82,7 @@ function unsupportedReasoning(
   return new Error(`@${alias} with ${provider}/${model} supports ${options.join(', ')} reasoning.`);
 }
 
-/** Resolve one alias using the configured physical model and ordered reasoning settings. */
-export function resolveModel(
-  requestedAlias: unknown,
-  environment: Record<string, string | undefined>,
-  settings: { sessionReasoning?: string; teamReasoning?: string } = {},
-): ResolvedModel {
+function aliasModel(requestedAlias: unknown, environment: Record<string, string | undefined>) {
   const parsedAlias = ModelAliasSchema.safeParse(
     typeof requestedAlias === 'string' ? requestedAlias.replace(/^@/, '') : requestedAlias,
   );
@@ -118,6 +113,13 @@ export function resolveModel(
       );
   }
 
+  return { alias, provider, model, ...(preset === undefined ? {} : { preset }) };
+}
+
+function resolveReasoning(
+  selection: ReturnType<typeof aliasModel>,
+  settings: { sessionReasoning?: string; teamReasoning?: string },
+): ResolvedModel {
   const overrides = [
     [settings.sessionReasoning, 'session'],
     [settings.teamReasoning || undefined, 'team'],
@@ -125,20 +127,26 @@ export function resolveModel(
   const override = overrides.find(([value]) => value !== undefined);
   const reasoning = override
     ? readReasoning(override[0], override[1] === 'session' ? 'Session' : 'Team member')
-    : preset;
-  const reasoningSource = override?.[1] ?? (preset === undefined ? 'default' : 'alias');
+    : selection.preset;
+  const reasoningSource = override?.[1] ?? (selection.preset === undefined ? 'default' : 'alias');
 
-  const valid = reasoningOptions({ alias, provider, model });
+  const valid = reasoningOptions(selection);
   if (reasoning !== undefined && !valid.includes(reasoning))
-    throw unsupportedReasoning({ alias, provider, model }, valid);
+    throw unsupportedReasoning(selection, valid);
   return {
-    alias,
-    provider,
-    model,
+    ...selection,
     ...(reasoning !== undefined ? { reasoning } : {}),
-    ...(preset !== undefined ? { preset } : {}),
     reasoningSource,
   };
+}
+
+/** Resolve one alias using the configured physical model and ordered reasoning settings. */
+export function resolveModel(
+  requestedAlias: unknown,
+  environment: Record<string, string | undefined>,
+  settings: { sessionReasoning?: string; teamReasoning?: string } = {},
+): ResolvedModel {
+  return resolveReasoning(aliasModel(requestedAlias, environment), settings);
 }
 
 /** Supply effective model settings for a Team Leader's alias selector. */
@@ -149,19 +157,22 @@ export function catalogModelAliases(
   return {
     teamAlias: member.modelAlias,
     aliases: MODEL_ALIASES.map((alias) => {
-      const selection = resolveModel(alias, environment);
+      const selection = aliasModel(alias, environment);
       const reasoningChoices = reasoningOptions(selection);
-      if (member.thinking && !reasoningChoices.includes(member.thinking)) {
+      try {
+        return {
+          ...resolveReasoning(selection, { teamReasoning: member.thinking }),
+          reasoningOptions: [...reasoningChoices],
+        };
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
         return {
           ...selection,
+          reasoningSource: 'default' as const,
           reasoningOptions: [...reasoningChoices],
-          configurationError: unsupportedReasoning(selection, reasoningChoices).message,
+          configurationError: error.message,
         };
       }
-      return {
-        ...resolveModel(alias, environment, { teamReasoning: member.thinking }),
-        reasoningOptions: [...reasoningChoices],
-      };
     }),
   };
 }

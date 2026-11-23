@@ -227,6 +227,61 @@ test('runs the compiled Pi entry through its npm-style symlink with Node', () =>
   });
 });
 
+test('launches a standalone Pi alias with a normalized managed model', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ltcook-pi-model-alias-'));
+  directories.push(root);
+  const model = 'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0';
+  const modelsPath = join(root, 'managed-models.json');
+  const launcher = resolve(import.meta.dir, '../../../runtime/src/main.ts');
+  writeFileSync(
+    modelsPath,
+    JSON.stringify({
+      providers: {
+        ollama: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          api: 'openai-completions',
+          apiKey: 'fixture-key',
+          models: [{ id: model, reasoning: true, thinkingLevelMap: { off: 'none', low: null } }],
+        },
+      },
+    }),
+  );
+
+  const launch = (id: string, effort: string) =>
+    spawnSync(
+      process.execPath,
+      [launcher, 'model-launch', 'pi', '@tiny-local', effort, '--', '--list-models', 'Spark'],
+      {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 10_000,
+        env: {
+          HOME: root,
+          USERPROFILE: root,
+          PATH: process.env.PATH,
+          LTCOOK_PI_AUTH_DIR: root,
+          LTCOOK_PI_MODELS_PATH: modelsPath,
+          LTCOOK_MODEL_TINY_LOCAL: id,
+          PI_OFFLINE: '1',
+        },
+      },
+    );
+
+  const result = launch(model, '');
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain(model);
+  expect(result.stdout).toContain('128K');
+
+  const unsupported = launch(model, 'low');
+  expect(unsupported.status, unsupported.error?.message).toBe(1);
+  expect(unsupported.stderr).toContain('with low reasoning');
+
+  const incomplete = launch(model.split(':')[0]!, '');
+  expect(incomplete.status, incomplete.error?.message).toBe(1);
+  expect(incomplete.stderr).toContain('Pi cannot resolve');
+});
+
 describe('shared-auth Pi RPC launcher', () => {
   test('runs Pi 1.5.2 RPC with shared auth and isolated project settings', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ltcook-pi-rpc-'));

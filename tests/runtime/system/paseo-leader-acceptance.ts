@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHostClient } from '@getpaseo/client/node';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
@@ -39,6 +40,7 @@ const teams = await TeamRegistry.load(root);
 const team = teams.resolve('default-minimal');
 const leaderId = randomUUID();
 let modelCalls = 0;
+let expectedModel = 'test';
 let providerError: unknown;
 const provider = createHttpServer(async (request, response) => {
   try {
@@ -49,7 +51,7 @@ const provider = createHttpServer(async (request, response) => {
       messages: Array<{ role: string; content: string }>;
     };
     modelCalls++;
-    assert.equal(input.model, 'test', 'Saved physical model must survive alias edits');
+    assert.equal(input.model, expectedModel, 'Inference must use the saved physical model');
     assert(
       runtime!.snapshot(leaderId).members.every(({ binding }) => binding?.state === 'bound'),
       'First inference began before persistent member reconciliation',
@@ -112,6 +114,14 @@ await writeFile(
             input: ['text'],
             reasoning: false,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+          {
+            id: 'changed-by-user',
+            name: 'Explicit native override',
+            contextWindow: 32768,
+            maxTokens: 1024,
+            input: ['text'],
+            reasoning: true,
           },
         ],
       },
@@ -311,6 +321,25 @@ try {
     (await host.api.agents.list()).entries.filter(({ agent }) => ids.includes(agent.id)).length,
     2,
   );
+  const nativeControls = createHostClient(host.listen, { clientId: 'ltcook-override-acceptance' });
+  try {
+    await nativeControls.connect();
+    const notice = await nativeControls.applyAgentConfig(leaderId, {
+      modelId: 'fixture/changed-by-user',
+      thinkingOptionId: 'low',
+    });
+    assert.equal(notice, null);
+    expectedModel = 'changed-by-user';
+    const reopened = await leader.reload();
+    assert.equal(reopened?.agent.runtimeInfo?.model, 'fixture/changed-by-user');
+    assert.equal(reopened?.agent.runtimeInfo?.thinkingOptionId, 'low');
+    await leader.run('Inspect using the model I selected in the native controls.', {
+      timeoutMs: 30_000,
+    });
+    if (providerError) throw providerError;
+  } finally {
+    await nativeControls.close();
+  }
   console.log(
     JSON.stringify({
       result: 'passed',

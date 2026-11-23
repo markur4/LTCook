@@ -1,24 +1,10 @@
+import { ollamaEndpoint } from '../integrations/ollama.js';
 import type { ReasoningEffort, ResolvedModel } from './aliases.js';
 
 export function piThinking(
   effort: ReasoningEffort | undefined,
 ): Exclude<ReasoningEffort, 'none'> | 'off' | undefined {
   return effort === 'none' ? 'off' : effort;
-}
-
-function ollamaResponsesBaseUrl(setting: string | undefined): string {
-  const endpoint = setting && URL.parse(setting);
-  if (
-    !endpoint ||
-    !['http:', 'https:'].includes(endpoint.protocol) ||
-    endpoint.username ||
-    endpoint.password ||
-    endpoint.search ||
-    endpoint.hash ||
-    endpoint.pathname !== '/'
-  )
-    throw new Error('Set LTCOOK_OLLAMA_ENDPOINT in AppRC to an HTTP or HTTPS server URL.');
-  return new URL('/v1', endpoint).href;
 }
 
 /** Translate a resolved model into native launcher arguments without invoking the harness. */
@@ -59,7 +45,14 @@ export function modelCommand(
       ...(reasoning === undefined ? [] : ['-c', `model_reasoning_effort="${reasoning}"`]),
     ],
     ...(local
-      ? { env: { CODEX_OSS_BASE_URL: ollamaResponsesBaseUrl(environment.LTCOOK_OLLAMA_ENDPOINT) } }
+      ? {
+          env: {
+            CODEX_OSS_BASE_URL: new URL(
+              '/v1',
+              ollamaEndpoint(environment.LTCOOK_OLLAMA_ENDPOINT ?? ''),
+            ).href,
+          },
+        }
       : {}),
   };
 }

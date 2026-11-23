@@ -252,11 +252,10 @@ ltcook
 ```
 
 This starts Paseo's UI without creating agents. Use **+ → LTCook**, choose an
-installed **Team**, and send a message to open its Leader chat. Or run
-`ltcook launch runtime --workspace ROOT` to open it from the terminal.
-Registration and AppRC workspace markers are optional; existing project settings
-are used when present. Model selections are needed when starting agents, not
-merely opening the UI.
+installed **Team**, and send a message to open its Leader chat. Use the Model
+control to select a Leader alias. Or run `ltcook launch runtime --workspace ROOT`
+to open a Team from the terminal. Registration and AppRC workspace markers are
+optional.
 
 Ordinary Pi and Codex chats in Paseo can use LTCook's workspace inventory and
 local Ollama summarizer. See [workspace tools](docs/How-To-User-Guides.md#use-workspace-tools-in-pi-or-codex).
@@ -282,8 +281,8 @@ separate from application data. See the
 Use Pi's native provider login through LTCook:
 
 ```shell
-ltcook auth login openai
-ltcook auth check --provider openai --json --no-refresh
+ltcook auth login openai-codex
+ltcook auth check --provider openai-codex --json --no-refresh
 ```
 
 For OpenAI, account sign-in and an API key are different authentication methods.
@@ -294,8 +293,10 @@ are reused without copying them into projects. See the
 [authentication guide](docs/How-To-User-Guides.md#authenticate-with-pi) for
 logout, headless login, and a custom `runtime.pi_auth_dir`.
 
-LTCook still selects team models through `runtime.smart_model`,
-`runtime.smol_model`, and `runtime.plan_model` in `ltcook config edit`.
+LTCook shares model aliases across Teams, Paseo and its native launcher.
+For example, run `ltcook launch model pi @plan` to start Pi with GPT-6.2 Sol
+and xhigh reasoning. Change the physical model slots in `ltcook config edit`.
+See [model aliases](docs/How-To-User-Guides.md#choose-a-model-alias).
 
 <br>
 
