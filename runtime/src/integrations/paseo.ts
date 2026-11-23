@@ -256,6 +256,7 @@ export async function createPaseoAgentBackend(input: {
   deploymentNode: string;
   browserAvailable: boolean;
   browserExecutable?: string;
+  onNativeAgentClose?(id: string): Promise<void>;
   originalShellEnvironment?(
     workspaceRoot: string,
     sessionId: string,
@@ -475,7 +476,11 @@ export async function createPaseoAgentBackend(input: {
       await input.api.agents.ref(id).send(message, { activeTurnBehavior: 'steer' });
     },
     async close(id: string) {
-      await input.api.agents.ref(id).archive();
+      try {
+        await input.api.agents.ref(id).archive();
+      } finally {
+        await input.onNativeAgentClose?.(id);
+      }
     },
   };
 }

@@ -304,6 +304,7 @@ async function run(): Promise<void> {
       deploymentNode: node,
       browserAvailable: receipt.browser_available === true,
       browserExecutable: receipt.browser_executable,
+      onNativeAgentClose: (id) => web.disposeAgent(id),
       originalShellEnvironment(_workspace, currentSessionId) {
         return workspaceShellEnvironments.get(currentSessionId);
       },
