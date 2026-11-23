@@ -173,6 +173,7 @@ export const CORE_SUMMARIZATION_CASES = [
 ];
 
 const exception = 'AUTH-17 remained blocked. Release holds until Nia approves.';
+export const NEAR_LIMIT_CASE_ID = 'near-limit-exception';
 const logLine = (number: number) =>
   'Cache health probe ' +
   number +
@@ -183,7 +184,7 @@ export const NEAR_LIMIT_FOCUS =
 function nearLimitCase(inputBytes: number): SummarizationCase {
   const logSplit = Math.max(0, Math.floor((inputBytes - Buffer.byteLength(exception) - 4) / 2));
   return {
-    id: 'near-limit-exception',
+    id: NEAR_LIMIT_CASE_ID,
     source:
       log.slice(0, logSplit) + '\n\n' + exception + '\n\n' + log.slice(logSplit, logSplit * 2),
     focus: NEAR_LIMIT_FOCUS,
@@ -225,11 +226,83 @@ const counterfactualMigration: SummarizationCase = {
   ],
 };
 
+const confirmedCause =
+  'RB-214 failed because distribution/manifest.json still pointed to the retired bin/reconcile entry; the cache was healthy.';
+const targetedRerun =
+  'After correcting distribution/manifest.json, RB-214 passed on attempt 2 with exit code 0.';
+const skippedSmoke =
+  'The Windows smoke workflow was skipped because no Windows runner was available.';
+const publishDecision = 'Mina did not approve publishing the repaired package.';
+const followUp = 'PKG-72 remains open for the clean-install smoke test.';
+
+export const CODING_SESSION_CASE: SummarizationCase = {
+  id: 'coding-session-handoff',
+  focus:
+    'Write a handoff with the original failing check and error, confirmed cause, similar passing check, precise repair result, skipped verification, publishing decision, and open issue.',
+  source: [
+    '09:14 — Checked out the release candidate in a clean worktree. The task was to verify the packaging fix without creating a release. I downloaded the artifact from the current build and compared its checksum with the attachment. The checksum matched, so I used that artifact for both Linux runs.',
+    '09:20 — RB-214 failed with E_MANIFEST and exit code 23 in tests/package/reconcile.test.ts. RB-241 passed in tests/package/reconcile-cache.test.ts. Both jobs mention reconcile, but they run different assertions. The verbose output from RB-241 only confirms cache initialization.',
+    '09:27 — I initially suspected stale cache data because both jobs share a setup step. I tried a new cache directory, then reran the setup alone. The cache was rebuilt successfully, but the failing assertion produced the same message with the rebuilt cache.',
+    '09:39 — I unpacked the package and traced the failing entry through the loader. ' +
+      confirmedCause +
+      ' I updated the manifest to reference the entry actually shipped in the package. I kept the patch limited to the manifest so the review could distinguish it from the unrelated cache code.',
+    '09:48 — ' +
+      targetedRerun +
+      ' I saved the targeted logs and marked the patch ready for review. This rerun covered the failure on Linux; it did not exercise a clean installation on another platform.',
+    '10:03 — The CI queue showed that the hosted image was unavailable. ' +
+      skippedSmoke +
+      ' I left that check marked skipped rather than copying the Linux result into the Windows row.',
+    '10:18 — I proposed publishing the package to the staging registry while waiting for a runner. ' +
+      publishDecision +
+      ' I left the artifact in the build system and did not run the publish command.',
+    '10:34 — I left links to both RB runs in the handoff. ' +
+      followUp +
+      ' The current change can be reviewed using the build logs without relying on the first cache hypothesis.',
+  ].join('\n\n'),
+  facts: [
+    {
+      id: 'original-failure',
+      statement:
+        'RB-214 originally failed with E_MANIFEST and exit code 23 in tests/package/reconcile.test.ts.',
+      sourceQuote:
+        'RB-214 failed with E_MANIFEST and exit code 23 in tests/package/reconcile.test.ts.',
+      exact: ['RB-214', 'E_MANIFEST', '23', 'tests/package/reconcile.test.ts'],
+    },
+    {
+      id: 'related-pass',
+      statement: 'RB-241 passed in tests/package/reconcile-cache.test.ts.',
+      sourceQuote: 'RB-241 passed in tests/package/reconcile-cache.test.ts.',
+      exact: ['RB-241', 'tests/package/reconcile-cache.test.ts'],
+    },
+    {
+      id: 'cause',
+      statement: confirmedCause,
+      sourceQuote: confirmedCause,
+      exact: ['distribution/manifest.json', 'bin/reconcile'],
+    },
+    {
+      id: 'rerun',
+      statement: targetedRerun,
+      sourceQuote: targetedRerun,
+      exact: ['RB-214', '2', '0'],
+    },
+    { id: 'skip', statement: skippedSmoke, sourceQuote: skippedSmoke, exact: ['Windows'] },
+    { id: 'approval', statement: publishDecision, sourceQuote: publishDecision, exact: ['Mina'] },
+    { id: 'follow-up', statement: followUp, sourceQuote: followUp, exact: ['PKG-72'] },
+  ],
+};
+
 export const fullSummarizationCases = (inputBytes: number) => [
   nearLimitCase(inputBytes),
   counterfactualMigration,
+  CODING_SESSION_CASE,
 ];
-export const REPEAT_SUMMARIZATION_CASES = new Set([migration.id, artifacts.id, correction.id]);
+export const REPEAT_SUMMARIZATION_CASES = new Set([
+  migration.id,
+  artifacts.id,
+  correction.id,
+  NEAR_LIMIT_CASE_ID,
+]);
 export const FILE_SUMMARIZATION_CASE = migration;
 
 export const DOWNSTREAM_CASE: SummarizationCase = {
@@ -257,6 +330,34 @@ export const DOWNSTREAM_CASE: SummarizationCase = {
 
 export const DOWNSTREAM_CONTROL =
   'Ada approved read-only smoke checks for R-31. Inez declined the production rollout.';
+
+const approvedRollout: SummarizationCase = {
+  id: 'rollout-approval',
+  source:
+    'Ada approved the read-only smoke checks for R-32. Inez declined its production rollout on Monday. ' +
+    'On Tuesday Inez, the required owner, explicitly approved production rollout of R-32. ' +
+    'Her separate decision to defer the R-33 database migration still stands.',
+  focus: 'Report the final production decision for R-32 and who had authority to make it.',
+  facts: [
+    {
+      id: 'decision',
+      statement:
+        'On Tuesday Inez, the required owner, explicitly approved production rollout of R-32.',
+      sourceQuote:
+        'On Tuesday Inez, the required owner, explicitly approved production rollout of R-32.',
+      exact: ['Inez', 'R-32', 'Tuesday'],
+    },
+  ],
+};
+
+export const DOWNSTREAM_CASES = [
+  { fixture: DOWNSTREAM_CASE, expected: 'HOLD', control: DOWNSTREAM_CONTROL },
+  {
+    fixture: approvedRollout,
+    expected: 'PROCEED',
+    control: 'On Tuesday Inez, the required owner, explicitly approved production rollout of R-32.',
+  },
+] as const;
 
 export type CalibrationExample = {
   id: string;

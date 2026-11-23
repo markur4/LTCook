@@ -134,3 +134,21 @@ The runtime bundle hash was
 `8a0c57f8a126a554ce84a2bf1fcc28b5bb3733f72d886a9aa30467a5a2da128e`
 and the fixture hash was
 `ac783efe57b57e879652db622985be6b560978884ea0caa23ad3113a5de901a9`.
+
+## Expanded full qualification
+
+The coding-session fixture's required facts were checked against the fixed
+handoff. `RB-214` initially failed in the reconcile test, and `RB-241` passed
+in the cache test. The healthy rebuild rules out the cache, while the manifest
+inspection explains the failure and why the second `RB-214` attempt passed.
+The Windows check was skipped, publishing lacked approval, and `PKG-72`
+remained open. In the positive downstream control, the required owner explicitly
+approved `R-32` on Tuesday, superseding Monday's refusal. The separate `R-33`
+migration remained deferred.
+
+The first expanded run `787106d1-a136-41e9-8838-1202305adf29` used the production
+LFM3 profile and passed 20 of 21 summary attempts in 159.4 seconds. Both native
+Pi decisions matched their expected outcomes, `HOLD` and `PROCEED`. All three
+near-limit attempts and all five Bonsai calibration examples passed. The
+coding-session summary reached the generation limit before returning any text,
+so all seven of its required facts were missing and qualification failed.

@@ -239,6 +239,17 @@ def _print_report(report: dict) -> None:
             ),
             markup=False,
         )
+        for case in downstream.get("cases", []):
+            actual = case.get("candidate", {}).get("decision") or "unavailable"
+            control = case.get("control", {}).get("decision")
+            detail = f" · control {control}" if control else ""
+            attribution = case.get("attribution")
+            if attribution:
+                detail += f" · {attribution}"
+            console.print(
+                f"  {case['id']} · expected {case['expected']} · returned {actual} · {case['verdict']}{detail}",
+                markup=False,
+            )
     for task in result.get("results", {}).get("behavior", {}).get("tasks", []):
         for attempt in task.get("attempts", []):
             budget = attempt.get("budget") or {}

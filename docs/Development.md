@@ -256,9 +256,11 @@ captured during Behavior Evaluation rather than launching another agent task.
 
 The core evaluates fixed, focus-specific facts for status, negation, migration
 failures, ownership, corrections, and text that contains instructions. Full
-qualification adds a near-limit case, a file/inline comparison, and three
-attempts for selected high-risk cases. It also runs a native Pi downstream
-decision and uses a reviewed correct-summary control if that decision fails.
+qualification adds a coding-session handoff, a file/inline comparison, and
+three attempts each for the near-limit case and selected high-risk cases.
+All attempts count toward qualification. Native Pi must return `HOLD` for a
+declined rollout and `PROCEED` for an approved rollout. A failed decision
+triggers the reviewed correct-summary control for that case.
 Repetitions expose instability on the selected cases. Traditional Tests cover
 deterministic evidence validation, file access, and Ollama failures.
 

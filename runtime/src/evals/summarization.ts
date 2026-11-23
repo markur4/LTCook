@@ -22,8 +22,7 @@ import {
 } from './summarization-decision.js';
 import {
   CORE_SUMMARIZATION_CASES,
-  DOWNSTREAM_CASE,
-  DOWNSTREAM_CONTROL,
+  DOWNSTREAM_CASES,
   FILE_SUMMARIZATION_CASE,
   fullSummarizationCases,
   NEAR_LIMIT_FOCUS,
@@ -75,6 +74,8 @@ type Calibration = {
 };
 
 type Decision = {
+  id: string;
+  expected: 'HOLD' | 'PROCEED';
   verdict: SummarizationQualification;
   attribution?: 'summary' | 'agent' | 'unresolved';
   candidate?: Awaited<ReturnType<typeof decideFromSummary>>;
@@ -108,7 +109,7 @@ export type SummarizationReport = {
   grader?: ModelIdentity;
   calibration: Calibration[];
   attempts: Attempt[];
-  downstream?: Decision;
+  downstream?: { verdict: SummarizationQualification; cases: Decision[] };
   blockers: string[];
   elapsedMs: number;
 };
@@ -218,8 +219,7 @@ export async function evaluateSummarization(input: {
         full: fullCases,
         repeat: [...REPEAT_SUMMARIZATION_CASES],
         file: FILE_SUMMARIZATION_CASE.id,
-        downstream: DOWNSTREAM_CASE,
-        control: DOWNSTREAM_CONTROL,
+        downstream: DOWNSTREAM_CASES,
         calibration: SUMMARIZATION_CALIBRATION,
       }),
     ),
@@ -254,6 +254,13 @@ export async function evaluateSummarization(input: {
     elapsedMs: 0,
   };
   const update = async (current?: string) => {
+    if (report.downstream) {
+      const decisions = report.downstream.cases.map(({ verdict }) => verdict);
+      report.downstream.verdict = qualificationVerdict([
+        ...decisions,
+        ...(decisions.length < DOWNSTREAM_CASES.length ? ['blocked' as const] : []),
+      ]);
+    }
     const outcomes = [
       ...report.attempts.map(({ verdict }) => verdict),
       ...(report.downstream ? [report.downstream.verdict] : []),
@@ -298,26 +305,24 @@ export async function evaluateSummarization(input: {
   if (grader && summarizer && !independent)
     report.blockers.push('The grader and summarizer weights could not be verified as independent.');
 
-  const jobs = CORE_SUMMARIZATION_CASES.flatMap((fixture) =>
+  const fixtures = full
+    ? [...CORE_SUMMARIZATION_CASES, ...fullCases, ...DOWNSTREAM_CASES.map(({ fixture }) => fixture)]
+    : CORE_SUMMARIZATION_CASES;
+  const cases = fixtures.flatMap((fixture) =>
     Array.from(
       { length: full && REPEAT_SUMMARIZATION_CASES.has(fixture.id) ? 3 : 1 },
-      (_, index) => ({ fixture, attempt: index + 1, input: 'inline' as const }),
+      (_, index) => ({
+        fixture,
+        attempt: index + 1,
+        input: 'inline' as Attempt['input'],
+      }),
     ),
   );
-  const cases: Array<{ fixture: SummarizationCase; attempt: number; input: Attempt['input'] }> = [
-    ...jobs,
-    ...(full
-      ? [...fullCases, DOWNSTREAM_CASE].map((fixture) => ({
-          fixture,
-          attempt: 1,
-          input: 'inline' as const,
-        }))
-      : []),
-    ...(full ? [{ fixture: FILE_SUMMARIZATION_CASE, attempt: 1, input: 'file' as const }] : []),
-  ];
   await mkdir(directory, { recursive: true });
-  if (full)
+  if (full) {
+    cases.push({ fixture: FILE_SUMMARIZATION_CASE, attempt: 1, input: 'file' });
     await writeFile(path.join(directory, 'fixture-notes.txt'), FILE_SUMMARIZATION_CASE.source);
+  }
   let usage: OllamaUsage | undefined;
   const tool = createSummarizeTool(settings, (value) => {
     usage = value;
@@ -437,55 +442,66 @@ export async function evaluateSummarization(input: {
   }
 
   if (full) {
-    const source = generated.find(({ fixture }) => fixture === DOWNSTREAM_CASE)?.result;
-    const downstream: Decision = { verdict: 'blocked', attribution: 'unresolved' };
-    report.downstream = downstream;
-    if (source?.summary && grader) {
-      const decide = (summary: string, name: string) =>
-        decideFromSummary({
-          endpoint,
-          model: grader.name,
-          directory: path.join(directory, name),
-          summary,
-          signal,
-        });
-      try {
-        await update('Behavior Evaluation · ' + DOWNSTREAM_CASE.id);
-        downstream.candidate = await decide(source.summary, 'candidate');
-        if (downstream.candidate.decision === 'HOLD' && !downstream.candidate.incomplete) {
-          downstream.verdict = 'passed';
-          delete downstream.attribution;
-        } else {
-          downstream.verdict = 'failed';
-          downstream.reason = downstream.candidate.incomplete
-            ? 'The native Pi candidate response did not complete.'
-            : 'The native Pi agent did not return the required HOLD decision.';
-          try {
-            const control = await decide(DOWNSTREAM_CONTROL, 'control');
-            downstream.control = control;
-            if (control.incomplete) {
-              downstream.reason += ' The correct-summary control did not complete.';
-            } else if (
-              control.decision === 'HOLD' &&
-              source.grading?.grade.facts.some(
-                ({ id, verdict }) =>
-                  id === 'decision' && (verdict === 'missing' || verdict === 'contradicted'),
-              )
-            ) {
-              downstream.attribution = 'summary';
-            } else if (control.decision !== 'HOLD' && source.verdict === 'passed') {
-              downstream.attribution = 'agent';
+    const decisions: Decision[] = [];
+    report.downstream = { verdict: 'blocked', cases: decisions };
+    for (const { fixture, expected, control: controlSummary } of DOWNSTREAM_CASES) {
+      const source = generated.find((item) => item.fixture === fixture)?.result;
+      const downstream: Decision = {
+        id: fixture.id,
+        expected,
+        verdict: 'blocked',
+        attribution: 'unresolved',
+      };
+      decisions.push(downstream);
+      if (source?.summary && grader) {
+        const decide = (summary: string, name: string) =>
+          decideFromSummary({
+            endpoint,
+            model: grader.name,
+            directory: path.join(directory, fixture.id, name),
+            summary,
+            signal,
+          });
+        try {
+          await update('Behavior Evaluation · ' + fixture.id);
+          downstream.candidate = await decide(source.summary, 'candidate');
+          if (downstream.candidate.decision === expected && !downstream.candidate.incomplete) {
+            downstream.verdict = 'passed';
+            delete downstream.attribution;
+          } else {
+            downstream.verdict = 'failed';
+            downstream.reason = downstream.candidate.incomplete
+              ? 'The native Pi candidate response did not complete.'
+              : `The native Pi agent did not return the required ${expected} decision.`;
+            try {
+              const control = await decide(controlSummary, 'control');
+              downstream.control = control;
+              if (control.incomplete) {
+                downstream.reason += ' The correct-summary control did not complete.';
+              } else if (
+                control.decision === expected &&
+                source.grading?.grade.facts.some(
+                  ({ id, verdict }) =>
+                    id === 'decision' && (verdict === 'missing' || verdict === 'contradicted'),
+                )
+              ) {
+                downstream.attribution = 'summary';
+              } else if (control.decision !== expected && source.verdict === 'passed') {
+                downstream.attribution = 'agent';
+              }
+            } catch (error) {
+              signal.throwIfAborted();
+              downstream.reason += ' Control could not run: ' + errorReason(error);
             }
-          } catch (error) {
-            signal.throwIfAborted();
-            downstream.reason += ' Control could not run: ' + errorReason(error);
           }
+        } catch (error) {
+          signal.throwIfAborted();
+          downstream.reason = errorReason(error);
         }
-      } catch (error) {
-        signal.throwIfAborted();
-        downstream.reason = errorReason(error);
-      }
-    } else downstream.reason = 'The fixed-fixture summary or local decision model was unavailable.';
+      } else
+        downstream.reason = 'The fixed-fixture summary or local decision model was unavailable.';
+      await update();
+    }
   }
 
   if (summarizer || grader) {
@@ -524,10 +540,12 @@ export async function evaluateSummarization(input: {
           result.reason = failure ?? graderReason;
         }
       }
-      if (report.downstream && (summarizerChanged || graderChanged)) {
-        report.downstream.verdict = 'blocked';
-        report.downstream.attribution = 'unresolved';
-        report.downstream.reason = summarizerChanged ? summarizerReason : graderReason;
+      if (summarizerChanged || graderChanged) {
+        for (const decision of report.downstream?.cases ?? []) {
+          decision.verdict = 'blocked';
+          decision.attribution = 'unresolved';
+          decision.reason = summarizerChanged ? summarizerReason : graderReason;
+        }
       }
     } catch {
       signal.throwIfAborted();
