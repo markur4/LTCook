@@ -69,7 +69,11 @@ export async function createLocalPiEvaluationSession(
   return createPiEvaluationSession(input, modelRuntime, selectedModel, 'off');
 }
 
-export async function prepareLunaPiEvaluation(directory: string, signal: AbortSignal) {
+export async function prepareLunaPiEvaluation(
+  directory: string,
+  signal: AbortSignal,
+  reasoning: 'low' | 'high' = LUNA_EVALUATION.reasoning,
+) {
   const { authMethod } = await codexAuthorization(signal);
   const provider = authMethod === 'apikey' ? 'openai' : 'openai-codex';
   const modelRuntime = useCodexOpenAiAuth(
@@ -83,14 +87,14 @@ export async function prepareLunaPiEvaluation(directory: string, signal: AbortSi
   const model = modelRuntime.getModel(provider, LUNA_EVALUATION.model);
   if (!model) throw new Error('The Codex-authenticated Pi catalog cannot resolve GPT-6 Luna.');
   return (input: PiEvaluationSessionOptions) =>
-    createPiEvaluationSession(input, modelRuntime, model, LUNA_EVALUATION.reasoning);
+    createPiEvaluationSession(input, modelRuntime, model, reasoning);
 }
 
 async function createPiEvaluationSession(
   { directory, cwd = directory, instructions, tools, customTools }: PiEvaluationSessionOptions,
   modelRuntime: ModelRuntime,
   model: NonNullable<CreateAgentSessionOptions['model']>,
-  thinkingLevel: 'off' | 'high',
+  thinkingLevel: 'off' | 'low' | 'high',
 ) {
   await mkdir(directory, { recursive: true });
   const settings = SettingsManager.inMemory({ retry: { enabled: false } });

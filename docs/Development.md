@@ -359,6 +359,14 @@ to add the long transcript or `--cadence` to run it alone. Add `--task-aware`
 to test a task-focus prompt with the same input, model and batch settings.
 Pass `--recommended-sampling` to use Liquid AI's published sampling settings
 for each candidate. The report records the request configuration per model.
+Use `--output-cap=2048` or `--temperature=0.4` to override the response cap or
+sampling temperature for all selected candidates in an evaluation.
+
+Save a JSON report from `--cadence` or `--include-cadence` and pass its path
+with `--luna-low-from=report.json` to retry failed cadence batches with
+GPT-6 Luna at low reasoning in native Pi. The replay uses the existing Codex
+sign-in and sends only the numbered excerpts of the synthetic evaluation
+fixture to the provider. It grades each batch on its own evidence.
 
 Run `bun evals/session-memory-edit-live.ts` with optional extractor and worker
 model tags to compare conventional delegation, deterministic conversation search,

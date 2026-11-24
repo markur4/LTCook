@@ -8,6 +8,11 @@ LFM3 variants retained the cache opener path and symbol that LFM2.5 missed.
 All three missed critical evidence. Deterministic search can retrieve omitted
 messages directly from Paseo.
 
+The [focused follow-up](#focused-follow-up-with-a-2048-token-cap) found that
+both LFM3 variants passed the long fixture at temperature 0.4 with a
+2,048-token cap. QAD Q4 used about half the request time of Q8 and less RAM.
+The three short fixtures have only been qualified under the earlier settings.
+
 ## Sampling settings and reasoning
 
 The original comparison explicitly sent `temperature: 0`. Both LFM3 Ollama
@@ -85,6 +90,102 @@ zero cached input tokens. Each model was resident for all four. The first
 long batch, messages 1–42, was also warm and uncached for all three. Total long
 request latency includes the different retries and cache reuse after that
 batch. Residency and peak RSS use decimal GB.
+
+## Focused follow-up with a 2,048-token cap
+
+The 92-message cache-recovery transcript was the only fixture that failed
+qualification in the recommended-sampling comparison. All three candidates
+reran that fixture at temperatures 0.1 and 0.4, with an output cap of 2,048
+tokens, CPU-only inference, and `think: false`. Both arms retained top-k 50,
+the model-specific repetition penalties, the 16,384-token context, and the
+same prompt, schema and cadence. The higher temperature tests a sampling
+hypothesis from a community report on a parentheses question that used the
+STEM preset. [Hugging Face discussion](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/discussions/6)
+
+```sh
+bun evals/session-memory-live.ts --extract-only --cadence --recommended-sampling --output-cap=2048 > cap2048-temp01.json
+bun evals/session-memory-live.ts --extract-only --cadence --recommended-sampling --output-cap=2048 --temperature=0.4 > cap2048-temp04.json
+```
+
+| Temperature | Extractor | Valid updates | Output cutoffs / timeouts | Checkpoint | Facts retained | Critical facts retained | Fixture |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 0.1 | LFM2.5 Instruct Q8 | 3/3 | 0 / 0 | 92 | 1/5 | 0/3 | Fail |
+| 0.1 | LFM3 Q8 | 1/4 | 0 / 3 | 42 | 2/5 | 2/3 | Fail |
+| 0.1 | LFM3 QAD Q4 | 1/4 | 1 / 2 | 42 | 2/5 | 2/3 | Fail |
+| 0.4 | LFM2.5 Instruct Q8 | 3/3 | 0 / 0 | 92 | 1/5 | 0/3 | Fail |
+| 0.4 | LFM3 Q8 | 3/3 | 0 / 0 | 92 | 4/5 | 3/3 | Pass |
+| 0.4 | LFM3 QAD Q4 | 3/3 | 0 / 0 | 92 | 4/5 | 3/3 | Pass |
+
+The higher cap at 0.1 let LFM2.5's first batch finish, which changed its
+subsequent batch boundaries. It retained only the schema mismatch. Both
+LFM3 variants still stalled at message 42. QAD Q4's last request returned
+after generating all 2,048 tokens, and five LFM3 requests reached the
+120-second deadline.
+
+At 0.4, both LFM3 models retained the opener path, opener symbol, version
+guard result and preserved cache bytes. Both missed the schema mismatch.
+There were no contradictions or wrong sources. QAD Q4 mismatched the
+category of all three critical facts. Q8 mismatched the categories of the
+guard result and the noncritical cache-bytes fact. Category mismatches are
+tracked separately from the fixture's qualification gate.
+
+| Temperature | Extractor | Prefill measured | Generation measured | Total request latency | Peak runner RSS |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 0.1 | LFM2.5 Instruct Q8 | 27.10 s | 72.48 s | 100.94 s | 1.77 GB |
+| 0.1 | LFM3 Q8 | 20.55 s | 26.33 s | 409.56 s | 2.39 GB |
+| 0.1 | LFM3 QAD Q4 | 21.05 s | 117.91 s | 382.55 s | 1.59 GB |
+| 0.4 | LFM2.5 Instruct Q8 | 33.38 s | 52.80 s | 87.90 s | 1.75 GB |
+| 0.4 | LFM3 Q8 | 45.00 s | 150.32 s | 197.81 s | 2.45 GB |
+| 0.4 | LFM3 QAD Q4 | 27.57 s | 69.78 s | 99.05 s | 1.65 GB |
+
+Prefill and generation sums cover responses that returned timing data. Total
+request latency includes timeouts and model loads. A short local type check
+overlapped the first Q8 timeout at 0.1. All first requests at 0.4 were cold,
+and all three batches matched by message range and zero cached tokens. On
+the longest batch, Q8 took 118.24 seconds within the 120-second deadline.
+QAD Q4 took 43.27 seconds on the same batch. Their successful responses
+generated 1,753 and 995 tokens respectively, both above the old cap. Ollama
+reported 1.62 GB, 2.02 GB, and 1.23 GB of loaded memory respectively for the
+three models.
+
+Ollama verified CPU residency throughout. Token logs verified zero reasoning
+tokens in all nine requests at 0.4 and in the six returned responses at 0.1.
+The five timeouts have no reasoning counts. The two runs used the same model
+manifests and cadence corpus SHA-256
+`09461ba3abb041b0480998da59ffa89a2518c2ff5001ac8c590b23985c88c348`.
+The 0.1 and 0.4 runs took 893.41 and 384.82 seconds respectively. The result
+reflects one sampled execution per candidate and temperature.
+
+### Low-reasoning fallback in native Pi
+
+LFM3's Ollama artifacts advertise Boolean thinking controls. To test an
+actual low-effort setting, native Pi reran the failed batches from the
+earlier 768-token recommended-sampling report with GPT-6 Luna via the
+existing Codex sign-in. Identical message ranges shared one retry. Pi received
+the same extraction instructions and numbered excerpts with the output schema
+in its system prompt. The same parser and fact grader evaluated each batch.
+[Ollama thinking controls](https://docs.ollama.com/capabilities/thinking)
+
+```sh
+bun evals/session-memory-live.ts --luna-low-from=models-recommended-sampling.json
+```
+
+| Replayed messages | Previously missed critical evidence | Fallback result | Pi elapsed time | Reported reasoning tokens |
+| --- | --- | --- | ---: | ---: |
+| 1–42 | Opener path and function name | Recovered | 7.62 s | 0 |
+| 1–51 | Opener path and function name | Recovered | 6.27 s | 0 |
+| 43–81 | Version guard result | Recovered | 13.20 s | 300 |
+| 43–90 | Version guard result | Recovered | 6.84 s | 0 |
+| 43–92 | Version guard result | Recovered | 5.86 s | 0 |
+
+All five retries returned valid evidence with correct source attribution.
+Pi recorded `low` for each request and reported 300 reasoning tokens in total.
+The five retries took 39.79 seconds. The provider omitted the response model
+identifier. The replay included both batches that still omitted critical
+evidence in LFM2.5 at temperature 0.4. The fixture grader knew which critical
+facts the local outputs missed. This measures recovery when a retry is selected
+and leaves both production failure detection and the independent effect of
+reasoning untested.
 
 ## Original CPU comparison at temperature zero
 

@@ -14,13 +14,14 @@ import {
   memoryGeneration,
   MemoryOutputError,
   mergeMemoryEntries,
+  prepareMemoryExtraction,
   preservePromptMessages,
   renderMemoryHandoff,
   selectMemoryContext,
   type MemoryEntry,
   type MemoryMessage,
 } from '../session-memory/extraction.js';
-import { EVAL_MODEL, hash } from './setup.js';
+import { EVAL_MODEL, LUNA_EVALUATION, hash } from './setup.js';
 import { evaluateMemoryHandoff } from './session-memory-handoff.js';
 import {
   memoryCadenceFixture,
@@ -28,6 +29,7 @@ import {
   type MemoryFixture,
 } from './session-memory-fixtures.js';
 import { inspectEvaluationModel, listEvaluationModels, modelTag } from './summarization-grader.js';
+import { prepareLunaPiEvaluation } from './summarization-decision.js';
 
 const models = [
   'LiquidAI/lfm2.5-1.2b-instruct:q8_0',
@@ -52,6 +54,50 @@ const runningModelSchema = z.object({
     }),
   ),
 });
+const cadenceReportSchema = z.object({
+  corpusHash: z.string(),
+  identityUnchanged: z.literal(true),
+  taskAware: z.boolean(),
+  candidates: z
+    .array(
+      z.object({
+        identity: z.object({ name: z.string() }),
+        scenarios: z.array(
+          z.object({
+            fixture: z.string(),
+            attempts: z.array(
+              z.object({
+                firstSeq: z.number().int().positive().optional(),
+                lastSeq: z.number().int().positive().optional(),
+                output: z.enum(['valid', 'invalid', 'unavailable', 'skipped']),
+                grade: z.object({
+                  facts: z.array(
+                    z.object({
+                      label: z.string(),
+                      source: z.number(),
+                      critical: z.boolean(),
+                      missing: z.boolean(),
+                      incorrect: z.boolean(),
+                      wrongAttribution: z.boolean(),
+                    }),
+                  ),
+                }),
+              }),
+            ),
+          }),
+        ),
+      }),
+    )
+    .min(1),
+});
+
+function corpusHash(fixtures: readonly MemoryFixture[]) {
+  return hash(
+    JSON.stringify(fixtures, (_key, value: unknown) =>
+      value instanceof RegExp ? value.toString() : value,
+    ),
+  );
+}
 
 async function residency(endpoint: URL, digest: string, signal: AbortSignal) {
   const response = await fetch(new URL('/api/ps', endpoint), {
@@ -144,6 +190,139 @@ function gradeMemory(
         (fact) => !fact.incorrect && (!fact.critical || (!fact.missing && !fact.wrongAttribution)),
       ),
   };
+}
+
+export async function runCadenceLunaFallback(
+  input: unknown,
+  signal: AbortSignal,
+  onProgress?: (event: string) => void,
+) {
+  const report = cadenceReportSchema.parse(input);
+  const fixture = memoryCadenceFixture();
+  const messages = fixture.turns.flat();
+  if (
+    ![corpusHash([fixture]), corpusHash([...memoryFixtures, fixture])].includes(report.corpusHash)
+  )
+    throw new Error('The fallback requires a report that includes the current cadence fixture.');
+  const failedBatches = new Map<
+    string,
+    {
+      firstSeq: number;
+      lastSeq: number;
+      failures: Array<{ model: string; output: string; facts: string[] }>;
+    }
+  >();
+  for (const { identity, scenarios } of report.candidates) {
+    const scenario = scenarios.find(({ fixture: id }) => id === fixture.id);
+    if (!scenario) throw new Error(`Missing cadence evaluation for ${identity.name}.`);
+    for (const { firstSeq, lastSeq, output, grade } of scenario.attempts) {
+      if (output === 'skipped') continue;
+      if (
+        firstSeq === undefined ||
+        lastSeq === undefined ||
+        firstSeq > lastSeq ||
+        !messages.some(({ seq }) => seq === firstSeq) ||
+        !messages.some(({ seq }) => seq === lastSeq)
+      )
+        throw new Error(`Invalid message range in the cadence evaluation for ${identity.name}.`);
+      const facts = grade.facts
+        .filter(
+          (fact) =>
+            fact.source >= firstSeq &&
+            fact.source <= lastSeq &&
+            (fact.incorrect || (fact.critical && (fact.missing || fact.wrongAttribution))),
+        )
+        .map(({ label }) => label);
+      if (output === 'valid' && !facts.length) continue;
+      const key = `${firstSeq}-${lastSeq}`;
+      const batch = failedBatches.get(key) ?? { firstSeq, lastSeq, failures: [] };
+      batch.failures.push({ model: identity.name, output, facts });
+      failedBatches.set(key, batch);
+    }
+  }
+
+  const worker = { name: LUNA_EVALUATION.model, reasoning: 'low' } as const;
+  if (!failedBatches.size) return { worker, corpusHash: report.corpusHash, results: [] };
+  const results = [];
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-fallback-'));
+  try {
+    const openPi = await prepareLunaPiEvaluation(directory, signal, worker.reasoning);
+    for (const [range, batch] of failedBatches) {
+      signal.throwIfAborted();
+      const pending = messages.filter(({ seq }) => seq >= batch.firstSeq && seq <= batch.lastSeq);
+      const request = prepareMemoryExtraction(
+        pending,
+        report.taskAware ? fixture.focus : undefined,
+      );
+      if (!request) throw new Error(`The failed batch ${range} contains no extraction input.`);
+      onProgress?.(`Retrying messages ${range} in native Pi using ${worker.name} at low reasoning`);
+      const { session } = await openPi({
+        directory: path.join(directory, range),
+        instructions: `${request.instructions}\nReturn only JSON matching this schema:\n${JSON.stringify(request.format)}`,
+      });
+      const bounded = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
+      const cancel = () => void session.abort();
+      bounded.addEventListener('abort', cancel, { once: true });
+      const started = performance.now();
+      let additions: MemoryEntry[] = [];
+      let usage;
+      let provider;
+      let responseModel;
+      let reasoning;
+      let requestedReasoning;
+      let error: string | undefined;
+      try {
+        bounded.throwIfAborted();
+        await session.prompt(request.prompt);
+        const answer = session.messages.findLast((message) => message.role === 'assistant');
+        usage = answer?.usage;
+        provider = answer?.provider;
+        responseModel = answer?.responseModel;
+        reasoning = answer?.providerThinkingLevel;
+        requestedReasoning = answer?.thinkingLevel;
+        bounded.throwIfAborted();
+        if (!answer || ['error', 'aborted', 'length'].includes(answer.stopReason))
+          throw new Error('Pi did not return a complete fallback answer.');
+        if (responseModel && modelTag(responseModel) !== modelTag(worker.name))
+          throw new Error('Pi returned a different fallback model.');
+        const text = answer.content
+          .flatMap((item) => (item.type === 'text' ? [item.text] : []))
+          .join('');
+        additions = request.parse(text);
+      } catch (failure) {
+        signal.throwIfAborted();
+        error = bounded.aborted
+          ? 'Pi fallback timed out.'
+          : failure instanceof Error
+            ? failure.message
+            : 'Pi fallback failed.';
+      } finally {
+        bounded.removeEventListener('abort', cancel);
+        session.dispose();
+      }
+      results.push({
+        ...batch,
+        elapsedMs: Math.round(performance.now() - started),
+        provider,
+        responseModel,
+        requestedReasoning,
+        providerReasoning: reasoning,
+        inputTokens: usage && usage.input + usage.cacheRead + usage.cacheWrite,
+        outputTokens: usage?.output,
+        reasoningTokens: usage?.reasoning,
+        output: error ? 'failed' : 'valid',
+        error,
+        grade: gradeMemory(
+          mergeMemoryEntries(preservePromptMessages(pending), additions),
+          pending,
+          fixture,
+        ),
+      });
+    }
+    return { worker, corpusHash: report.corpusHash, results };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 export async function evaluateMemoryFixture(input: {
@@ -297,6 +476,8 @@ export async function runSessionMemoryEvaluation(
     extractOnly?: boolean;
     taskAware?: boolean;
     recommendedSampling?: boolean;
+    outputCap?: number;
+    temperature?: number;
   },
 ) {
   const selectedModels = models.filter((model) => {
@@ -313,6 +494,22 @@ export async function runSessionMemoryEvaluation(
     throw new Error(
       'Choose a Session Memory candidate or remaining, and optional cadence from 1 to 6500.',
     );
+  const outputCap = selection?.outputCap ?? memoryGeneration.options.num_predict;
+  if (
+    !Number.isSafeInteger(outputCap) ||
+    outputCap < 1 ||
+    outputCap >= memoryGeneration.options.num_ctx
+  )
+    throw new Error('Choose a positive integer output cap below the Session Memory context size.');
+  const temperature =
+    selection?.temperature ??
+    (selection?.recommendedSampling ? 0.1 : memoryGeneration.options.temperature);
+  if (!Number.isFinite(temperature) || temperature < 0)
+    throw new Error('Choose a finite, nonnegative Session Memory temperature.');
+  const baseGeneration = {
+    ...memoryGeneration,
+    options: { ...memoryGeneration.options, num_predict: outputCap, temperature },
+  };
   const started = performance.now();
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-session-memory-eval-'));
   try {
@@ -350,15 +547,14 @@ export async function runSessionMemoryEvaluation(
       }
       const generation = selection?.recommendedSampling
         ? {
-            ...memoryGeneration,
+            ...baseGeneration,
             options: {
-              ...memoryGeneration.options,
-              temperature: 0.1,
+              ...baseGeneration.options,
               top_k: 50,
               repeat_penalty: requestedModel === models[0] ? 1.05 : 1.1,
             },
           }
-        : memoryGeneration;
+        : baseGeneration;
       const scenarios = [];
       for (const fixture of fixtures) {
         onProgress?.(`Evaluating ${requestedModel} on ${fixture.id}`);
@@ -422,17 +618,18 @@ export async function runSessionMemoryEvaluation(
     );
     return {
       threshold,
-      corpusHash: hash(
-        JSON.stringify(fixtures, (_key, value: unknown) =>
-          value instanceof RegExp ? value.toString() : value,
-        ),
-      ),
+      corpusHash: corpusHash(fixtures),
       elapsedMs: Math.round(performance.now() - started),
       platform: platform(),
       cpu: { model: cpus()[0]?.model, logicalCount: cpus().length },
       ...(selection?.recommendedSampling
-        ? { sampling: 'liquid-recommended' }
-        : { generation: memoryGeneration }),
+        ? {
+            sampling:
+              selection?.temperature === undefined
+                ? 'liquid-recommended'
+                : 'liquid-with-temperature-override',
+          }
+        : { generation: baseGeneration }),
       taskAware: selection?.taskAware ?? false,
       qualification,
       identityUnchanged,
