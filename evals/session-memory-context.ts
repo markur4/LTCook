@@ -43,7 +43,7 @@ export const contextStrategies = [
   'rolling',
   'original-search',
 ] as const;
-export const defaultContextSeeds = [17, 43, 89] as const;
+export const defaultContextSeeds = [17] as const;
 
 export function contextSeeds(raw?: string) {
   if (raw === undefined) return [...defaultContextSeeds];

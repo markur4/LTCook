@@ -2,9 +2,9 @@
 
 The initial runtime passed local verification and was integrated ahead of
 model qualification. Rolling history remains below the critical-retention
-target. The retention follow-up received code review. The user requested
-merging the final corrections with verification paused until GPU access.
-Delegation enrichment stays opt-in.
+target. The retention follow-up was reviewed and merged with live verification
+deferred until GPU access. See the [Immediate Context qualification](#immediate-context-qualification)
+for the post-merge run. Delegation enrichment stays opt-in.
 
 ## Method
 
@@ -257,11 +257,9 @@ requested implementation path. The short replay had higher latency than the
 pre-fix run under a shared CPU workload.
 
 The short result predates the final exact-match grader and selection logic.
-The follow-up long replay was stopped before it produced a complete report,
-and the queued trace-pairing replay did not start. Final exact retention,
-repository-edit behavior, and performance remain unverified for the
-reviewed follow-up. The merged initial runtime's local checks are recorded
-below.
+The follow-up long replay stopped before producing a complete report, and the
+queued trace-pairing replay did not start. The merged initial runtime's local
+checks are recorded below.
 
 ## Local verification
 
@@ -275,3 +273,139 @@ below.
 Bun used a 20-second test limit during concurrent CPU workloads. The native
 acceptance fixture verifies the attachment handoff at protocol level. The
 supported composer control has type and bundle coverage.
+
+## Immediate Context qualification
+
+Qualification remains open. Immediate Context preserved all held-out critical
+facts. The full corpus exposed a coverage gap in the attachment fixture, and
+the native Pi edit attempts timed out in both Immediate Context cases at
+seed 17.
+
+The post-merge run used LTCook revision `2003a9` (PR #31) on Linux/WSL with
+Ollama 0.40.16. The full comparison corpus contains five fixtures. The separate
+held-out run uses the index-restore fixture. The completed context matrices
+used the earlier default of seeds 17, 43, and 89. They compared no added
+context, authoritative Task context, Immediate Context, and rolling history.
+The edit comparison uses those strategies plus conventional and original-search
+controls on two pinned repository edits. The handoff comparison sends paired
+chronological and generated presentations to fresh Pi sessions. Routine runs
+now use one seed, defaulting to 17.
+
+The summarizer used `lfm3:1.7b-qad-q4_0` (digest `765f7bd04f18`) at
+temperature 0.4, top-k 50, and a 1.1 repetition penalty, with a 16,384-token
+context, a 2,048-token output cap, and reasoning disabled. Native Pi used
+local `ltcook-bonsai-2-27b-ctx65536:latest` (digest `bd5f3c102bf7`) for the
+edit and handoff comparisons. Completed runners reported stable model digests.
+Ollama's GPU discovery watchdog expired during the first full run and the
+model moved to CPU. That run was canceled. The GPU rerun used a temporary
+loopback Ollama listener restricted to the RTX 5090.
+
+### CPU summarization sample
+
+The focused run used the single-seed default and the production summarizer
+settings on an AMD Ryzen 9 9900X. Ollama reported 100% CPU residency. The table
+shows one completed Agent Action Batch, source sequence 8 from the short
+cache-recovery fixture, using Immediate Context. The model was already loaded.
+
+| Input tokens | Cached input tokens | Output tokens | Prefill | Generation | Load | End-to-end |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 677 | 0 | 362 | 0.808 s | 6.502 s | 0.001 s | 56.014 s |
+
+Prefill and generation totaled 7.310 s. Other requests overlapped on the shared
+Ollama service, and the observed end-to-end latency includes time beyond model
+load, prefill, and generation. The focused runner completed four summary
+requests in 152.89 s. This sample describes one input and output length.
+
+```shell
+bun evals/session-memory-live.ts --context-aware --cpu-only \
+  --fixture=runtime-rebuild-and-cache-recovery --strategy=immediate
+```
+
+### GPU summary retention
+
+All 72 strategy runs in the full and held-out context matrices reported full
+GPU residency. Source portion hashes matched across the four strategies for
+every fixture and seed. The full matrix took 373.19 s. The held-out matrix
+took 16.53 s.
+
+| Full corpus strategy | Complete requests | Critical facts in summaries | In handoff before original recovery | In assembled handoff |
+| --- | ---: | ---: | ---: | ---: |
+| No added context | 75/75 | 39/42 | 39/42 | 39/42 |
+| Authoritative Task context | 75/75 | 39/42 | 37/42 | 39/42 |
+| Immediate Context | 74/75 | 36/42 | 34/42 | 39/42 |
+| Rolling history | 75/75 | 21/42 | 22/42 | 37/42 |
+
+Original search found all 42 critical facts. The attachment-specific fact was
+outside the summarization portions and absent from the assembled handoff for
+every strategy and seed. Original search retrieved it every time. This fixture
+exercises attachment search and leaves attachment summarization unqualified.
+
+Immediate Context retained 8/9 critical facts in summaries on each of the short
+and interleaved cache-recovery fixtures. Both handoffs covered 9/9. The short
+fixture had one incomplete Agent Action Batch at seed 89. At seed 43 the long
+fixture's corresponding batch omitted `CACHE_VERSION_GUARD` and introduced an
+unsupported automatic-rebuild observation. The invoice replay grader missed
+one valid `DUPLICATE_REPLAY_CASE` result because the identifier and `PASS`
+appeared on separate JSON lines. Three rewind contradiction flags matched
+references to a failing assertion alongside the passing `PI_REWIND_PROVIDER_ID`
+result. The audited summaries still included unsupported claims about whether
+the original failure had been resolved.
+
+Immediate Context retained all 9/9 held-out critical facts in summaries and
+in the assembled handoff, with no labeled contradictions. Authoritative Task
+context also retained 9/9 in summaries. No added context and rolling history
+retained 8/9 each. All four held-out handoffs retained 9/9.
+
+### Native Pi handoff formats on GPU
+
+Both invoice handoff formats failed both wording variants. All four responses
+returned parseable output. Three chose the wrong target value and one chose the
+wrong idempotency key. The runner took 13.25 s and Ollama reported 100% GPU
+residency for Bonsai.
+
+### Native Pi repository edits on GPU
+
+The table reports the controls and seed-17 strategy results. Pi edited files
+from pinned revision `53a615`. Ollama reported full GPU residency for Bonsai
+and LFM3. Both trace-pairing controls ran once. For workspace preparation,
+the targeted rolling-history replay ran the required controls again.
+
+| Strategy | Trace pairing | Workspace preparation |
+| --- | --- | --- |
+| Conventional | Failed (6.10 s) | Timed out in both runs |
+| Original search | Passed | Timed out in both runs |
+| No added context | Timed out | Passed |
+| Authoritative Task context | Passed | Timed out |
+| Immediate Context | Timed out | Timed out |
+| Rolling history | Timed out | Timed out |
+
+The first edit run recorded 23 outcomes, with eight timeouts at the runner's
+120-second safeguard. It stopped after the seed-17 workspace-preparation
+Immediate Context attempt when the routine seed count changed. Its progress
+log contains the completed outcomes. The runner emits detailed JSON on
+completion. The follow-up used the new single-seed default for the remaining
+workspace-preparation rolling-history comparison. Original search retrieved
+the critical facts on that replay but did not finish the edit. The original
+control timeouts make the matched workspace-preparation comparison
+inconclusive. The rolling-history replay made 160 tool calls before it timed
+out.
+
+The first edit run took 1,294.20 s including canceled work. The targeted
+replay took 388.04 s. The reported GPU runs total 2,085.21 s. Together with
+Traditional Tests and native acceptance, the aggregate measured time was
+2,162.59 s.
+
+### Post-merge Traditional Tests
+
+| Check | Result | Wall time |
+| --- | --- | ---: |
+| `just check` | Passed formatting, lint, and type checks after the single-seed default change | 17.15 s |
+| Bun Traditional Tests | 311 passed, two opt-in skips | 27.39 s |
+| Python Traditional Tests | 250 passed on six workers | 2.78 s |
+| Native Pi/Paseo Leader adoption | Passed the scripted end-to-end test, including Session Memory source access, attachments, and restart | 47.21 s |
+
+Two native guidance tests in the first `just test` run discovered host Pi
+skills. The passing Bun run used the same test directories, masked the host
+skill directory for the process, and used a 20-second test limit. The Python
+command from `just test` ran separately. Traditional Tests and native
+acceptance took 77.38 s in aggregate.

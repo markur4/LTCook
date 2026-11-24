@@ -204,6 +204,12 @@ local model contention does not distort elapsed-time estimates. Ordinary CI runs
 tests, including scripted checks of the evaluation machinery; model-backed Agent
 Evals remain separately invoked.
 
+Run local model inference on GPU for the full development Agent Evals suite.
+Check actual GPU residency with `ollama ps` while the models are loaded. Run
+explicit CPU benchmarks separately and report their timings independently of
+the GPU suite. The Bonsai fallback below applies when local GPU evaluation is
+unavailable or exceeds its safeguard.
+
 Prettier is pinned as a development-only JavaScript dependency. Its commands cover
 authored runtime, team, and test TypeScript, excluding generated distributions.
 Python formatting uses the existing Ruff configuration and generated-path
@@ -373,19 +379,25 @@ Run `bun evals/session-memory-live.ts --context-aware` on the GPU host to
 compare no additional context, authoritative Task context, Immediate Context,
 and the former rolling window on the short and cadence cache-recovery fixtures.
 The runner keeps source portions, the model, and sampling settings matched.
-It defaults to seeds 17, 43, and 89. Use `--seeds=17,43`, `--fixture=ID`, or
-`--strategy=immediate,rolling` to focus a replay. Use `--held-out` for the
-held-out index fixture and `--full` for the original comparison corpus.
-The runner uses Ollama's configured hardware, with `--cpu-only` available for
-explicit CPU diagnostics. The report records source coverage, summary quality
+Run one seed per strategy in both Session Memory runners. They default to
+seed 17. Use `--seeds=43` to select another seed, `--fixture=ID` to select a
+fixture, or `--strategy=immediate,rolling` to focus the strategy comparison.
+Use `--held-out` for the held-out index fixture and `--full` for the original
+comparison corpus.
+Use GPU inference for every local model in development qualification. Use
+`--cpu-only` in a separate focused run to measure a production-model summary
+request on CPU. Record its fixture, strategy, source portion, model digest,
+processor, input and output token counts, and Ollama's prefill and generation
+times. Include model load and end-to-end request time so readers can interpret
+the two inference timings. The report records source coverage, summary quality
 by portion, retrieval within budget, and production handoff size and timing.
 Add `--audit-output` to include generated fixture summaries for manual
 hallucination and attribution review. Keep those reports local until reviewed.
 
-Run `bun evals/session-memory-live.ts` to compare hybrid extraction on
-the fixed workflow corpus. The runner uses native Pi with relevant original
-source as the downstream control and grades extraction omissions,
-contradictions, attribution, categorization and invalid output separately.
+To replay the historical CPU extraction baseline, run
+`bun evals/session-memory-live.ts` on the fixed workflow corpus. The runner
+uses relevant original source as the native Pi control. It grades omissions,
+contradictions, attribution, categorization, and invalid output separately.
 It records model digests, reasoning token evidence, prefill and generation time,
 end-to-end request latency, CPU residency, available process peak RSS and Pi
 input-token changes. Positional arguments select the downstream Pi model,
@@ -409,21 +421,26 @@ GPT-6 Luna at low reasoning in native Pi. The replay uses the existing Codex
 sign-in and sends only the numbered excerpts of the synthetic evaluation
 fixture to the provider. It grades each batch on its own evidence.
 
-Run `bun evals/session-memory-edit-live.ts --context-aware` to exercise the
-same comparison on pinned repository edits in Pi. Use
-`--fixture=trace-pairing` for the summary omission and
-`--fixture=workspace-preparation` to re-establish the previously failed
-source control. Only the conventional worker receives the manual handoff.
-The source-only Pi control and conventional control run once per fixture.
-The default Pi worker is GPT-6 Luna at high reasoning through the existing
-Codex authorization. A failed original-search control makes its matched
-downstream comparison inconclusive.
+For the GPU repository-edit qualification in Pi, run both models locally.
 
-Run `bun evals/session-memory-edit-live.ts` with optional extractor and worker
-model tags to compare conventional delegation, deterministic conversation search,
-and hybrid context on repository edits. Pass `gpt-6-luna` as the worker to use
-the high-reasoning fallback in Pi through the existing Codex sign-in.
-Each Pi worker edits its own
+```shell
+bun evals/session-memory-edit-live.ts --context-aware \
+  lfm3:1.7b-qad-q4_0 ltcook-bonsai-2-27b-ctx65536:latest
+```
+
+Use `--fixture=trace-pairing` for the summary omission and
+`--fixture=workspace-preparation` to re-establish the previously failed source
+control. The original-search and conventional controls run once per fixture.
+The conventional worker receives the manual handoff. A failed original-search
+control makes its matched comparison inconclusive. The runner defaults to
+GPT-6 Luna at high reasoning through existing Codex authorization when the Pi
+model argument is omitted.
+
+To replay the historical extraction comparison on repository edits, run
+`bun evals/session-memory-edit-live.ts` with optional extractor and worker model
+tags. It compares conventional delegation, deterministic conversation search,
+and hybrid context. Pass `gpt-6-luna` as the worker to use the high-reasoning
+fallback in Pi through the existing Codex sign-in. Each Pi worker edits its own
 copy of the same files from a pinned LTCook commit. The runner checks the edits
 against the latest confirmed decisions and records tool calls and usage. See the
 [CPU and edit comparison](../evals/session-memory-budget-results.md), the
@@ -440,10 +457,12 @@ summary suffix, including history-dependent responses. A new epoch rebuilds
 from original history where native receipts establish the boundaries.
 
 The previous extractive summarizer is limited to the Agent Evals baseline.
-The production default is local LFM3 QAD Q4 at temperature 0.4 with reasoning
-disabled. The historical window evicts in groups from 4,096 to 2,048 estimated
-tokens. Memory work is asynchronous and waits to start while foreground
-local inference is active. See the [architecture diagrams](Explanations.md#context-aware-session-memory).
+The production default runs local LFM3 QAD Q4 on CPU at temperature 0.4 with
+reasoning disabled. The rolling-window evaluation control evicts in groups
+from 4,096 to 2,048 estimated tokens. Memory work is asynchronous and starts
+only when foreground local inference is idle. See the
+[architecture diagrams](Explanations.md#context-aware-session-memory) and the
+[CPU timing and GPU qualification results](context-aware-session-memory/QUALIFICATION.md#immediate-context-qualification).
 
 ### Opt-in summarization utility comparison
 

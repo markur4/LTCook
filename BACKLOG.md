@@ -90,6 +90,15 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 # 2026-11-24
 
+## P3 / E3 [Tooling] - *Isolate native guidance test fixtures from host skills*
+
+- **Area:** `tests/runtime/native/native-guidance.test.ts`
+- **Observed while:** Running Traditional Tests for Immediate Context qualification.
+- **Why not fixed now:** This pass covers Session Memory qualification. Fixture isolation is a separate test change.
+- **Evidence:** Two native guidance tests picked up skills from the host's `~/.agents/skills`. One fixture returned unexpected skills and the other reported a duplicate skill name. Both passed with the host skill directory masked for the Bun process.
+- **Context:** The Pi loader can discover host skills independently of the fixture's temporary agent and guidance directories.
+- **Suggested next step:** Run the affected fixtures with isolated host skill discovery while preserving the tests that exercise an explicit shared skills directory.
+
 ## P2 / E2 [Tooling] - *Release Activity observation when native mobile hides a retained tab*
 - **Area:** `runtime/src/paseo-plugin/client/screens/ActivityPanel.tsx` and Paseo's Explorer panel contract.
 - **Observed while:** Checking the Activity panel's subscription lifetime against the pinned Paseo SDK.

@@ -10,5 +10,6 @@
 - [x] Integrate the reviewed implementation as requested.
 - [x] Preserve named tool outcomes and recover missing task identifiers from original messages.
 - [x] Prepare Immediate Context and the matched evaluation with identical source portions.
-- [ ] Run focused exact-retention replays on the GPU host and audit unsupported claims.
-- [ ] Run held-out qualification once focused retention is reproducible.
+- [x] Run the exact-retention replays and held-out index fixture on GPU. Review flagged claims and record the outcomes in [Immediate Context qualification](QUALIFICATION.md#immediate-context-qualification).
+- [ ] Qualify attachment summarization with a fixture that supplies the attachment to the summarizer. Recheck named outcomes and unsupported claims in the cache-recovery and rewind replays.
+- [ ] Qualify the Pi edits after establishing a passing workspace-preparation original-search control and resolving the Immediate Context timeouts.
