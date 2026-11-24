@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
@@ -102,6 +102,12 @@ if (process.argv.includes('large output')) {
       });
       const workspace = await openRepositoryWorkspace(source);
       const signal = new AbortController().signal;
+      expect(await provider.readStatus(workspace)).toEqual({
+        availability: 'not-ready',
+        activity: 'idle',
+        diagnostic: null,
+      });
+      await expect(lstat(path.join(root, 'cache'))).rejects.toHaveProperty('code', 'ENOENT');
       const result = await provider.search(workspace, { query: 'cache' }, signal);
       expect(result).toMatchObject({
         provider: 'colgrep',

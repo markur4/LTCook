@@ -9,6 +9,9 @@ import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
+import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
+import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
+import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import {
   createPaseoAgentBackend,
@@ -25,6 +28,12 @@ const workspace = path.join(directory, 'workspace');
 const deployment = path.join(directory, 'deployment');
 const piHome = path.join(directory, 'pi');
 const authHome = path.join(directory, 'auth');
+const fixtureSkill = path.join(directory, 'guidance', 'skills', 'activity-fixture', 'SKILL.md');
+await mkdir(path.dirname(fixtureSkill), { recursive: true });
+await writeFile(
+  fixtureSkill,
+  '---\nname: activity-fixture\ndescription: Browser activity fixture\n---\nRead the fixture.\n',
+);
 for (const entry of [workspace, deployment, piHome, authHome])
   await mkdir(entry, { recursive: true });
 async function freePort(): Promise<number> {
@@ -63,17 +72,48 @@ const provider = createHttpServer(async (request, response) => {
   try {
     let body = '';
     for await (const chunk of request) body += chunk;
-    const input = JSON.parse(body) as { model: string; messages?: unknown[] };
+    const input = JSON.parse(body) as {
+      model: string;
+      messages?: Array<{ role?: string; content?: unknown }>;
+    };
+    const lastUser = input.messages?.findLastIndex(({ role }) => role === 'user') ?? -1;
+    const prompt = JSON.stringify(input.messages?.[lastUser]?.content ?? '');
+    const exerciseParallel = prompt.includes('Exercise Activity parallel tools');
+    const exerciseActivity = exerciseParallel || prompt.includes('Exercise Activity tools');
+    const needsTools =
+      exerciseActivity && !input.messages?.slice(lastUser + 1).some(({ role }) => role === 'tool');
     const reply = JSON.stringify(input.messages ?? []).includes('GUI mobile draft launch')
       ? 'GUI mobile native Leader response.'
       : 'GUI native Leader response.';
     modelCalls++;
     const id = `gui-fixture-${modelCalls}`;
     response.writeHead(200, { 'content-type': 'text/event-stream' });
+    const toolRequests = exerciseParallel
+      ? Array.from({ length: 2 }, () => ({ name: 'bash', args: { command: 'sleep 7' } }))
+      : Array.from({ length: 8 }, () => ({ name: 'read', args: { path: fixtureSkill } }));
+    const tools = needsTools
+      ? toolRequests.map(({ name, args }, index) => ({
+          index,
+          id: `${id}-${index}`,
+          type: 'function',
+          function: { name, arguments: JSON.stringify(args) },
+        }))
+      : undefined;
     for (const [delta, finish_reason] of [
       [{ role: 'assistant' }, null],
-      [{ content: reply }, null],
-      [{}, 'stop'],
+      [
+        tools
+          ? { tool_calls: tools }
+          : {
+              content: exerciseParallel
+                ? 'Activity parallel fixture done.'
+                : exerciseActivity
+                  ? 'Activity fixture done.'
+                  : reply,
+            },
+        null,
+      ],
+      [{}, tools ? 'tool_calls' : 'stop'],
     ]) {
       response.write(
         `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: 1, model: input.model, choices: [{ index: 0, delta, finish_reason }] })}\n\n`,
@@ -94,6 +134,17 @@ async function inspectStage(name: string): Promise<void> {
 }
 async function clickButton(name: string): Promise<void> {
   await browser('find', 'role', 'button', 'click', '--name', name, '--exact');
+}
+async function openActivityPanel(): Promise<void> {
+  await browser('press', 'Control+k');
+  await browser(
+    'find',
+    'placeholder',
+    'Search commands, files, workspaces, and agents...',
+    'fill',
+    'Open Activity panel',
+  );
+  await clickButton('Open Activity panel');
 }
 async function tapNativeChoice(name: string): Promise<void> {
   const target = `native-touch-${randomUUID()}`;
@@ -290,9 +341,13 @@ const evals = new EvalRunService(path.join(directory, 'eval-state'), async (requ
 });
 await evals.initialize();
 api.setEval(evals);
+api.setWorkspaceMcp(new WorkspaceMcp([], listen));
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 let runtime: ReturnType<typeof createRuntime> | undefined;
+let memory: SessionMemory | undefined;
+let backgroundSummary = false;
+let activityRequests = 0;
 try {
   host = await startPaseoHost({
     node,
@@ -304,6 +359,10 @@ try {
     pluginDirectory: path.join(root, 'runtime/src/paseo-plugin'),
     environment,
     piCommand: path.join(root, 'runtime/dist/integrations/pi-rpc.js'),
+  });
+  api.setProviderSubagents(async (agentId) => {
+    activityRequests++;
+    return host!.listProviderSubagents(agentId);
   });
   const backend = await createPaseoAgentBackend({
     api: host.api,
@@ -512,6 +571,165 @@ try {
   await clickButton(`Back to ${mobileLeader.agent.title}`);
   await waitForComposer(mobileLeader.agent.title);
 
+  const gitWorkspace = path.join(directory, 'activity-parent');
+  const workerWorkspace = path.join(directory, 'activity-worktree');
+  await mkdir(gitWorkspace);
+  await run('git', ['init', gitWorkspace]);
+  await run(
+    'git',
+    [
+      '-c',
+      'user.name=Fixture',
+      '-c',
+      'user.email=fixture@example.test',
+      'commit',
+      '--allow-empty',
+      '--no-gpg-sign',
+      '-m',
+      'Fixture',
+    ],
+    { cwd: gitWorkspace },
+  );
+  await run('git', ['worktree', 'add', '--detach', workerWorkspace], { cwd: gitWorkspace });
+  const differentWorkspace = await host.api.workspaces.open(workerWorkspace);
+  const crossAgent = await differentWorkspace.agents.create({
+    parent: mobileSession.id,
+    title: 'Activity cross-worktree worker',
+    config: { provider: 'pi/fixture/test' },
+    env: environment,
+  });
+
+  assert.equal((await crossAgent.refresh())?.agent.workspaceId, differentWorkspace.id);
+  await openActivityPanel();
+  await browser('wait', '--text', 'Recent conversation activity');
+  assert(
+    (await browser('snapshot')).includes('Close Explorer sidebar'),
+    'Activity opens in Explorer',
+  );
+  await inspectStage('native-activity-explorer');
+
+  await host.api.agents.ref(mobileSession.id).send('Exercise Activity tools');
+  await browser('wait', '--text', 'Activity fixture done.');
+  await browser(
+    'wait',
+    '--fn',
+    `Boolean(document.querySelector('[aria-label="activity-fixture, observed skill load"]'))`,
+  );
+  await clickButton('activity-fixture, observed skill load');
+  await browser(
+    'wait',
+    '--fn',
+    `Boolean(document.querySelector('[aria-label="Close activity-fixture preview"]'))`,
+  );
+  await browser(
+    'wait',
+    '--fn',
+    `[...document.querySelectorAll('button,[role=button]')].some(button => /show.+older tools/i.test(button.getAttribute('aria-label') ?? ''))`,
+  );
+  await browser('find', 'role', 'button', 'click', '--name', 'Show 3 older tools', '--exact');
+  await browser(
+    'wait',
+    '--fn',
+    `Boolean(document.querySelector('[aria-label="Hide 3 older tools"]'))`,
+  );
+  await clickButton('Hide 3 older tools');
+  await openActivityPanel();
+  await browser(
+    'wait',
+    '--fn',
+    `Boolean(document.querySelector('[aria-label="Close activity-fixture preview"]'))`,
+  );
+  await browser('set', 'viewport', '1100', '950');
+  await browser(
+    'wait',
+    '--fn',
+    `[...document.querySelectorAll('[aria-label^="Agent context,"]')].some(node => /[0-9].*tokens/.test(node.getAttribute('aria-label') ?? ''))`,
+  );
+  const panelWidth = JSON.parse(
+    await browser(
+      'eval',
+      `(() => {
+    const row = document.querySelector('[aria-label^="RAG Index,"]');
+    const bounds = row?.getBoundingClientRect();
+    return { width: bounds?.width ?? 0, fits: Boolean(row && row.scrollWidth <= row.clientWidth + 1) };
+  })()`,
+    ),
+  ) as { width: number; fits: boolean };
+  assert(
+    panelWidth.width >= 260 && panelWidth.width <= 430 && panelWidth.fits,
+    'Activity cards fit the narrow Explorer',
+  );
+  await browser('screenshot', path.join(directory, 'activity-explorer.png'));
+  const colors = `(() => {
+    let element = document.querySelector('[aria-label^="RAG Index,"]');
+    const backgrounds = [];
+    for (let depth = 0; element && depth < 6; depth++, element = element.parentElement) {
+      backgrounds.push(getComputedStyle(element).backgroundColor);
+    }
+    return backgrounds;
+  })()`;
+  const lightColors = JSON.parse(await browser('eval', colors)) as string[];
+  await browser('set', 'media', 'dark');
+  await browser(
+    'wait',
+    '--fn',
+    `JSON.stringify(${colors}) !== JSON.stringify(${JSON.stringify(lightColors)})`,
+  );
+  await browser('screenshot', path.join(directory, 'activity-explorer-dark.png'));
+  await browser('set', 'media', 'light');
+  await inspectStage('native-activity-tools-and-skills');
+  await browser('set', 'viewport', '1440', '1000');
+
+  await clickButton('Open Adjutant conversation');
+  await waitForComposer('Adjutant');
+  await browser(
+    'wait',
+    '--fn',
+    `Boolean(document.querySelector('[aria-label="Adjutant"][aria-selected="true"]'))`,
+  );
+  await clickButton(`Back to ${mobileLeader.agent.title}`);
+  await waitForComposer(mobileLeader.agent.title);
+  await browser('wait', '--text', 'RAG Index');
+  await clickButton('Open Activity cross-worktree worker conversation');
+  await waitForComposer('Activity cross-worktree worker');
+  await browser('wait', '--text', workerWorkspace);
+  await inspectStage('native-activity-cross-worktree');
+  await crossAgent.send('Exercise Activity parallel tools');
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelectorAll('[aria-label="bash, Running"]').length === 2`,
+  );
+  await inspectStage('native-activity-parallel-tools');
+  await browser('wait', '--text', 'Activity parallel fixture done.');
+  await clickButton(`Back to ${mobileLeader.agent.title}`);
+  await waitForComposer(mobileLeader.agent.title);
+  await browser('wait', '--text', 'RAG Index');
+
+  memory = new SessionMemory({
+    databasePath: path.join(directory, 'activity-memory.sqlite'),
+    source: createPaseoMemorySource(host.api, secret),
+    async summarize(type, prompt) {
+      if (JSON.stringify(prompt).includes('Summarize without Activity')) backgroundSummary = true;
+      return { type, text: 'Background summary fixture', complete: true, elapsedMs: 1 };
+    },
+  });
+  api.setSessionMemory(memory, () => ({ sessionId: mobileSession.id }));
+  await clickButton('Close Explorer sidebar');
+  await new Promise((resolve) => setTimeout(resolve, 1750));
+  const requestsWhileHidden = activityRequests;
+  await host.api.agents
+    .ref(mobileSession.id)
+    .send('Summarize without Activity', { clientMessageId: randomUUID() });
+  for (let attempt = 0; attempt < 100 && !backgroundSummary; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert(backgroundSummary, 'Session Memory summarizes while Activity is hidden');
+  assert.equal(activityRequests, requestsWhileHidden, 'Hidden Activity releases observation');
+  await clickButton('Open Explorer sidebar');
+  await browser('wait', '--text', 'Recent conversation activity');
+  assert(activityRequests > requestsWhileHidden, 'Reopening Activity resumes observation');
+
   const panelNavigation = telemetry.begin('panel.navigation');
   try {
     await browser('press', 'Control+k');
@@ -590,7 +808,7 @@ try {
       mobile: 'draft Team selection and native chat',
       teamsBrowser: 'reuse and New Session',
       childNavigation: 'native subagent track and contextual panel',
-      panels: 'Team hierarchy, Task Board, Diagnostics',
+      panels: 'Activity Explorer, Team hierarchy, Task Board, Diagnostics',
       telemetry: 'existing Perfetto timings exported',
       modelCalls,
     }),
@@ -610,6 +828,7 @@ try {
   throw error;
 } finally {
   await browser('close').catch(() => undefined);
+  await memory?.close();
   await host?.close();
   await runtime?.close();
   await evals.close();
