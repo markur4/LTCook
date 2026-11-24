@@ -9,6 +9,7 @@ import {
   modelTag,
 } from '../runtime/src/evals/summarization-grader.js';
 import type { ToolDefinition } from '../runtime/src/tools/types.js';
+import { repositoryEvidenceText } from '../runtime/src/tools/repository-evidence-text.js';
 import type { RepositoryHit, RepositoryRetrieval } from '../runtime/src/repository/results.js';
 import { RepositoryBehaviorAnswer } from './repository-behavior-grade.js';
 
@@ -135,7 +136,10 @@ export async function evaluateRepositoryWithPi({
           repositorySearchAccess: true,
           signal: toolSignal ? AbortSignal.any([bounded, toolSignal]) : bounded,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
+        return {
+          content: [{ type: 'text', text: repositoryEvidenceText(tool.name, result) }],
+          details: result,
+        };
       },
     }),
   );

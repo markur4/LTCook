@@ -163,6 +163,39 @@ test('a claim needs its own evidence and cannot borrow the evidence cited for a 
   });
 });
 
+test('same-file adjacent lines remain distinct evidence for each fact', () => {
+  const path = 'src/retries.ts';
+  const stable = { path, startLine: 1, endLine: 1 };
+  const preview = { path, startLine: 2, endLine: 2 };
+  const excerpt = 'const stableRetries = 12;\nconst previewRetries = 48;';
+  const answer: Answer = {
+    outcome: 'answered',
+    facts: [
+      { id: 'stable', value: 12, citations: [preview] },
+      { id: 'preview', value: 48, citations: [stable] },
+    ],
+  };
+  expect(
+    gradeRepositoryBehavior({
+      answer,
+      expected: [
+        { id: 'stable', value: 12, evidence: stable },
+        { id: 'preview', value: 48, evidence: preview },
+      ],
+      searches: [{ ...complete, results: [{ path, startLine: 1, endLine: 2, excerpt }] }],
+      files: new Map([[path, `${excerpt}\n`]]),
+    }),
+  ).toMatchObject({
+    factualCorrectness: 'correct',
+    taskSuccess: 'unverified',
+    factGrades: [
+      { id: 'stable', citedExpectedRange: false },
+      { id: 'preview', citedExpectedRange: false },
+    ],
+    retrieval: { recall: 1 },
+  });
+});
+
 test('stale source output is an integrity failure even when separate valid evidence supports the answer', () => {
   const staleHit = { ...definition, excerpt: 'export const maximumWait = 60;' };
   const results = [staleHit, ...hits];

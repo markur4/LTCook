@@ -2,11 +2,20 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
+import { Value } from 'typebox/value';
+import {
+  gradeRepositoryBehavior,
+  RepositoryBehaviorAnswer,
+} from '../../../evals/repository-behavior-grade.js';
+import { EVAL_CONTEXT_WINDOW, EVAL_MODEL_COMPAT } from '../../../runtime/src/evals/setup.js';
 import { startPaseoHost } from '../../../runtime/src/integrations/paseo.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { ollamaEndpoint } from '../../../runtime/src/integrations/ollama.js';
 import { createTools } from '../../../runtime/src/tools/catalog.js';
 import { RiedService } from '../../../runtime/src/repository/discovery.js';
+import { RepositoryLocateOutputSchema } from '../../../runtime/src/tools/repo-locate.js';
+import { RepositorySearchOutputSchema } from '../../../runtime/src/tools/repo-search.js';
 
 const root = path.resolve(import.meta.dir, '../../..');
 const fixture = process.argv[2];
@@ -20,14 +29,24 @@ const model = 'gpt-5.4';
 const material = 'Release R-17 passed 42 checks but did not deploy. The cause is uncertain.';
 const summary = 'R-17 passed 42 checks and did not deploy. The cause is uncertain.';
 const summaryModel = 'fixture-summary';
+const liveModel = process.env.LTCOOK_NATIVE_PI_MODEL;
 const verifyColgrep = Boolean(process.env.LTCOOK_COLGREP_DEPLOYMENT);
 if (verifyColgrep) {
   process.env.LTCOOK_COLGREP_CACHE_DIR = path.join(fixture, 'colgrep-cache');
 }
-await writeFile(
-  path.join(workspace, 'checksum.ts'),
-  'export function computeReleaseChecksum(value: number) { return value % 65521; }\n',
-);
+const retryPath = 'channel-retries.ts';
+const retrySource = [
+  "export const releaseRetryLimit = (channel: 'stable' | 'preview') => {",
+  "  if (channel === 'stable') return 12;",
+  "  if (channel === 'preview') return 48;",
+  '  return 0;',
+  '};',
+  '',
+].join('\n');
+const checksumSource =
+  'export function computeReleaseChecksum(value: number) { return value % 65521; }\n';
+await writeFile(path.join(workspace, 'checksum.ts'), checksumSource);
+await writeFile(path.join(workspace, retryPath), retrySource);
 await writeFile(path.join(workspace, 'notes.txt'), material);
 let tool = 'ltcook_ried';
 let argumentsJson = '{"operation":"summary"}';
@@ -47,6 +66,18 @@ function toolNames(tools: FixtureTool[]) {
 let marker = '';
 let calls = 0;
 let providerError: unknown;
+let verifyRepositoryResult: ((content: string) => void) | undefined;
+const verifiedRepositoryCases: string[] = [];
+
+function verifyRetryEvidence(content: string) {
+  assert.match(content, /"provider"\s*:\s*"ripgrep"/);
+  assert.match(content, /"status"\s*:\s*"ready"/);
+  assert.match(content, /channel-retries\.ts/);
+  assert.match(content, /^2 \|   if \(channel === 'stable'\) return 12;$/m);
+  assert.match(content, /^3 \|   if \(channel === 'preview'\) return 48;$/m);
+  assert.doesNotMatch(content, /^2 \| .*return 48;|^3 \| .*return 12;/m);
+}
+
 const provider = createServer(async (request, response) => {
   try {
     if (request.method === 'GET') {
@@ -58,6 +89,12 @@ const provider = createServer(async (request, response) => {
     for await (const data of request) text += data;
     const input = JSON.parse(text);
     if (request.url === '/api/chat') {
+      if (liveCalls.size) {
+        response
+          .writeHead(422)
+          .end('Summarization is unavailable during the live repository check.');
+        return;
+      }
       assert.equal(input.model, summaryModel);
       assert.equal(input.messages[1]?.content, material);
       response.writeHead(200, { 'content-type': 'application/json' });
@@ -72,7 +109,7 @@ const provider = createServer(async (request, response) => {
       return;
     }
     const servedTool = `mcp__ltcook_workspace__${tool}`;
-    const codex = request.url?.endsWith('/responses');
+    const codex = request.url?.endsWith('/responses') ?? false;
     const messages = codex ? input.input : input.messages;
     const result = messages?.findLast((item: Record<string, unknown>) =>
       codex
@@ -88,18 +125,19 @@ const provider = createServer(async (request, response) => {
     let useSearch = false;
     let namespace: string | undefined;
     if (result) {
-      const returned = JSON.stringify(result);
-      assert(
-        tool === 'ltcook_ried'
-          ? returned.includes(workspace) && returned.includes('workspaceRoot')
-          : tool === 'ltcook_repo_search' || tool === 'ltcook_repo_locate'
-            ? returned.includes('checksum.ts') &&
-              returned.includes('computeReleaseChecksum') &&
-              returned.includes(marker.endsWith('_ripgrep') ? 'ripgrep' : 'colgrep') &&
-              (tool !== 'ltcook_repo_locate' || returned.includes('searches'))
+      if (verifyRepositoryResult) {
+        assert.equal(typeof result.content, 'string', `${marker} needs Pi tool text.`);
+        verifyRepositoryResult(result.content);
+        verifiedRepositoryCases.push(marker.slice('call_'.length));
+      } else {
+        const returned = JSON.stringify(result);
+        assert(
+          tool === 'ltcook_ried'
+            ? returned.includes(workspace) && returned.includes('workspaceRoot')
             : returned.includes(summary) && returned.includes(summaryModel),
-        `Tool result was not returned in ${marker}: ${returned.slice(0, 500)}`,
-      );
+          `Tool result was not returned in ${marker}: ${returned.slice(0, 500)}`,
+        );
+      }
       calls++;
     } else {
       const tools = input.tools as FixtureTool[];
@@ -229,9 +267,39 @@ await writeFile(
           },
         ],
       },
+      ...(liveModel
+        ? {
+            ollama: {
+              baseUrl: new URL(
+                '/v1',
+                ollamaEndpoint(process.env.LTCOOK_OLLAMA_ENDPOINT ?? 'http://127.0.0.1:11434'),
+              ).toString(),
+              api: 'openai-completions',
+              apiKey: 'ollama',
+              models: [
+                {
+                  id: liveModel,
+                  name: 'Local Pi evaluation model',
+                  contextWindow: EVAL_CONTEXT_WINDOW,
+                  maxTokens: 512,
+                  compat: EVAL_MODEL_COMPAT,
+                  samplingParams: { max_tokens: 512, temperature: 0 },
+                  reasoning: true,
+                  thinkingLevelMap: { off: 'none' },
+                },
+              ],
+            },
+          }
+        : {}),
     },
   }),
 );
+if (liveModel) {
+  await writeFile(
+    path.join(pi, 'settings.json'),
+    JSON.stringify({ defaultTools: [], retry: { enabled: false } }),
+  );
+}
 const codex = path.join(fixture, '.codex');
 await mkdir(codex, { recursive: true });
 await writeFile(
@@ -255,15 +323,50 @@ const authority = `127.0.0.1:${apiAddress.port}`;
 const secret = 'offline-mcp-runtime';
 let api: RuntimeApi | undefined;
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
+type LiveSearch = Parameters<typeof gradeRepositoryBehavior>[0]['searches'][number];
+type LiveCall = { tool: string; searches: LiveSearch[] };
+const liveCalls = new Map<string, LiveCall[]>();
+const absentSymbol = 'releaseBackoffWindow';
 async function start() {
   api = new RuntimeApi(undefined, secret, authority);
+  const tools = createTools(
+    new RiedService(path.join(fixture, 'cache'), undefined, () => ({ PATH: '' })),
+    {
+      endpoint: new URL(endpoint).origin,
+      model: summaryModel,
+      keepAlive: -1,
+    },
+  );
   api.setWorkspaceMcp(
     new WorkspaceMcp(
-      createTools(new RiedService(path.join(fixture, 'cache'), undefined, () => ({ PATH: '' })), {
-        endpoint: new URL(endpoint).origin,
-        model: summaryModel,
-        keepAlive: -1,
-      }),
+      liveModel
+        ? tools.map((tool) => ({
+            ...tool,
+            async invoke(input, context) {
+              const recorded = liveCalls.get(context.agentId);
+              if (!recorded) return tool.invoke(input, context);
+              const call: LiveCall = { tool: tool.name, searches: [] };
+              recorded.push(call);
+              const output = await tool.invoke(input, context);
+              const request = input as { paths?: string[]; query?: string };
+              const observe = (result: LiveSearch, query: string | undefined) => ({
+                ...result,
+                relevantToNegative:
+                  result.kind === 'exhaustive' &&
+                  query === absentSymbol &&
+                  (request.paths ?? []).every((value) => value === '.'),
+              });
+              if (Value.Check(RepositorySearchOutputSchema, output)) {
+                call.searches.push(observe(output, request.query));
+              } else if (Value.Check(RepositoryLocateOutputSchema, output)) {
+                call.searches.push(
+                  ...output.searches.map((result) => observe(result, result.query)),
+                );
+              }
+              return output;
+            },
+          }))
+        : tools,
       authority,
     ),
   );
@@ -288,6 +391,78 @@ async function start() {
   });
   return host;
 }
+
+async function exerciseLive(
+  active: NonNullable<typeof host>,
+  scenario: 'adjacent-lines' | 'empty' | 'unavailable',
+) {
+  if (!liveModel) return;
+  const agent = await active.api.agents.create({
+    cwd: workspace,
+    config: { provider: `pi/ollama/${liveModel}` },
+  });
+  const calls: LiveCall[] = [];
+  liveCalls.set(agent.id, calls);
+  const question =
+    scenario === 'empty'
+      ? `Does the exact identifier ${absentSymbol} occur anywhere in this repository? If present, give its source path as id implementationFile.`
+      : scenario === 'adjacent-lines'
+        ? 'In channel-retries.ts, what number is returned for each of the stable and preview conditions on channel? Use fact ids stable and preview, with a separate citation for each.'
+        : 'What numeric retry limits does the implementation give to the regular and early-access release channels? Use fact ids stable and preview, with a separate citation for each.';
+  const started = performance.now();
+  try {
+    const outcome = await agent.run(
+      `${question}\nRespond with a JSON object with outcome and facts. For a supported answer use outcome "answered" and facts with id, value, and citations. Each citation has path, startLine and endLine. Use outcome "not-found" and facts [] if a completed search found no relevant evidence. Use outcome "insufficient-evidence" and facts [] if evidence is unavailable or insufficient.`,
+      { timeoutMs: 45_000 },
+    );
+    const searches = calls.flatMap((call) => call.searches);
+    let answer: unknown;
+    try {
+      answer = JSON.parse(
+        outcome.lastMessage?.trim().replace(/^```(?:json)?\s+|\s+```$/gi, '') ?? '',
+      );
+    } catch {
+      // > A malformed response is recorded without printing the model transcript.
+    }
+    const parsed = Value.Check(RepositoryBehaviorAnswer, answer) ? answer : undefined;
+    const grade = gradeRepositoryBehavior({
+      answer: parsed,
+      expected:
+        scenario === 'empty'
+          ? []
+          : [
+              { id: 'stable', value: 12, evidence: { path: retryPath, startLine: 2, endLine: 2 } },
+              { id: 'preview', value: 48, evidence: { path: retryPath, startLine: 3, endLine: 3 } },
+            ],
+      searches,
+      files: new Map([
+        [retryPath, retrySource],
+        ['checksum.ts', checksumSource],
+        ['notes.txt', material],
+      ]),
+    });
+    console.log(
+      JSON.stringify({
+        livePi: scenario,
+        model: liveModel,
+        status: outcome.status,
+        elapsedMs: performance.now() - started,
+        outcome: parsed?.outcome ?? null,
+        calls: calls.map(({ tool, searches }) => ({
+          tool,
+          statuses: searches.map(({ status }) => status),
+        })),
+        grade,
+      }),
+    );
+  } finally {
+    try {
+      await agent.archive();
+    } finally {
+      liveCalls.delete(agent.id);
+    }
+  }
+}
 async function stop() {
   await host?.close();
   host = undefined;
@@ -300,8 +475,9 @@ async function exercise(
   toolInput?:
     | { path: string }
     | { text: string }
-    | { symbol: string }
-    | { query: string; mode?: 'exact'; pattern?: string },
+    | { symbol: string; paths?: string[] }
+    | { query: string; mode?: 'exact' | 'semantic'; pattern?: string; paths?: string[] },
+  verifyResult?: (content: string) => void,
 ) {
   tool =
     toolInput && 'symbol' in toolInput
@@ -313,6 +489,7 @@ async function exercise(
           : 'ltcook_ried';
   argumentsJson = JSON.stringify(toolInput ?? { operation: 'summary' });
   marker = `call_${phase}`;
+  verifyRepositoryResult = verifyResult;
   const before = calls;
   let outcome = await agent.run(`Call ${tool}. Fixture phase ${phase}.`, {
     timeoutMs: 30_000,
@@ -339,17 +516,42 @@ try {
   });
   await exercise(ordinaryPi, 'pi_fresh');
   if (Bun.which('rg')) {
-    await exercise(ordinaryPi, 'pi_locate_ripgrep', { symbol: 'computeReleaseChecksum' });
-    await exercise(ordinaryPi, 'pi_searches_ripgrep', {
-      query: 'computeReleaseChecksum',
-      mode: 'exact',
-    });
+    await exercise(
+      ordinaryPi,
+      'pi_locate_ripgrep',
+      { symbol: 'channel', paths: ['channel-retries.ts'] },
+      verifyRetryEvidence,
+    );
+    await exercise(
+      ordinaryPi,
+      'pi_searches_ripgrep',
+      { query: 'channel', mode: 'exact', paths: ['channel-retries.ts'] },
+      verifyRetryEvidence,
+    );
+    await exercise(
+      ordinaryPi,
+      'pi_searches_empty',
+      { query: absentSymbol, mode: 'exact' },
+      (content) => {
+        assert.match(content, /"status"\s*:\s*"ready"/);
+        assert.match(content, /"hitCount"\s*:\s*0\b/);
+        assert.doesNotMatch(content, /^\d+ \|/m);
+      },
+    );
   }
   if (verifyColgrep)
-    await exercise(ordinaryPi, 'pi_searches_repository', {
-      query: 'calculate the release checksum',
-      pattern: 'computeReleaseChecksum',
-    });
+    await exercise(
+      ordinaryPi,
+      'pi_searches_repository',
+      { query: 'calculate the release checksum', pattern: 'computeReleaseChecksum' },
+      (content) => {
+        assert.match(content, /"provider"\s*:\s*"colgrep"/);
+        assert.match(content, /checksum\.ts/);
+        assert.match(content, /^1 \| export function computeReleaseChecksum.*% 65521;.*$/m);
+      },
+    );
+  await exerciseLive(active, 'adjacent-lines');
+  await exerciseLive(active, 'empty');
   const ordinaryCodex = await active.api.agents.create({
     cwd: workspace,
     config: { provider: `codex/${model}` },
@@ -358,14 +560,29 @@ try {
   await ordinaryCodex.reload();
   await exercise(ordinaryCodex, 'codex_warm_resume');
   await stop();
+  process.env.LTCOOK_COLGREP_DEPLOYMENT = path.join(fixture, 'missing-colgrep-assets');
   active = await start();
-  await exercise(active.api.agents.ref(ordinaryPi.id), 'pi_restart_resume');
+  const resumedPi = active.api.agents.ref(ordinaryPi.id);
+  await exercise(resumedPi, 'pi_restart_resume');
+  await exercise(
+    resumedPi,
+    'pi_searches_unavailable',
+    { query: 'retry allowance for each release channel', mode: 'semantic' },
+    (content) => {
+      assert.match(content, /"status"\s*:\s*"unavailable"/);
+      assert.match(content, /ColGREP assets are missing or invalid/);
+      assert.doesNotMatch(content, /^\d+ \|/m);
+    },
+  );
+  await exerciseLive(active, 'unavailable');
   await exercise(active.api.agents.ref(ordinaryCodex.id), 'codex_restart_resume');
-  await exercise(active.api.agents.ref(ordinaryPi.id), 'pi_summarizes_file', { path: 'notes.txt' });
+  await exercise(resumedPi, 'pi_summarizes_file', { path: 'notes.txt' });
   await exercise(active.api.agents.ref(ordinaryCodex.id), 'codex_summarizes_text', {
     text: material,
   });
-  console.log(JSON.stringify({ result: 'passed', verifiedToolCalls: calls }));
+  console.log(
+    JSON.stringify({ result: 'passed', verifiedToolCalls: calls, verifiedRepositoryCases }),
+  );
 } finally {
   await stop();
   provider.closeAllConnections();

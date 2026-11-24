@@ -18,6 +18,9 @@ export {
   REPO_SEARCH_TOOL_NAME,
 } from '../paseo-plugin/shared/workspace-tools.js';
 
+export const repositoryEvidenceGuidance =
+  ' Cite the exact supporting numbered lines for each claim. Search again only to close a specific evidence gap. A ready empty response means this search found no matches. An unavailable or indexing response leaves the evidence unresolved.';
+
 export const RepositorySearchPathsSchema = Type.Array(
   Type.String({ minLength: 1, maxLength: 1024 }),
   { maxItems: 12 },
@@ -113,7 +116,8 @@ export function createRepoSearchTool(
     ...defineTool({
       name: REPO_SEARCH_TOOL_NAME,
       description:
-        'Search the authorized local workspace. Use exact for whole identifiers, literal for substrings, regex for patterns, and hybrid or semantic for ranked conceptual matches.',
+        'Search the authorized local workspace. Use exact for whole identifiers, literal for substrings, regex for patterns, and hybrid or semantic for ranked conceptual matches.' +
+        repositoryEvidenceGuidance,
       inputSchema: RepositorySearchInputSchema,
       outputSchema: RepositorySearchOutputSchema,
       async execute(input, context) {

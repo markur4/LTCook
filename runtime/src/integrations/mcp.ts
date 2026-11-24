@@ -13,6 +13,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolDefinition, ToolContext } from '../tools/types.js';
 import { isRepositoryTool } from '../paseo-plugin/shared/workspace-tools.js';
+import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
 import type { WebToolService } from '../tools/web.js';
 
 type Grant = {
@@ -170,8 +171,11 @@ export class WorkspaceMcp {
           repositorySearchAccess: grant.repositorySearchAccess,
           signal,
         });
+        const text = isRepositoryTool(params.name)
+          ? repositoryEvidenceText(params.name, output)
+          : JSON.stringify(output);
         return {
-          content: [{ type: 'text', text: JSON.stringify(output) }],
+          content: [{ type: 'text', text }],
           structuredContent: output,
         };
       } catch (error) {
