@@ -31,15 +31,62 @@ function queryTerms(query: string): string[] {
   return [...new Set(specific.length ? specific : terms)];
 }
 
-export function memoryPreview(text: string, budget: number, query = ''): string {
+function* memoryIdentifierTokens(text: string) {
+  for (const { 0: word, index } of text.matchAll(/[\p{L}\p{N}_./-]{3,}/gu)) {
+    yield { term: word.replace(/\.+$/, ''), index };
+  }
+}
+
+function memoryFilename(term: string): string | undefined {
+  const slash = term.lastIndexOf('/');
+  if (slash < 0) return undefined;
+  const filename = term.slice(slash + 1);
+  return filename.includes('.') ? filename : undefined;
+}
+
+export function memoryIdentifierMatches(text: string, identifiers: readonly string[]): Set<string> {
+  const remaining = new Set(identifiers);
+  const matches = new Set<string>();
+  if (!remaining.size) return matches;
+  for (const { term } of memoryIdentifierTokens(text)) {
+    if (remaining.delete(term)) matches.add(term);
+    const filename = memoryFilename(term);
+    if (filename && remaining.delete(filename)) matches.add(filename);
+    if (!remaining.size) break;
+  }
+  return matches;
+}
+
+export function memoryPreview(
+  text: string,
+  budget: number,
+  query = '',
+  identifiers: readonly string[] = [],
+): string {
   if (estimateMemoryTokens(text) <= budget) return text;
   if (budget < 1) return '';
-  const content = text.toLowerCase();
-  const match = queryTerms(query)
-    .sort((a, b) => b.length - a.length)
-    .map((term) => content.indexOf(term))
-    .find((offset) => offset >= 0);
-  let start = Math.max(0, (match ?? 0) - budget);
+  let start: number;
+  let exact: { term: string; index: number } | undefined;
+  if (identifiers.length) {
+    for (const token of memoryIdentifierTokens(text)) {
+      const filename = memoryFilename(token.term);
+      if (!identifiers.includes(token.term) && (!filename || !identifiers.includes(filename)))
+        continue;
+      exact = token;
+      break;
+    }
+  }
+  if (exact) {
+    const lookBehind = Math.max(0, budget - estimateMemoryTokens(exact.term));
+    start = Math.max(0, exact.index - lookBehind);
+  } else {
+    const content = text.toLowerCase();
+    const match = queryTerms(query)
+      .sort((a, b) => b.length - a.length)
+      .map((term) => content.indexOf(term))
+      .find((offset) => offset >= 0);
+    start = Math.max(0, (match ?? 0) - budget);
+  }
   if (/[\uDC00-\uDFFF]/u.test(text.charAt(start))) start--;
   let end = Math.min(text.length, start + budget * 4);
   while (estimateMemoryTokens(text.slice(start, end)) > budget) {
@@ -55,6 +102,7 @@ export function budgetMemoryText<T extends { text: string }>(
   total: number,
   query: string,
   cost: (item: T) => number,
+  identifiers: readonly string[] = [],
 ) {
   const selected: T[] = [];
   let remaining = total;
@@ -66,7 +114,7 @@ export function budgetMemoryText<T extends { text: string }>(
       break;
     }
     const atCapacity = () => {
-      const text = memoryPreview(item.text, capacity, query);
+      const text = memoryPreview(item.text, capacity, query, identifiers);
       return text === item.text ? item : { ...item, text, truncated: true as const };
     };
     let preview = atCapacity();
@@ -90,4 +138,11 @@ export function budgetMemoryText<T extends { text: string }>(
 export function memoryRelevance(text: string, query: string): number {
   const content = text.toLowerCase();
   return queryTerms(query).filter((term) => content.includes(term)).length;
+}
+
+export function missingMemoryIdentifiers(query: string, context: string): string[] {
+  const identifiers = [...new Set(Array.from(memoryIdentifierTokens(query), ({ term }) => term))]
+    .filter((term) => /[_./]|[a-z][A-Z]|[A-Z][0-9]/.test(term));
+  const matches = memoryIdentifierMatches(context, identifiers);
+  return identifiers.filter((term) => !matches.has(term));
 }

@@ -1267,6 +1267,7 @@ Task to register: ${input.description}`,
       const unavailable = {
         text: 'Supplemental Session Memory. This context is potentially incomplete.',
       };
+      const deadline = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
       let payload: MemoryHandoffObservation | undefined;
       try {
@@ -1275,13 +1276,17 @@ Task to register: ${input.description}`,
             .handoff(
               leader.nativeAgentId,
               `${task.title} ${task.description} ${task.acceptance} ${assignment.handoff}`,
+              deadline.signal,
               (observation) => {
                 payload = observation;
               },
             )
             .then((text) => ({ text, payload })),
           new Promise<typeof unavailable>((resolve) => {
-            timer = setTimeout(() => resolve(unavailable), 500);
+            timer = setTimeout(() => {
+              deadline.abort();
+              resolve(unavailable);
+            }, 500);
           }),
         ]);
       } catch {
