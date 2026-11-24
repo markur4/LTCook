@@ -5,6 +5,7 @@ import { defineRpc, PluginAttachmentItemSchema } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
 import {
   activitySubscription,
+  memoryDeviceRpc,
   MemoryUnitCountsSchema,
   storedSummariesRpc,
 } from './shared/activity';
@@ -240,6 +241,7 @@ const activityServices = z.object({
   memoryDisabled: z.boolean().optional(),
   memory: z
     .object({
+      cpuOnly: z.boolean(),
       summarization: z.enum([
         'summarizing',
         'queued',
@@ -278,6 +280,9 @@ const activityServices = z.object({
 });
 
 export default function contribute(server: PluginServerContext) {
+  server.handle(memoryDeviceRpc, async (input) =>
+    memoryDeviceRpc.output.parse(await runtimeJson('/v1/activity/memory-device', input)),
+  );
   server.handle(storedSummariesRpc, async (input, { paseo }) => {
     const entry = await paseo.agents.ref(input.agentId).refresh();
     if (!entry || entry.agent.archivedAt)
@@ -352,6 +357,7 @@ export default function contribute(server: PluginServerContext) {
             ...(services?.rag.diagnostic ? { diagnostic: services.rag.diagnostic } : {}),
           },
           memory: {
+            cpuOnly: memory?.cpuOnly ?? null,
             summarization: services?.memoryDisabled
               ? 'disabled'
               : (memory?.summarization ?? 'unknown'),

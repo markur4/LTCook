@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useRpc } from '@getpaseo/plugin/client';
-import { Icon } from '@getpaseo/plugin/client/ui';
+import { Icon, SettingsSwitch } from '@getpaseo/plugin/client/ui';
 import {
+  memoryDeviceRpc,
   storedSummariesRpc,
   type ActivitySnapshot,
   type MemoryUnitCounts,
@@ -57,17 +58,34 @@ export function ActivityServices({
   agentId,
   rag,
   memory,
+  onCpuOnlyChange,
   agentWorktree,
 }: Pick<ActivitySnapshot, 'rag' | 'memory'> & {
   theme: Theme;
   agentId: string;
+  onCpuOnlyChange: (cpuOnly: boolean) => void;
   agentWorktree?: string;
 }) {
   const [ragOpen, setRagOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [savingDevice, setSavingDevice] = useState(false);
+  const [deviceError, setDeviceError] = useState<string | null>(null);
   const [reader, setReader] = useState<SummaryReader | null>(null);
   const request = useRef(0);
   const fetchSummaries = useRpc(storedSummariesRpc);
+  const saveMemoryDevice = useRpc(memoryDeviceRpc);
+  async function changeMemoryDevice(useGpu: boolean) {
+    setSavingDevice(true);
+    setDeviceError(null);
+    try {
+      const { cpuOnly } = await saveMemoryDevice({ cpuOnly: !useGpu });
+      onCpuOnlyChange(cpuOnly);
+    } catch (error) {
+      setDeviceError(error instanceof Error ? error.message : 'Could not change inference device.');
+    } finally {
+      setSavingDevice(false);
+    }
+  }
   function closeReader() {
     request.current++;
     setReader(null);
@@ -164,6 +182,15 @@ export function ActivityServices({
         <ActivityText theme={theme} strong>
           Background summaries
         </ActivityText>
+        {memory.cpuOnly !== null && (
+          <SettingsSwitch
+            label="Use GPU"
+            value={!memory.cpuOnly}
+            disabled={savingDevice}
+            onValueChange={(useGpu) => void changeMemoryDevice(useGpu)}
+            error={deviceError}
+          />
+        )}
         {memory.summarization !== 'disabled' && (
           <ActivityButton
             theme={theme}

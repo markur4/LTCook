@@ -11,6 +11,7 @@ import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import {
   LFM3_SUMMARIZER_MODEL,
   ollamaChat,
+  releaseOllamaModel,
   type OllamaUsage,
 } from '../../../runtime/src/integrations/ollama.js';
 import { createTools } from '../../../runtime/src/tools/catalog.js';
@@ -25,6 +26,40 @@ async function localAuthority(): Promise<string> {
   if (!address || typeof address === 'string') throw new Error('No fixture port.');
   return `127.0.0.1:${address.port}`;
 }
+
+test('waits for the unloaded Ollama runner to disappear before reusing the model', async () => {
+  const model = LFM3_SUMMARIZER_MODEL;
+  const other = { name: 'other:latest' };
+  let unloading = false;
+  let observed = 0;
+  const ollama = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(request) {
+      const route = new URL(request.url).pathname;
+      if (route === '/api/generate') {
+        const payload = await request.json();
+        if (request.method !== 'POST' || payload.model !== model || payload.keep_alive !== 0)
+          return new Response(null, { status: 400 });
+        unloading = true;
+        return Response.json({ done: true, done_reason: 'unload' });
+      }
+      if (route === '/api/ps' && unloading) {
+        return Response.json({ models: ++observed === 1 ? [{ name: model }, other] : [other] });
+      }
+      return new Response(null, { status: 404 });
+    },
+  });
+  try {
+    await releaseOllamaModel(
+      { endpoint: ollama.url.origin, model, keepAlive: -1 },
+      AbortSignal.timeout(2_000),
+    );
+    expect(observed).toBe(2);
+  } finally {
+    await ollama.stop(true);
+  }
+});
 
 test('ordinary Pi and Codex share workspace tool access across reconnect and enforce workspace boundaries', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'ltcook-mcp-'));

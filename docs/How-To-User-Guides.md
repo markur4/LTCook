@@ -188,7 +188,10 @@ unconfirmed. Opening the panel does not start a search or build.
 
 **Session Memory** shows the selected agent's background summaries and last
 acknowledged delegation handoff. Stored and pending counts describe that
-agent's conversation. Select **Stored for this agent** to read its completed
+agent's conversation. Turn off **Use GPU** to run background summaries on CPU.
+The switch is on by default and lets Ollama use a GPU when available, with CPU
+fallback. LTCook saves the choice for the host and applies it to the next
+summary request. Select **Stored for this agent** to read its completed
 UAMP and AAB summaries, starting with the newest. Use **Load older summaries**
 to continue through the conversation. The handoff shows the sending agent, receipt time,
 payload size, and the number of summaries represented. A handoff can also

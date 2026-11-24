@@ -111,6 +111,49 @@ function snapshotFor(
 }
 
 describe('native runtime boundary', () => {
+  test('only the user can change the host Session Memory device', async () => {
+    const memory = new SessionMemory({
+      databasePath: ':memory:',
+      source: {
+        async read() {
+          throw new Error('Changing the inference device must not read conversation history.');
+        },
+      },
+      async summarize() {
+        throw new Error('Changing the inference device must not start inference.');
+      },
+    });
+    const master = 'test-master-secret';
+    const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`);
+    const endpoint = await api.listen();
+    const post = (path: string, input: object, token = master) =>
+      fetch(`${endpoint}/v1/activity/${path}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+    try {
+      expect((await post('memory-device', { cpuOnly: true })).status).toBe(503);
+      api.setSessionMemory(memory);
+      const nativeAgentId = 'selected';
+      const rejected = await post(
+        'memory-device',
+        { nativeAgentId, cpuOnly: true },
+        agentBearer(master, nativeAgentId),
+      );
+      expect(rejected.status).toBe(403);
+      expect((await post('memory-device', { cpuOnly: 'cpu' })).status).toBe(400);
+      const updated = await post('memory-device', { cpuOnly: true });
+      expect(updated.status).toBe(200);
+      expect(await updated.json()).toEqual({ cpuOnly: true });
+      const snapshot = await post('services', { nativeAgentId: 'another-agent' });
+      expect(await snapshot.json()).toMatchObject({ memory: { cpuOnly: true } });
+    } finally {
+      await api.close();
+      await memory.close();
+    }
+  });
+
   test('only the user can page completed summaries for the requested agent and current history', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-summary-reader-'));
     directories.push(directory);

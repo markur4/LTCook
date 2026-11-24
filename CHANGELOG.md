@@ -55,7 +55,8 @@ All notable changes to `ltcook` will be documented in this file.
   Activity groups repeated tool calls and shows background summaries and
   acknowledged delegation handoffs in the Session Memory card. Select
   **Stored for this agent** to read the completed summaries and their source
-  sequence numbers.
+  sequence numbers. Use the **Use GPU** switch to choose GPU-accelerated or CPU-only
+  summarization for the host.
 
 - `ltcook restart` stops the local runtime and reopens Paseo. On Linux and macOS,
   `--update` applies the registered AppRC update before starting.

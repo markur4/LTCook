@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 
 export interface OllamaSettings {
@@ -143,6 +144,40 @@ export function ollamaEndpoint(value: string): URL {
     throw new Error(
       'Configure LTCOOK_OLLAMA_ENDPOINT in AppRC as an HTTP loopback URL with a port.',
     );
+  }
+}
+
+const loadedModels = z.object({ models: z.array(z.object({ name: z.string() })) });
+
+/** Wait for Ollama to release the previous runner before requesting automatic placement. */
+export async function releaseOllamaModel(settings: OllamaSettings, signal: AbortSignal) {
+  const endpoint = ollamaEndpoint(settings.endpoint);
+  const model = settings.model.trim();
+  const bounded = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
+  const requestSignal = bounded as NonNullable<Parameters<typeof fetch>[1]>['signal'];
+  const response = await fetch(new URL('/api/generate', endpoint), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    redirect: 'error',
+    signal: requestSignal,
+    body: JSON.stringify({ model, keep_alive: 0, stream: false }),
+  });
+  await response.body?.cancel();
+  if (!response.ok) throw new Error(`Ollama model unload failed (HTTP ${response.status}).`);
+
+  const tag = model.split('/').at(-1)?.includes(':') ? model : `${model}:latest`;
+  for (;;) {
+    const processes = await fetch(new URL('/api/ps', endpoint), {
+      redirect: 'error',
+      signal: requestSignal,
+    });
+    if (!processes.ok) {
+      await processes.body?.cancel();
+      throw new Error(`Ollama model status failed (HTTP ${processes.status}).`);
+    }
+    const { models } = loadedModels.parse(await processes.json());
+    if (!models.some(({ name }) => name === model || name === tag)) return;
+    await delay(100, undefined, { signal: bounded });
   }
 }
 

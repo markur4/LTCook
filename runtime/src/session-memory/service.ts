@@ -82,6 +82,7 @@ export type MemoryHandoffObservation = UnitCounts & {
 };
 
 export type SessionMemoryStatus = {
+  cpuOnly: boolean;
   summarization: SummaryOutcome | 'queued' | 'summarizing';
   lastSuccessfulSummaryAt: string | null;
   lastError: MemoryError | null;
@@ -110,7 +111,9 @@ type MemoryOptions = {
     unit: MemoryUnit['type'],
     request: ReturnType<typeof prepareMemorySummaries>[number]['prompt'],
     signal: AbortSignal,
+    cpuOnly: boolean,
   ): Promise<MemorySummaryResult>;
+  releaseCpuModel?(signal: AbortSignal): Promise<void>;
   threshold?: number;
   budgets?: MemoryBudgets;
   model?: string;
@@ -264,6 +267,10 @@ export class SessionMemory {
     this.store = new MemoryStore(options.databasePath);
   }
 
+  setCpuOnly(cpuOnly: boolean): void {
+    this.store.saveDeviceSettings({ ...this.store.deviceSettings(), cpuOnly });
+  }
+
   status(sessionId: string | undefined, agentId: string, epoch?: string): SessionMemoryStatus {
     const recorded = this.activity.get(agentId);
     const mismatched =
@@ -279,6 +286,7 @@ export class SessionMemory {
         ? { ...delivery.value }
         : null;
     return {
+      cpuOnly: this.store.deviceSettings().cpuOnly,
       summarization: mismatched
         ? 'unknown'
         : this.inferenceAgentId === agentId
@@ -822,9 +830,18 @@ export class SessionMemory {
             result,
           });
         try {
+          const { cpuOnly, cpuRunner } = this.store.deviceSettings();
+          if (!cpuOnly && cpuRunner && this.options.releaseCpuModel) {
+            // > Automatic GPU placement can reuse a CPU-only runner until it is unloaded.
+            await this.options.releaseCpuModel(this.abort.signal);
+            const current = this.store.deviceSettings();
+            this.store.saveDeviceSettings({ ...current, cpuRunner: false });
+            if (this.foreground.size || current.cpuOnly !== cpuOnly) return true;
+          }
+          if (cpuOnly && !cpuRunner) this.store.saveDeviceSettings({ cpuOnly, cpuRunner: true });
           this.inferenceAgentId = agentId;
           const result = await this.options
-            .summarize(unit.type, part.prompt, this.abort.signal)
+            .summarize(unit.type, part.prompt, this.abort.signal, cpuOnly)
             .finally(() => {
               this.inferenceAgentId = undefined;
             })

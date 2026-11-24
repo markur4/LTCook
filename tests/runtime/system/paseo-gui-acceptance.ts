@@ -779,6 +779,14 @@ try {
   stage = 'native-activity-memory-summaries';
   await browser('wait', '[aria-label^="Session Memory,"][aria-label*="stored"]');
   await browser('click', '[aria-label^="Session Memory,"]');
+  const useGpu = '[role="switch"][aria-label="Use GPU"]';
+  await browser('wait', `${useGpu}[aria-checked="true"]`);
+  await browser('click', useGpu);
+  await browser('wait', `${useGpu}[aria-checked="false"]`);
+  assert.equal(memory.status(undefined, mobileSession.id).cpuOnly, true);
+  await browser('click', useGpu);
+  await browser('wait', `${useGpu}[aria-checked="true"]`);
+  assert.equal(memory.status(undefined, mobileSession.id).cpuOnly, false);
   await browser('wait', '--text', 'Stored for this agent');
   await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
   await browser('wait', '--text', 'Background summary fixture');

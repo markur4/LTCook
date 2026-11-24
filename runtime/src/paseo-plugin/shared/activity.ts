@@ -54,6 +54,7 @@ const ragStatus = z.object({
 });
 export const MemoryUnitCountsSchema = z.object({ uamp: count, aab: count });
 const sessionMemoryStatus = z.object({
+  cpuOnly: z.boolean().nullable(),
   lastHandoff: z
     .object({
       at: timestamp,
@@ -92,6 +93,13 @@ export const activitySubscription = defineSubscription({
   name: 'ltcook.activity',
   input: z.object({ agentId: id }),
   event: ActivitySnapshotSchema,
+});
+
+const memoryDevice = z.object({ cpuOnly: z.boolean() });
+export const memoryDeviceRpc = defineRpc({
+  name: 'ltcook.activity.memory-device',
+  input: memoryDevice,
+  output: memoryDevice,
 });
 
 const summaryCursor = z.object({ epoch: id, position: count, id });

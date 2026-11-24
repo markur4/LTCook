@@ -86,7 +86,26 @@ export class MemoryStore {
       CREATE TABLE IF NOT EXISTS memory_summary (agent TEXT NOT NULL, epoch TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(agent, epoch, id));
       CREATE INDEX IF NOT EXISTS memory_summary_order ON memory_summary(agent, epoch, position);
       CREATE TABLE IF NOT EXISTS memory_prompt (agent TEXT NOT NULL, epoch TEXT NOT NULL, seq INTEGER NOT NULL, text TEXT NOT NULL, PRIMARY KEY(agent, epoch, seq));
+      CREATE TABLE IF NOT EXISTS memory_device (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        cpu_only INTEGER NOT NULL CHECK (cpu_only IN (0, 1)),
+        cpu_runner INTEGER NOT NULL CHECK (cpu_runner IN (0, 1))
+      );
     `);
+  }
+
+  deviceSettings() {
+    const row = this.database.prepare('SELECT cpu_only, cpu_runner FROM memory_device').get() as
+      { cpu_only: 0 | 1; cpu_runner: 0 | 1 } | undefined;
+    return { cpuOnly: row?.cpu_only === 1, cpuRunner: row?.cpu_runner === 1 };
+  }
+
+  saveDeviceSettings({ cpuOnly, cpuRunner }: ReturnType<MemoryStore['deviceSettings']>) {
+    this.database
+      .prepare(
+        'INSERT INTO memory_device VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET cpu_only = excluded.cpu_only, cpu_runner = excluded.cpu_runner',
+      )
+      .run(Number(cpuOnly), Number(cpuRunner));
   }
 
   state(agentId: string) {

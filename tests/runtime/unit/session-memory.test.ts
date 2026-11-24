@@ -292,6 +292,52 @@ async function eventually(predicate: () => boolean | Promise<boolean>) {
   expect(await predicate()).toBe(true);
 }
 
+test('persists the inference device and releases a CPU runner once before automatic placement', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-device-'));
+  const messages: MemorySourceMessage[] = [];
+  const requests: string[] = [];
+  const options = {
+    databasePath: path.join(directory, 'memory.sqlite'),
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(
+      type: 'UAMP' | 'AAB',
+      _prompt: unknown,
+      _signal: AbortSignal,
+      cpuOnly: boolean,
+    ) {
+      requests.push(cpuOnly ? 'cpu' : 'automatic');
+      return { type, text: 'Kept the cursor.', complete: true, elapsedMs: 1 };
+    },
+    async releaseCpuModel() {
+      requests.push('release');
+    },
+  };
+  let memory = new SessionMemory(options);
+  async function summarizeTurn(turnId: string, storedCount: number) {
+    messages.push(
+      { ...first, seq: messages.length + 1, turnId },
+      { ...finding, seq: messages.length + 2, turnId },
+    );
+    memory.turn('leader', { turnId, outcome: 'completed' }, false);
+    await eventually(() => memory.status(undefined, 'leader').stored?.uamp === storedCount);
+  }
+  try {
+    expect(memory.status(undefined, 'leader').cpuOnly).toBe(false);
+    memory.setCpuOnly(true);
+    await summarizeTurn('1', 1);
+    await memory.close();
+    memory = new SessionMemory(options);
+    expect(memory.status(undefined, 'leader').cpuOnly).toBe(true);
+    memory.setCpuOnly(false);
+    await summarizeTurn('2', 2);
+    await summarizeTurn('3', 3);
+    expect(requests).toEqual(['cpu', 'release', 'automatic', 'automatic']);
+  } finally {
+    await memory.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('stores the attachment citation from a native turn with only a trailing action', async () => {
   const messages: MemorySourceMessage[] = [
     {

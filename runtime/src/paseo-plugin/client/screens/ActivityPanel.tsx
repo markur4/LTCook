@@ -95,6 +95,11 @@ function ObservedActivity(props: ActivityPanelProps & { selectedAgentId: string 
             agentId={selectedAgentId}
             rag={snapshot.rag}
             memory={snapshot.memory}
+            onCpuOnlyChange={(cpuOnly) =>
+              setSnapshot((current) =>
+                current ? { ...current, memory: { ...current.memory, cpuOnly } } : current,
+              )
+            }
             agentWorktree={snapshot.agent.worktree?.path}
           />
           <Section theme={theme} title="Agent" />

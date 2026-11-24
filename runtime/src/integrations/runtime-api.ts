@@ -17,7 +17,7 @@ import type { SessionMemory } from '../session-memory/service.js';
 import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import type { WorkspaceMcp } from './mcp.js';
-import { storedSummariesRpc } from '../paseo-plugin/shared/activity.js';
+import { memoryDeviceRpc, storedSummariesRpc } from '../paseo-plugin/shared/activity.js';
 import {
   isRepositoryTool,
   SESSION_MEMORY_TOOL_NAME,
@@ -262,6 +262,7 @@ export class RuntimeApi {
           '/v1/session-memory/observe',
           '/v1/session-memory/paste',
           '/v1/activity/services',
+          '/v1/activity/memory-device',
           '/v1/activity/stored-summaries',
           '/v1/mcp/grant',
           '/v1/mcp/revoke',
@@ -373,6 +374,20 @@ export class RuntimeApi {
           : undefined;
       if (!actor) {
         response.writeHead(401).end('{"error":"unauthorized"}');
+        return;
+      }
+      if (request.url === '/v1/activity/memory-device') {
+        if (!isUser) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        const { cpuOnly } = memoryDeviceRpc.input.parse(parsed);
+        if (!this.memory) {
+          response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
+          return;
+        }
+        this.memory.setCpuOnly(cpuOnly);
+        response.writeHead(200).end(JSON.stringify({ cpuOnly }));
         return;
       }
       if (request.url === '/v1/activity/stored-summaries') {
