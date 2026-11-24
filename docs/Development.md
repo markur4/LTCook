@@ -9,6 +9,7 @@ layout, packaging boundary, verification limits, and current release workflow.
 - [Work in the project](#work-in-the-project)
   - [Maintainer environment](#maintainer-environment)
   - [Repository routing](#repository-routing)
+  - [Workspace tool guidance](#workspace-tool-guidance)
   - [Shared personal skill discovery](#shared-personal-skill-discovery)
 - [Document the project](#document-the-project)
   - [Documentation authoring](#documentation-authoring)
@@ -119,6 +120,27 @@ with coordination metadata and user decisions in SQLite.
 The `src/ltcook_distr/bundle` destination is generated production input for the
 wheel and installer, not general build debris. See
 [asset packaging](#asset-packaging).
+
+## Workspace tool guidance
+
+When adding a workspace tool or changing what agents should use it for, ship
+concise agent-facing guidance with the registration. Explain when to choose the
+tool, what evidence it returns, and what to do when the evidence is incomplete.
+Use consistent guidance across supported harnesses. When a harness discovers MCP
+tools on demand, put the tool name and its use case in the instructions the
+agent sees before discovery.
+
+For repository work, prefer `ltcook_repo_locate` when looking for the definition,
+callers, or tests of a known symbol. Use ranked `ltcook_repo_search` when the
+question describes behavior but the relevant symbol is unknown. Use native
+search for quick literal checks and read the surrounding source to follow
+control flow. If ranked retrieval is unavailable or still indexing, use native
+search or direct file reads for immediate evidence.
+
+Check that a normal launch exposes the tool and delivers its guidance. Use the
+existing [Repository Agent Behavior Evaluation](#repository-agent-behavior-evaluation)
+when comparing tool selection and evidence quality. Compare time to verified
+evidence and total turn time separately.
 
 ---
 

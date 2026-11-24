@@ -88,6 +88,18 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 <br>
 
+# 2026-11-24
+
+## P2 / E2 [Tooling] - *Deliver workspace tool guidance to native agents*
+- **Area:** `runtime/src/paseo-plugin/index.server.ts` and native workspace tool registration.
+- **Observed while:** Comparing a production incident trace in Codex CLI and Paseo.
+- **Why not fixed now:** The current change defines the maintainer policy. Launch guidance and verification belong in the runtime follow-up.
+- **Evidence:** LTCook registered the workspace MCP namespace in a Codex run that used only shell searches and reads. The launch hook supplies the MCP catalog without instructions on when to choose its tools.
+- **Context:** Codex can defer MCP tool discovery until the model asks for a relevant tool.
+- **Suggested next step:** Deliver concise [workspace tool guidance](docs/Development.md#workspace-tool-guidance) in the normal Pi and Codex launches. Check that agents receive it before discovery, then compare tool selection and evidence quality in the existing evaluation.
+
+<br>
+
 # 2026-11-22
 
 ## P2 / E2 [Tools] - *Improve local summarizer fidelity on operational notes*
