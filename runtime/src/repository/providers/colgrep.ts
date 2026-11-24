@@ -8,7 +8,7 @@ import { Type } from 'typebox';
 import { Value } from 'typebox/value';
 import { REPO_SEARCH_TIMEOUT_MS } from '../../paseo-plugin/shared/workspace-tools.js';
 import { isWithin } from '../../path-containment.js';
-import { verifySourceEvidence } from '../evidence.js';
+import { RepositorySourceReader } from '../evidence.js';
 import type { RepositoryDiagnostic, RepositoryRetrieval } from '../results.js';
 import type { RepositoryWorkspace } from '../workspace.js';
 
@@ -335,6 +335,7 @@ async function normalizeResults(
   candidateLimit: number,
   signal: AbortSignal,
   result: RepositoryRetrieval,
+  source: RepositorySourceReader,
 ): Promise<void> {
   let value: unknown;
   try {
@@ -376,8 +377,7 @@ async function normalizeResults(
     const ranges = [hit.matches?.[0], hit.unit].flatMap((range) =>
       range ? [{ startLine: range.line, endLine: range.end_line, name: range.name }] : [],
     );
-    const evidence = await verifySourceEvidence(
-      workspace,
+    const evidence = await source.verify(
       {
         path: path.relative(workspace.root, file),
         excerpt: hit.unit.code,
@@ -433,6 +433,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       workspace: RepositoryWorkspace,
       input: RepositorySearchRequest,
       callerSignal: AbortSignal,
+      source = new RepositorySourceReader(workspace),
     ): Promise<RepositoryRetrieval> {
       callerSignal.throwIfAborted();
       if (!input.query.trim() || input.query.includes('\0') || input.pattern?.includes('\0')) {
@@ -504,6 +505,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
             candidateLimit,
             signal,
             outcome,
+            source,
           );
         }
       } catch (error) {

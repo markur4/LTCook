@@ -152,6 +152,7 @@ const provider = createServer(async (request, response) => {
     );
     assert.match(instructions, /ltcook_repo_locate[^.]*known symbol/);
     assert.match(instructions, /ltcook_repo_search[^.]*hybrid/);
+    assert.match(instructions, /Locate location/);
     const result = messages?.findLast((item: Record<string, unknown>) =>
       codex
         ? item.type === 'function_call_output' && item.call_id === marker
@@ -516,11 +517,12 @@ async function exercise(
     | { path: string }
     | { text: string }
     | { symbol: string; paths?: string[] }
+    | { location: { path: string; line: number } }
     | { query: string; mode?: 'exact' | 'semantic'; pattern?: string; paths?: string[] },
   verifyResult?: (content: string) => void,
 ) {
   tool =
-    toolInput && 'symbol' in toolInput
+    toolInput && ('symbol' in toolInput || 'location' in toolInput)
       ? 'ltcook_repo_locate'
       : toolInput && 'query' in toolInput
         ? 'ltcook_repo_search'
@@ -555,6 +557,17 @@ try {
     config: { provider: `pi/fixture/${model}`, systemPrompt: agentPrompt },
   });
   await exercise(ordinaryPi, 'pi_fresh');
+  await exercise(
+    ordinaryPi,
+    'pi_locate_block',
+    { location: { path: retryPath, line: 3 } },
+    (content) => {
+      assert.match(content, /"anchorLine"\s*:\s*3\b/);
+      assert.match(content, /"complete"\s*:\s*true/);
+      assert.match(content, /^3 \|   if \(channel === 'preview'\) return 48;$/m);
+      assert.match(content, /^5 \| \};$/m);
+    },
+  );
   if (Bun.which('rg')) {
     await exercise(
       ordinaryPi,

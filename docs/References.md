@@ -483,29 +483,46 @@ for your installation to restore the managed assets.
 
 #### Repository Locate
 
-`ltcook_repo_locate` uses the same repository-search grant and evidence checks
-as `ltcook_repo_search`. Supply exactly one nonempty, single-line `symbol` or
-`query`. Optional literal, workspace-relative `paths` constrain every search.
+`ltcook_repo_locate` uses the same repository-search access and verified
+workspace-relative paths as `ltcook_repo_search`. Supply exactly one lookup.
 
-| Input | Search stages |
+| Input | Result |
 | --- | --- |
-| `symbol` | One exact ripgrep search. |
-| `query` | One ColGREP hybrid search, followed by at most one exact ripgrep search. |
+| `symbol` | One exact ripgrep stage. |
+| `symbols` | Up to four distinct, single-line symbols. Results keep input order, with separate limits and diagnostics per symbol. |
+| `query` | One ColGREP hybrid stage and at most one exact ripgrep follow-up. |
+| `location` | Open `{path, line, maxLines?}` from a previous hit. Defaults to 24 lines, with a maximum of 60. |
 
-The follow-up uses the first ranked hit with a simple identifier that occurs
-as a whole identifier in its verified, unclipped excerpt. Hybrid search uses
-the eight-candidate default. Exact search considers up to 48 matching lines.
-Each stage in `searches` identifies the `mode` and `query` and reports its status,
-provider, and diagnostics.
+For a location, `source` includes the anchor and a numbered excerpt. Locate
+selects the smallest enclosing JavaScript, TypeScript, or Python function,
+class, or recognized test that fits the budget. If none fits, it can return a
+shorter excerpt near the anchor. The optional `block` gives the enclosing
+range and `complete` indicates whether the entire block is displayed.
 
-Locate returns up to three candidates per role in each stage. It lists
-definitions first, followed by callers, tests, and references. Roles are based on
-recognizable JavaScript, TypeScript, and Python syntax and test paths. Use the
-excerpts to confirm the relationship when names are shared. Exact definition,
-caller, and test hits can include up to two following lines, with inclusive line ranges.
-`truncated` indicates omitted matches or clipped excerpts.
+Locate returns up to three candidates per role in each search stage. Exact
+search reserves separate slots for definitions, callers, tests, and references
+during the scan. The stages share checked source snapshots within the request.
+The hybrid follow-up uses the first ranked hit with a simple identifier that
+occurs as a whole identifier in its verified, unclipped excerpt. Hybrid Locate
+uses eight candidates by default. Roles reflect recognizable JavaScript,
+TypeScript, and Python syntax and test paths. Exact definitions, callers, and
+tests can include up to two following lines.
 
-`followUp` is `not-needed` for a symbol request, `attempted` after an exact
+Supply `follow: true` on a lookup to request one verified JavaScript or
+TypeScript connection per exact stage. A `connections` entry gives numbered
+source locations for both ends of a relative import, a re-export, or a simple
+delegating wrapper. An imported wrapper target stops at the import statement.
+Dynamic or ambiguous links can be omitted. Optional `paths` constrain hits,
+location lookups, and both ends of a connection.
+
+Optionally provide `base` with Search or a Locate search stage, for example
+`"base": "main"`. This prioritizes paths changed between the local base and
+`HEAD`, staged, unstaged, or untracked paths, and tests with matching file stems.
+Other matches remain eligible. Ranked modes reorder a bounded set of ColGREP
+candidates. A resolved `base` includes the reference and commit. Git failures
+emit diagnostics and the repository search can still return matches.
+
+`followUp` is `not-needed` for exact and location requests, `attempted` after an exact
 follow-up returns an outcome, and `no-verified-symbol` when ranked evidence
 contains no eligible name. `initial-unavailable` covers an initial indexing or
 unavailable outcome. `failed` covers a follow-up that failed before returning

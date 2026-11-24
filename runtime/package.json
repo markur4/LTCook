@@ -41,12 +41,15 @@
     "build": "rm -rf dist/api && \"$npm_execpath\" build src/team-api/index.ts --target=node --format=esm --outfile=dist/team-api/index.js && \"$npm_execpath\" build src/guidance-api/index.ts --target=node --format=esm --outfile=dist/guidance-api/index.js && \"$npm_execpath\" build src/workflow-api/index.ts --target=node --format=esm --outfile=dist/workflow-api/index.js && \"$npm_execpath\" build src/main.ts --target=node --format=esm --packages=external --outfile=dist/main.js && \"$npm_execpath\" run build:web-mcp && \"$npm_execpath\" build src/integrations/pi-extension.ts --target=node --format=esm --packages=external --outfile=dist/integrations/pi-extension.js && \"$npm_execpath\" build src/integrations/pi-rpc.ts --target=node --format=esm --packages=external --outfile=dist/integrations/pi-rpc.js && \"$npm_execpath\" build src/evals/worker.ts --target=node --format=esm --packages=external --outfile=dist/evals/worker.js && chmod +x dist/integrations/pi-rpc.js && rm -rf dist/paseo-plugin && mkdir -p dist/paseo-plugin && cp -R src/paseo-plugin/. dist/paseo-plugin/"
   },
   "dependencies": {
+    "@babel/parser": "7.29.14",
+    "@babel/types": "7.29.14",
     "@earendil-works/pi-coding-agent": "1.5.2",
     "@getpaseo/client": "0.16.0-beta.2",
     "@getpaseo/plugin": "0.16.0-beta.2",
     "@getpaseo/server": "0.16.0-beta.2",
     "@ltcook/team-default": "0.1.0",
     "@ltcook/team-default-minimal": "0.1.0",
+    "@lezer/python": "1.1.19",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@nicknisi/pi-codesearch": "0.3.4",
     "agent-browser": "0.43.0",

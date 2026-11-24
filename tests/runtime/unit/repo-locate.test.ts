@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test';
-import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { RepositorySourceReader } from '../../../runtime/src/repository/evidence.js';
+import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
-import type { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
+import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
 
 type Search = ReturnType<typeof createRepoSearchTool>['search'];
 const unavailable = {
@@ -47,7 +49,7 @@ test.skipIf(!Bun.which('rg'))(
   () =>
     fixture(async (root) => {
       await mkdir(path.join(root, 'tests'));
-      const references = Array.from({ length: 12 }, () => "import { locate } from './z-source';");
+      const references = Array.from({ length: 80 }, () => "import { locate } from './z-source';");
       await writeFile(path.join(root, 'a-imports.ts'), references.join('\n') + '\n');
       await writeFile(
         path.join(root, 'b-caller.ts'),
@@ -213,3 +215,235 @@ test('Locate reports a changed match instead of attaching context from a differe
       ],
     });
   }));
+
+test('Locate opens the smallest complete block and keeps the anchor when clipped', () =>
+  fixture(async (root) => {
+    await writeFile(
+      path.join(root, 'source.ts'),
+      [
+        "import { test } from 'bun:test';",
+        "test('wrapper', () => {",
+        '  function nested() {',
+        '    return 17;',
+        '  }',
+        '  nested();',
+        '});',
+      ].join('\n'),
+    );
+    await writeFile(
+      path.join(root, 'test_sample.py'),
+      [
+        '@decorator',
+        'def test_wrapper():',
+        '    value = """a string',
+        '  with an unindented line"""',
+        '    assert value',
+        '',
+        'def unrelated():',
+        '    pass',
+      ].join('\n'),
+    );
+    await writeFile(path.join(root, 'notes.txt'), `first\n${'x'.repeat(2500)}\nanchor\nlast`);
+    const locate = createRepoLocateTool();
+    const open = (path: string, line: number, maxLines?: number) =>
+      locate.invoke({ location: { path, line, maxLines } }, context(root));
+
+    expect((await open('source.ts', 4)).source).toMatchObject({
+      anchorLine: 4,
+      block: { kind: 'function', startLine: 3, endLine: 5 },
+      startLine: 3,
+      endLine: 5,
+      excerpt: '  function nested() {\n    return 17;\n  }',
+      complete: true,
+    });
+    expect((await open('source.ts', 6)).source).toMatchObject({
+      block: { kind: 'test' },
+      complete: true,
+    });
+    expect((await open('source.ts', 4, 2)).source).toMatchObject({
+      startLine: 3,
+      endLine: 4,
+      complete: false,
+    });
+    expect((await open('test_sample.py', 1)).source).toMatchObject({
+      anchorLine: 1,
+      block: { kind: 'test', startLine: 1, endLine: 5 },
+      complete: true,
+    });
+    expect((await open('notes.txt', 3)).source).toMatchObject({
+      anchorLine: 3,
+      startLine: 3,
+      endLine: 4,
+      excerpt: 'anchor\nlast',
+      complete: false,
+    });
+    await expect(open('source.ts', 8)).rejects.toThrow(/outside the file/);
+  }));
+
+test.skipIf(process.platform === 'win32')(
+  'Locate honors search access, paths, exclusions and symbolic links when opening a location',
+  () =>
+    fixture(async (root) => {
+      await writeFile(path.join(root, 'file.ts'), 'const value = 1;');
+      await writeFile(path.join(root, '.env'), 'secret');
+      await symlink('file.ts', path.join(root, 'link.ts'));
+      const locate = createRepoLocateTool();
+      const location = { path: 'file.ts', line: 1 };
+      await expect(
+        locate.invoke({ location }, { ...context(root), repositorySearchAccess: false }),
+      ).rejects.toThrow(/unavailable/);
+      await expect(locate.invoke({ location, paths: ['link.ts'] }, context(root))).rejects.toThrow(
+        /symbolic links/,
+      );
+      await expect(
+        locate.invoke({ location: { ...location, path: '.env' } }, context(root)),
+      ).rejects.toThrow(/outside the search scope/);
+      await expect(
+        locate.invoke({ location: { ...location, path: '../file.ts' } }, context(root)),
+      ).rejects.toThrow(/without traversal/);
+    }),
+);
+
+test.skipIf(!Bun.which('rg'))(
+  'Locate batches symbols in order and verifies a single local connection per stage',
+  () =>
+    fixture(async (root) => {
+      await writeFile(
+        path.join(root, 'target.ts'),
+        ['export function original() {', '  return 1;', '}'].join('\n'),
+      );
+      await writeFile(
+        path.join(root, 'barrel.ts'),
+        "export { original as exported } from './target.js';",
+      );
+      await writeFile(
+        path.join(root, 'caller.ts'),
+        [
+          'import {',
+          '  exported as aliased,',
+          "} from './barrel.js';",
+          'export const wrapper = () => aliased();',
+        ].join('\n'),
+      );
+      const locate = createRepoLocateTool();
+      const result = await locate.invoke(
+        { symbols: ['wrapper', 'aliased', 'exported', 'absent'], follow: true },
+        context(root),
+      );
+      expect(result.followUp).toBe('not-needed');
+      expect(result.searches.map(({ query }) => query)).toEqual([
+        'wrapper',
+        'aliased',
+        'exported',
+        'absent',
+      ]);
+      expect(result.searches[0]?.connections).toMatchObject([
+        {
+          kind: 'wrapper',
+          from: { path: 'caller.ts', startLine: 4 },
+          to: { path: 'caller.ts', startLine: 1, endLine: 3 },
+        },
+      ]);
+      expect(result.searches[1]?.connections).toMatchObject([
+        {
+          kind: 'import',
+          from: { path: 'caller.ts', startLine: 1, endLine: 3 },
+          to: { path: 'barrel.ts', startLine: 1 },
+        },
+      ]);
+      expect(result.searches[2]?.connections).toMatchObject([
+        {
+          kind: 're-export',
+          from: { path: 'barrel.ts', startLine: 1 },
+          to: { path: 'target.ts', startLine: 1 },
+        },
+      ]);
+      expect(result.searches[3]?.results).toEqual([]);
+      const restricted = await locate.invoke(
+        { symbol: 'aliased', paths: ['caller.ts'], follow: true },
+        context(root),
+      );
+      expect(restricted.searches[0]?.connections).toBeUndefined();
+      await expect(
+        locate.invoke({ symbols: ['wrapper', ' wrapper '] }, context(root)),
+      ).rejects.toThrow(/distinct/);
+    }),
+);
+
+test('Verified source reads reuse one snapshot and refuse to mix in new file contents', () =>
+  fixture(async (root) => {
+    const file = path.join(root, 'source.ts');
+    await writeFile(file, 'const before = 1;');
+    const reader = new RepositorySourceReader(await openRepositoryWorkspace(root));
+    const { signal } = context(root);
+    const [first, second] = await Promise.all([
+      reader.read('source.ts', signal),
+      reader.read('./source.ts', signal),
+    ]);
+    expect(first).toBe(second);
+    await writeFile(file, 'const after = 2;');
+    expect(await reader.read('source.ts', signal)).toBe('source-changed');
+  }));
+
+test.skipIf(!Bun.which('git') || !Bun.which('rg'))(
+  'Git ranking prioritizes base and worktree changes without filtering other matches',
+  () =>
+    fixture(async (root) => {
+      function git(...args: string[]) {
+        const result = Bun.spawnSync(
+          [
+            'git',
+            '-c',
+            'commit.gpgsign=false',
+            '-c',
+            'user.name=Fixture',
+            '-c',
+            'user.email=fixture@example.com',
+            ...args,
+          ],
+          { cwd: root },
+        );
+        if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+        return result.stdout.toString().trim();
+      }
+      git('init', '-q');
+      await writeFile(path.join(root, 'a-other.ts'), 'use(shared);');
+      await writeFile(path.join(root, 'p-working.ts'), 'use(shared);');
+      await writeFile(path.join(root, 'z-logic.test.ts'), 'test("shared", () => shared());');
+      await writeFile(path.join(root, 'z-logic.ts'), 'const shared = 1;');
+      git('add', '.');
+      git('commit', '-qm', 'base');
+      const base = git('rev-parse', 'HEAD');
+      await writeFile(path.join(root, 'z-logic.ts'), 'const shared = 2;');
+      git('commit', '-qam', 'change');
+      await writeFile(path.join(root, 'p-working.ts'), 'use(shared, 3);');
+      await writeFile(path.join(root, 'q-untracked.ts'), 'use(shared, 4);');
+      const tool = createRepoSearchTool();
+      const ranked = await tool.invoke({ query: 'shared', mode: 'exact', base }, context(root));
+      expect(ranked.base).toEqual({ reference: base, commit: base });
+      expect(ranked.results?.map(({ path }) => path)).toEqual([
+        'p-working.ts',
+        'q-untracked.ts',
+        'z-logic.test.ts',
+        'z-logic.ts',
+        'a-other.ts',
+      ]);
+      const fallback = await tool.invoke(
+        { query: 'shared', mode: 'exact', base: 'missing-ref', limit: 1 },
+        context(root),
+      );
+      expect(fallback).toMatchObject({
+        partial: true,
+        diagnostics: [{ code: 'base-commit-unavailable' }],
+      });
+      expect(fallback.results?.[0]?.path).toBe('a-other.ts');
+      const grouped = await createRepoLocateTool().invoke(
+        { symbols: ['shared', 'use'], base },
+        context(root),
+      );
+      expect(grouped.searches.map((search) => search.base)).toEqual([ranked.base, ranked.base]);
+      expect(
+        grouped.searches[0]?.results?.filter(({ role }) => role === 'reference').at(-1)?.path,
+      ).toBe('a-other.ts');
+    }),
+);
