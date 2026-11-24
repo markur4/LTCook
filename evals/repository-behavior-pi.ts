@@ -11,6 +11,15 @@ import type { ToolDefinition } from '../runtime/src/tools/types.js';
 
 const endpoint = process.env.LTCOOK_OLLAMA_ENDPOINT ?? 'http://127.0.0.1:11434';
 const toolCallLimit = 16;
+const instructions = [
+  'Answer the repository question from verified source evidence.',
+  'After each tool response, decide whether a specific requested fact still needs evidence.',
+  'When you have evidence for every requested fact, return the final JSON immediately.',
+  'Make another tool call only when a different search can fill a specific gap. Avoid repeating the same search.',
+  'Use "not-found" when a relevant search returned ready and the material you reviewed offers no support.',
+  'Use "insufficient-evidence" when a search is unavailable or still indexing, or a partial or stale response leaves a specific gap.',
+  'In either case, return the requested JSON now when another search cannot help.',
+].join(' ');
 
 /** Identify the installed Ollama model before running either arm. */
 export async function repositoryPiModel(model: string | undefined, signal: AbortSignal) {
@@ -67,7 +76,7 @@ export async function evaluateRepositoryWithPi({
     endpoint,
     model,
     directory,
-    instructions: 'Answer the repository question using evidence from the available tools.',
+    instructions,
     tools: customTools.map(({ name }) => name),
     customTools,
   });

@@ -320,8 +320,8 @@ const {
   values: {
     model: requestedModel,
     'compare-locate': compareLocate,
-    autonomous,
-    pi,
+    autonomous: explicitAutonomous,
+    codex,
     case: selectedCase,
   },
 } = parseArgs({
@@ -329,25 +329,27 @@ const {
     model: { type: 'string' },
     'compare-locate': { type: 'boolean' },
     autonomous: { type: 'boolean' },
-    pi: { type: 'boolean' },
+    codex: { type: 'boolean' },
     case: { type: 'string' },
   },
 });
-if (autonomous && compareLocate)
+if (compareLocate && !codex) throw new Error('Guided --compare-locate requires --codex.');
+if (explicitAutonomous && compareLocate)
   throw new Error('Choose either --autonomous or the guided --compare-locate.');
-if (pi && !autonomous) throw new Error('--pi requires --autonomous.');
+const autonomous = !codex || explicitAutonomous;
 if (selectedCase !== undefined && !autonomous) throw new Error('--case requires --autonomous.');
 const paired = compareLocate || autonomous;
-const model = requestedModel ?? (paired && !pi ? 'gpt-6.2-sol' : undefined);
-const executable = pi ? undefined : (Bun.which('codex') ?? undefined);
+const model = requestedModel ?? (paired && codex ? 'gpt-6.2-sol' : undefined);
+const executable = codex ? (Bun.which('codex') ?? undefined) : undefined;
 const ripgrep = Bun.which('rg');
 const deploymentDirectory = process.env.LTCOOK_COLGREP_DEPLOYMENT;
-if ((!pi && !executable) || !ripgrep || !deploymentDirectory)
+if (!ripgrep || !deploymentDirectory)
   throw new Error(
-    'Repository Behavior Evaluation needs ripgrep, installed LTCOOK_COLGREP_DEPLOYMENT assets, and the selected native agent.',
+    'Repository Behavior Evaluation needs ripgrep and installed LTCOOK_COLGREP_DEPLOYMENT assets.',
   );
+if (codex && !executable) throw new Error('The optional Codex diagnostic needs Codex on PATH.');
 
-const piEvaluation = pi ? await import('./repository-behavior-pi.js') : undefined;
+const piEvaluation = codex ? undefined : await import('./repository-behavior-pi.js');
 const checkout = path.resolve(import.meta.dir, '..');
 const referenceSources = new Map(
   await Promise.all(
@@ -454,7 +456,7 @@ const runs = selectedSchedule.flatMap(
     }));
   },
 );
-const root = await realpath(await mkdtemp(path.join(tmpdir(), 'ltcook-codex-retrieval-')));
+const root = await realpath(await mkdtemp(path.join(tmpdir(), 'ltcook-repository-eval-')));
 const controller = new AbortController();
 const cancel = () => controller.abort();
 process.once('SIGINT', cancel);
@@ -626,7 +628,7 @@ try {
     const { expected, group } = scenario.question;
     const name = variant ? `${caseId}-${variant}` : caseId;
     const id = repetition === 1 ? name : `${name}-repeat-${repetition}`;
-    console.error(`Running ${pi ? 'Pi' : 'Codex'} Behavior Evaluation for ${id}`);
+    console.error(`Running ${codex ? 'Codex' : 'Pi'} Behavior Evaluation for ${id}`);
     const directory = path.join(root, id);
     await mkdir(directory);
     const observations: RepositoryCall[] = [];
@@ -834,7 +836,7 @@ try {
         ...(autonomous
           ? {
               design: 'autonomous',
-              agent: pi ? 'pi' : 'codex',
+              agent: codex ? 'codex' : 'pi',
               provenance: { ...provenance, ...(piModel ? { piModel } : {}) },
               nativeSummary: summarizeNativeRuns(nativeObservations),
             }
@@ -857,7 +859,7 @@ try {
 async function autonomousProvenance(checkout: string, codex: string | undefined, rg: string) {
   const files = [
     'bun.lock',
-    'evals/codex-repository-behavior-live.ts',
+    'evals/repository-behavior-live.ts',
     'evals/repository-behavior-grade.ts',
     'evals/repository-behavior-pi.ts',
     'evals/repository-citations.ts',

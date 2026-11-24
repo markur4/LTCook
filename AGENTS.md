@@ -37,6 +37,7 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
 
 ## Verification
 - Review the diff for duplicate helpers, naming drift, unnecessary abstractions, and regressions.
+- Use Pi as the required harness for model-backed Agent Evals. Keep Codex adapter and permission coverage in Traditional Tests. Live cross-harness comparisons are explicitly opt-in.
 - Repository policy: keep pytest-xdist in the development dependency group and run Python tests with six workers by default. Do not remove the dependency or reduce this default without explicit user approval. A complete test-suite measurement includes both Traditional Tests and model-backed Agent Evals; report their times and outcomes separately and together.
 - Repository policy: call the two categories Traditional Tests and Agent Evals. Use the established labels Instruction Audit, Behavior Evaluation, and Bottleneck Attribution in interfaces, documentation, and reports. Routine Agent Evals use full instructions in the selected setup, with one repetition by default. Behavior Evaluation and Bottleneck Attribution share the same executions; do not add reduced-instruction runs or repeated timing runs by default.
 - Agent Evals safeguards use three times the slowest of the five most recent comparable successful attempts, with separate no-reasoning and low-reasoning histories. Preserve diagnostics before fallback, cancellation, or failure; failed attempts must not increase the safeguard. The 120-second safeguard applies only when there is no compatible successful history.
