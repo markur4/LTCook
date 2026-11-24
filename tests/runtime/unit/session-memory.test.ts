@@ -82,6 +82,85 @@ test('a handoff retains a pending correction behind a tool-heavy timeline tail',
   }
 });
 
+test('invalidates preserved user messages beyond a shortened timeline in the same epoch', async () => {
+  let messages = [first, finding, correction];
+  const failure = Promise.withResolvers<void>();
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    threshold: 1,
+    source: {
+      async read() {
+        const latest = messages.at(-1)!.seq;
+        return { epoch: 'fixture', latest, through: latest, reset: false, messages };
+      },
+    },
+    async extract() {
+      throw new Error('Inference failed before advancing the checkpoint');
+    },
+    onFailure: failure.resolve,
+  });
+  try {
+    memory.observe('leader');
+    await failure.promise;
+    expect((await memory.search('leader', '', 'advance')).matches[0]?.entries).toEqual([revision]);
+
+    messages = [first, finding];
+    expect((await memory.search('leader', '', 'advance')).matches).toEqual([]);
+    expect(await memory.handoff('leader', 'cobalt')).not.toContain(correction.text);
+  } finally {
+    await memory.close();
+  }
+});
+
+test('preserves recent user messages while an older evidence batch keeps failing', async () => {
+  let messages = [first, finding];
+  const attempts: number[][] = [];
+  const firstFailure = Promise.withResolvers<void>();
+  const secondFailure = Promise.withResolvers<void>();
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    threshold: 1,
+    source: {
+      async read(_agentId, cursor, direction) {
+        const page =
+          direction === 'tail'
+            ? messages.slice(-2)
+            : messages.filter(({ seq }) => seq > (cursor?.seq ?? -1)).slice(0, 2);
+        return {
+          epoch: 'fixture',
+          latest: messages.at(-1)!.seq,
+          through: page.at(-1)!.seq,
+          reset: false,
+          messages: page,
+        };
+      },
+    },
+    async extract(evidence) {
+      attempts.push(evidence.map(({ seq }) => seq));
+      throw new Error('The older evidence batch still fails');
+    },
+    onFailure() {
+      if (attempts.length === 1) firstFailure.resolve();
+      else secondFailure.resolve();
+    },
+  });
+  try {
+    memory.observe('leader');
+    await firstFailure.promise;
+    messages = [first, finding, correction, issue];
+    memory.observe('leader');
+    await secondFailure.promise;
+
+    expect(attempts).toEqual([[finding.seq], [finding.seq]]);
+    expect(await memory.search('leader', '', 'advance')).toMatchObject({
+      incomplete: true,
+      matches: [{ entries: [revision] }],
+    });
+  } finally {
+    await memory.close();
+  }
+});
+
 test('coalesces updates, shares only authorized context, and recovers from a failed checkpoint', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-test-'));
   let epoch = 'before';

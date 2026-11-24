@@ -474,7 +474,7 @@ try {
       );
       const matches = result.matches as Array<{
         epoch: string;
-        entries: Array<{ text: string; sources: number[] }>;
+        entries: Array<{ text: string; seq: number }>;
       }>;
       const match = matches[0];
       const citation = match?.entries.find(({ text }) => text === userRequirement)?.seq;

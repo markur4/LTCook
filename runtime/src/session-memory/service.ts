@@ -44,6 +44,10 @@ function checkpoint(state: MemoryState | undefined): MemoryCursor | undefined {
   return state && state.seq >= 0 ? { epoch: state.epoch, seq: state.seq } : undefined;
 }
 
+function latestSequence(state: MemoryState): number {
+  return Math.max(state.seq, state.entries.at(-1)?.seq ?? -1);
+}
+
 const maxBatchTokens = 6500;
 const maxBatchPages = 8;
 
@@ -71,11 +75,16 @@ export class SessionMemory {
     if (this.abort.signal.aborted) return;
     const finalTurn = this.finalizeOnTurn.delete(agentId);
     this.pending.set(agentId, this.pending.get(agentId) === true || finalTurn || force);
+    this.startDrain();
+  }
+
+  private startDrain(): void {
     this.drain ??= Promise.resolve().then(async () => {
       try {
         await this.runPending();
       } finally {
         this.drain = undefined;
+        if (this.pending.size && !this.abort.signal.aborted) this.startDrain();
       }
     });
   }
@@ -112,7 +121,9 @@ export class SessionMemory {
   private async update(agentId: string, force: boolean): Promise<boolean> {
     const current = this.state(agentId);
     let page = await this.options.source.read(agentId, checkpoint(current));
-    const replaced = current && (page.epoch !== current.epoch || page.reset);
+    const replaced =
+      current &&
+      (page.epoch !== current.epoch || page.reset || page.latest < latestSequence(current));
     const prior = replaced ? undefined : current;
     if (replaced) {
       this.database.prepare('DELETE FROM memory WHERE agent_id = ?').run(agentId);
@@ -149,14 +160,22 @@ export class SessionMemory {
     const oldUserSequences = new Set(
       oldEntries.filter(({ kind }) => kind === 'user').map(({ seq }) => seq),
     );
-    const newUserEntries = preserveUserMessages(messages).filter(
+    // > Capture recent user messages while an older evidence batch is pending.
+    const tail =
+      through < head ? await this.options.source.read(agentId, undefined, 'tail') : undefined;
+    if (tail && (tail.epoch !== epoch || tail.latest < head)) return true;
+    const recent = tail?.messages.filter(({ seq }) => seq > through) ?? [];
+    const newUserEntries = preserveUserMessages([...messages, ...recent]).filter(
       ({ seq }) => !oldUserSequences.has(seq),
     );
     const entries = mergeMemoryEntries(oldEntries, newUserEntries);
 
     // > Persist user intent independently of the model. The evidence checkpoint stays
     // > at its previous position until the corresponding inference has succeeded.
-    if (newUserEntries.length && !(await this.save(agentId, { epoch, seq: previousSeq, entries })))
+    if (
+      newUserEntries.length &&
+      !(await this.save(agentId, { epoch, seq: previousSeq, entries }, tail))
+    )
       return true;
     if (!force && messages.length && tokens < this.threshold && through >= head) return false;
 
@@ -172,15 +191,11 @@ export class SessionMemory {
     return !saved || through < head;
   }
 
-  private async save(agentId: string, state: MemoryState): Promise<boolean> {
+  private async save(agentId: string, state: MemoryState, tail?: MemoryPage): Promise<boolean> {
     this.abort.signal.throwIfAborted();
-    const latest = await this.options.source.read(agentId, undefined, 'tail');
+    const latest = tail ?? (await this.options.source.read(agentId, undefined, 'tail'));
     this.abort.signal.throwIfAborted();
-    if (
-      latest.epoch !== state.epoch ||
-      latest.latest < Math.max(state.seq, state.entries.at(-1)?.seq ?? -1)
-    )
-      return false;
+    if (latest.epoch !== state.epoch || latest.latest < latestSequence(state)) return false;
     this.database
       .prepare(
         'INSERT INTO memory VALUES (?, ?, ?, ?) ON CONFLICT(agent_id) DO UPDATE SET epoch = excluded.epoch, seq = excluded.seq, entries = excluded.entries',
@@ -193,10 +208,16 @@ export class SessionMemory {
     const state = this.state(agentId);
     const tail = await this.options.source.read(agentId, undefined, 'tail');
     const valid =
-      state && state.epoch === tail.epoch && state.seq <= tail.latest ? state : undefined;
+      state && state.epoch === tail.epoch && latestSequence(state) <= tail.latest
+        ? state
+        : undefined;
     if (state && !valid) {
       const current = this.state(agentId);
-      if (current?.epoch === state.epoch && current.seq === state.seq) {
+      if (
+        current?.epoch === state.epoch &&
+        current.seq === state.seq &&
+        latestSequence(current) === latestSequence(state)
+      ) {
         this.database.prepare('DELETE FROM memory WHERE agent_id = ?').run(agentId);
       }
       this.observe(agentId, true);
