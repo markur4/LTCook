@@ -144,6 +144,7 @@ export async function startPaseoHost(input: {
       listen: input.listen,
       appendSystemPrompt:
         `When LTCook workspace tools are available, prefer ${REPO_LOCATE_TOOL_NAME} with a known symbol to find its definition, callers, or tests. ` +
+        'For multi-file investigations, call Locate trace with the question and up to four independent leads, such as behaviors, symbols, routes, or settings. Use its numbered evidence and check only specific gaps. ' +
         `Use ${REPO_SEARCH_TOOL_NAME} in hybrid mode when you know the behavior but lack the symbol. Discover these tools through tool search if needed. ` +
         'Batch independent symbols with symbols. Open an enclosing source block with Locate location {path, line}, or use follow: true for one local connection. ' +
         'Use native search for quick literal checks. If repository retrieval is unavailable or indexing, use native search and file reads.',

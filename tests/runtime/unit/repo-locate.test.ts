@@ -6,6 +6,7 @@ import { RepositorySourceReader } from '../../../runtime/src/repository/evidence
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
 import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
+import { traceRepository } from '../../../runtime/src/tools/repo-trace.js';
 
 type Search = ReturnType<typeof createRepoSearchTool>['search'];
 const unavailable = {
@@ -164,6 +165,200 @@ test('Locate distinguishes an unavailable search, absent identifier, and failed 
       expect(result).toMatchObject({ followUp });
       expect(result.searches).toHaveLength(1);
     }
+  }));
+
+test.skipIf(!Bun.which('rg'))(
+  'Locate trace cites distinct leads and shares evidence between them',
+  () =>
+    fixture(async (root) => {
+      await mkdir(path.join(root, 'tests'));
+      await writeFile(
+        path.join(root, 'source.ts'),
+        [
+          'export function startDispatch() {',
+          '  return process.env.WORKER_DEADLINE_MS ?? 500;',
+          '}',
+        ].join('\n'),
+      );
+      await writeFile(path.join(root, 'launch.py'), 'environment["WORKER_DEADLINE_MS"] = "600"\n');
+      await writeFile(
+        path.join(root, 'a-prefix.ts'),
+        'export const ignored = process.env.OTHER_WORKER_DEADLINE_MS;\n',
+      );
+      await writeFile(
+        path.join(root, 'tests/dispatch.test.ts'),
+        [
+          "import { startDispatch } from '../source.js';",
+          "test('uses a default deadline', () => {",
+          '  const timeout = startDispatch();',
+          '  expect(timeout).toBe(500);',
+          '});',
+        ].join('\n'),
+      );
+      const locate = createRepoLocateTool();
+      const trace = (
+        await locate.execute(
+          {
+            trace: {
+              question: 'Where does the worker deadline come from?',
+              leads: [
+                { mode: 'exact', query: 'startDispatch' },
+                { mode: 'literal', query: 'WORKER_DEADLINE_MS' },
+              ],
+            },
+          },
+          context(root),
+        )
+      ).trace!;
+
+      const implementation = trace.evidence.filter(({ path }) => path === 'source.ts');
+      expect(implementation).toHaveLength(1);
+      expect(
+        trace.leads.every(({ evidenceIds }) => evidenceIds.includes(implementation[0]!.id)),
+      ).toBe(true);
+      expect(trace.evidence).toContainEqual(
+        expect.objectContaining({
+          path: 'tests/dispatch.test.ts',
+          excerpt: expect.stringContaining('expect(timeout).toBe(500)'),
+        }),
+      );
+      const launcher = trace.evidence.find(({ path }) => path === 'launch.py');
+      expect(launcher?.excerpt).toContain('"600"');
+      const literal = trace.connections.find(({ kind }) => kind === 'shared-literal');
+      expect(literal?.literal).toBe('WORKER_DEADLINE_MS');
+      expect([literal?.from, literal?.to]).toEqual(
+        expect.arrayContaining([launcher!.id, implementation[0]!.id]),
+      );
+      expect(literal?.from === implementation[0]!.id ? literal.fromLine : literal?.toLine).toBe(2);
+      const caller = trace.evidence.find(({ path }) => path === 'tests/dispatch.test.ts')!;
+      expect(trace.connections).toContainEqual({
+        kind: 'call',
+        from: caller.id,
+        to: caller.id,
+        fromLine: 3,
+        toLine: 1,
+      });
+    }),
+);
+
+test.each([false, true])(
+  'Locate trace retains fast evidence across a sibling deadline (source changed: %s)',
+  (changed) =>
+    fixture(async (root) => {
+      const pathName = 'source.txt';
+      const excerpt = 'fast evidence';
+      await writeFile(path.join(root, pathName), excerpt);
+      const sourceRead = Promise.withResolvers<void>();
+      const deadline = new AbortController();
+      class ObservedReader extends RepositorySourceReader {
+        override async read(...args: Parameters<RepositorySourceReader['read']>) {
+          const result = await super.read(...args);
+          if (args[0] === pathName) sourceRead.resolve();
+          return result;
+        }
+      }
+      const trace = await traceRepository(
+        {
+          question: 'Find two behaviors.',
+          leads: [
+            { mode: 'literal', query: excerpt },
+            { mode: 'hybrid', query: 'slow source' },
+          ],
+        },
+        {
+          reader: new ObservedReader(await openRepositoryWorkspace(root)),
+          allows: () => true,
+          callerSignal: new AbortController().signal,
+          deadline: deadline.signal,
+          async search({ mode }, signal) {
+            if (mode === 'hybrid') {
+              await sourceRead.promise;
+              if (changed) await writeFile(path.join(root, pathName), 'a replacement source');
+              deadline.abort();
+              signal.throwIfAborted();
+            }
+            return {
+              ...unavailable,
+              status: 'ready',
+              freshness: 'current',
+              partial: false,
+              results: [{ path: pathName, startLine: 1, endLine: 1, excerpt }],
+            };
+          },
+        },
+      );
+      expect(trace.leads[1]?.gaps).toEqual(['deadline']);
+      if (changed) {
+        expect(trace.evidence).toEqual([]);
+        expect(trace.leads[0]?.gaps).toEqual(['source-unavailable']);
+      } else {
+        expect(trace.evidence).toHaveLength(1);
+        expect(trace.evidence[0]?.excerpt).toBe(excerpt);
+        expect(trace.leads[0]?.evidenceIds).toEqual([trace.evidence[0]?.id]);
+      }
+    }),
+);
+
+test('Locate trace keeps evidence when a sibling lead is unavailable, and follows the callable anchor', () =>
+  fixture(async (root) => {
+    const local = 'const rewound = true;';
+    const source = 'export function dispatch() { return 500; }';
+    await writeFile(path.join(root, 'source.ts'), `${local}\n${source}`);
+    const calls: string[] = [];
+    const bothStarted = Promise.withResolvers<void>();
+    const locate = createRepoLocateTool({
+      async search(_workspace, { mode, query }) {
+        calls.push(query);
+        if (mode === 'hybrid') {
+          if (calls.length === 2) bothStarted.resolve();
+          await bothStarted.promise;
+          if (query === 'history?') return unavailable;
+        }
+        return {
+          ...unavailable,
+          status: 'ready',
+          freshness: 'current',
+          partial: false,
+          diagnostics: [],
+          results: [
+            ...(mode === 'hybrid' ? [hit('rewound', local)] : []),
+            { ...hit('dispatch', source), startLine: 2, endLine: 2 },
+          ],
+        };
+      },
+    });
+    const result = await locate.execute(
+      { trace: { question: 'Dispatch? history?' } },
+      context(root),
+    );
+    const trace = result.trace!;
+    expect(calls).toEqual(['Dispatch?', 'history?', 'dispatch']);
+    expect(trace.leads[0]?.evidenceIds.length).toBeGreaterThan(0);
+    expect(trace.leads[1]).toMatchObject({
+      evidenceIds: [],
+      gaps: ['unavailable', 'search-partial'],
+    });
+    expect(trace.evidence.some(({ excerpt }) => excerpt.includes('return 500'))).toBe(true);
+    await expect(
+      locate.invoke(
+        { trace: { question: 'who', leads: [{ mode: 'exact', query: 'not a symbol' }] } },
+        context(root),
+      ),
+    ).rejects.toThrow(/Exact leads/);
+  }));
+
+test('Locate trace propagates external cancellation even with independent leads', () =>
+  fixture(async (root) => {
+    const controller = new AbortController();
+    const locate = createRepoLocateTool({
+      async search() {
+        controller.abort(new Error('trace canceled by caller'));
+        return unavailable;
+      },
+    });
+    await expect(
+      locate.invoke({ trace: { question: 'A? B?' } }, context(root, controller.signal)),
+    ).rejects.toThrow('trace canceled by caller');
   }));
 
 test('Locate propagates cancellation and refuses to return evidence after a workspace replacement', () =>

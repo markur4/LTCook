@@ -65,3 +65,19 @@ export function firstVerifiedCitationMs(
   }
   return null;
 }
+
+/** Measure when the agent has received every labeled source range, regardless of its answer. */
+export function allRequiredEvidenceMs(
+  expected: readonly SourceRange[],
+  replies: readonly { elapsedMs: number; hits: readonly RepositoryHit[] }[],
+  files: ReadonlyMap<string, string>,
+): number | null {
+  if (!expected.length) return null;
+  const hits: RepositoryHit[] = [];
+  for (const reply of replies.toSorted((left, right) => left.elapsedMs - right.elapsedMs)) {
+    hits.push(...reply.hits);
+    if (!gradeRepositoryCitations(expected, expected, hits, files).missing.length)
+      return reply.elapsedMs;
+  }
+  return null;
+}

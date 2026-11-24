@@ -20,6 +20,13 @@ import {
   RepositorySearchOutputSchema,
   RepositorySearchPathsSchema,
 } from './repo-search.js';
+import {
+  REPOSITORY_TRACE_TIMEOUT_MS,
+  RepositoryTraceInputSchema,
+  RepositoryTraceOutputSchema,
+  traceRepository,
+  verifiedIdentifier,
+} from './repo-trace.js';
 import { defineTool } from './types.js';
 
 export { REPO_LOCATE_TOOL_NAME } from '../paseo-plugin/shared/workspace-tools.js';
@@ -44,6 +51,7 @@ const LocateSearch = Type.Object({
           Type.Literal('import'),
           Type.Literal('re-export'),
           Type.Literal('wrapper'),
+          Type.Literal('call'),
         ]),
         from: RepositoryHitSchema,
         to: RepositoryHitSchema,
@@ -171,6 +179,7 @@ export const RepositoryLocateOutputSchema = Type.Object({
       ),
     }),
   ),
+  trace: Type.Optional(RepositoryTraceOutputSchema),
   searches: Type.Array(LocateSearch),
   followUp: Type.Union([
     Type.Literal('not-needed'),
@@ -182,24 +191,13 @@ export const RepositoryLocateOutputSchema = Type.Object({
   ]),
 });
 
-function verifiedIdentifier(hits: RepositoryHit[]): string | undefined {
-  for (const { name, excerpt, excerptTruncated } of hits) {
-    if (excerptTruncated || !name || !/^[A-Za-z_][A-Za-z_0-9]*$/.test(name)) continue;
-    const identifier = new RegExp(
-      `(?:^|[^\\p{L}\\p{M}\\p{N}_$])${name}(?![\\p{L}\\p{M}\\p{N}_$])`,
-      'u',
-    );
-    if (identifier.test(excerpt)) return name;
-  }
-}
-
 export function createRepoLocateTool(
   { search }: Pick<ReturnType<typeof createRepoSearchTool>, 'search'> = createRepoSearchTool(),
 ) {
   return defineTool({
     name: REPO_LOCATE_TOOL_NAME,
     description:
-      'Locate verified definitions, callers, and tests. Supply symbol for one identifier, symbols for up to four independent identifiers, query for behavior, or location {path, line, maxLines} to open an enclosing block. Set follow to true to show one verified import, re-export, or wrapper hop per symbol. Optionally supply base (a local Git ref) to prioritize changed code and related tests.' +
+      'For multi-file investigations use trace {question, leads?} to get verified source, connections and evidence gaps in one call. Add up to four leads {mode, query}: hybrid for separate behaviors, exact for symbols, literal for routes and setting names. For quick lookups use symbol, symbols, query, or location {path, line, maxLines}. Set follow to true on quick symbol lookups for one verified local connection. Optionally supply base (a local Git ref) to prioritize changed code and related tests.' +
       repositoryEvidenceGuidance,
     inputSchema: Type.Object(
       {
@@ -208,6 +206,7 @@ export function createRepoLocateTool(
           Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { minItems: 1, maxItems: 4 }),
         ),
         location: Type.Optional(SourceLocation),
+        trace: Type.Optional(RepositoryTraceInputSchema),
         follow: Type.Optional(Type.Boolean()),
         base: Type.Optional(RepositorySearchBaseSchema),
         query: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
@@ -221,17 +220,20 @@ export function createRepoLocateTool(
         query.trim(),
       );
       if (
-        [input.symbol, input.symbols, input.query, input.location].filter(
+        [input.symbol, input.symbols, input.query, input.location, input.trace].filter(
           (value) => value !== undefined,
         ).length !== 1 ||
         (!input.location &&
+          !input.trace &&
           (queries.some((query) => !query || /[\0\r\n]/.test(query)) ||
             new Set(queries).size !== queries.length))
       )
         throw new Error(
-          'Supply exactly one of symbol, symbols, query, or location, with distinct nonempty single-line queries.',
+          'Supply exactly one of symbol, symbols, query, location, or trace, with distinct nonempty single-line queries.',
         );
-      const deadline = AbortSignal.timeout(REPO_SEARCH_TIMEOUT_MS);
+      const deadline = AbortSignal.timeout(
+        input.trace ? REPOSITORY_TRACE_TIMEOUT_MS : REPO_SEARCH_TIMEOUT_MS,
+      );
       const signal = AbortSignal.any([context.signal, deadline]);
       const workspace = await openAuthorizedSearchWorkspace(context);
       const reader = new RepositorySourceReader(workspace);
@@ -270,7 +272,49 @@ export function createRepoLocateTool(
       const priority =
         input.base === undefined
           ? undefined
-          : await repositorySearchPriority(workspace, input.base, signal);
+          : await repositorySearchPriority(workspace, input.base, signal).catch(
+              (error: unknown) => {
+                context.signal.throwIfAborted();
+                if (!input.trace || !deadline.aborted) throw error;
+                return undefined;
+              },
+            );
+      if (input.trace) {
+        if (input.follow !== undefined) throw new Error('Trace follows connections automatically.');
+        const trace = await traceRepository(input.trace, {
+          reader,
+          allows,
+          callerSignal: context.signal,
+          deadline,
+          async search({ mode, query }, traceSignal) {
+            const classify = mode === 'exact' ? classifySymbol(query) : undefined;
+            const group =
+              mode === 'literal'
+                ? ({ path }: Pick<RepositoryHit, 'path'>) =>
+                    isTestSource(path)
+                      ? 'test'
+                      : /\.pyi?$/.test(path)
+                        ? 'python'
+                        : /\.[cm]?[jt]sx?$/.test(path)
+                          ? 'javascript'
+                          : 'other'
+                : classify;
+            const result = await search(
+              workspace,
+              { query, mode, paths: input.paths },
+              traceSignal,
+              {
+                source: reader,
+                priority,
+                ...(group && { collection: { group, perGroup: HITS_PER_ROLE } }),
+              },
+            );
+            return classify ? await groupEvidence(reader, result, classify, traceSignal) : result;
+          },
+        });
+        await workspace.assertUnchanged();
+        return { searches, followUp: 'not-needed', trace };
+      }
       const run = async (mode: 'hybrid' | 'exact', query: string) => {
         const symbol = mode === 'exact' ? query : undefined;
         const classify = symbol ? classifySymbol(symbol) : undefined;

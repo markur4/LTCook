@@ -23,19 +23,29 @@ type SearchAttempt = {
   finished?: number;
   requestKey?: string;
   searches: readonly { result: SearchResult }[];
+  extraEvidence?: readonly RepositoryHit[];
+  traceStatus?: SearchResult['status'];
 };
 type StopReason = 'repeated-search' | 'retrieval-unavailable' | 'tool-budget';
 
-function evidenceKeys(results: readonly SearchResult[]): string[] {
-  return results.flatMap(({ results: hits }) =>
-    (hits ?? []).map(({ path, startLine, endLine, excerpt, excerptTruncated }) =>
-      JSON.stringify([path, startLine, endLine, excerpt, excerptTruncated]),
-    ),
+function evidenceKeys({ searches, extraEvidence = [] }: SearchAttempt): string[] {
+  const hits = [...searches.flatMap(({ result }) => result.results ?? []), ...extraEvidence];
+  return hits.map(({ path, startLine, endLine, excerpt, excerptTruncated }) =>
+    JSON.stringify([path, startLine, endLine, excerpt, excerptTruncated]),
   );
 }
 
-function unavailable({ searches }: SearchAttempt): boolean {
-  return searches.length > 0 && searches.every(({ result }) => result.status === 'unavailable');
+function unavailable({ searches, traceStatus }: SearchAttempt): boolean {
+  return (
+    traceStatus === 'unavailable' ||
+    (searches.length > 0 && searches.every(({ result }) => result.status === 'unavailable'))
+  );
+}
+
+function ready({ searches, extraEvidence, traceStatus }: SearchAttempt): boolean {
+  return searches.length
+    ? searches.every(({ result }) => result.status === 'ready')
+    : traceStatus === 'ready' || Boolean(extraEvidence?.length);
 }
 
 /** Decide at the end of a tool batch using only observed requests and results. */
@@ -58,19 +68,12 @@ export function repositorySearchStop(
   )
     return 'retrieval-unavailable';
   if (toolsInTurn !== 1) return;
-  const latestResults = latest.searches.map(({ result }) => result);
-  if (!latestResults.length) return;
-  if (!latest.requestKey || latestResults.some(({ status }) => status !== 'ready')) return;
+  if (!latest.requestKey || !ready(latest)) return;
   const priorReady = [previous, ...earlier].filter(
-    ({ requestKey, searches }) =>
-      requestKey === latest.requestKey &&
-      searches.length > 0 &&
-      searches.every(({ result }) => result.status === 'ready'),
+    (attempt) => attempt.requestKey === latest.requestKey && ready(attempt),
   );
-  const priorEvidence = new Set(
-    priorReady.flatMap(({ searches }) => evidenceKeys(searches.map(({ result }) => result))),
-  );
-  if (priorReady.length && evidenceKeys(latestResults).every((entry) => priorEvidence.has(entry)))
+  const priorEvidence = new Set(priorReady.flatMap(evidenceKeys));
+  if (priorReady.length && evidenceKeys(latest).every((entry) => priorEvidence.has(entry)))
     return 'repeated-search';
 }
 

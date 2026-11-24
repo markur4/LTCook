@@ -82,6 +82,8 @@ All notable changes to `ltcook` will be documented in this file.
 
 - Pi can use `ltcook_repo_locate` to find verified implementation,
   caller, and test candidates with bounded follow-up search.
+  Pi and Codex can also trace several leads in one call and receive deduplicated
+  source excerpts, verified connections, and evidence gaps.
 
 - Shared SearXNG search, URL retrieval, and stored-result tools for managed
   Pi and workspace Pi and Codex chats in Paseo. Local searches wait for SearXNG

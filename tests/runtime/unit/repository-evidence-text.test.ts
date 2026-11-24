@@ -111,3 +111,24 @@ test('Locate separates candidate roles and renders the verified range', () => {
     '{"role":"reference","path":"index.ts","startLine":1,"endLine":1}\n1 | export { locate };',
   ]);
 });
+
+test('Locate trace renders each source span once and references it from leads and connections', () => {
+  const text = repositoryEvidenceText(REPO_LOCATE_TOOL_NAME, {
+    followUp: 'not-needed',
+    searches: [],
+    trace: {
+      leads: [
+        { mode: 'exact', query: 'dispatch', evidenceIds: [1, 2], gaps: ['connection-unresolved'] },
+      ],
+      connections: [{ kind: 'call', from: 1, to: 2, fromLine: 7, toLine: 4 }],
+      evidence: [
+        { id: 1, path: 'src/caller.ts', startLine: 7, endLine: 7, excerpt: 'await dispatch();' },
+        { id: 2, path: 'src/worker.ts', startLine: 4, endLine: 4, excerpt: 'return 500;' },
+      ],
+    },
+  });
+  expect(text).toContain('"from":1,"to":2');
+  expect(text).toContain('"gaps":["connection-unresolved"]');
+  expect(text.match(/7 \| await dispatch\(\);/g)).toHaveLength(1);
+  expect(text).toContain('4 | return 500;');
+});
