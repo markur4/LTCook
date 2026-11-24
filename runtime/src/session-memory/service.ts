@@ -4,6 +4,7 @@ import {
   memoryRelevance,
   estimateMemoryTokens,
   memoryIdentifierMatches,
+  memoryIdentifiers,
   missingMemoryIdentifiers,
 } from './text.js';
 import {
@@ -14,13 +15,14 @@ import {
 } from './store.js';
 import {
   defaultMemoryBudgets,
-  memoryHistory,
+  summaryStatements,
   prepareMemorySummaries,
   type MemoryBudgets,
   type MemorySummaryResult,
 } from './summarization.js';
 import {
   identifyMemoryUnits,
+  scopeKey,
   observedMemoryChecks,
   type MemorySourceMessage,
   type MemoryTurnOutcome,
@@ -61,27 +63,45 @@ type MemoryOptions = {
   configuration?: string;
   peers?(agentId: string, workspaceRoot: string): readonly string[];
   onFailure?(): void;
+  onDispatch?(data: { agentId: string; elapsedMs: number; estimatedTokens?: number }): void;
   onRequest?(data: {
+    agentId: string;
+    unitId: string;
+    portion: number;
+    historyIds: string[];
+    authoritativeEstimatedTokens: number;
+    prefixHash: string;
     type: MemoryUnit['type'];
     queueMs: number;
     result: MemorySummaryResult;
   }): void;
 };
 
-type SearchEntry = {
+export type MemorySearchEntry = {
   seq: number;
   author: string;
   kind: 'UAMP' | 'AAB' | 'user' | 'original-message' | 'unattributed-prompt';
   text: string;
   sources?: number[];
+  summaryId?: string;
+  portion?: number;
+  field?: string;
+  tool?: MemorySourceMessage['tool'];
   userSources?: number[];
   truncated?: true;
 };
+type SearchEntry = MemorySearchEntry;
 type SearchHit = SearchEntry & { agentId: string; epoch: string; score: number };
 const searchTokens = 2200;
+export const memoryDispatchDeadlineMs = 500;
 
 function compareHits(a: SearchHit, b: SearchHit): number {
-  return b.score - a.score || b.seq - a.seq;
+  return (
+    b.score - a.score ||
+    Number(b.author === 'tool' || b.author === 'user') -
+      Number(a.author === 'tool' || a.author === 'user') ||
+    b.seq - a.seq
+  );
 }
 
 function searchCost({ score: _score, ...entry }: SearchHit): number {
@@ -92,26 +112,50 @@ function unitId({ type, messages }: MemoryUnit): string {
   return [type, messages[0]!.seq, messages.at(-1)!.seq].join(':');
 }
 
-function summaryText(summary: StoredMemorySummary): string {
-  return summary.parts.map(({ text }) => text).join('\n');
-}
-
-function sourceEntry({ seq, text, author }: MemorySourceMessage): SearchEntry {
+function sourceEntry({ seq, text, author, tool }: MemorySourceMessage): SearchEntry {
   const kind =
     author === 'user' ? 'user' : author === 'unknown' ? 'unattributed-prompt' : 'original-message';
-  return { seq, text, author, kind };
+  return { seq, text, author, kind, ...(tool ? { tool } : {}) };
 }
 
-function summaryEntry(summary: StoredMemorySummary): SearchEntry {
-  return {
-    kind: summary.type,
-    author: 'summary',
-    seq: summary.position,
-    text: summaryText(summary),
-    sources: summary.sources.map(({ seq }) => seq),
-    userSources: summary.sources.filter(({ author }) => author === 'user').map(({ seq }) => seq),
-  };
+function summaryEntries(summary: StoredMemorySummary): SearchEntry[] {
+  return summary.parts.flatMap((part, index) => {
+    if (part.noUsefulInformation || !part.text.trim()) return [];
+    const entry = {
+      kind: summary.type,
+      author: 'summary',
+      seq: summary.position,
+      summaryId: summary.id,
+      portion: index + 1,
+      sources: part.sources,
+      userSources: summary.sources
+        .filter(({ author, seq }) => author === 'user' && part.sources.includes(seq))
+        .map(({ seq }) => seq),
+    };
+    const statements: SearchEntry[] = summaryStatements({ type: summary.type, ...part }).map(
+      (statement) => ({ ...entry, ...statement }),
+    );
+    try {
+      JSON.parse(part.text.replace(/^```(?:json)?\s*|\s*```$/gi, ''));
+    } catch {
+      statements.push({ ...entry, text: part.text });
+    }
+    return statements.length ? statements : [{ ...entry, text: part.text }];
+  });
 }
+
+function uniqueEvidence<T extends SearchEntry>(entries: readonly T[]): T[] {
+  const seen = new Map<string, T>();
+  for (const entry of entries) {
+    const key = JSON.stringify([entry.author, entry.text.trim().replace(/\s+/g, ' ')]);
+    const existing = seen.get(key);
+    if (!existing) seen.set(key, entry);
+    // Keep the winning statement's own portion and source references.
+  }
+  return [...seen.values()];
+}
+
+const incompleteHandoff = 'Supplemental Session Memory. This context is potentially incomplete.';
 
 export class SessionMemory {
   private readonly store: MemoryStore;
@@ -127,17 +171,11 @@ export class SessionMemory {
   constructor(private readonly options: MemoryOptions) {
     this.threshold = options.threshold ?? 3000;
     this.budgets = options.budgets ?? defaultMemoryBudgets;
-    const { history, retained, input } = this.budgets;
+    const { input } = this.budgets;
     if (!Number.isInteger(this.threshold) || this.threshold < 1 || this.threshold > 6500)
       throw new Error('Session Memory action threshold must be between 1 and 6500 tokens.');
-    if (
-      ![history, retained, input].every(Number.isSafeInteger) ||
-      retained < 0 ||
-      history <= retained ||
-      input - history < 1024 ||
-      input > 14336
-    )
-      throw new Error('Session Memory budgets leave insufficient room for bounded sources.');
+    if (!Number.isSafeInteger(input) || input < 1024 || input > 14336)
+      throw new Error('Session Memory input budget must be between 1024 and 14336 tokens.');
     this.store = new MemoryStore(options.databasePath);
   }
 
@@ -160,7 +198,12 @@ export class SessionMemory {
     if (this.abort.signal.aborted) return;
     const prior = this.store.turns(agentId, new Set([turn.turnId])).get(turn.turnId);
     if (prior && prior.outcome !== 'running') return;
-    this.store.saveTurn(agentId, { ...turn, scope: prior?.scope ?? turn.scope });
+    this.store.saveTurn(agentId, {
+      ...prior,
+      ...turn,
+      scope: prior?.scope ?? turn.scope,
+      task: prior?.task ?? turn.task,
+    });
     const key = JSON.stringify([agentId, turn.turnId]);
     if (turn.outcome === 'running') {
       const previous = this.activeTurns.get(agentId);
@@ -182,6 +225,21 @@ export class SessionMemory {
       }
       this.foregroundEnded(key);
     }
+    this.observe(agentId);
+  }
+
+  scopeChanged(agentId: string, context: Pick<MemoryTurn, 'scope' | 'task'>): void {
+    const active = this.activeTurns.get(agentId);
+    if (!active || this.abort.signal.aborted) return;
+    const [, turnId] = JSON.parse(active) as [string, string];
+    const receipt = this.store.turns(agentId, new Set([turnId])).get(turnId);
+    if (!receipt || receipt.outcome !== 'running') return;
+    const changes = receipt.changes ?? [];
+    if (scopeKey(changes.at(-1)?.scope ?? receipt.scope) === scopeKey(context.scope)) return;
+    this.store.saveTurn(agentId, {
+      ...receipt,
+      changes: [...changes, { ...context, at: new Date().toISOString() }],
+    });
     this.observe(agentId);
   }
 
@@ -293,10 +351,22 @@ export class SessionMemory {
     const turnIds = new Set(messages.flatMap(({ turnId }) => (turnId ? [turnId] : [])));
     const turns = this.store.turns(agentId, turnIds);
     const outcomes = new Map<string, MemoryTurnOutcome>();
-    for (const [id, turn] of turns) if (turn.outcome !== 'running') outcomes.set(id, turn.outcome);
+    const lastByTurn = new Map<string, number>();
+    for (const message of messages) if (message.turnId) lastByTurn.set(message.turnId, message.seq);
+    for (const [id, turn] of turns) {
+      if (turn.epoch && turn.epoch !== epoch) continue;
+      if (turn.outcome !== 'running') outcomes.set(id, turn.outcome);
+      this.store.saveTurn(agentId, { ...turn, epoch, lastSeq: lastByTurn.get(id) });
+    }
     for (const message of messages) {
       const turn = message.turnId ? turns.get(message.turnId) : undefined;
-      message.scope ??= turn?.scope;
+      if (!turn || (turn.epoch && turn.epoch !== epoch)) continue;
+      const timestamp = message.timestamp;
+      const context = timestamp
+        ? (turn.changes?.findLast(({ at }) => Date.parse(at) <= Date.parse(timestamp)) ?? turn)
+        : turn;
+      message.scope ??= context.scope;
+      message.task ??= context.task;
     }
     const stored = this.store.summaries(agentId, epoch);
     const summaries = new Map(stored.map((summary) => [summary.id, summary]));
@@ -315,7 +385,23 @@ export class SessionMemory {
       });
       if (sources.length !== summary.sources.length) continue;
       if (!units.some((unit) => unitId(unit) === summary.id)) {
-        units.push({ type: summary.type, messages: sources, scope: summary.scope });
+        const context = identifyMemoryUnits(messages, outcomes, this.threshold, true).find(
+          (unit) => unitId(unit) === summary.id,
+        );
+        units.push({
+          type: summary.type,
+          messages: sources,
+          scope: summary.scope,
+          task: context?.task ?? sources[0]?.task,
+          instructions:
+            context?.instructions ??
+            messages.filter(
+              ({ seq, author, turnId }) =>
+                seq < sources[0]!.seq &&
+                sources.some((item) => item.turnId && item.turnId === turnId) &&
+                (author === 'user' || (author === 'runtime' && !sources[0]?.task?.assignment)),
+            ),
+        });
       }
     }
     units.sort((a, b) => a.messages.at(-1)!.seq - b.messages.at(-1)!.seq);
@@ -336,10 +422,22 @@ export class SessionMemory {
         (turns.get(message.turnId)?.outcome === 'running' || !force);
       const openAction =
         !force &&
-        !message.turnId &&
-        (message.author === 'tool' || message.intermediate) &&
+        (message.author === 'tool' ||
+          message.intermediate ||
+          (message.author === 'agent' &&
+            !!message.scope?.taskId &&
+            !!message.turnId &&
+            outcomes.get(message.turnId) === 'completed' &&
+            !units.some(
+              ({ type, messages: sources }) => type === 'UAMP' && sources.includes(message),
+            ))) &&
         !scheduledActions.has(message.seq);
-      if (pending || openAction) checkpoint = Math.min(checkpoint, message.seq - 1);
+      if (pending || openAction) {
+        const start = message.turnId
+          ? messages.find(({ turnId }) => turnId === message.turnId)
+          : message;
+        checkpoint = Math.min(checkpoint, (start?.seq ?? message.seq) - 1);
+      }
     }
     for (const unit of units) {
       if (this.foreground.size) return true;
@@ -348,14 +446,23 @@ export class SessionMemory {
       if (existing?.complete) continue;
       const position = unit.messages.at(-1)!.seq;
       const earlier = [...summaries.values()]
-        .filter((summary) => summary.complete && summary.position < position)
+        .filter(
+          (summary) => summary.type === 'UAMP' && summary.complete && summary.position < position,
+        )
         .sort((a, b) => a.position - b.position);
-      const history = memoryHistory(
-        earlier.map((summary) => ({ type: summary.type, text: summaryText(summary) })),
-        this.budgets,
+      const history = earlier.flatMap((summary) =>
+        summary.parts.map((part, index) => ({
+          ...part,
+          type: summary.type,
+          scope: summary.scope,
+          unitId: summary.id,
+          id: `${summary.id}/${index + 1}`,
+        })),
       );
-      const historyHash = createHash('sha256').update(history).digest('hex');
       const parts = prepareMemorySummaries(unit, history, this.budgets);
+      const historyHash = createHash('sha256')
+        .update(JSON.stringify(parts.map(({ prompt }) => prompt)))
+        .digest('hex');
       const summary: StoredMemorySummary = {
         id,
         agentId,
@@ -385,14 +492,42 @@ export class SessionMemory {
       for (const part of parts.slice(summary.parts.length)) {
         if (this.foreground.size) return true;
         const queueMs = Math.round(performance.now() - queuedAt);
+        const started = performance.now();
+        const report = (result: MemorySummaryResult) =>
+          this.options.onRequest?.({
+            agentId,
+            type: unit.type,
+            unitId: id,
+            portion: summary.parts.length + 1,
+            queueMs,
+            historyIds: part.historyIds,
+            authoritativeEstimatedTokens: part.authoritativeEstimatedTokens,
+            prefixHash: part.prefixHash,
+            result,
+          });
         try {
-          const result = await this.options.summarize(unit.type, part.prompt, this.abort.signal);
-          this.options.onRequest?.({ type: unit.type, queueMs, result });
+          const result = await this.options
+            .summarize(unit.type, part.prompt, this.abort.signal)
+            .catch(() => {
+              this.abort.signal.throwIfAborted();
+              return {
+                type: unit.type,
+                text: '',
+                complete: false,
+                elapsedMs: performance.now() - started,
+              };
+            });
+          report(result);
           if (!result.complete || !result.text.trim()) {
             this.options.onFailure?.();
             break;
           }
-          summary.parts.push({ text: result.text, fields: result.fields, sources: part.sources });
+          summary.parts.push({
+            text: result.text,
+            fields: result.fields,
+            sources: part.sources,
+            noUsefulInformation: result.noUsefulInformation,
+          });
           summary.complete = summary.parts.length === parts.length;
           if (!(await this.currentHistory(agentId, epoch, latest))) return true;
           this.store.saveSummary(summary);
@@ -403,7 +538,11 @@ export class SessionMemory {
         }
       }
       if (!summary.complete) {
-        checkpoint = Math.min(checkpoint, summary.sources[0]!.seq - 1);
+        checkpoint = Math.min(
+          checkpoint,
+          summary.sources[0]!.seq - 1,
+          ...(unit.instructions ?? []).map(({ seq }) => seq - 1),
+        );
         if (!(await this.currentHistory(agentId, epoch, latest))) return true;
         this.store.saveSummary(summary);
       }
@@ -436,6 +575,27 @@ export class SessionMemory {
   }
 
   async handoff(agentId: string, query: string, deadline?: AbortSignal): Promise<string> {
+    const start = performance.now();
+    let estimatedTokens: number | undefined;
+    try {
+      const { text } = await this.handoffDetails(agentId, query, deadline);
+      estimatedTokens = estimateMemoryTokens(text);
+      return text;
+    } finally {
+      this.options.onDispatch?.({ agentId, elapsedMs: performance.now() - start, estimatedTokens });
+    }
+  }
+
+  async handoffDetails(
+    agentId: string,
+    query: string,
+    deadline?: AbortSignal,
+    recoverOriginals = true,
+  ): Promise<{
+    text: string;
+    entries: MemorySearchEntry[];
+    recoveredSources: number[];
+  }> {
     const signal = deadline ? AbortSignal.any([deadline, this.abort.signal]) : this.abort.signal;
     signal.throwIfAborted();
     const { tail, state, summaries } = await this.current(agentId);
@@ -454,7 +614,7 @@ export class SessionMemory {
         if (!page) break;
         if (page.reset || page.epoch !== tail.epoch || page.latest < tail.latest) {
           this.observe(agentId, true);
-          return 'Supplemental Session Memory. This context is potentially incomplete.';
+          return { text: incompleteHandoff, entries: [], recoveredSources: [] };
         }
         if (page.through <= (cursor?.seq ?? through)) break;
         recent.push(...page.messages.filter(({ seq }) => seq > through && seq < tailStart));
@@ -483,7 +643,7 @@ export class SessionMemory {
       ].map((check) => [JSON.stringify([check.seq, check.text]), check]),
     );
     const candidates: SearchEntry[] = [
-      ...summaries.filter(({ complete }) => complete).map(summaryEntry),
+      ...summaries.filter(({ complete }) => complete).flatMap(summaryEntries),
       ...[...observed.values()]
         .filter(({ seq }) => seq <= through)
         .map(({ seq, text }) => sourceEntry({ seq, text, author: 'tool' })),
@@ -505,14 +665,16 @@ export class SessionMemory {
           : [],
       ),
     ];
-    const borrowedSources = new Set<SearchEntry>();
+    const borrowedSources = new Map<SearchEntry, number>();
     const selectEvidence = (identifiers: readonly string[] = []) =>
       budgetMemoryText(
-        candidates.sort(
-          (a, b) =>
-            Number(borrowedSources.has(b)) - Number(borrowedSources.has(a)) ||
-            memoryRelevance(b.text, query) - memoryRelevance(a.text, query) ||
-            b.seq - a.seq,
+        uniqueEvidence(
+          candidates.sort(
+            (a, b) =>
+              (borrowedSources.get(a) ?? Infinity) - (borrowedSources.get(b) ?? Infinity) ||
+              memoryRelevance(b.text, query) - memoryRelevance(a.text, query) ||
+              b.seq - a.seq,
+          ),
         ),
         900,
         query,
@@ -520,38 +682,43 @@ export class SessionMemory {
         identifiers,
       );
     let evidence = selectEvidence();
-    const identifiers = missingMemoryIdentifiers(
-      query,
-      [...users.selected, ...evidence.selected].map(({ text }) => text).join('\n'),
-    );
+    const identifiers = memoryIdentifiers(query);
     let originalSearchIncomplete = false;
-    if (identifiers.length) {
-      const discovered = await this.searchConversation(
-        agentId,
-        identifiers.join(' '),
-        signal,
-        {
-          tail,
-          state,
-          summaries: [],
-          identifiers,
-        },
-      ).catch(() => undefined);
+    if (recoverOriginals && identifiers.length) {
+      const discovered = await this.searchConversation(agentId, identifiers.join(' '), signal, {
+        tail,
+        state,
+        summaries: [],
+        identifiers,
+      }).catch(() => undefined);
       signal.throwIfAborted();
       if (discovered?.stale) {
         this.observe(agentId, true);
-        return 'Supplemental Session Memory. This context is potentially incomplete.';
+        return { text: incompleteHandoff, entries: [], recoveredSources: [] };
       }
       originalSearchIncomplete = !discovered || discovered.incomplete;
       const evidenceKey = ({ seq, author, text }: { seq: number; author: string; text: string }) =>
         JSON.stringify([seq, author, text]);
       const represented = new Map(candidates.map((entry) => [evidenceKey(entry), entry]));
       const selectedUserKeys = new Set(users.selected.map(evidenceKey));
-      for (const { agentId: _agentId, epoch, score: _score, ...entry } of discovered?.hits ?? []) {
+      const originals = discovered?.hits ?? [];
+      const firstForIdentifier = new Set(
+        identifiers.flatMap((identifier) => {
+          const item = originals.find(
+            ({ text }) => memoryIdentifierMatches(text, [identifier]).size > 0,
+          );
+          return item ? [item] : [];
+        }),
+      );
+      for (const { agentId: _agentId, epoch, score: _score, ...entry } of [
+        ...firstForIdentifier,
+        ...originals.filter((item) => !firstForIdentifier.has(item)),
+      ]) {
         const key = evidenceKey(entry);
         if (epoch !== tail.epoch || selectedUserKeys.has(key)) continue;
         const existing = represented.get(key);
-        borrowedSources.add(existing ?? entry);
+        const borrowed = existing ?? entry;
+        if (!borrowedSources.has(borrowed)) borrowedSources.set(borrowed, borrowedSources.size);
         if (!existing) {
           represented.set(key, entry);
           candidates.push(entry);
@@ -559,8 +726,23 @@ export class SessionMemory {
       }
       evidence = selectEvidence(identifiers);
     }
-    if (!users.selected.length && !evidence.selected.length) return '';
-    return [
+    const selectedKeys = new Set(
+      [...borrowedSources.keys()].map(({ seq, author }) => JSON.stringify([seq, author])),
+    );
+    const recoveredSources = [
+      ...new Set(
+        evidence.selected
+          .filter(
+            ({ seq, author, text }) =>
+              selectedKeys.has(JSON.stringify([seq, author])) &&
+              memoryIdentifierMatches(text, identifiers).size > 0,
+          )
+          .map(({ seq }) => seq),
+      ),
+    ];
+    const entries = [...users.selected.map(sourceEntry), ...evidence.selected];
+    if (!entries.length) return { text: '', entries, recoveredSources };
+    const text = [
       'Supplemental Session Memory. Follow the approved assignment and the latest original user instruction. Resolve decisions against original user messages. Prefer original tool results for observed outcomes.',
       JSON.stringify({
         agentId,
@@ -581,6 +763,7 @@ export class SessionMemory {
       'Summaries and recent evidence in chronological order',
       ...evidence.selected.sort((a, b) => a.seq - b.seq).map((item) => JSON.stringify(item)),
     ].join('\n');
+    return { text, entries, recoveredSources };
   }
 
   private async searchConversation(
@@ -591,20 +774,20 @@ export class SessionMemory {
       tail: MemoryPage;
       state?: MemoryState;
       summaries: readonly StoredMemorySummary[];
-      identifiers: readonly string[];
+      identifiers?: readonly string[];
     },
   ) {
     const { state, tail, summaries } = view ?? (await this.current(id));
     let incomplete = !state || state.seq < tail.latest || tail.reset;
     let hits: SearchHit[] = [];
     const add = (entry: SearchEntry) => {
-      const score = view
+      const score = view?.identifiers
         ? memoryIdentifierMatches(entry.text, view.identifiers).size
         : memoryRelevance(entry.text, query);
       if (query && !score) return;
       hits.push({ ...entry, agentId: id, epoch: tail.epoch, score });
     };
-    for (const summary of summaries) if (summary.complete) add(summaryEntry(summary));
+    for (const summary of summaries) if (summary.complete) summaryEntries(summary).forEach(add);
     let page = tail;
     while (true) {
       signal.throwIfAborted();
@@ -620,7 +803,7 @@ export class SessionMemory {
           });
       }
       const budgeted = budgetMemoryText(
-        hits.sort(compareHits),
+        uniqueEvidence(hits.sort(compareHits)),
         searchTokens,
         query,
         searchCost,
@@ -634,7 +817,11 @@ export class SessionMemory {
         { epoch: tail.epoch, seq: page.start },
         'before',
       );
-      if (previous.epoch !== tail.epoch || previous.latest < tail.latest || (view && previous.reset))
+      if (
+        previous.epoch !== tail.epoch ||
+        previous.latest < tail.latest ||
+        (view && previous.reset)
+      )
         return { hits: [], incomplete: true, stale: true };
       if (previous.reset || previous.start === undefined || previous.start >= page.start) {
         incomplete = true;
@@ -651,13 +838,15 @@ export class SessionMemory {
     query = '',
     target?: string,
     signal = this.abort.signal,
+    originalsOnly = false,
   ) {
     const peers = new Set([agentId, ...(this.options.peers?.(agentId, workspaceRoot) ?? [])]);
     if (target && !peers.has(target)) throw new Error('Session Memory access denied.');
     const results = await Promise.all(
       [...(target ? [target] : peers)].map(async (id) => {
         try {
-          return await this.searchConversation(id, query.trim(), signal);
+          const view = originalsOnly ? { ...(await this.current(id)), summaries: [] } : undefined;
+          return await this.searchConversation(id, query.trim(), signal, view);
         } catch {
           signal.throwIfAborted();
           return { incomplete: true, hits: [] };

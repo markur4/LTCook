@@ -13,7 +13,7 @@ import { canonicalWorkspace } from '../core/workspace.js';
 import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { SessionMemory } from '../session-memory/service.js';
-import type { MemoryScope } from '../session-memory/units.js';
+import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import type { WorkspaceMcp } from './mcp.js';
 import {
@@ -76,7 +76,9 @@ export function agentBearer(secret: string, nativeAgentId: string): string {
 export class RuntimeApi {
   private server: Server | undefined;
   private memory?: SessionMemory;
-  private memoryScope?: (agentId: string) => MemoryScope | undefined;
+  private memoryContext?: (
+    agentId: string,
+  ) => { scope?: MemoryScope; task?: MemoryTaskContext } | undefined;
   private pastedDocuments?: PastedDocuments;
   private runtime: RuntimeController | undefined;
   private readonly sessions = new Map<string, string>();
@@ -110,12 +112,9 @@ export class RuntimeApi {
   private shutdown: (() => Promise<void>) | undefined;
   private stopping = false;
   private workspaceMcp: WorkspaceMcp | undefined;
-  setSessionMemory(
-    memory: SessionMemory,
-    scope?: (agentId: string) => MemoryScope | undefined,
-  ): void {
+  setSessionMemory(memory: SessionMemory, context?: RuntimeApi['memoryContext']): void {
     this.memory = memory;
-    this.memoryScope = scope;
+    this.memoryContext = context;
   }
   setPastedDocuments(documents: PastedDocuments): void {
     this.pastedDocuments = documents;
@@ -414,7 +413,7 @@ export class RuntimeApi {
         ) {
           this.memory?.turn(
             id,
-            { turnId: input.turnId, outcome, scope: this.memoryScope?.(id) },
+            { turnId: input.turnId, outcome, ...this.memoryContext?.(id) },
             input.local === true,
           );
         } else {

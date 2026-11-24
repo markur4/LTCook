@@ -461,39 +461,26 @@ from original tool results. When a requested path or technical identifier
 is absent from the selected context, LTCook searches the original
 conversation and includes the cited source within the same handoff budget.
 
-History is background for the new summary. Completed summaries are rendered in
-chronological order with stable text between common instructions and the
-current UAMP or AAB instructions. The blue blocks below show potential reuse.
-Ollama processes a new summary once before it joins a reusable prefix.
+Immediate Context supplies the current Task objective and acceptance criteria
+when Core knows them. For an AAB it also supplies the initiating user
+instructions or runtime assignment and applicable steering. This material is
+separate from the current original messages and serves as instructions.
+One recent relevant completed UAMP provides background for references.
+A previous summary cannot establish that an Action occurred or a decision
+was accepted in the current unit.
 
-```mermaid
-flowchart LR
-  A1[Stable instructions] --> B1[Current type instructions and original unit 1]
-  A2[Stable instructions] --> S1[New summary 1] --> B2[Current type instructions and original unit 2]
-  A3[Stable instructions] --> S1R[Summary 1] --> S2[New summary 2] --> B3[Current type instructions and original unit 3]
-  classDef reuse fill:#dbeafe,color:#172554,stroke:#3b82f6
-  class A2,A3,S1R reuse
-```
+The selection follows chronology within the known Task scope. Where Task
+identity is absent, matching Session, Plan, and Pass scope is used when
+available. Immediate Context aims for about 256 to 512 additional estimated
+tokens. Authoritative instructions can exceed that target, and the available
+space for previous summary text shrinks to protect current sources.
+All completed summaries stay in chronological storage. Retrieval can select
+individual recognized field statements and cite the original sequences used
+by their summary portion. Malformed formatting retains a raw-text fallback.
 
-Previous original units leave the request after summarization. A cold prompt, a
-model reload, agent switches, or an Ollama cache miss can require full prefill.
-History eviction changes token positions. Removing several old summaries in
-one operation leaves a stable prefix for more subsequent requests.
-
-```mermaid
-flowchart TD
-  Full[History reaches 4096 tokens]
-  Full --> One[Remove one old summary]
-  One --> Repeat[Another arrival shifts the prefix again]
-  Full --> Group[Remove oldest summaries down to 2048 tokens]
-  Group --> Shift[Next request rebuilds the surviving prefix]
-  Shift --> Stable[Later requests can reuse the surviving prefix]
-```
-
-Stored summaries remain available to search after eviction. Rewind invalidates
-the affected history and dependent summaries. When the native epoch changes,
-the runtime rebuilds from authorized original messages. Summaries never replace
-the source authority for a decision.
+Rewind invalidates affected summaries and receipts that were tied to the
+replaced history. The runtime rebuilds from authorized original messages.
+Paseo still owns the original conversation and the native lifecycle metadata.
 
 ## Web services and diagnostics
 

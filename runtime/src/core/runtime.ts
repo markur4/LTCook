@@ -30,8 +30,8 @@ import {
   SESSION_MEMORY_TOOL_NAME,
 } from '../paseo-plugin/shared/workspace-tools.js';
 
-import type { SessionMemory } from '../session-memory/service.js';
-import type { MemoryScope } from '../session-memory/units.js';
+import { memoryDispatchDeadlineMs, type SessionMemory } from '../session-memory/service.js';
+import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
 
 type RuntimeOptions = {
   databasePath: string;
@@ -631,7 +631,17 @@ Task to register: ${input.description}`,
             )
         )
           throw new Error('Agents may update only Steps belonging to their assigned tasks');
-        return this.store.updateStep(sessionId, command);
+        const updated = this.store.updateStep(sessionId, command);
+        if (updated.status !== step.status) {
+          for (const assignment of this.store.listAssignments(sessionId)) {
+            if (assignment.taskId === task.id && ['sending', 'sent'].includes(assignment.status)) {
+              const context = this.memoryContext(assignment.nativeAgentId);
+              if (context?.scope?.sessionId === sessionId)
+                this.options.memory?.scopeChanged(assignment.nativeAgentId, context);
+            }
+          }
+        }
+        return updated;
       }
       case 'review.create': {
         const review = this.createReview(sessionId, actor, identity, command);
@@ -1213,7 +1223,7 @@ Task to register: ${input.description}`,
     ];
   }
 
-  memoryScope(agentId: string): MemoryScope | undefined {
+  memoryContext(agentId: string): { scope?: MemoryScope; task?: MemoryTaskContext } | undefined {
     if (this.closed) return undefined;
     const sessions = this.store
       .listSessions()
@@ -1230,7 +1240,7 @@ Task to register: ${input.description}`,
         ({ nativeAgentId, status }) =>
           nativeAgentId === agentId && ['sending', 'sent'].includes(status),
       );
-    if (assignments.length !== 1) return { sessionId };
+    if (assignments.length !== 1) return { scope: { sessionId } };
     const task = this.store.getTask(sessionId, assignments[0]!.taskId);
     const steps = this.store
       .listSteps(sessionId)
@@ -1239,11 +1249,19 @@ Task to register: ${input.description}`,
       ? this.planning.list(sessionId).filter(({ passId }) => passId === task.passId)
       : [];
     return {
-      sessionId,
-      taskId: task.id,
-      passId: task.passId,
-      planId: plans.length === 1 ? plans[0]!.id : undefined,
-      stepId: steps.length === 1 ? steps[0]!.id : undefined,
+      scope: {
+        sessionId,
+        taskId: task.id,
+        passId: task.passId,
+        planId: plans.length === 1 ? plans[0]!.id : undefined,
+        stepId: steps.length === 1 ? steps[0]!.id : undefined,
+      },
+      task: {
+        title: task.title,
+        description: task.description,
+        acceptance: [task.acceptance],
+        assignment: assignments[0]!.handoff,
+      },
     };
   }
 
@@ -1274,7 +1292,7 @@ Task to register: ${input.description}`,
             timer = setTimeout(() => {
               deadline.abort();
               resolve(unavailable);
-            }, 500);
+            }, memoryDispatchDeadlineMs);
           }),
         ]);
       } catch {
@@ -1308,6 +1326,9 @@ Task to register: ${input.description}`,
       memberKey: assignment.memberKey,
     });
     this.store.updateAssignment(assignment.sessionId, assignment.id, 'sending');
+    const memoryContext = this.options.memory && this.memoryContext(assignment.nativeAgentId);
+    if (memoryContext?.scope?.sessionId === session.id)
+      this.options.memory?.scopeChanged(assignment.nativeAgentId, memoryContext);
     try {
       await this.agents.send(
         assignment.nativeAgentId,

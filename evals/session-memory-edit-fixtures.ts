@@ -2,6 +2,7 @@ import { rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { MemoryFixture } from '../runtime/src/evals/session-memory-fixtures.js';
+import type { MemorySourceMessage } from '../runtime/src/session-memory/units.js';
 import type { MemoryMessage } from '../runtime/src/session-memory/text.js';
 
 export const editBase = '53a615798b8ca04a63c70e2d3b9503b01a97ddf3';
@@ -113,19 +114,33 @@ const parallelWork: readonly (readonly TranscriptLine[])[] = [
 
 export function editTranscript(fixture: EditCase): MemoryFixture {
   const beforeCorrection = fixture.conversation.slice(0, -1);
-  const transcript = beforeCorrection.flatMap((line, index) => [
-    line,
-    ...(parallelWork[index] ?? []),
-  ]);
-  const duplicateReports = parallelWork.flatMap((turn) =>
-    turn.filter(([author]) => author !== 'user'),
-  );
-  transcript.push(...duplicateReports, fixture.conversation.at(-1)!);
-  const messages = transcript.map(([author, text], index): MemoryMessage => ({
-    seq: index + 1,
-    author,
-    text,
-  }));
+  let turn = 0;
+  let seq = 0;
+  const mainScope = { taskId: fixture.id };
+  const transcript: MemorySourceMessage[] = [];
+  const append = (
+    [author, text]: (typeof beforeCorrection)[number],
+    turnId: string,
+    taskId: string,
+  ) => transcript.push({ seq: ++seq, author, text, turnId, scope: { taskId } });
+  const primary: MemorySourceMessage[][] = [];
+  for (const line of beforeCorrection) {
+    if (!primary.length || line[0] === 'user' || line[0] === 'runtime' || line[0] === 'unknown')
+      primary.push([]);
+    primary.at(-1)!.push({ seq: 0, author: line[0], text: line[1] });
+  }
+  for (const group of primary) {
+    const current = ++turn;
+    for (const { author, text } of group) append([author, text], `primary-${current}`, fixture.id);
+    for (const line of parallelWork[current - 1] ?? [])
+      append(line, `parallel-${current}`, `docs-${current}`);
+  }
+  for (let index = turn; index < parallelWork.length; index++) {
+    for (const line of parallelWork[index]!)
+      append(line, `parallel-${index + 1}`, `docs-${index + 1}`);
+  }
+  const [author, text] = fixture.conversation.at(-1)!;
+  const messages = [...transcript, { seq: ++seq, author, text, scope: mainScope }];
   const turns = Array.from({ length: Math.ceil((messages.length - 1) / 3) }, (_, index) =>
     messages.slice(index * 3, Math.min(index * 3 + 3, messages.length - 1)),
   );
@@ -138,6 +153,11 @@ export function editTranscript(fixture: EditCase): MemoryFixture {
     correctionSources: [messages.length],
     focus: fixture.focus,
     task: { prompt: fixture.assignment, expected: {} },
+    taskContext: {
+      title: fixture.id,
+      description: fixture.assignment,
+      acceptance: ['Apply the current approved change and keep the adjacent file unchanged.'],
+    },
     facts: [
       {
         label: 'implementation location',

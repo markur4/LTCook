@@ -334,22 +334,36 @@ async function run(): Promise<void> {
           model: memorySettings.model,
           configuration: memorySettings.generation,
           budgets: {
-            history: Number(
-              process.env.LTCOOK_SESSION_MEMORY_HISTORY_TOKENS ?? defaultMemoryBudgets.history,
-            ),
-            retained: Number(
-              process.env.LTCOOK_SESSION_MEMORY_RETAINED_TOKENS ?? defaultMemoryBudgets.retained,
-            ),
             input: Number(
               process.env.LTCOOK_SESSION_MEMORY_INPUT_TOKENS ?? defaultMemoryBudgets.input,
             ),
           },
           peers: (agentId, workspace) => runtime?.memoryPeers(agentId, workspace) ?? [],
+          onRequest: ({ result, ...request }) => {
+            void telemetry.log('info', 'session-memory.request', {
+              ...request,
+              complete: result.complete,
+              elapsedMs: result.elapsedMs,
+              inputCount: result.usage?.inputTokens,
+              outputCount: result.usage?.outputTokens,
+              cachedCount: result.metrics?.cachedInputTokens,
+              prefillMs: result.metrics?.prefillMs,
+              generationMs: result.metrics?.generationMs,
+              thinkingPresent: result.metrics?.thinkingPresent,
+            });
+          },
+          onDispatch: (data) => {
+            void telemetry.log('info', 'session-memory.dispatch', {
+              agentId: data.agentId,
+              elapsedMs: data.elapsedMs,
+              estimatedSize: data.estimatedTokens,
+            });
+          },
           onFailure: () => {
             void telemetry.log('warn', 'session-memory.update_failed', {});
           },
         });
-        api.setSessionMemory(memory, (id) => runtime?.memoryScope(id));
+        api.setSessionMemory(memory, (id) => runtime?.memoryContext(id));
         const activeMemory = memory;
         void host.api.agents
           .list()

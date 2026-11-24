@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
   defaultMemoryBudgets,
-  memoryHistory,
   parseMemorySummary,
   prepareMemorySummaries,
 } from '../../../runtime/src/session-memory/summarization.js';
@@ -89,27 +88,72 @@ test('keeps free-form summaries and reads recognizable fields opportunistically'
 });
 
 test('separates semantically empty output from usable malformed formatting', () => {
-  for (const output of ['{}', 'null', '{"results": [" "]}', '```json\n\n```'])
+  expect(parseMemorySummary('AAB', '{}')).toEqual({
+    type: 'AAB',
+    text: '{}',
+    noUsefulInformation: true,
+  });
+  for (const output of ['null', '{"results": [" "]}', '```json\n\n```'])
     expect(parseMemorySummary('AAB', output).text).toBe('');
   expect(parseMemorySummary('AAB', '{"results": "CACHE_GUARD passed"').text).toContain(
     'CACHE_GUARD passed',
   );
 });
 
-test('evicts a group and preserves complete oversized source text across bounded portions', () => {
-  const summaries = ['A', 'B', 'C'].map((name) => ({
-    type: 'UAMP' as const,
-    text: name.repeat(120),
-  }));
-  const history = memoryHistory(summaries, { ...defaultMemoryBudgets, history: 100, retained: 60 });
-  expect(history).not.toContain('A'.repeat(120));
-  expect(history).not.toContain('B'.repeat(120));
-  expect(history).toContain('C'.repeat(120));
+test('uses only the latest relevant completed UAMP for Immediate Context', () => {
+  const unit = {
+    type: 'AAB' as const,
+    scope: { taskId: 'cache' },
+    task: {
+      title: 'Cache restore',
+      description: 'Recover the existing cache.',
+      acceptance: ['Keep the existing manifest.'],
+    },
+    instructions: [
+      { seq: 8, author: 'user' as const, text: 'Steering: use CHECK_CACHE for the current run.' },
+    ],
+    messages: [{ seq: 9, author: 'tool' as const, text: 'CHECK_CACHE PASS' }],
+  };
+  const history = [
+    {
+      id: 'older',
+      type: 'UAMP' as const,
+      scope: { taskId: 'cache' },
+      text: '{"intent":"Older details"}',
+    },
+    {
+      id: 'latest',
+      type: 'UAMP' as const,
+      scope: { taskId: 'cache' },
+      text: '{"intent":"Latest cache details"}',
+    },
+    {
+      id: 'independent',
+      type: 'UAMP' as const,
+      scope: { taskId: 'docs' },
+      text: '{"intent":"Independent docs details"}',
+    },
+  ];
+  const [part] = prepareMemorySummaries(unit, history);
+  expect(part?.historyIds).toEqual(['latest']);
+  expect(part?.sources).toEqual([9]);
+  const prompt = part?.prompt[1]?.content;
+  expect(prompt).toContain('Keep the existing manifest.');
+  expect(prompt).toContain('Steering: use CHECK_CACHE');
+  expect(prompt).not.toContain('Independent docs details');
+  const [baseline] = prepareMemorySummaries(unit, history, defaultMemoryBudgets, {
+    mode: 'no-context',
+  });
+  expect(baseline?.text).toBe(part?.text);
+  expect(baseline?.sources).toEqual(part?.sources);
+  expect(baseline?.prompt[1]?.content).not.toContain('Latest cache details');
+});
 
+test('preserves complete oversized source text across identical bounded portions', () => {
   const text = '✍️"\n'.repeat(8000);
   const parts = prepareMemorySummaries(
     { type: 'UAMP', messages: [{ seq: 1, author: 'user', text }] },
-    history,
+    [{ type: 'UAMP', text: 'Prior context'.repeat(500) }],
   );
   expect(parts.length).toBeGreaterThan(1);
   expect(

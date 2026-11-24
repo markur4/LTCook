@@ -8,6 +8,7 @@ import {
   memoryAttachmentFixture,
   memoryCadenceFixture,
   memoryFixtures,
+  memoryHeldOutFixture,
 } from '../runtime/src/evals/session-memory-fixtures.js';
 import {
   inspectEvaluationModel,
@@ -17,8 +18,8 @@ import {
 import {
   compareContextMemory,
   contextModel,
+  contextSeeds,
   contextStrategies,
-  measureContextCache,
 } from './session-memory-context.js';
 import { resolveEvaluationContext } from '../runtime/src/evals/setup.js';
 
@@ -65,43 +66,47 @@ try {
       const selected = catalog.find(({ name }) => modelTag(name) === modelTag(contextModel));
       if (!selected) throw new Error('The Session Memory summarizer is missing from Ollama.');
       const modelInfo = await inspectEvaluationModel(summarization.endpoint, selected, signal);
-      if (args.includes('--cache')) {
-        const cache = await measureContextCache({
-          settings: summarization,
-          digest: modelInfo.digest,
-          weightsDigest: modelInfo.weightsDigest,
-          signal,
-          progress: (event) => console.error(event),
-        });
-        console.log(JSON.stringify({ model: modelInfo, cache }, null, 2));
-      } else {
-        const fixtures = [...memoryFixtures, memoryCadenceFixture(), memoryAttachmentFixture()];
-        const fixtureId = option('fixture');
-        const selectedStrategies = option('strategy')?.split(',');
-        const strategies = selectedStrategies
-          ? contextStrategies.filter((strategy) => selectedStrategies.includes(strategy))
-          : contextStrategies;
-        if (selectedStrategies && strategies.length !== selectedStrategies.length)
-          throw new Error('Unknown or duplicate Session Memory strategy.');
-        const requested = fixtureId ? fixtures.filter(({ id }) => id === fixtureId) : fixtures;
-        if (!requested.length) throw new Error('Unknown Session Memory fixture.');
-        const results = [];
-        for (const fixture of requested) {
+      const fixtures = args.includes('--held-out') ? [memoryHeldOutFixture] : fixtureList();
+
+      function fixtureList() {
+        if (args.includes('--full') || option('fixture')) {
+          return [...memoryFixtures, memoryCadenceFixture(), memoryAttachmentFixture()];
+        }
+        return [
+          ...memoryFixtures.filter(({ id }) => id === 'runtime-rebuild-and-cache-recovery'),
+          memoryCadenceFixture(),
+        ];
+      }
+      const fixtureId = option('fixture');
+      const selectedStrategies = option('strategy')?.split(',');
+      const strategies = selectedStrategies
+        ? contextStrategies.filter((strategy) => selectedStrategies.includes(strategy))
+        : contextStrategies.filter((strategy) => strategy !== 'original-search');
+      if (selectedStrategies && strategies.length !== selectedStrategies.length)
+        throw new Error('Unknown or duplicate Session Memory strategy.');
+      const requested = fixtureId ? fixtures.filter(({ id }) => id === fixtureId) : fixtures;
+      if (!requested.length) throw new Error('Unknown Session Memory fixture.');
+      const results = [];
+      for (const fixture of requested) {
+        for (const seed of contextSeeds(option('seeds'))) {
           const report = await compareContextMemory(fixture, {
-            settings: summarization,
+            settings: { ...summarization, cpuOnly: args.includes('--cpu-only') },
             digest: modelInfo.digest,
             weightsDigest: modelInfo.weightsDigest,
             strategies,
+            seed,
+            auditOutput: args.includes('--audit-output'),
             signal,
-            progress: (event) => console.error(event),
+            progress: (event) => console.error(`Seed ${seed} ${event}`),
           });
           results.push({
             ...report,
+            seed,
             arms: report.arms.map(({ handoff: _handoff, ...arm }) => arm),
           });
         }
-        console.log(JSON.stringify({ model: modelInfo, results }, null, 2));
       }
+      console.log(JSON.stringify({ model: modelInfo, results }, null, 2));
     } else {
       const report = await runSessionMemoryEvaluation(
         summarization,

@@ -1,5 +1,5 @@
 import type { MemoryEntry, MemoryMessage } from './session-memory-extractive.js';
-import type { MemorySourceMessage } from '../session-memory/units.js';
+import type { MemorySourceMessage, MemoryTaskContext } from '../session-memory/units.js';
 
 export type MemoryFact = {
   label: string;
@@ -20,6 +20,7 @@ export type MemoryFixture = {
   focus: string;
   task: { prompt: string; expected: Record<string, string | number | boolean> };
   facts: readonly MemoryFact[];
+  taskContext?: MemoryTaskContext;
 };
 
 export const memoryFixtures: readonly MemoryFixture[] = [
@@ -239,6 +240,11 @@ export const memoryFixtures: readonly MemoryFixture[] = [
   },
   {
     id: 'runtime-rebuild-and-cache-recovery',
+    taskContext: {
+      title: 'Cache recovery',
+      description: 'Implement the restart and cache recovery work in the initiating instructions.',
+      acceptance: ['Record actual checks and preserve the existing cache on incompatible input.'],
+    },
     turns: [
       [
         {
@@ -399,7 +405,7 @@ export function memoryCadenceFixture(): MemoryFixture {
   const turns = base.turns.flatMap((turn, index) => {
     const relevant = turn.map(({ seq: original, ...message }) => {
       sources.set(original, ++seq);
-      return { seq, ...message, turnId: `cache-${index}` };
+      return { seq, ...message, turnId: `cache-${index}`, scope: { taskId: base.id } };
     });
     const interleaved = reports.slice(index * 3, (index + 1) * 3);
     return [
@@ -409,6 +415,7 @@ export function memoryCadenceFixture(): MemoryFixture {
           seq: ++seq,
           ...message,
           turnId: `documentation-${index}-${reportIndex}`,
+          scope: { taskId: `documentation-${index}-${reportIndex}` },
         })),
       ),
     ];
@@ -461,3 +468,91 @@ export function memoryAttachmentFixture(): MemoryFixture {
     ],
   };
 }
+
+/** New labels for qualification after prompt development on the original cache fixtures. */
+export const memoryHeldOutFixture: MemoryFixture = {
+  id: 'held-out-index-restore',
+  turns: [
+    [
+      {
+        seq: 1,
+        turnId: 'restore',
+        author: 'user',
+        scope: { taskId: 'restore' },
+        text: 'Restore the workspace index without creating a replacement cache. Preserve the existing index and document only observed outcomes.',
+      },
+      {
+        seq: 2,
+        turnId: 'restore',
+        author: 'tool',
+        scope: { taskId: 'restore' },
+        text: 'INDEX_RESTORE_FAILSAFE PASS. The previous index retained 37 entries. No files were created.',
+      },
+      {
+        seq: 3,
+        turnId: 'restore',
+        author: 'agent',
+        scope: { taskId: 'restore' },
+        text: 'restoreIndexSnapshot in runtime/src/repository/index-restore.ts retained the previous index with 37 entries.',
+      },
+    ],
+    [
+      {
+        seq: 4,
+        turnId: 'docs',
+        author: 'runtime',
+        scope: { taskId: 'docs' },
+        text: 'Separate documentation assignment for the installation heading.',
+      },
+      {
+        seq: 5,
+        turnId: 'docs',
+        author: 'agent',
+        scope: { taskId: 'docs' },
+        text: 'I proposed changing the heading and left it as it was.',
+      },
+    ],
+    [
+      {
+        seq: 6,
+        author: 'user',
+        text: 'Give me the observed index restore check, retained entry count and exact implementation symbol.',
+      },
+    ],
+  ],
+  flushAfter: [3],
+  originalSources: [1, 2, 3, 6],
+  correctionSources: [6],
+  focus:
+    'INDEX_RESTORE_FAILSAFE restoreIndexSnapshot runtime/src/repository/index-restore.ts 37 retained entries',
+  task: {
+    prompt: 'Report check and retained count.',
+    expected: { check: 'INDEX_RESTORE_FAILSAFE', retained: 37 },
+  },
+  facts: [
+    {
+      label: 'observed restore outcome',
+      source: 2,
+      kind: 'progress',
+      critical: true,
+      identifiers: ['INDEX_RESTORE_FAILSAFE'],
+      expected: /INDEX_RESTORE_FAILSAFE.*(?:pass|success)/i,
+      contradicts: /INDEX_RESTORE_FAILSAFE.*fail(?:ed|ure)?\b/i,
+    },
+    {
+      label: 'retained index size',
+      source: 2,
+      kind: 'finding',
+      critical: true,
+      expected: /\b37\b.*entries/i,
+    },
+    {
+      label: 'implementation',
+      source: 3,
+      kind: 'reference',
+      critical: true,
+      identifiers: ['restoreIndexSnapshot', 'runtime/src/repository/index-restore.ts'],
+      expected: /restoreIndexSnapshot|index-restore/,
+    },
+  ],
+};

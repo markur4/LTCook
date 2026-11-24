@@ -144,7 +144,29 @@ function readMessages(
             ];
           const result = toolOutcome(item);
           return result
-            ? [{ ...origin, messageId: item.callId, author: 'tool', text: result }]
+            ? [
+                {
+                  ...origin,
+                  messageId: item.callId,
+                  author: 'tool',
+                  text: result,
+                  tool: {
+                    kind: item.detail.type,
+                    name: item.name,
+                    status: item.status,
+                    exitCode:
+                      item.detail.type === 'shell'
+                        ? (item.detail.exitCode ?? undefined)
+                        : undefined,
+                    filePath:
+                      item.detail.type === 'edit' ||
+                      item.detail.type === 'write' ||
+                      item.detail.type === 'read'
+                        ? item.detail.filePath
+                        : undefined,
+                  },
+                },
+              ]
             : [];
         }
         default:
