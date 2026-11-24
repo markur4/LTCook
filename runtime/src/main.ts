@@ -11,6 +11,9 @@ import { isWithin } from './path-containment.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
 import { EvalRunService } from './evals/service.js';
 import { createEvalEngine } from './evals/engine.js';
+import { createPaseoMemorySource } from './integrations/paseo-memory.js';
+import { SessionMemory } from './session-memory/service.js';
+import { extractMemory } from './session-memory/extraction.js';
 import { catalogModelAliases, resolveModel } from './models/aliases.js';
 const EX_TEMPFAIL = 75;
 function isListenAddressInUse(error: unknown): boolean {
@@ -154,6 +157,7 @@ async function run(): Promise<void> {
   let apiListening = false;
   let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined;
   let evals: EvalRunService | undefined;
+  let memory: SessionMemory | undefined;
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
   let shutdownPromise: Promise<void> | undefined;
@@ -189,6 +193,7 @@ async function run(): Promise<void> {
           sessionId: initialSnapshot?.session.id,
         }),
       );
+      if (memory) await attempt(() => memory!.close());
       if (runtime) await attempt(() => runtime!.close());
       if (evals) await attempt(() => evals!.close());
       if (host) await attempt(() => host!.close());
@@ -255,7 +260,6 @@ async function run(): Promise<void> {
       (id) => workspaceShellEnvironments.get(id),
       ensureProjectServices,
     );
-    api.setWorkspaceMcp(new WorkspaceMcp(createTools(ried, summarization, web), apiListen, web));
     api.setEval(evals);
     const apiUrl = await api.listen();
     apiListening = true;
@@ -300,6 +304,48 @@ async function run(): Promise<void> {
       host = undefined;
       return;
     }
+    const threshold = Number(process.env.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000');
+    if (threshold !== 0) {
+      try {
+        await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+        const memorySettings = {
+          ...summarization,
+          model: process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || summarization.model,
+          generation: JSON.stringify({
+            think: false,
+            options: { num_ctx: 16384, num_predict: 2048, temperature: 0 },
+          }),
+        };
+        memory = new SessionMemory({
+          databasePath: path.join(stateDirectory, 'session-memory.sqlite'),
+          source: createPaseoMemorySource(host.api, apiToken),
+          threshold,
+          extract: (entries, messages, signal) =>
+            extractMemory(memorySettings, entries, messages, signal),
+          peers: (agentId, workspace) => runtime?.memoryPeers(agentId, workspace) ?? [],
+          onFailure: () => {
+            void telemetry.log('warn', 'session-memory.update_failed', {});
+          },
+        });
+        api.setSessionMemory(memory);
+        const activeMemory = memory;
+        void host.api.agents
+          .list()
+          .then(({ entries }) => {
+            activeMemory.recover(
+              entries.flatMap(({ agent }) =>
+                ['ltcook', 'pi', 'codex'].includes(agent.provider) ? [agent.id] : [],
+              ),
+            );
+          })
+          .catch(() => {});
+      } catch {
+        void telemetry.log('warn', 'session-memory.unavailable', {});
+      }
+    }
+    api.setWorkspaceMcp(
+      new WorkspaceMcp(createTools(ried, summarization, web, memory), apiListen, web),
+    );
     const receipt = JSON.parse(
       await fs
         .readFile(path.join(canonicalDeploymentRoot, 'runtime.json'), 'utf8')
@@ -309,6 +355,7 @@ async function run(): Promise<void> {
     const backend = await createPaseoAgentBackend({
       telemetry,
       api: host.api,
+      ...(memory ? { memoryProvenanceSecret: apiToken } : {}),
       python,
       runtimeApiUrl: apiUrl,
       piHome,
@@ -332,6 +379,8 @@ async function run(): Promise<void> {
       ...(team ? { team } : {}),
       teams,
       agents: backend,
+      memory,
+      memoryDelegation: process.env.LTCOOK_SESSION_MEMORY_DELEGATION !== 'false',
       onEvent(event) {
         void telemetry.log('info', 'runtime.event', event);
       },

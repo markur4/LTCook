@@ -15,6 +15,7 @@ layout, packaging boundary, verification limits, and current release workflow.
 - [Verify and release](#verify-and-release)
   - [Verification](#verification)
   - [Local Ollama and Agent Evals](#local-ollama-and-agent-evals)
+    - [Session Memory qualification](#session-memory-qualification)
   - [Repository retrieval evaluation](#repository-retrieval-evaluation)
   - [Asset packaging](#asset-packaging)
   - [Integration and system procedures](#integration-and-system-procedures)
@@ -330,6 +331,24 @@ The quick preset and focused runs for other agent cases provide partial coverage
 The qualification verdict belongs to the summarization report, independently
 of whether the runner completed. Existing elapsed-time history and fallback for
 the three agent cases still use their original attempts.
+
+### Session Memory qualification
+
+Run `bun evals/session-memory-live.ts` to compare the four pinned Q8 candidates
+with 1,500, 3,000 and 6,000 estimated tokens per incremental update. The runner
+uses fixed fixture messages. It measures extraction on CPU, checks retained
+requirements and citations, and compares the resulting handoff with a
+relevant-source control in fresh native Pi sessions. The JSON report includes
+model digests, cold and warm residency, update latency, throughput and the
+model bytes reported by Ollama. An argument selects an installed downstream
+Pi model instead of the standard Bonsai model.
+
+The runtime stores derived entries and their Paseo timeline checkpoint together
+in `session-memory.sqlite` under runtime state. A changed history epoch
+invalidates the previous citations. Existing TeamInstances and Core bindings
+determine shared read access. The checkout's native Pi and Paseo system test
+checks provenance, authorized reads, restart and rewind. Codex-specific
+compatibility and permission behavior belongs in focused Traditional Tests.
 
 ### Opt-in summarization utility comparison
 

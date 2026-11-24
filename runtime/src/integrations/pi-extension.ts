@@ -16,7 +16,9 @@ import {
   isRepositoryTool,
   REPO_LOCATE_TOOL_NAME,
   REPO_SEARCH_TIMEOUT_MS,
+  SESSION_MEMORY_TOOL_NAME,
 } from '../paseo-plugin/shared/workspace-tools.js';
+import { sessionMemoryDescription, sessionMemoryInput } from '../tools/session-memory.js';
 import { isWebTool, webDefinitions } from '../tools/web.js';
 import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
@@ -87,6 +89,12 @@ export default async function activate(
       body: JSON.stringify({ sessionId, nativeAgentId, ...payload }),
     });
   const evaluation = Boolean(process.env.LTCOOK_EVAL_ARM);
+  const memoryEnabled = !evaluation && process.env.LTCOOK_SESSION_MEMORY_THRESHOLD !== '0';
+  if (memoryEnabled) {
+    pi.on('session_before_compact', () => {
+      void rpc('/v1/session-memory/observe', { force: true }).catch(() => {});
+    });
+  }
   const observe = async (value: Record<string, unknown>) => {
     const response = await rpc('/v1/evaluation/observe', value);
     if (!response.ok) throw new Error('Evaluation observation unavailable');
@@ -495,6 +503,20 @@ export default async function activate(
       >['signal'],
     });
   };
+  if (memoryEnabled) {
+    pi.registerTool({
+      name: SESSION_MEMORY_TOOL_NAME,
+      label: 'Session Memory',
+      description: sessionMemoryDescription,
+      parameters: sessionMemoryInput,
+      async execute(_id, input, signal) {
+        const response = await invokeWorkspaceTool(SESSION_MEMORY_TOOL_NAME, input, signal, 5000);
+        const result: unknown = await response.json();
+        if (!response.ok) throw new Error(`Session Memory unavailable (${response.status}).`);
+        return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
+      },
+    });
+  }
   for (const tool of repositoryTools()) {
     registerRepositoryTool(pi, tool, async (input, signal) => {
       const response = await invokeWorkspaceTool(

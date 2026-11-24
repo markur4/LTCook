@@ -1,4 +1,7 @@
-import { REPOSITORY_TOOL_NAMES } from '../paseo-plugin/shared/workspace-tools.js';
+import {
+  REPOSITORY_TOOL_NAMES,
+  SESSION_MEMORY_TOOL_NAME,
+} from '../paseo-plugin/shared/workspace-tools.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,6 +43,7 @@ const readTools = new Set([
   'web_enable',
   'ltcook_ried',
   ...REPOSITORY_TOOL_NAMES,
+  SESSION_MEMORY_TOOL_NAME,
 ]);
 export interface PlanningDependencies {
   executionAllowed?(sessionId: string, passId: string): boolean;

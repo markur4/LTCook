@@ -19,6 +19,7 @@ import { RESOLVED_MODEL_METADATA_KEY } from '../paseo-plugin/shared/models.js';
 import { agentEnvironment } from './native-policy.js';
 import { configurePiExtensions } from './pi-settings.js';
 import { isWithin } from '../path-containment.js';
+import { memoryDispatchId } from './paseo-memory.js';
 import { WorkspacePreparationCache } from './workspace-preparation.js';
 export interface PaseoHost {
   api: PaseoApi;
@@ -247,6 +248,7 @@ export async function startPaseoHost(input: {
 }
 
 export async function createPaseoAgentBackend(input: {
+  memoryProvenanceSecret?: string;
   api: PaseoApi;
   python: string;
   runtimeApiUrl: string;
@@ -472,7 +474,12 @@ export async function createPaseoAgentBackend(input: {
     },
     async send(id: string, message: string) {
       // > Scheduling may hand work back to an agent inside its current tool turn.
-      await input.api.agents.ref(id).send(message, { activeTurnBehavior: 'steer' });
+      await input.api.agents.ref(id).send(message, {
+        activeTurnBehavior: 'steer',
+        ...(input.memoryProvenanceSecret
+          ? { messageId: memoryDispatchId(input.memoryProvenanceSecret, id) }
+          : {}),
+      });
     },
     async close(id: string) {
       await input.api.agents.ref(id).archive();

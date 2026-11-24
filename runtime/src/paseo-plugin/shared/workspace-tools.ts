@@ -1,3 +1,4 @@
+export const SESSION_MEMORY_TOOL_NAME = 'session-memory';
 export const WORKSPACE_MCP_SERVER = 'ltcook_workspace';
 export const REPO_SEARCH_TIMEOUT_MS = 120_000;
 export const REPO_SEARCH_TOOL_NAME = 'ltcook_repo_search';

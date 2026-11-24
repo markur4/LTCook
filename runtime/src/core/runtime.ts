@@ -25,7 +25,12 @@ import { CoordinationStore } from '../storage/coordination.js';
 import { canonicalWorkspace } from './workspace.js';
 import type { RiedService } from '../repository/discovery.js';
 import type { RiedRequest } from '../repository/requests.js';
-import { REPOSITORY_TOOL_NAMES } from '../paseo-plugin/shared/workspace-tools.js';
+import {
+  REPOSITORY_TOOL_NAMES,
+  SESSION_MEMORY_TOOL_NAME,
+} from '../paseo-plugin/shared/workspace-tools.js';
+
+import type { SessionMemory } from '../session-memory/service.js';
 
 type RuntimeOptions = {
   databasePath: string;
@@ -34,6 +39,8 @@ type RuntimeOptions = {
   agents: AgentBackend;
   stateDirectory?: string;
   ried?: RiedService;
+  memory?: SessionMemory;
+  memoryDelegation?: boolean;
   onEvent?: (event: RuntimeEvent) => void;
   evaluation?: { sessionId: string; toolBudget?: number };
 };
@@ -61,7 +68,7 @@ export class RuntimeController implements RuntimeControllerContract {
   private readonly initializedSessions = new Set<string>();
   private readonly initializingSessions = new Map<string, Promise<void>>();
   private readonly scheduling = new Map<string, Promise<void>>();
-  constructor(options: RuntimeOptions) {
+  constructor(private readonly options: RuntimeOptions) {
     this.defaultTeam = options.team;
     this.teams = options.teams ?? new TeamRegistry(options.team ? [options.team] : []);
     this.evaluationSessionId = options.evaluation?.sessionId;
@@ -588,6 +595,7 @@ Task to register: ${input.description}`,
           ...command,
           nativeAgentId: actor.nativeAgentId,
         });
+        this.options.memory?.finalize(actor.nativeAgentId);
         this.emit({
           type: 'assignment.reported',
           sessionId,
@@ -613,8 +621,11 @@ Task to register: ${input.description}`,
           throw new Error('Agents may update only Steps belonging to their assigned tasks');
         return this.store.updateStep(sessionId, command);
       }
-      case 'review.create':
-        return this.createReview(sessionId, actor, identity, command);
+      case 'review.create': {
+        const review = this.createReview(sessionId, actor, identity, command);
+        if (actor.kind === 'agent') this.options.memory?.finalize(actor.nativeAgentId);
+        return review;
+      }
       case 'approval.create':
         if (actor.kind !== 'user')
           throw new Error('Only the trusted user route can create approvals');
@@ -1167,7 +1178,67 @@ Task to register: ${input.description}`,
     return this.store.putBinding({ ...binding, state: 'closed' });
   }
 
+  memoryPeers(agentId: string, workspaceRoot: string): string[] {
+    if (this.closed) return [];
+    const workspace = canonicalWorkspace(workspaceRoot);
+    const sessions = this.store
+      .listSessions()
+      .filter((session) => session.workspaceRoot === workspace);
+    const memberships = sessions.map((session) => ({
+      team: session.teamInstanceId,
+      agents: this.store
+        .listBindings(session.id)
+        .flatMap((binding) =>
+          binding.state === 'bound' && binding.nativeAgentId ? [binding.nativeAgentId] : [],
+        ),
+    }));
+    const teams = new Set(
+      memberships.filter(({ agents }) => agents.includes(agentId)).map(({ team }) => team),
+    );
+    return [
+      ...new Set(memberships.filter(({ team }) => teams.has(team)).flatMap(({ agents }) => agents)),
+    ];
+  }
+
   private async deliverAssignment(assignment: Assignment): Promise<void> {
+    let supplemental = '';
+    const memory = this.options.memoryDelegation === false ? undefined : this.options.memory;
+    const session = this.session(assignment.sessionId);
+    const task = this.store.getTask(session.id, assignment.taskId);
+    const leader = this.store
+      .listBindings(session.id)
+      .find(
+        (binding) =>
+          binding.state === 'bound' &&
+          binding.memberKey === this.teamFor(session).definition.leaderKey,
+      );
+    if (memory && leader?.nativeAgentId && leader.nativeAgentId !== assignment.nativeAgentId) {
+      const unavailable = 'Supplemental Session Memory. This context is potentially incomplete.';
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        supplemental = await Promise.race([
+          memory.handoff(
+            leader.nativeAgentId,
+            `${task.title} ${task.description} ${task.acceptance} ${assignment.handoff}`,
+          ),
+          new Promise<string>((resolve) => {
+            timer = setTimeout(() => resolve(unavailable), 500);
+          }),
+        ]);
+      } catch {
+        supplemental = unavailable;
+      } finally {
+        clearTimeout(timer);
+      }
+      if (this.store.getAssignment(session.id, assignment.id).status !== 'pending') return;
+      if (
+        task.scheduled &&
+        task.passId &&
+        (!this.executionAllowed(session.id, task.passId) ||
+          this.taskGates(session.id, this.store.getTask(session.id, task.id)).length)
+      )
+        return;
+    }
     this.emit({
       type: 'assignment.dispatch',
       sessionId: assignment.sessionId,
@@ -1179,7 +1250,7 @@ Task to register: ${input.description}`,
     try {
       await this.agents.send(
         assignment.nativeAgentId,
-        `Assignment ID: ${assignment.id}. Task ID: ${assignment.taskId}. Attempt: ${assignment.attempt ?? 1}.\n${assignment.handoff}`,
+        `Assignment ID: ${assignment.id}. Task ID: ${assignment.taskId}. Attempt: ${assignment.attempt ?? 1}.\n${assignment.handoff}${supplemental ? `\n\n${supplemental}` : ''}`,
       );
       if (this.store.getAssignment(assignment.sessionId, assignment.id).status === 'sending')
         this.store.updateAssignment(assignment.sessionId, assignment.id, 'sent');
@@ -1359,6 +1430,7 @@ Task to register: ${input.description}`,
         'ltcook_team',
         'ltcook_ried',
         ...REPOSITORY_TOOL_NAMES,
+        SESSION_MEMORY_TOOL_NAME,
         'web_enable',
       ].includes(toolName)
     )
