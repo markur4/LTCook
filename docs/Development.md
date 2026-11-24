@@ -496,6 +496,28 @@ final answer. This field is `null` when no citation qualifies. Compare paired
 correctness before timing. Live runs are opt-in. Normal CI type-checks the
 runner and tests the deterministic graders.
 
+For a spot check of natural stopping, the native Paseo fixture can also send
+three questions to an installed loopback Ollama model. It starts ordinary Pi
+sessions with built-in tools disabled so the cases exercise workspace MCP. The
+cases cover citations to adjacent source lines, a successful empty search, and
+missing ColGREP assets. The fixture records the model's outcome, evidence
+grade, and tool calls without steering or retrying the answer. The fixture's
+scripted summarizer rejects live requests. Run the check with the checkout's
+native test prerequisites and the selected model already installed.
+
+```shell
+bun run build
+fixture=$(mktemp -d)
+env -i HOME="$fixture" PATH="$PATH" PI_OFFLINE=1 DO_NOT_TRACK=1 \
+  LTCOOK_COLGREP_DEPLOYMENT="$LTCOOK_COLGREP_DEPLOYMENT" \
+  LTCOOK_NATIVE_PI_MODEL=qwen3.5:4b-q8_0 \
+  bun tests/runtime/system/paseo-workspace-mcp.ts "$fixture"
+```
+
+The existing scripted native checks still gate transport correctness. The
+optional live observations are descriptive. Choosing a model here applies only
+to these evaluation turns.
+
 #### Optional Codex diagnostics
 
 With the Codex CLI authenticated, use `--codex` to run the two-case guided

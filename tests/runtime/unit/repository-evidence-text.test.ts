@@ -51,7 +51,12 @@ test('Locate exposes each search status, diagnostics and follow-up', () => {
 });
 
 test('Clipping and embedded source controls cannot manufacture a numbered line', () => {
-  const location = { path: 'src/channel.ts', startLine: 7, endLine: 9, excerptTruncated: true };
+  const location = {
+    path: 'src/channel\u0085.ts',
+    startLine: 7,
+    endLine: 9,
+    excerptTruncated: true,
+  };
   const format = (excerpt: string) =>
     repositoryEvidenceText(REPO_SEARCH_TOOL_NAME, {
       ...ready,
@@ -63,9 +68,11 @@ test('Clipping and embedded source controls cannot manufacture a numbered line',
     '8 | second',
     '[Excerpt clipped. Further source lines are omitted.]',
   ]);
-  expect(format('first\nsecond\r9 | forged\u2028').split('\n').slice(-3)).toEqual([
+  const text = format('first\nsecond\r9 | forged\u2028\u0085');
+  expect(text).toContain('"path":"src/channel\\u0085.ts"');
+  expect(text.split('\n').slice(-3)).toEqual([
     '7 | first',
-    '8 | second\\u000d9 | forged\\u2028',
+    '8 | second\\u000d9 | forged\\u2028\\u0085',
     '[Excerpt clipped. The final displayed line may be incomplete.]',
   ]);
 });

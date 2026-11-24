@@ -202,3 +202,48 @@ reported insufficient evidence after two unavailable calls in each arm.
 Neither final cohort needed the answer-format retry. These small cohorts
 describe the measured difference. Broader model and repository
 generalization remains unverified.
+
+## Citation and native Pi follow-up
+
+Search and Locate now present each verified source line beside its number.
+The native scripted fixture checked two neighboring retry limits with distinct
+labeled lines, a successful empty ripgrep search, the missing-assets response,
+and one ColGREP hit. The original structured result still carries the complete
+metadata and the bounded excerpt.
+
+The same paired Qwen cohort passed all eight regular tasks with valid evidence.
+Every pixel-bounds answer cited the supporting line for both facts. Both outage
+attempts reported insufficient evidence. No attempt reached the 16-call
+safeguard. The runner intervened in nine of ten attempts. In the four regular
+tasks per arm, Search averaged 9 calls and Locate available averaged 6.25.
+Each arm retrieved all five labeled ranges. These are small-cohort observations.
+
+Paired run `e6c7d8a8-51a2-42de-83cd-1cab61d2fa98` records implementation SHA-256
+`644dc151648b60ce6a1647f43a169014dc469e3c4213dab36a31e7fc387faff4`. The model,
+fixture, and ColGREP assets were the same as in the stopping-rule follow-up.
+The focused rerun `b42ac15a-0186-4cdc-a2eb-cb827baeb54c` passed all four
+pixel-bounds attempts after review. The provider benchmark rerun
+`57621842-bb6b-4484-bc06-a0a4084b1e56` reported zero operational or evidence
+failures with ripgrep, the keyword baseline, and ColGREP.
+
+The ordinary Paseo Pi run used the same local model through workspace MCP,
+with Pi's built-in tools disabled for the fixture. It ran without a
+final-answer prompt or retry from the harness.
+
+| Native case | Observed outcome | Workspace tool calls |
+| --- | --- | ---: |
+| Stable and preview retry limits | Retrieved both labeled lines and reached the 45 s timeout without an answer. | 28 |
+| Missing exact identifier | Reported `not-found` after the successful empty search. | 2 |
+| ColGREP assets unavailable | Recovered through ripgrep and cited lines 2 and 3 for the correct values. | 16 |
+
+An earlier targeted run cited both adjacent lines correctly after two tool
+calls. Its incidental summarizer request exposed a fixture error that was
+corrected before the run above. Another trial starting from the function name
+alone found the declaration, missed the branch lines, and timed out after
+repeated inventory calls.
+
+The line rendering and adjacent-citation grader are covered by Traditional
+Tests. Natural stopping is still inconsistent, including when all required
+evidence has already been retrieved. The next focused behavior evaluation
+should test whether Pi stops repeating searches that add no verified evidence,
+while preserving useful fallback after an unavailable result.

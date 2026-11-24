@@ -89,6 +89,12 @@ const provider = createServer(async (request, response) => {
     for await (const data of request) text += data;
     const input = JSON.parse(text);
     if (request.url === '/api/chat') {
+      if (liveCalls.size) {
+        response
+          .writeHead(422)
+          .end('Summarization is unavailable during the live repository check.');
+        return;
+      }
       assert.equal(input.model, summaryModel);
       assert.equal(input.messages[1]?.content, material);
       response.writeHead(200, { 'content-type': 'application/json' });
@@ -450,8 +456,11 @@ async function exerciseLive(
       }),
     );
   } finally {
-    liveCalls.delete(agent.id);
-    await agent.archive();
+    try {
+      await agent.archive();
+    } finally {
+      liveCalls.delete(agent.id);
+    }
   }
 }
 async function stop() {
