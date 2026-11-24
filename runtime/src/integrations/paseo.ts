@@ -1,6 +1,7 @@
 import type { Telemetry } from '../diagnostics/telemetry.js';
 import type { PlanningDialogEvent } from './planning-dialogs.js';
 import { createHostClient } from '@getpaseo/client/node';
+import type { ProviderSubagentDescriptorPayload } from '@getpaseo/protocol/messages';
 import { createPaseoApi, type PaseoApi } from '@getpaseo/client';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +30,7 @@ export interface PaseoHost {
   api: PaseoApi;
   listen: string;
   logPath: string;
+  listProviderSubagents(agentId: string): Promise<ProviderSubagentDescriptorPayload[]>;
   subscribePlanningDialogs(handler: (event: PlanningDialogEvent) => Promise<void>): () => void;
   close(): Promise<void>;
 }
@@ -189,6 +191,11 @@ export async function startPaseoHost(input: {
       api,
       listen: instance.listen,
       logPath: daemonLogPath(home),
+      async listProviderSubagents(agentId) {
+        const result = await connectedClient.listProviderSubagents(agentId, { timeout: 3000 });
+        if (result.error) throw new Error('Provider subagents are unavailable.');
+        return result.subagents;
+      },
       subscribePlanningDialogs(handler) {
         const feed = connectedClient.observeEvents([
           'agent_permission_request',

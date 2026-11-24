@@ -11,6 +11,14 @@ import { isWithin } from '../../path-containment.js';
 import { RepositorySourceReader } from '../evidence.js';
 import type { RepositoryDiagnostic, RepositoryRetrieval } from '../results.js';
 import type { RepositoryWorkspace } from '../workspace.js';
+import {
+  type ColgrepStatus,
+  inspectColgrepIndex,
+  missing,
+  startColgrepOperation,
+} from './colgrep-status.js';
+
+export type { ColgrepStatus } from './colgrep-status.js';
 
 export const COLGREP_MAX_RESULTS = 20;
 const MAX_STDOUT = 4 * 1024 * 1024;
@@ -71,6 +79,15 @@ class ColgrepCommandLimitError extends Error {
 
 class ColgrepPatternError extends Error {}
 
+function indexContended(stderr: string): boolean {
+  return stderr
+    .split('\n')
+    .some(
+      (line) =>
+        line.trim() === 'Error: colgrep index is currently being built, rely on grep for now.',
+    );
+}
+
 function confinedPath(root: string, relative: string): string {
   const candidate = path.resolve(root, relative);
   if (path.isAbsolute(relative) || !isWithin(root, candidate)) {
@@ -104,11 +121,7 @@ async function verifyFile(
   previous.set(file, { identity, digest });
 }
 
-async function loadAssets(
-  deployment: string | undefined,
-  verified: Map<string, VerifiedFile>,
-  signal: AbortSignal,
-) {
+async function readAssets(deployment: string | undefined, signal?: AbortSignal) {
   let repair = REPAIR;
   try {
     if (!deployment || !path.isAbsolute(deployment)) throw new Error('Missing managed deployment.');
@@ -142,34 +155,64 @@ async function loadAssets(
       repair = `Move unexpected files out of the managed ColGREP model directory. ${REPAIR}`;
       throw new Error('The managed model directory contains unverified entries.');
     }
-    for (const [file, digest] of files) await verifyFile(file, digest, verified, signal);
-    return { root, binary, library, model };
+    const binding = JSON.stringify([root, binary, library, model, [...files].sort()]);
+    return { root, binary, library, model, files, binding };
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw new Error(`ColGREP assets are missing or invalid. ${repair}`, { cause: error });
+  }
+}
+
+async function loadAssets(
+  deployment: string | undefined,
+  verified: Map<string, VerifiedFile>,
+  signal: AbortSignal,
+) {
+  const assets = await readAssets(deployment, signal);
+  try {
+    for (const [file, digest] of assets.files) await verifyFile(file, digest, verified, signal);
+    return assets;
   } catch (error) {
     signal.throwIfAborted();
-    throw new Error(`ColGREP assets are missing or invalid. ${repair}`, { cause: error });
+    throw new Error(`ColGREP assets are missing or invalid. ${REPAIR}`, { cause: error });
   }
 }
 
 async function getIndexDirectory(
   cache: string | undefined,
-  workspace: string,
-  identity: string,
-): Promise<string> {
+  workspace: RepositoryWorkspace,
+  create: true,
+): Promise<string>;
+async function getIndexDirectory(
+  cache: string | undefined,
+  workspace: RepositoryWorkspace,
+  create: false,
+): Promise<string | undefined>;
+async function getIndexDirectory(
+  cache: string | undefined,
+  workspace: RepositoryWorkspace,
+  create: boolean,
+): Promise<string | undefined> {
   try {
     if (!cache || !path.isAbsolute(cache)) throw new Error('Missing AppRC cache path.');
-    await mkdir(cache, { recursive: true, mode: 0o700 });
+    if (create) await mkdir(cache, { recursive: true, mode: 0o700 });
     const root = await realpath(cache);
-    const key = createHash('sha256').update(workspace).update('\0').update(identity).digest('hex');
+    const key = createHash('sha256')
+      .update(workspace.root)
+      .update('\0')
+      .update(workspace.identity)
+      .digest('hex');
     const scope = path.join(root, key);
     const indices = path.join(scope, 'indices');
     for (const directory of [scope, indices]) {
-      await mkdir(directory, { recursive: true, mode: 0o700 });
+      if (create) await mkdir(directory, { recursive: true, mode: 0o700 });
       if (!(await lstat(directory)).isDirectory() || (await realpath(directory)) !== directory) {
         throw new Error('Linked index storage.');
       }
     }
     return indices;
   } catch (error) {
+    if (!create && missing(error)) return undefined;
     throw new Error(
       'ColGREP cannot open its AppRC index storage. Check that the cache is writable.',
       {
@@ -211,6 +254,7 @@ function execute(
   args: string[],
   indices: string,
   signal: AbortSignal,
+  onProcess: (pid: number | undefined) => void,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   signal.throwIfAborted();
   const windows = process.platform === 'win32';
@@ -231,6 +275,8 @@ function execute(
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
+    child.once('spawn', () => onProcess(child.pid));
+    child.once('exit', () => onProcess(undefined));
     let failure: unknown;
     let stdout = '';
     let stderr = '';
@@ -299,6 +345,50 @@ function searchFailure(stderr: string, pattern?: string): Error {
   return new Error(
     'ColGREP search failed. Check that the workspace and AppRC cache are available.',
   );
+}
+
+async function runIndexOperation(
+  assets: Awaited<ReturnType<typeof loadAssets>>,
+  workspace: RepositoryWorkspace,
+  indices: string,
+  args: string[],
+  signal: AbortSignal,
+  pattern?: string,
+) {
+  const operation = startColgrepOperation(indices, assets.binding, workspace);
+  const interrupted = {
+    activity: 'interrupted',
+    diagnostic: 'ColGREP was interrupted. Retry repository search to resume indexing if needed.',
+  } as const;
+  let outcome: Parameters<typeof operation.finish>[0] = {
+    activity: 'error',
+    diagnostic: 'ColGREP could not run. Check the managed installation and AppRC cache.',
+  };
+  try {
+    const result = await execute(assets, args, indices, signal, operation.setPid);
+    const failure = result.code === 0 ? undefined : searchFailure(result.stderr, pattern);
+    if (!failure || failure instanceof ColgrepPatternError) {
+      outcome = { activity: 'idle', diagnostic: null };
+    } else if (indexContended(result.stderr)) {
+      // > v1.8.5 also reports contention if the nonblocking lock operation fails.
+      outcome = {
+        activity: 'unknown',
+        diagnostic: 'ColGREP could not verify an index lock. Retry when index work finishes.',
+      };
+    } else if (/^Error: Indexing (interrupted|cancelled) by user\b/m.test(result.stderr)) {
+      outcome = interrupted;
+    } else {
+      outcome = { activity: 'error', diagnostic: failure.message };
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof ColgrepCommandLimitError) {
+      outcome = { activity: 'error', diagnostic: error.message };
+    }
+    throw error;
+  } finally {
+    operation.finish(signal.aborted ? interrupted : outcome);
+  }
 }
 
 function nativePath(file: string): string {
@@ -408,18 +498,40 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
   const cache = options.cacheDirectory ?? process.env.LTCOOK_COLGREP_CACHE_DIR;
   const timeoutMs = options.timeoutMs ?? REPO_SEARCH_TIMEOUT_MS;
   return {
+    /** Read status for a caller-authorized workspace without running native ColGREP. */
+    async readStatus(workspace: RepositoryWorkspace): Promise<ColgrepStatus> {
+      let failure = 'The authorized workspace is unavailable.';
+      try {
+        await workspace.assertUnchanged();
+        failure = `ColGREP assets are missing or invalid. ${REPAIR}`;
+        const assets = await readAssets(deployment);
+        await Promise.all([...assets.files.keys()].map((file) => regularFile(file)));
+        failure = 'ColGREP could not read its AppRC index storage.';
+        const indices = await getIndexDirectory(cache, workspace, false);
+        const status: ColgrepStatus = indices
+          ? await inspectColgrepIndex(indices, assets.model, assets.binding, workspace)
+          : { availability: 'not-ready', activity: 'idle', diagnostic: null };
+        failure = 'The authorized workspace is unavailable.';
+        await workspace.assertUnchanged();
+        return status;
+      } catch {
+        return { availability: 'unavailable', activity: 'error', diagnostic: failure };
+      }
+    },
+
     /** Build the same native index without searching and return the native command's elapsed time. */
     async buildIndex(workspace: RepositoryWorkspace, callerSignal: AbortSignal): Promise<number> {
       const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(timeoutMs)]);
       signal.throwIfAborted();
       const assets = await loadAssets(deployment, verifiedFiles, signal);
-      const indices = await getIndexDirectory(cache, workspace.root, workspace.identity);
+      const indices = await getIndexDirectory(cache, workspace, true);
       await workspace.assertUnchanged();
       const started = performance.now();
-      const result = await execute(
+      const result = await runIndexOperation(
         assets,
-        ['init', '--model', assets.model, '--', workspace.root],
+        workspace,
         indices,
+        ['init', '--model', assets.model, '--', workspace.root],
         signal,
       );
       const elapsedMs = performance.now() - started;
@@ -458,7 +570,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         const filters = paths.some(({ filter }) => !filter) ? [] : paths;
         const candidateLimit = (filters.length ? COLGREP_MAX_RESULTS : limit) + 1;
         const assets = await loadAssets(deployment, verifiedFiles, signal);
-        const indices = await getIndexDirectory(cache, workspace.root, workspace.identity);
+        const indices = await getIndexDirectory(cache, workspace, true);
         const args = [
           'search',
           '--json',
@@ -474,17 +586,16 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
           workspace.root,
         ];
         await workspace.assertUnchanged();
-        const result = await execute(assets, args, indices, signal);
+        const result = await runIndexOperation(
+          assets,
+          workspace,
+          indices,
+          args,
+          signal,
+          input.pattern,
+        );
         if (result.code !== 0) {
-          if (
-            result.stderr
-              .split('\n')
-              .some(
-                (line) =>
-                  line.trim() ===
-                  'Error: colgrep index is currently being built, rely on grep for now.',
-              )
-          ) {
+          if (indexContended(result.stderr)) {
             outcome.value.status = 'indexing';
             outcome.freshness = 'unknown';
             report(

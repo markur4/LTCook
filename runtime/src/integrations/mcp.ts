@@ -14,6 +14,7 @@ import {
 import type { ToolDefinition, ToolContext } from '../tools/types.js';
 import { isRepositoryTool } from '../paseo-plugin/shared/workspace-tools.js';
 import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
+import { openRepositoryWorkspace } from '../repository/workspace.js';
 import type { WebToolService } from '../tools/web.js';
 
 type Grant = {
@@ -98,6 +99,15 @@ export class WorkspaceMcp {
     this.tokens.set(grant.token, grant);
     await previous;
     return grant.token;
+  }
+
+  async repositorySearchWorkspace(agentId: string) {
+    const grant = this.grants.get(agentId);
+    if (!grant?.repositorySearchAccess) return undefined;
+    const workspace = await openRepositoryWorkspace(grant.workspaceRoot).catch(() => undefined);
+    if (this.grants.get(agentId) !== grant || workspace?.identity !== grant.workspaceIdentity)
+      return undefined;
+    return workspace;
   }
 
   async invokeTool(

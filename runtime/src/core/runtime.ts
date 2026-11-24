@@ -30,7 +30,7 @@ import {
   SESSION_MEMORY_TOOL_NAME,
 } from '../paseo-plugin/shared/workspace-tools.js';
 
-import type { SessionMemory } from '../session-memory/service.js';
+import type { MemoryHandoffObservation, SessionMemory } from '../session-memory/service.js';
 import type { MemoryScope } from '../session-memory/units.js';
 
 type RuntimeOptions = {
@@ -1248,7 +1248,7 @@ Task to register: ${input.description}`,
   }
 
   private async deliverAssignment(assignment: Assignment): Promise<void> {
-    let supplemental = '';
+    let supplemental: { text: string; payload?: MemoryHandoffObservation } = { text: '' };
     const memory = this.options.memoryDelegation === false ? undefined : this.options.memory;
     const session = this.session(assignment.sessionId);
     const task = this.store.getTask(session.id, assignment.taskId);
@@ -1260,15 +1260,23 @@ Task to register: ${input.description}`,
           binding.memberKey === this.teamFor(session).definition.leaderKey,
       );
     if (memory && leader?.nativeAgentId && leader.nativeAgentId !== assignment.nativeAgentId) {
-      const unavailable = 'Supplemental Session Memory. This context is potentially incomplete.';
+      const unavailable = {
+        text: 'Supplemental Session Memory. This context is potentially incomplete.',
+      };
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let payload: MemoryHandoffObservation | undefined;
       try {
         supplemental = await Promise.race([
-          memory.handoff(
-            leader.nativeAgentId,
-            `${task.title} ${task.description} ${task.acceptance} ${assignment.handoff}`,
-          ),
-          new Promise<string>((resolve) => {
+          memory
+            .handoff(
+              leader.nativeAgentId,
+              `${task.title} ${task.description} ${task.acceptance} ${assignment.handoff}`,
+              (observation) => {
+                payload = observation;
+              },
+            )
+            .then((text) => ({ text, payload })),
+          new Promise<typeof unavailable>((resolve) => {
             timer = setTimeout(() => resolve(unavailable), 500);
           }),
         ]);
@@ -1303,11 +1311,15 @@ Task to register: ${input.description}`,
       memberKey: assignment.memberKey,
     });
     this.store.updateAssignment(assignment.sessionId, assignment.id, 'sending');
+    const confirmMemoryDelivery =
+      supplemental.payload &&
+      memory?.prepareDelivery(assignment.sessionId, assignment.nativeAgentId, supplemental.payload);
     try {
       await this.agents.send(
         assignment.nativeAgentId,
-        `Assignment ID: ${assignment.id}. Task ID: ${assignment.taskId}. Attempt: ${assignment.attempt ?? 1}.\n${assignment.handoff}${supplemental ? `\n\n${supplemental}` : ''}`,
+        `Assignment ID: ${assignment.id}. Task ID: ${assignment.taskId}. Attempt: ${assignment.attempt ?? 1}.\n${assignment.handoff}${supplemental.text ? `\n\n${supplemental.text}` : ''}`,
       );
+      confirmMemoryDelivery?.();
       if (this.store.getAssignment(assignment.sessionId, assignment.id).status === 'sending')
         this.store.updateAssignment(assignment.sessionId, assignment.id, 'sent');
       this.emit({
@@ -1319,8 +1331,10 @@ Task to register: ${input.description}`,
       });
     } catch (error) {
       // > A native result proves delivery even when its transport acknowledgement arrives late.
-      if (this.store.getAssignment(assignment.sessionId, assignment.id).status === 'reported')
+      if (this.store.getAssignment(assignment.sessionId, assignment.id).status === 'reported') {
+        confirmMemoryDelivery?.();
         return;
+      }
       this.store.updateAssignment(assignment.sessionId, assignment.id, 'uncertain');
       this.store.updateTask(assignment.sessionId, {
         taskId: assignment.taskId,

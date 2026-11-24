@@ -2,6 +2,7 @@ import { SidebarRow } from '@getpaseo/plugin/client/ui';
 import type { PluginClientContext } from '@getpaseo/plugin/client';
 import { TeamsBrowser } from './client/screens/TeamsBrowser';
 import { TeamStatus } from './client/screens/TeamStatus';
+import { ACTIVITY_PANEL_ID, ActivityPanel } from './client/screens/ActivityPanel';
 import { TeamComposerItem } from './client/components/TeamComposerItem';
 import { ModelComposerItem } from './client/components/ModelComposerItem';
 import { PastedTextComposerItem } from './client/components/PastedTextComposerItem';
@@ -35,6 +36,22 @@ export default function contribute(client: PluginClientContext) {
       title: 'Team',
       icon: 'Users',
       Component: TeamStatus,
+    }),
+    client.addAgentPanel({
+      id: ACTIVITY_PANEL_ID,
+      title: 'Activity',
+      icon: 'Activity',
+      locations: ['explorer'],
+      Component: (props) => <ActivityPanel {...props} client={client} />,
+    }),
+    client.addCommandCenterItem({
+      id: 'open-activity-panel',
+      title: 'Open Activity panel',
+      icon: 'Activity',
+      context: 'agent',
+      onSelect({ openPanel }) {
+        openPanel(ACTIVITY_PANEL_ID, { location: 'explorer' });
+      },
     }),
     client.addComposerItem({ id: 'team-selector', Component: TeamComposerItem }),
     client.addComposerItem({ id: 'model-selector', Component: ModelComposerItem }),

@@ -3,6 +3,8 @@ import type { PaseoApi } from '@getpaseo/client';
 import { z } from 'zod';
 import { defineRpc, PluginAttachmentItemSchema } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
+import { activitySubscription } from './shared/activity';
+import { observeActivity, observedTimestamp } from './server/activity';
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
 import {
@@ -211,7 +213,199 @@ async function listSessions(input: z.infer<typeof SessionListRequestSchema>, pas
   };
 }
 
+const activityServices = z.object({
+  rag: z.object({
+    availability: z.enum(['ready', 'not-ready', 'unavailable', 'unknown']),
+    activity: z.enum([
+      'idle',
+      'checking',
+      'indexing',
+      'updating',
+      'interrupted',
+      'error',
+      'unknown',
+    ]),
+    diagnostic: z.string().nullable(),
+  }),
+  workspace: z.object({ root: z.string(), identity: z.string() }).optional(),
+  task: z.string().optional(),
+  memoryDisabled: z.boolean().optional(),
+  memory: z
+    .object({
+      summarization: z.enum([
+        'summarizing',
+        'queued',
+        'up-to-date',
+        'below-threshold',
+        'failed',
+        'unknown',
+      ]),
+      lastSuccessfulSummaryAt: z.string().nullable(),
+      lastError: z.object({ message: z.string() }).nullable(),
+      stored: z
+        .object({ uamp: z.number().int().nonnegative(), aab: z.number().int().nonnegative() })
+        .nullable(),
+      lastDelivered: z
+        .object({
+          sourceAgentId: z.string(),
+          recipientAgentId: z.string(),
+          deliveredAt: z.string(),
+          bytes: z.number().int().nonnegative(),
+          uamp: z.number().int().nonnegative(),
+          aab: z.number().int().nonnegative(),
+        })
+        .nullable(),
+      pendingUamp: z.number().int().nonnegative().nullable(),
+      pendingAab: z.number().int().nonnegative().nullable(),
+    })
+    .optional(),
+  subagents: z
+    .array(
+      z.object({
+        id: z.string(),
+        parentAgentId: z.string(),
+        parentSubagentId: z.string().nullable().optional(),
+        provider: z.string(),
+        title: z.string().nullable(),
+        status: z.enum(['running', 'completed', 'failed', 'canceled']),
+        updatedAt: z.string(),
+        cwd: z.string().nullable().optional(),
+      }),
+    )
+    .optional(),
+});
+
 export default function contribute(server: PluginServerContext) {
+  server.handle(activitySubscription, ({ agentId }, { paseo, signal, push }) =>
+    observeActivity(
+      paseo,
+      agentId,
+      signal,
+      push,
+      async (agent, observerSignal) => {
+        const sessionId = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
+        const { endpoint, headers } = runtimeConfig();
+        const response = await fetch(`${endpoint}/v1/activity/services`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ nativeAgentId: agent.id, sessionId }),
+          signal: AbortSignal.any([observerSignal, AbortSignal.timeout(5000)]) as NonNullable<
+            Parameters<typeof fetch>[1]
+          >['signal'],
+        }).catch(() => undefined);
+        const parsed = activityServices.safeParse(
+          response?.ok ? await response.json().catch(() => undefined) : undefined,
+        );
+        const services = parsed.success ? parsed.data : undefined;
+        const workspace = services?.workspace;
+        const memory = services?.memory;
+        const delivery = memory?.lastDelivered;
+        const source = delivery?.sourceAgentId
+          ? (
+              await paseo.agents
+                .ref(delivery.sourceAgentId)
+                .refresh()
+                .catch(() => null)
+            )?.agent.title
+          : undefined;
+        return {
+          task: services?.task,
+          providerSubagents: (services?.subagents ?? [])
+            .filter((child) => child.parentAgentId === agent.id && !child.parentSubagentId)
+            .map((child) => ({
+              id: child.id,
+              name: child.title || child.provider,
+              worktree: child.cwd
+                ? { id: child.cwd, name: path.basename(child.cwd) || child.cwd, path: child.cwd }
+                : null,
+              status:
+                child.status === 'completed' || child.status === 'canceled'
+                  ? 'finished'
+                  : child.status,
+              updatedAt: observedTimestamp(child.updatedAt),
+              context: null,
+              tools: null,
+              skills: null,
+              canOpenConversation: false,
+            })),
+          rag: {
+            worktree: workspace
+              ? {
+                  id: workspace.identity,
+                  name: path.basename(workspace.root),
+                  path: workspace.root,
+                }
+              : null,
+            provider: 'ColGREP',
+            availability: services?.rag.availability ?? 'unknown',
+            activity: services?.rag.activity ?? 'unknown',
+            ...(services?.rag.diagnostic ? { diagnostic: services.rag.diagnostic } : {}),
+          },
+          memory: {
+            scopeLabel: 'Selected agent storage',
+            context: null,
+            contextStage: delivery ? 'delivered' : 'unknown',
+            summarization: services?.memoryDisabled
+              ? 'disabled'
+              : (memory?.summarization ?? 'unknown'),
+            lastSummaryAt: memory?.lastSuccessfulSummaryAt
+              ? observedTimestamp(memory.lastSuccessfulSummaryAt)
+              : null,
+            pendingUamp: memory?.pendingUamp ?? null,
+            pendingAab: memory?.pendingAab ?? null,
+            uamp: { inContext: null, stored: memory?.stored?.uamp ?? null },
+            aab: { inContext: null, stored: memory?.stored?.aab ?? null },
+            ...(memory?.lastError?.message ? { diagnostic: memory.lastError.message } : {}),
+            ...(delivery
+              ? {
+                  sourceLabel: source ?? 'Leader',
+                  recipientLabel: agent.title ?? 'Selected agent',
+                  lastDelivery: {
+                    at: observedTimestamp(delivery.deliveredAt),
+                    bytes: delivery.bytes,
+                    uamp: delivery.uamp,
+                    aab: delivery.aab,
+                  },
+                }
+              : {}),
+          },
+        };
+      },
+      async (agent) => {
+        const sessionId = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
+        if (!sessionId) return undefined;
+        const reports = z
+          .array(
+            z.object({
+              id: z.string(),
+              inspection: z.object({
+                resources: z.array(
+                  z.object({
+                    name: z.string(),
+                    path: z.string(),
+                    kind: z.enum(['skill', 'rule']),
+                    applicable: z.boolean(),
+                    loaded: z.boolean(),
+                  }),
+                ),
+              }),
+            }),
+          )
+          .parse(
+            await runtimeJson('/v1/command', {
+              sessionId,
+              command: { type: 'guidance.inspect', nativeAgentId: agent.id },
+            }),
+          );
+        return reports
+          .find((report) => report.id === agent.id)
+          ?.inspection.resources.filter(
+            (resource) => resource.kind === 'skill' && resource.applicable && resource.loaded,
+          );
+      },
+    ),
+  );
+
   server.handle(pastedTextSearchRpc, async () => ({ items: [] }));
   server.handle(discardPastedTextRpc, async ({ id }) => {
     await runtimeJson('/v1/session-memory/paste', { discard: id });

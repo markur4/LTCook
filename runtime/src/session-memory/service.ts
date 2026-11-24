@@ -40,6 +40,49 @@ export interface MemorySource {
   invalidateAttachments?(agentId: string, epoch: string, from?: number): Promise<void>;
 }
 
+type UnitCounts = { uamp: number; aab: number };
+type SummaryOutcome = 'up-to-date' | 'below-threshold' | 'failed' | 'unknown';
+type MemoryError = { at: string; message: string };
+type StoredMemory = UnitCounts & { agentId: string; epoch: string; coveredThrough: number | null };
+type DeliveredMemory = UnitCounts & {
+  sessionId: string;
+  recipientAgentId: string;
+  recipientEpoch: string | null;
+  sourceAgentId: string;
+  sourceEpoch: string;
+  deliveredAt: string;
+  bytes: number;
+};
+
+export type MemoryHandoffObservation = UnitCounts & {
+  bytes: number;
+  sourceAgentId: string;
+  sourceEpoch: string;
+  sourceGeneration: symbol;
+};
+
+export type SessionMemoryStatus = {
+  summarization: SummaryOutcome | 'queued' | 'summarizing';
+  lastSuccessfulSummaryAt: string | null;
+  lastError: MemoryError | null;
+  stored: StoredMemory | null;
+  lastDelivered: DeliveredMemory | null;
+  currentContext: null;
+  pendingUamp: number | null;
+  pendingAab: number | null;
+};
+
+type AgentMemoryActivity = {
+  generation: symbol;
+  epoch?: string;
+  latest?: number;
+  outcome: SummaryOutcome;
+  stored?: StoredMemory;
+  pending?: UnitCounts;
+  lastSuccessfulSummaryAt?: string;
+  lastError?: MemoryError;
+};
+
 type MemoryOptions = {
   databasePath: string;
   source: MemorySource;
@@ -71,6 +114,7 @@ type SearchEntry = {
   truncated?: true;
 };
 type SearchHit = SearchEntry & { agentId: string; epoch: string; score: number };
+type HandoffEvidence = SearchEntry & { summaryId?: string };
 const searchTokens = 2200;
 
 function compareHits(a: SearchHit, b: SearchHit): number {
@@ -81,8 +125,18 @@ function searchCost({ score: _score, ...entry }: SearchHit): number {
   return estimateMemoryTokens(JSON.stringify(entry) + ',');
 }
 
+function handoffLine({ summaryId: _id, ...entry }: HandoffEvidence): string {
+  return JSON.stringify(entry);
+}
+
 function unitId({ type, messages }: MemoryUnit): string {
   return [type, messages[0]!.seq, messages.at(-1)!.seq].join(':');
+}
+
+function countUnits(types: Iterable<MemoryUnit['type']>): UnitCounts {
+  const counts = { uamp: 0, aab: 0 };
+  for (const type of types) counts[type === 'UAMP' ? 'uamp' : 'aab']++;
+  return counts;
 }
 
 function summaryText(summary: StoredMemorySummary): string {
@@ -115,6 +169,20 @@ export class SessionMemory {
   private readonly activeTurns = new Map<string, string>();
   private readonly watchers = new Map<string, () => void>();
   private readonly abort = new AbortController();
+  private readonly activity = new Map<string, AgentMemoryActivity>();
+  private readonly deliveries = new Map<
+    string,
+    {
+      value: DeliveredMemory;
+      sourceGeneration: symbol;
+      recipientGeneration: symbol;
+      order: number;
+    }
+  >();
+  private readonly statusListeners = new Set<() => void>();
+  private statusNotification?: ReturnType<typeof setImmediate>;
+  private inferenceAgentId?: string;
+  private sendOrder = 0;
   private drain?: Promise<void>;
 
   constructor(private readonly options: MemoryOptions) {
@@ -132,6 +200,157 @@ export class SessionMemory {
     )
       throw new Error('Session Memory budgets leave insufficient room for bounded sources.');
     this.store = new MemoryStore(options.databasePath);
+  }
+
+  status(sessionId: string | undefined, agentId: string): SessionMemoryStatus {
+    const activity = this.activity.get(agentId);
+    const delivery = sessionId
+      ? this.deliveries.get(JSON.stringify([sessionId, agentId]))
+      : undefined;
+    const lastDelivered =
+      delivery &&
+      activity?.generation === delivery.recipientGeneration &&
+      this.activity.get(delivery.value.sourceAgentId)?.generation === delivery.sourceGeneration
+        ? { ...delivery.value }
+        : null;
+    return {
+      summarization:
+        this.inferenceAgentId === agentId
+          ? 'summarizing'
+          : this.pending.has(agentId)
+            ? 'queued'
+            : (activity?.outcome ?? 'unknown'),
+      lastSuccessfulSummaryAt: activity?.lastSuccessfulSummaryAt ?? null,
+      lastError: activity?.lastError ? { ...activity.lastError } : null,
+      stored: activity?.stored ? { ...activity.stored } : null,
+      lastDelivered,
+      currentContext: null,
+      pendingUamp: activity?.pending?.uamp ?? null,
+      pendingAab: activity?.pending?.aab ?? null,
+    };
+  }
+
+  subscribeStatus(listener: () => void): () => void {
+    if (this.abort.signal.aborted) return () => {};
+    this.statusListeners.add(listener);
+    return () => this.statusListeners.delete(listener);
+  }
+
+  private notifyStatus(): void {
+    if (this.statusNotification || !this.statusListeners.size) return;
+    this.statusNotification = setImmediate(() => {
+      this.statusNotification = undefined;
+      for (const listener of this.statusListeners) {
+        try {
+          listener();
+        } catch {
+          // > Status observers run independently of memory work and assignment delivery.
+        }
+      }
+    });
+  }
+
+  private agentActivity(agentId: string): AgentMemoryActivity {
+    let activity = this.activity.get(agentId);
+    if (!activity) {
+      activity = { generation: Symbol(), outcome: 'unknown' };
+      this.activity.set(agentId, activity);
+    }
+    return activity;
+  }
+
+  private resetActivity(activity: AgentMemoryActivity): void {
+    activity.generation = Symbol();
+    activity.epoch = undefined;
+    activity.latest = undefined;
+    activity.outcome = 'unknown';
+    activity.stored = undefined;
+    activity.pending = undefined;
+    activity.lastSuccessfulSummaryAt = undefined;
+    activity.lastError = undefined;
+    this.notifyStatus();
+  }
+
+  private noteTimeline(agentId: string, page: MemoryPage): void {
+    const activity = this.agentActivity(agentId);
+    if (
+      page.reset ||
+      (activity.epoch !== undefined && activity.epoch !== page.epoch) ||
+      (activity.latest !== undefined && activity.latest > page.latest)
+    ) {
+      this.resetActivity(activity);
+    } else if (activity.latest !== page.latest) {
+      activity.pending = undefined;
+      if (activity.outcome === 'up-to-date' || activity.outcome === 'below-threshold')
+        activity.outcome = 'unknown';
+      this.notifyStatus();
+    }
+    activity.epoch = page.epoch;
+    activity.latest = page.latest;
+  }
+
+  private noteStored(
+    agentId: string,
+    epoch: string,
+    seq: number,
+    summaries: Iterable<StoredMemorySummary>,
+  ): void {
+    const activity = this.agentActivity(agentId);
+    const types = new Map<string, MemoryUnit['type']>();
+    for (const summary of summaries) if (summary.complete) types.set(summary.id, summary.type);
+    activity.stored = {
+      agentId,
+      epoch,
+      coveredThrough: seq < 0 ? null : seq,
+      ...countUnits(types.values()),
+    };
+    this.notifyStatus();
+  }
+
+  private noteFailure(agentId: string, message: string): void {
+    const activity = this.agentActivity(agentId);
+    activity.outcome = 'failed';
+    activity.lastError = { at: new Date().toISOString(), message };
+    this.notifyStatus();
+  }
+
+  prepareDelivery(
+    sessionId: string,
+    recipientAgentId: string,
+    payload: MemoryHandoffObservation,
+  ): () => void {
+    const recipient = this.agentActivity(recipientAgentId);
+    const recipientGeneration = recipient.generation;
+    const recipientEpoch = recipient.epoch ?? null;
+    const key = JSON.stringify([sessionId, recipientAgentId]);
+    const order = ++this.sendOrder;
+    return () => {
+      const prior = this.deliveries.get(key);
+      if (
+        this.abort.signal.aborted ||
+        recipient.generation !== recipientGeneration ||
+        this.activity.get(payload.sourceAgentId)?.generation !== payload.sourceGeneration ||
+        (prior && prior.order >= order)
+      )
+        return;
+      this.deliveries.set(key, {
+        value: {
+          sessionId,
+          recipientAgentId,
+          recipientEpoch,
+          sourceAgentId: payload.sourceAgentId,
+          sourceEpoch: payload.sourceEpoch,
+          deliveredAt: new Date().toISOString(),
+          bytes: payload.bytes,
+          uamp: payload.uamp,
+          aab: payload.aab,
+        },
+        sourceGeneration: payload.sourceGeneration,
+        recipientGeneration,
+        order,
+      });
+      this.notifyStatus();
+    };
   }
 
   foregroundStarted(id: string): void {
@@ -194,7 +413,10 @@ export class SessionMemory {
       force: !!prior?.force || force,
       queuedAt: prior?.queuedAt ?? performance.now(),
     });
+    const activity = this.agentActivity(agentId);
+    activity.pending = undefined;
     this.startDrain();
+    this.notifyStatus();
   }
 
   private startDrain(): void {
@@ -221,6 +443,10 @@ export class SessionMemory {
     while (this.pending.size && !this.foreground.size && !this.abort.signal.aborted) {
       const [agentId, pending] = this.pending.entries().next().value!;
       this.pending.delete(agentId);
+      const activity = this.agentActivity(agentId);
+      activity.outcome = 'unknown';
+      activity.pending = undefined;
+      this.notifyStatus();
       try {
         if (await this.update(agentId, pending.force, pending.queuedAt)) {
           const next = this.pending.get(agentId);
@@ -228,9 +454,13 @@ export class SessionMemory {
             force: pending.force || !!next?.force,
             queuedAt: pending.queuedAt,
           });
+          this.notifyStatus();
         }
       } catch {
-        if (!this.abort.signal.aborted) this.options.onFailure?.();
+        if (!this.abort.signal.aborted) {
+          this.noteFailure(agentId, 'Session Memory update failed.');
+          this.options.onFailure?.();
+        }
       }
     }
   }
@@ -244,6 +474,7 @@ export class SessionMemory {
       page = await this.options.source.read(agentId);
       state = undefined;
     }
+    this.noteTimeline(agentId, page);
     const { epoch, latest } = page;
     let through = state?.seq ?? -1;
     const messages: MemorySourceMessage[] = [];
@@ -253,7 +484,10 @@ export class SessionMemory {
       if (through >= latest) break;
       page = await this.options.source.read(agentId, { epoch, seq: through });
     }
-    if (page.reset || page.epoch !== epoch) return undefined;
+    if (page.reset || page.epoch !== epoch) {
+      this.noteTimeline(agentId, page);
+      return undefined;
+    }
     return { epoch, latest, through, messages, previous: state?.seq ?? -1 };
   }
 
@@ -266,13 +500,18 @@ export class SessionMemory {
         epoch,
         tail.epoch === epoch && !tail.reset ? tail.latest + 1 : undefined,
       );
-      return false;
+      this.noteTimeline(agentId, tail);
+      return undefined;
     }
-    return true;
+    this.noteTimeline(agentId, tail);
+    return tail;
   }
 
   private async invalidate(agentId: string, epoch: string, from?: number) {
     this.store.invalidate(agentId, epoch, from);
+    const activity = this.activity.get(agentId);
+    if (activity && (activity.epoch === undefined || activity.epoch === epoch))
+      this.resetActivity(activity);
     await this.options.source.invalidateAttachments?.(agentId, epoch, from);
   }
 
@@ -280,7 +519,19 @@ export class SessionMemory {
     const input = await this.readOutstanding(agentId, this.store.state(agentId));
     if (!input) return false;
     const { epoch, latest, through, messages, previous } = input;
-    if (through <= previous) return false;
+    const activity = this.agentActivity(agentId);
+    if (through <= previous) {
+      if (!activity.stored) {
+        this.noteStored(agentId, epoch, previous, this.store.summaries(agentId, epoch));
+      }
+      if (activity.latest === previous && !this.activeTurns.has(agentId)) {
+        activity.outcome = 'up-to-date';
+        activity.lastError = undefined;
+        activity.pending = { uamp: 0, aab: 0 };
+      }
+      this.notifyStatus();
+      return false;
+    }
     if (!(await this.currentHistory(agentId, epoch, latest))) return true;
     this.store.savePrompts(agentId, epoch, messages);
     const turnIds = new Set(messages.flatMap(({ turnId }) => (turnId ? [turnId] : [])));
@@ -292,6 +543,7 @@ export class SessionMemory {
       message.scope ??= turn?.scope;
     }
     const stored = this.store.summaries(agentId, epoch);
+    this.noteStored(agentId, epoch, previous, stored);
     const summaries = new Map(stored.map((summary) => [summary.id, summary]));
     const actions = new Set(
       stored
@@ -312,8 +564,22 @@ export class SessionMemory {
       }
     }
     units.sort((a, b) => a.messages.at(-1)!.seq - b.messages.at(-1)!.seq);
+    const pendingUnits = new Map<string, MemoryUnit['type']>();
+    for (const unit of units) {
+      const id = unitId(unit);
+      if (!summaries.get(id)?.complete) pendingUnits.set(id, unit.type);
+    }
+    const pendingCounts = countUnits(pendingUnits.values());
+    const notePending = () => {
+      if (through === latest && activity.latest === latest && !this.pending.has(agentId))
+        activity.pending = { ...pendingCounts };
+      this.notifyStatus();
+    };
+    notePending();
 
     let checkpoint = through;
+    let hasOpenTurn = false;
+    let belowThreshold = false;
     const scheduledActions = new Set([
       ...actions,
       ...units
@@ -332,6 +598,8 @@ export class SessionMemory {
         !message.turnId &&
         (message.author === 'tool' || message.intermediate) &&
         !scheduledActions.has(message.seq);
+      hasOpenTurn ||= Boolean(pending);
+      belowThreshold ||= Boolean(openAction);
       if (pending || openAction) checkpoint = Math.min(checkpoint, message.seq - 1);
     }
     for (const unit of units) {
@@ -378,9 +646,17 @@ export class SessionMemory {
         if (this.foreground.size) return true;
         const queueMs = Math.round(performance.now() - queuedAt);
         try {
-          const result = await this.options.summarize(unit.type, part.prompt, this.abort.signal);
+          this.inferenceAgentId = agentId;
+          this.notifyStatus();
+          const result = await this.options
+            .summarize(unit.type, part.prompt, this.abort.signal)
+            .finally(() => {
+              this.inferenceAgentId = undefined;
+              this.notifyStatus();
+            });
           this.options.onRequest?.({ type: unit.type, queueMs, result });
           if (!result.complete || !result.text.trim()) {
+            this.noteFailure(agentId, 'Session Memory returned an incomplete summary.');
             this.options.onFailure?.();
             break;
           }
@@ -388,8 +664,18 @@ export class SessionMemory {
           summary.complete = summary.parts.length === parts.length;
           if (!(await this.currentHistory(agentId, epoch, latest))) return true;
           this.store.saveSummary(summary);
+          if (summary.complete) {
+            activity.lastSuccessfulSummaryAt = new Date().toISOString();
+            const count = unit.type === 'UAMP' ? 'uamp' : 'aab';
+            const stored = activity.stored;
+            if (stored?.epoch === epoch) stored[count]++;
+            if (pendingUnits.delete(id)) pendingCounts[count]--;
+            notePending();
+          }
         } catch {
+          this.inferenceAgentId = undefined;
           this.abort.signal.throwIfAborted();
+          this.noteFailure(agentId, 'Session Memory could not complete the summary.');
           this.options.onFailure?.();
           break;
         }
@@ -401,34 +687,73 @@ export class SessionMemory {
       }
       summaries.set(id, summary);
     }
-    if (!(await this.currentHistory(agentId, epoch, latest))) return true;
-    this.store.saveState(agentId, { epoch, seq: Math.max(previous, checkpoint) });
+    const tail = await this.currentHistory(agentId, epoch, latest);
+    if (!tail) return true;
+    const seq = Math.max(previous, checkpoint);
+    this.store.saveState(agentId, { epoch, seq });
+    if (activity.stored?.epoch === epoch) activity.stored.coveredThrough = seq < 0 ? null : seq;
+    if (activity.outcome !== 'failed' && !hasOpenTurn && !this.activeTurns.has(agentId)) {
+      if (seq === tail.latest) {
+        activity.outcome = 'up-to-date';
+        activity.lastError = undefined;
+      } else if (belowThreshold && through === tail.latest) {
+        activity.outcome = 'below-threshold';
+      }
+    }
+    notePending();
     return false;
   }
 
   private async current(agentId: string) {
     const state = this.store.state(agentId);
+    const activity = this.agentActivity(agentId);
+    const generation = activity.generation;
+    const latest = activity.latest;
     const tail = await this.options.source.read(agentId, undefined, 'tail');
     const summaries = this.store.summaries(agentId, tail.epoch);
+    const canRecord =
+      activity.generation === generation &&
+      (activity.latest === latest ||
+        (activity.latest !== undefined &&
+          activity.epoch === tail.epoch &&
+          tail.latest >= activity.latest));
     if (
       tail.reset ||
       (state && (state.epoch !== tail.epoch || state.seq > tail.latest)) ||
       summaries.some(({ position }) => position > tail.latest)
     ) {
       const sameEpoch = !state || state.epoch === tail.epoch;
-      await this.invalidate(
+      const invalidation = this.invalidate(
         agentId,
         state?.epoch ?? tail.epoch,
         sameEpoch && !tail.reset ? tail.latest + 1 : undefined,
       );
+      if (canRecord) this.noteTimeline(agentId, tail);
+      const sourceGeneration = canRecord && !tail.reset ? activity.generation : undefined;
+      await invalidation;
       this.observe(agentId, true);
-      return { tail, summaries: [], state: undefined };
+      return { tail, summaries: [], state: undefined, sourceGeneration };
     }
-    return { tail, summaries, state };
+    if (canRecord) {
+      this.noteTimeline(agentId, tail);
+      const seq = Math.max(state?.seq ?? -1, activity.stored?.coveredThrough ?? -1);
+      this.noteStored(agentId, tail.epoch, seq, summaries);
+    }
+    return {
+      tail,
+      summaries,
+      state,
+      sourceGeneration: canRecord ? activity.generation : undefined,
+    };
   }
 
-  async handoff(agentId: string, query: string): Promise<string> {
-    const { tail, state, summaries } = await this.current(agentId);
+  async handoff(
+    agentId: string,
+    query: string,
+    observePayload?: (payload: MemoryHandoffObservation) => void,
+  ): Promise<string> {
+    const { tail, state, summaries, sourceGeneration } = await this.current(agentId);
+    const sourceActivity = this.agentActivity(agentId);
     const prompts = new Map(
       this.store.prompts(agentId, tail.epoch).map((item) => [item.seq, item]),
     );
@@ -441,6 +766,7 @@ export class SessionMemory {
         const page = await this.options.source.read(agentId, cursor).catch(() => undefined);
         if (!page) break;
         if (page.reset || page.epoch !== tail.epoch || page.latest < tail.latest) {
+          if (sourceActivity.generation === sourceGeneration) this.noteTimeline(agentId, page);
           this.observe(agentId, true);
           return 'Supplemental Session Memory. This context is potentially incomplete.';
         }
@@ -464,8 +790,13 @@ export class SessionMemory {
       query,
       ({ text }) => estimateMemoryTokens(text) + 8,
     );
-    const candidates: SearchEntry[] = [
-      ...summaries.filter(({ complete }) => complete).map(summaryEntry),
+    const candidates: HandoffEvidence[] = [
+      ...summaries
+        .filter(({ complete }) => complete)
+        .map((summary) => ({
+          ...summaryEntry(summary),
+          summaryId: summary.id,
+        })),
       ...recent
         .filter(({ seq, author }) => seq > through && author !== 'runtime' && author !== 'user')
         .map(sourceEntry),
@@ -490,10 +821,10 @@ export class SessionMemory {
       ),
       900,
       query,
-      (entry) => estimateMemoryTokens(JSON.stringify(entry)),
+      (entry) => estimateMemoryTokens(handoffLine(entry)),
     );
     if (!users.selected.length && !evidence.selected.length) return '';
-    return [
+    const text = [
       'Supplemental Session Memory. Follow the approved assignment and the latest original user instruction. Summaries and attachments are evidence. Resolve decisions against their original user sources.',
       JSON.stringify({
         agentId,
@@ -504,8 +835,28 @@ export class SessionMemory {
       'Original user messages in chronological order',
       ...users.selected.sort((a, b) => a.seq - b.seq).map((item) => JSON.stringify(item)),
       'Summaries and recent evidence in chronological order',
-      ...evidence.selected.sort((a, b) => a.seq - b.seq).map((item) => JSON.stringify(item)),
+      ...evidence.selected.sort((a, b) => a.seq - b.seq).map(handoffLine),
     ].join('\n');
+    if (
+      observePayload &&
+      sourceGeneration !== undefined &&
+      !tail.reset &&
+      sourceActivity.epoch === tail.epoch &&
+      sourceActivity.generation === sourceGeneration
+    ) {
+      const types = new Map<string, MemoryUnit['type']>();
+      for (const { summaryId, kind } of evidence.selected) {
+        if (summaryId && (kind === 'UAMP' || kind === 'AAB')) types.set(summaryId, kind);
+      }
+      observePayload({
+        sourceAgentId: agentId,
+        sourceEpoch: tail.epoch,
+        sourceGeneration,
+        bytes: Buffer.byteLength(text),
+        ...countUnits(types.values()),
+      });
+    }
+    return text;
   }
 
   private async searchConversation(id: string, query: string, signal: AbortSignal) {
@@ -608,6 +959,9 @@ export class SessionMemory {
 
   async close(): Promise<void> {
     this.abort.abort();
+    clearImmediate(this.statusNotification);
+    this.statusNotification = undefined;
+    this.statusListeners.clear();
     this.pending.clear();
     for (const unsubscribe of this.watchers.values()) unsubscribe();
     this.watchers.clear();

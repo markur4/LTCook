@@ -9,6 +9,7 @@ import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
+import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import {
   createPaseoAgentBackend,
@@ -290,9 +291,11 @@ const evals = new EvalRunService(path.join(directory, 'eval-state'), async (requ
 });
 await evals.initialize();
 api.setEval(evals);
+api.setWorkspaceMcp(new WorkspaceMcp([], listen));
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 let runtime: ReturnType<typeof createRuntime> | undefined;
+let activityRequests = 0;
 try {
   host = await startPaseoHost({
     node,
@@ -304,6 +307,10 @@ try {
     pluginDirectory: path.join(root, 'runtime/src/paseo-plugin'),
     environment,
     piCommand: path.join(root, 'runtime/dist/integrations/pi-rpc.js'),
+  });
+  api.setProviderSubagents(async (agentId) => {
+    activityRequests++;
+    return host!.listProviderSubagents(agentId);
   });
   const backend = await createPaseoAgentBackend({
     api: host.api,
@@ -511,6 +518,79 @@ try {
   await inspectStage('native-child-conversation');
   await clickButton(`Back to ${mobileLeader.agent.title}`);
   await waitForComposer(mobileLeader.agent.title);
+
+  const gitWorkspace = path.join(directory, 'activity-parent');
+  const workerWorkspace = path.join(directory, 'activity-worktree');
+  await mkdir(gitWorkspace);
+  await run('git', ['init', gitWorkspace]);
+  await run(
+    'git',
+    [
+      '-c',
+      'user.name=Fixture',
+      '-c',
+      'user.email=fixture@example.test',
+      'commit',
+      '--allow-empty',
+      '--no-gpg-sign',
+      '-m',
+      'Fixture',
+    ],
+    { cwd: gitWorkspace },
+  );
+  await run('git', ['worktree', 'add', '--detach', workerWorkspace], { cwd: gitWorkspace });
+  const differentWorkspace = await host.api.workspaces.open(workerWorkspace);
+  const crossAgent = await host.api.agents.create({
+    cwd: workerWorkspace,
+    parent: mobileSession.id,
+    title: 'Activity cross-worktree worker',
+    config: { provider: 'pi/fixture/test' },
+    env: environment,
+  });
+
+  await browser('press', 'Control+k');
+  await browser(
+    'find',
+    'placeholder',
+    'Search commands, files, workspaces, and agents...',
+    'fill',
+    'Open Activity panel',
+  );
+  await clickButton('Open Activity panel');
+  await browser('wait', '--text', 'Recent conversation activity');
+  assert(
+    (await browser('snapshot')).includes('Close Explorer sidebar'),
+    'Activity opens in Explorer',
+  );
+  await inspectStage('native-activity-explorer');
+
+  await clickButton('Open Adjutant conversation');
+  await waitForComposer('Adjutant');
+  await browser(
+    'wait',
+    '--fn',
+    `Boolean(document.querySelector('[aria-label="Adjutant"][aria-selected="true"]'))`,
+  );
+  await clickButton(`Back to ${mobileLeader.agent.title}`);
+  await waitForComposer(mobileLeader.agent.title);
+  await browser('wait', '--text', 'RAG Index');
+  await clickButton('Open Activity cross-worktree worker conversation');
+  await waitForComposer('Activity cross-worktree worker');
+  await browser('wait', '--text', workerWorkspace);
+  await inspectStage('native-activity-cross-worktree');
+  assert.equal((await crossAgent.refresh())?.agent.workspaceId, differentWorkspace.id);
+  await clickButton(`Back to ${mobileLeader.agent.title}`);
+  await waitForComposer(mobileLeader.agent.title);
+  await browser('wait', '--text', 'RAG Index');
+
+  await clickButton('Close Explorer sidebar');
+  await new Promise((resolve) => setTimeout(resolve, 1750));
+  const requestsWhileHidden = activityRequests;
+  await new Promise((resolve) => setTimeout(resolve, 1750));
+  assert.equal(activityRequests, requestsWhileHidden, 'Hidden Activity releases observation');
+  await clickButton('Open Explorer sidebar');
+  await browser('wait', '--text', 'Recent conversation activity');
+  assert(activityRequests > requestsWhileHidden, 'Reopening Activity resumes observation');
 
   const panelNavigation = telemetry.begin('panel.navigation');
   try {
