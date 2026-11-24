@@ -185,6 +185,11 @@ All notable changes to `ltcook` will be documented in this file.
 
 <br>
 
+- Pi is the required harness for model-backed Agent Evals. Repository Behavior
+  Evaluation defaults to Pi, with an explicit option for Codex diagnostics.
+  The Pi comparison records early stops for repeated searches and unavailable
+  retrieval.
+
 - **Breaking:** 💥 Set `LTCOOK_MODEL_TINY_LOCAL` in place of
   `LTCOOK_SUMMARIZER_MODEL`. `@plan` now shares the smart model slot, so
   remove `LTCOOK_MODEL_PLAN`. Use plain `provider/model` settings and put

@@ -7,6 +7,7 @@ import {
   type RepositoryBehaviorAnswer,
 } from '../../../evals/repository-behavior-grade.js';
 import type { RepositoryHit } from '../../../runtime/src/repository/results.js';
+import { repositorySearchStop } from '../../../evals/repository-behavior-pi.js';
 
 const definition = { path: 'src/value.ts', startLine: 1, endLine: 1 };
 const check = { path: 'test/value.ts', startLine: 1, endLine: 1 };
@@ -33,6 +34,61 @@ const complete = {
   truncated: false,
   results: hits,
 } as const;
+
+test('Pi stops a completed repeat with the same evidence and allows new evidence', () => {
+  const first = {
+    finished: 1,
+    requestKey: 'same',
+    searches: [{ result: { status: 'ready', results: [hits[0]!] } }],
+  } as const;
+  expect(repositorySearchStop([first], 1, 1)).toBeUndefined();
+  const repeat = [first, { ...first, finished: 2 }];
+  expect(repositorySearchStop(repeat, 2, 1)).toBe('repeated-search');
+  expect(repositorySearchStop(repeat, 2, 2)).toBeUndefined();
+  expect(
+    repositorySearchStop([first, { ...first, finished: 2, requestKey: 'different' }], 2, 1),
+  ).toBeUndefined();
+  expect(
+    repositorySearchStop(
+      [
+        first,
+        {
+          ...first,
+          finished: 2,
+          searches: [{ result: complete }],
+        },
+      ],
+      2,
+      1,
+    ),
+  ).toBeUndefined();
+});
+
+test('Pi permits a fallback after one unavailable attempt and distinguishes indexing', () => {
+  const unavailable = { finished: 1, searches: [{ result: { status: 'unavailable' } }] } as const;
+  const indexing = { finished: 2, searches: [{ result: { status: 'indexing' } }] } as const;
+  expect(repositorySearchStop([unavailable], 1, 1)).toBeUndefined();
+  expect(repositorySearchStop([unavailable, indexing], 2, 1)).toBeUndefined();
+  expect(repositorySearchStop([indexing, { ...unavailable, finished: 3 }], 2, 1)).toBeUndefined();
+  expect(repositorySearchStop([unavailable, { ...unavailable, finished: 2 }], 2, 1)).toBe(
+    'retrieval-unavailable',
+  );
+  const unavailablePair = [unavailable, { ...unavailable, finished: 3 }];
+  expect(repositorySearchStop(unavailablePair, 2, 2)).toBe('retrieval-unavailable');
+  expect(
+    repositorySearchStop(
+      [...unavailablePair, { finished: 2, searches: [{ result: complete }] }],
+      3,
+      3,
+    ),
+  ).toBeUndefined();
+});
+
+test('Pi applies the safeguard when the native completions never reach the provider', () => {
+  expect(repositorySearchStop([], 15, 1)).toBeUndefined();
+  expect(repositorySearchStop([], 16, 1)).toBe('tool-budget');
+  expect(repositorySearchStop([], 18, 3)).toBe('tool-budget');
+});
 
 type Answer = Static<typeof RepositoryBehaviorAnswer>;
 const correct: Answer = {

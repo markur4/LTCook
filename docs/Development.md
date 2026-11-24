@@ -153,6 +153,11 @@ model-free Instruction Audit remains an Agent Eval. Agent Evals also include
 Behavior Evaluation and Bottleneck Attribution. Scripted model responses and
 model-backed runs describe how a particular test or Agent Eval operates.
 
+Pi is the sole required agent harness for model-backed qualification across
+LTCook. Traditional Tests cover the supported Codex adapters, including MCP
+connectivity and permission enforcement. Optional Codex diagnostics have their
+own results.
+
 Use the root quick checks described in
 [Contributing](../CONTRIBUTING.md#run-checks). `just check` performs Prettier and
 TypeScript checks, Ruff formatting/lint checks, and Pyright; `just test` runs Bun
@@ -303,6 +308,7 @@ provider, model, and reasoning setting. The opt-in also works with the source
 runner, `bun evals/evaluation-live.ts synthetic full STATE_DIRECTORY --case summarization --summarization-grader gpt-6-luna`.
 It uses the signed-in Codex CLI on PATH for both grading and rollout decisions.
 Codex receives only fixed fixture inputs and candidate summaries from LTCook.
+This option is an exploratory comparison with the required Pi evaluation path.
 
 Each run checks the selected grader against development and held-out fixtures with fixed
 expected judgments. Keep the held-out cases separate when refining the grading prompt.
@@ -459,68 +465,53 @@ historical reference.
 
 ### Repository Agent Behavior Evaluation
 
-With Codex CLI authenticated, `rg` on `PATH`, and `LTCOOK_COLGREP_DEPLOYMENT`
-pointing to installed assets, run the two-case evaluation explicitly.
+Run the paired comparison through native Pi with `rg` on `PATH`, loopback
+Ollama running, and `LTCOOK_COLGREP_DEPLOYMENT` pointing to installed assets.
+The runner uses the installed LTCook Bonsai model by default. Pass
+`--model MODEL` to select another installed Ollama model for both arms.
 
 ```shell
-bun evals/codex-repository-behavior-live.ts > codex-repository-behavior.json
+bun evals/repository-behavior-live.ts > pi-repository-behavior.json
 ```
 
-Pass `--model MODEL` to select the Codex model. This guided smoke test starts
-an isolated local MCP runtime and makes two sequential model calls in fresh
-read-only Codex sessions. The harness owns and grants access to its disposable
-fixture. It disables the shell tool so the measured evidence comes from MCP.
-The labeled multi-file question grades exact-mode choice, support for citations
-in returned evidence, and coverage of the definition, caller, and test. The
-answerless conceptual question grades ranked-mode choice and abstention.
-The JSON records each verdict, cited ranges, retrieval metadata, model and
-fixture provenance. It excludes credentials and raw responses. This evaluation
-uses a live model and stays outside Traditional Tests.
-
-#### Compare Locate with repository search
-
-Use the same prerequisites to run a paired comparison.
-
-```shell
-bun evals/codex-repository-behavior-live.ts --compare-locate > codex-locate-comparison.json
-```
-
-The runner prebuilds one local ColGREP index and opens six fresh read-only
-Codex sessions. It runs the labeled implementation–caller–test, pixel bounds,
-and answerless conceptual questions once with repository search and once
-with Locate. The Locate variant can use repository search for follow-up.
-Variants alternate order across pairs. The comparison defaults to
-`gpt-6.2-sol`; `--model MODEL` sets one model for both variants.
-
-The report records citation coverage, unsupported citations, abstention,
-tool calls, elapsed time, and model and fixture provenance. Time to the first
-verified citation measures when returned evidence first supports a correct
-citation that appears in the final answer. It is `null` when no citation
-qualifies. Compare paired correctness before timing. One run per variant
-gives an initial observation.
-
-For an autonomous comparison, use identical task prompts in two arms. The
-first gives the agent Search. The second adds Locate. Neither prompt names
-a tool. Run Codex in the same controlled workspace or pass `--pi` to run
-the paired cases through native Pi with the installed LTCook Bonsai model.
-
-```shell
-bun evals/codex-repository-behavior-live.ts --autonomous > codex-autonomous.json
-bun evals/codex-repository-behavior-live.ts --autonomous --pi > pi-autonomous.json
-```
-
-Both runs use a warmed disposable index and repeat a selected pair in the
-opposite order. A separate pair tests the response to deliberately unavailable
-retrieval for a question with a known answer. The answer schema ties each
-factual assertion to citations. Use `--case CASE_ID` to rerun that case's
-scheduled pairs, such as `--case absent-concept` for the negative.
-The Pi runner caps each attempt at 16 tool calls and records when it reaches
-that budget.
+Both arms receive identical task prompts. One has Search and the other has
+Search and Locate. They use a warmed disposable index and repeat a selected
+pair in the opposite order. A separate pair tests the response to deliberately
+unavailable retrieval for a question with a known answer. The answer schema
+ties each fact to citations. Use `--case CASE_ID` to rerun a case's scheduled
+pairs, such as `--case absent-concept` for the negative.
+The Pi runner requests the final answer when a single-call turn repeats a
+search with no new evidence or when two consecutive calls are unavailable.
+It waits for all parallel replies and continues if a sibling returns usable
+evidence. It records native tool attempts and errors, including
+requests rejected before provider execution. The 16-call safeguard applies
+to those attempts. If Pi sends another tool request after stopping or returns
+an invalid answer format, the runner records one tools-disabled answer retry.
+Factual and citation grading still applies.
 The report separates factual correctness, evidence validity, retrieval
 coverage, and tool selection. It records tool calls, repeated or low-yield
-requests, context size, and elapsed times without making them task-success
-requirements. These live comparisons are opt-in. Normal CI type-checks the
-scripts and runs the deterministic graders.
+requests, context size, and elapsed times. Time to the first verified citation
+measures when returned evidence first supports a correct citation in the
+final answer. This field is `null` when no citation qualifies. Compare paired
+correctness before timing. Live runs are opt-in. Normal CI type-checks the
+runner and tests the deterministic graders.
+
+#### Optional Codex diagnostics
+
+With the Codex CLI authenticated, use `--codex` to run the two-case guided
+smoke. Add `--compare-locate` for the six-run guided comparison or
+`--autonomous` for the same paired schedule as Pi. The paired Codex modes
+default to `gpt-6.2-sol`. Pass `--model MODEL` to select another Codex model.
+
+```shell
+bun evals/repository-behavior-live.ts --codex > codex-repository-smoke.json
+bun evals/repository-behavior-live.ts --codex --compare-locate > codex-locate-comparison.json
+bun evals/repository-behavior-live.ts --codex --autonomous > codex-autonomous.json
+```
+
+The harness grants the read-only Codex sessions access to its disposable
+fixture through isolated local MCP. All recorded verdicts and evidence
+metadata refer to that fixture. Reports exclude credentials and raw responses.
 
 See the [Repository Intelligence evaluation report](../evals/repository-intelligence-report.md)
 for the measured results and coverage gaps.
