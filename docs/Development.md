@@ -480,10 +480,14 @@ pair in the opposite order. A separate pair tests the response to deliberately
 unavailable retrieval for a question with a known answer. The answer schema
 ties each fact to citations. Use `--case CASE_ID` to rerun a case's scheduled
 pairs, such as `--case absent-concept` for the negative.
-The Pi runner requests the final answer after a completed repeat adds no new
-evidence or after two consecutive unavailable calls. It records the reason
-and retains a 16-call safeguard. Factual and citation grading still applies
-to the resulting answer.
+The Pi runner requests the final answer when a single-call turn repeats a
+search with no new evidence or when two consecutive calls are unavailable.
+It waits for all parallel replies and continues if a sibling returns usable
+evidence. It records native tool attempts and errors, including
+requests rejected before provider execution. The 16-call safeguard applies
+to those attempts. If Pi sends another tool request after stopping or returns
+an invalid answer format, the runner records one tools-disabled answer retry.
+Factual and citation grading still applies.
 The report separates factual correctness, evidence validity, retrieval
 coverage, and tool selection. It records tool calls, repeated or low-yield
 requests, context size, and elapsed times. Time to the first verified citation

@@ -160,7 +160,7 @@ new verified source line within 2.3 seconds. Each still made 16 calls.
 The native adapter delivered usable evidence. The remaining gap was when to
 stop searching and how to interpret an unavailable provider.
 
-Three runs used the same Qwen 3.5 4B model digest, source and question fixture,
+The paired runs used the same Qwen 3.5 4B model digest, source and question fixture,
 ColGREP assets, warmed index policy, and paired order.
 
 | Design | Native task passes | Correct outage responses | 16-call safeguard reached |
@@ -168,28 +168,37 @@ ColGREP assets, warmed index policy, and paired order.
 | Original cap and final-answer prompt | 8/8 | 0/2 | 10/10 |
 | Expanded initial instructions | 4/8 | 1/2 | 9/10 |
 | Stop on a repeat without new evidence or two unavailable calls | 8/8 | 2/2 | 0/10 |
+| Final runner with batch-aware stops and bounded answer recovery | 7/8 | 2/2 | 0/10 |
 
 The final design uses completed tool replies and request identity. It allows
 a fallback after one unavailable call and asks Pi for the final answer when a
-repeat yields no new evidence or two consecutive calls are unavailable. The
-grade uses the same factual and citation checks. It reports the stopping
-intervention separately from task success.
+single-call repeat yields no new evidence or two consecutive calls are
+unavailable. Review moved this decision after the batch completed and made
+the safeguard count tool requests rejected before reaching a provider. The
+runner records one bounded answer retry for invalid format or a post-stop
+tool request. Factual and citation grading remains independent.
 
 | Mean per native attempt | Search before | Search after | Locate available before | Locate available after |
 | --- | ---: | ---: | ---: | ---: |
 | Tool calls | 16 | 6.00 | 16 | 7.25 |
 | Repeated requests | 11.25 | 1.00 | 10.50 | 1.00 |
-| Elapsed time | 14.07 s | 5.88 s | 11.49 s | 5.54 s |
-| Serialized tool responses | 11,458 bytes | 6,221 bytes | 14,103 bytes | 4,648 bytes |
+| Elapsed time | 14.07 s | 6.17 s | 11.49 s | 6.13 s |
+| Serialized tool responses | 11,458 bytes | 6,221 bytes | 14,103 bytes | 7,978 bytes |
 
-Both final arms covered all five labeled ranges, and both correctly
-abstained after reviewing the genuine negative. The outage attempts ended
-after two calls each. All ten attempts used the harness stop. The result
-qualifies a stopping intervention within the evaluation fixture. Ordinary
-Pi sessions need their own verification before adopting the behavior.
+Both final arms retrieved all five labeled ranges and correctly abstained
+after reviewing the genuine negative. One Locate-available answer gave both
+correct pixel bounds and attached a closing-brace citation to the upper
+bound, leaving the task unverified. Both simulated outages ended after two
+calls. All ten attempts used the harness stop. The result measures a stopping
+intervention within the evaluation fixture. Ordinary Pi sessions need their
+own verification before adopting the behavior.
 
-The prompt-only run was `bf0122ef-31b6-49b7-b94f-b79f1d89e73a`. The final
-run was `92386478-6399-473e-ac54-bf05cd71e9e6` with implementation SHA-256
-`b34be41dafd18016c39d2de159ae73fee2674ac4ce5a4831d0878e89abc0a0c4`.
-The single paired cohort supports comparison with the recorded baseline.
-Broader model and repository generalization remains unverified.
+The prompt-only run was `bf0122ef-31b6-49b7-b94f-b79f1d89e73a`. The first
+result-driven run was `92386478-6399-473e-ac54-bf05cd71e9e6`. The final run
+was `649b5edb-146c-49ab-8846-49cf75f0cea2` with implementation SHA-256
+`67caf0940bcd3152753f8c518ef60e6923e2dd2c7a50c65f0e0c0346625601ff`.
+The focused default Bonsai run `56e282a6-f63b-42fe-8002-ded281a212c2` also
+reported insufficient evidence after two unavailable calls in each arm.
+Neither final cohort needed the answer-format retry. These small cohorts
+describe the measured difference. Broader model and repository
+generalization remains unverified.

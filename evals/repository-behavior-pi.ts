@@ -1,4 +1,5 @@
 import { defineTool } from '@earendil-works/pi-coding-agent';
+import { Value } from 'typebox/value';
 import { sanitizeEvaluationText } from '../runtime/src/evals/diagnostics.js';
 import { EVAL_MODEL } from '../runtime/src/evals/setup.js';
 import { createLocalPiEvaluationSession } from '../runtime/src/evals/summarization-decision.js';
@@ -9,6 +10,7 @@ import {
 } from '../runtime/src/evals/summarization-grader.js';
 import type { ToolDefinition } from '../runtime/src/tools/types.js';
 import type { RepositoryHit, RepositoryRetrieval } from '../runtime/src/repository/results.js';
+import { RepositoryBehaviorAnswer } from './repository-behavior-grade.js';
 
 const endpoint = process.env.LTCOOK_OLLAMA_ENDPOINT ?? 'http://127.0.0.1:11434';
 const toolCallLimit = 16;
@@ -31,22 +33,32 @@ function evidenceKeys(results: readonly SearchResult[]): string[] {
   );
 }
 
-/** Stop on exhausted searches in the fixed fixture using only observed tool results. */
-export function repositorySearchStop(attempts: readonly SearchAttempt[]): StopReason | undefined {
-  const [latest, previous, ...earlier] = attempts
+function unavailable({ searches }: SearchAttempt): boolean {
+  return searches.length > 0 && searches.every(({ result }) => result.status === 'unavailable');
+}
+
+/** Decide at the end of a tool batch using only observed requests and results. */
+export function repositorySearchStop(
+  attempts: readonly SearchAttempt[],
+  completedToolAttempts: number,
+  toolsInTurn: number,
+): StopReason | undefined {
+  if (completedToolAttempts >= toolCallLimit) return 'tool-budget';
+  const completed = attempts
     .flatMap((attempt) =>
       attempt.finished === undefined ? [] : [{ ...attempt, finished: attempt.finished }],
     )
     .toSorted((left, right) => right.finished - left.finished);
+  const [latest, previous, ...earlier] = completed;
   if (!latest || !previous) return;
-  const latestResults = latest.searches.map(({ result }) => result);
-  if (!latestResults.length) return;
   if (
-    latestResults.every(({ status }) => status === 'unavailable') &&
-    previous.searches.length &&
-    previous.searches.every(({ result }) => result.status === 'unavailable')
+    completed.length >= toolsInTurn &&
+    completed.slice(0, Math.max(toolsInTurn, 2)).every(unavailable)
   )
     return 'retrieval-unavailable';
+  if (toolsInTurn !== 1) return;
+  const latestResults = latest.searches.map(({ result }) => result);
+  if (!latestResults.length) return;
   if (!latest.requestKey || latestResults.some(({ status }) => status !== 'ready')) return;
   const priorReady = [previous, ...earlier].filter(
     ({ requestKey, searches }) =>
@@ -61,12 +73,18 @@ export function repositorySearchStop(attempts: readonly SearchAttempt[]): StopRe
     return 'repeated-search';
 }
 
-const finishingPrompts = {
-  'repeated-search': 'Use the evidence already returned to produce the requested JSON.',
-  'tool-budget': 'Use the evidence already returned to produce the requested JSON.',
-  'retrieval-unavailable':
-    'The last searches were unavailable. If earlier evidence cannot answer the question, return the requested JSON with outcome "insufficient-evidence" and no facts.',
-} satisfies Record<StopReason, string>;
+const finalAnswerInstruction =
+  'Return only the requested JSON from the evidence already shown. Cite the exact supporting source range separately for each fact.';
+const outageInstruction =
+  'When the searches were unavailable and earlier evidence cannot answer the question, use outcome "insufficient-evidence" and an empty facts array.';
+
+function decodeAnswer(text: string): unknown {
+  try {
+    return JSON.parse(text.trim().replace(/^```(?:json)?\s+|\s+```$/gi, '')) as unknown;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Identify the installed Ollama model before running either arm. */
 export async function repositoryPiModel(model: string | undefined, signal: AbortSignal) {
@@ -99,7 +117,7 @@ export async function evaluateRepositoryWithPi({
 }) {
   const started = performance.now();
   const bounded = AbortSignal.any([signal, AbortSignal.timeout(150_000)]);
-  let toolCalls = 0;
+  let providerCalls = 0;
   const customTools = tools.map((tool) =>
     defineTool({
       name: tool.name,
@@ -107,9 +125,9 @@ export async function evaluateRepositoryWithPi({
       description: tool.description,
       parameters: tool.inputSchema,
       async execute(_id, input, toolSignal) {
-        if (toolCalls >= toolCallLimit)
+        if (providerCalls >= toolCallLimit)
           throw new Error('Repository evaluation tool budget reached.');
-        toolCalls++;
+        providerCalls++;
         const result = await tool.invoke(input, {
           agentId,
           workspaceRoot: workspace,
@@ -131,21 +149,64 @@ export async function evaluateRepositoryWithPi({
   });
   const cancel = () => void session.abort();
   let stopReason: StopReason | undefined;
-  const unsubscribe = session.subscribe((event) => {
-    if (event.type !== 'tool_execution_end' || stopReason) return;
-    stopReason =
-      repositorySearchStop(attempts) ?? (toolCalls >= toolCallLimit ? 'tool-budget' : undefined);
+  let completedToolAttempts = 0;
+  let toolErrors = 0;
+  let recordedAttempts = 0;
+  let toolAfterStop = false;
+  let finalAnswerRetry: 'tool-after-stop' | 'invalid-answer-format' | undefined;
+  const unsubscribe = session.agent.subscribe(async (event) => {
+    if (event.type === 'tool_execution_end') {
+      completedToolAttempts++;
+      if (event.isError) toolErrors++;
+    }
+    if (event.type !== 'turn_end' || !event.toolResults.length) return;
+    if (stopReason || finalAnswerRetry) {
+      toolAfterStop = true;
+      cancel();
+      return;
+    }
+    const toolsInTurn = event.toolResults.length;
+    const observedTurn = attempts.length - recordedAttempts === toolsInTurn;
+    recordedAttempts = attempts.length;
+    stopReason = repositorySearchStop(
+      observedTurn ? attempts : [],
+      completedToolAttempts,
+      toolsInTurn,
+    );
     if (!stopReason) return;
     session.setActiveToolsByName([]);
-    void session.steer(finishingPrompts[stopReason]).catch(cancel);
+    const finish =
+      stopReason === 'retrieval-unavailable'
+        ? `${finalAnswerInstruction} ${outageInstruction}`
+        : finalAnswerInstruction;
+    await session.steer(finish).catch(cancel);
   });
   bounded.addEventListener('abort', cancel, { once: true });
   try {
     bounded.throwIfAborted();
-    await session.prompt(prompt);
+    await session.prompt(prompt).catch((error: unknown) => {
+      if (!toolAfterStop) throw error;
+    });
     bounded.throwIfAborted();
+    const readAnswer = () => {
+      const message = session.messages.findLast((item) => item.role === 'assistant');
+      const text = message?.content
+        .flatMap((part) => (part.type === 'text' ? [part.text] : []))
+        .join('');
+      return { message, parsed: decodeAnswer(text ?? '') };
+    };
+    let { message: answer, parsed } = readAnswer();
+    if (
+      toolAfterStop ||
+      (answer?.stopReason === 'stop' && !Value.Check(RepositoryBehaviorAnswer, parsed))
+    ) {
+      finalAnswerRetry = toolAfterStop ? 'tool-after-stop' : 'invalid-answer-format';
+      session.setActiveToolsByName([]);
+      await session.prompt(`${finalAnswerInstruction} ${outageInstruction}`);
+      bounded.throwIfAborted();
+      ({ message: answer, parsed } = readAnswer());
+    }
     const turns = session.messages.filter((message) => message.role === 'assistant');
-    const answer = turns.at(-1);
     const observedModel = answer?.responseModel ?? null;
     if (
       turns.some(
@@ -157,11 +218,6 @@ export async function evaluateRepositoryWithPi({
     if (answer?.stopReason !== 'stop') {
       throw new Error(answer?.errorMessage ?? 'Pi did not return a complete answer.');
     }
-    const text = answer.content
-      .flatMap((part) => (part.type === 'text' ? [part.text] : []))
-      .join('')
-      .trim()
-      .replace(/^```(?:json)?\s+|\s+```$/gi, '');
     const usage = turns.reduce(
       (total, { usage }) => ({
         inputTokens: total.inputTokens + usage.input + usage.cacheRead + usage.cacheWrite,
@@ -169,12 +225,6 @@ export async function evaluateRepositoryWithPi({
       }),
       { inputTokens: 0, outputTokens: 0 },
     );
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text) as unknown;
-    } catch {
-      parsed = undefined;
-    }
     return {
       answer: parsed,
       elapsedMs: performance.now() - started,
@@ -182,8 +232,11 @@ export async function evaluateRepositoryWithPi({
       exitCode: 0,
       observedModel,
       usage,
-      toolBudgetReached: toolCalls >= toolCallLimit,
+      completedToolAttempts,
+      toolErrors,
+      toolBudgetReached: completedToolAttempts >= toolCallLimit,
       toolStopReason: stopReason,
+      finalAnswerRetry,
     };
   } catch (error) {
     signal.throwIfAborted();
@@ -193,8 +246,11 @@ export async function evaluateRepositoryWithPi({
       started,
       exitCode: 1,
       observedModel: null,
-      toolBudgetReached: toolCalls >= toolCallLimit,
+      completedToolAttempts,
+      toolErrors,
+      toolBudgetReached: completedToolAttempts >= toolCallLimit,
       toolStopReason: stopReason,
+      finalAnswerRetry,
       error: sanitizeEvaluationText(
         error instanceof Error ? error.message : 'Pi evaluation failed.',
       ),
