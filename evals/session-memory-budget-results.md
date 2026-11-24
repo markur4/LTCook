@@ -1,13 +1,92 @@
 # Session Memory CPU and repository-edit evaluation
 
 Keep `LiquidAI/lfm2.5-1.2b-instruct:q8_0` as the recommended extractor for
-opt-in Session Memory. LFM3 QAD was faster on short requests and used less
-memory. LFM2.5 completed more long-transcript updates and recovered after
-reaching the output limit. All three models missed critical evidence on the
-long transcript. Deterministic search can retrieve omitted messages directly
-from Paseo.
+opt-in Session Memory. It recovered after reaching the output limit and
+completed more long-transcript updates in both sampling profiles. LFM3 QAD Q4
+was the fastest on the matched warm requests and used the least memory. Both
+LFM3 variants retained the cache opener path and symbol that LFM2.5 missed.
+All three missed critical evidence. Deterministic search can retrieve omitted
+messages directly from Paseo.
 
-## Matched CPU comparison
+## Sampling settings and reasoning
+
+The original comparison explicitly sent `temperature: 0`. Both LFM3 Ollama
+tags ship with temperature 0.1, top-k 50, and a repetition penalty of 1.1.
+The original requests inherited the latter two values and overrode the
+temperature. Liquid AI recommends all three values together for general
+inference on the LFM3 GGUF models, including QAD Q4. The LFM2.5 Instruct
+recipe uses the same temperature and top-k with a repetition penalty of 1.05.
+[LFM3 GGUF model card](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF#how-to-run-lfm3-17b),
+[LFM2.5 Instruct model card](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct)
+
+Pass `--recommended-sampling` to apply those three parameters explicitly to
+each candidate. Both profiles request `think: false` and `num_gpu: 0`.
+Reasoning token counts come from the generated token log and the returned
+answer and thinking fields. [Ollama chat API](https://docs.ollama.com/api/chat)
+
+## Rerun with recommended sampling
+
+```sh
+bun evals/session-memory-live.ts --extract-only --include-cadence --recommended-sampling
+```
+
+This reruns the same extraction corpus with the same prompt, schema, context
+and output limits. All three candidates use temperature 0.1 and top-k 50.
+The repetition penalty is 1.05 for LFM2.5 and 1.1 for both LFM3 variants.
+The JSON report includes each candidate's request settings and per-request
+reasoning token counts. The rerun used the same Linux host, Ollama version,
+model manifest digests, and corpus hash as the original comparison. It took
+484.10 seconds and used one run per fixture with Ollama's default seed setting.
+
+Ollama reported zero GPU bytes for all 26 requests. The generated token logs
+verified zero reasoning tokens in 25 requests. The final LFM3 Q8 request for
+messages 43–92 reached the output limit and its token log could not be
+reconciled with the returned answer. Its reasoning token count is unknown.
+All 26 requests sent `think: false` and returned no thinking text.
+
+| Extraction result | LFM2.5 1.2B Instruct Q8 | LFM3 1.7B Q8 | LFM3 1.7B QAD Q4 |
+| --- | ---: | ---: | ---: |
+| Short-workflow facts retained | 14/14 | 14/14 | 14/14 |
+| Short-workflow fact categories mismatched | 7 | 6 | 6 |
+| Valid short outputs | 5/5 | 5/5 | 5/5 |
+| Valid long outputs | 2/3 | 1/4 | 1/4 |
+| Valid outputs overall | 7/8 | 6/9 | 6/9 |
+| Long-transcript facts retained | 3/5 | 2/5 | 2/5 |
+| Long-transcript critical facts retained | 1/3 | 2/3 | 2/3 |
+| Final long-transcript checkpoint | 92 | 42 | 42 |
+| Requests with verified zero reasoning tokens | 8/8 | 8/9 | 9/9 |
+
+No labeled contradiction or source misattribution was observed. LFM2.5 hit
+the 768-token cap on messages 1–42, then produced valid updates through
+messages 51 and 90. The final two messages advanced its checkpoint to 92
+without an inference request. It retained the schema mismatch, version guard
+result, and preserved cache bytes. Both LFM3 variants retained the cache
+opener path and symbol in the first update, then hit the output cap on all
+three subsequent attempts. The retained facts and checkpoint behavior were
+the same under both sampling profiles. QAD Q4 had one more short-workflow
+category mismatch at temperature 0.1 than at temperature zero.
+
+| CPU measurement | LFM2.5 1.2B Instruct Q8 | LFM3 1.7B Q8 | LFM3 1.7B QAD Q4 |
+| --- | ---: | ---: | ---: |
+| Warm short prefill | 4.02 s | 8.50 s | 4.67 s |
+| Warm short generation | 19.69 s | 20.97 s | 12.37 s |
+| Warm short request latency | 23.74 s | 29.50 s | 17.07 s |
+| Warm short generated tokens | 714 | 500 | 497 |
+| Cold first short request latency | 4.12 s | 8.68 s | 5.50 s |
+| First long batch prefill | 11.94 s | 19.79 s | 12.18 s |
+| First long batch generation | 25.96 s | 24.32 s | 15.01 s |
+| First long batch request latency | 37.92 s | 44.12 s | 27.21 s |
+| Total long request latency | 99.20 s | 182.13 s | 114.05 s |
+| Ollama CPU residency | 1.62 GB | 2.02 GB | 1.23 GB |
+| Peak runner RSS | 1.75 GB | 2.43 GB | 1.63 GB |
+
+Warm short timings sum four requests matched on fixture, message range, and
+zero cached input tokens. Each model was resident for all four. The first
+long batch, messages 1–42, was also warm and uncached for all three. Total long
+request latency includes the different retries and cache reuse after that
+batch. Residency and peak RSS use decimal GB.
+
+## Original CPU comparison at temperature zero
 
 The three candidates used the same numbered excerpt prompt, structured output
 schema, 16,384-token context, 768-token output budget, temperature zero,
@@ -32,11 +111,14 @@ durations separately. [Ollama API timing and usage](https://github.com/ollama/ol
 | LFM3 1.7B QAD Q4 | 14/14 | 6/9 | 1.17 s | 3.02 s | 4.20 s | 1.23 GB | 1.63 GB |
 
 Timing columns are medians of the four warm short requests with zero cached
-input tokens per candidate. LFM3 Q8 and QAD first loaded in requests of 7.06 s
+input tokens per candidate. Only three of those batches match across all
+three candidates. LFM3 Q8 and QAD first loaded in requests of 7.06 s
 and 3.98 s. The baseline was already resident at its first request, which
 took 3.40 s. Residency is Ollama's loaded size. Peak RSS is the largest
 Linux runner high-water mark observed for each model across the corpus.
 The two memory measurements use decimal GB and cover different allocations.
+Across the three shared warm uncached short requests, total latency was
+15.00 s for LFM2.5, 17.23 s for LFM3 Q8, and 10.43 s for LFM3 QAD Q4.
 
 | Extractor | Valid long updates | Critical evidence omitted at final checkpoint | Total long request latency |
 | --- | ---: | --- | ---: |
@@ -44,13 +126,20 @@ The two memory measurements use decimal GB and cover different allocations.
 | LFM3 1.7B Q8 | 1/4 | Cache version guard result | 202.98 s |
 | LFM3 1.7B QAD Q4 | 1/4 | Cache version guard result | 121.12 s |
 
+| Final long-transcript result | LFM2.5 1.2B Instruct Q8 | LFM3 1.7B Q8 | LFM3 1.7B QAD Q4 |
+| --- | ---: | ---: | ---: |
+| Labeled facts retained | 3/5 | 2/5 | 2/5 |
+| Critical labels retained | 1/3 | 2/3 | 2/3 |
+| Conversation checkpoint | 92 | 42 | 42 |
+
 Both LFM3 models found the opener path and symbol in the first matched long
 batch. Each then reached the 768-token cutoff on every attempt to complete the
 second batch. LFM2.5 reached the cutoff on the first long update and completed
 its later updates. Its first long request reused 3,257 input tokens, so total
 long latency includes different cache and retry patterns. The warm uncached
-short medians give the cleaner CPU timing comparison. No labeled
-contradiction or source misattribution was observed. At the short workflows'
+short batches that match across candidates give the cleaner CPU timing
+comparison. No labeled contradiction or source misattribution was observed.
+At the short workflows'
 final checkpoints, LFM2.5, LFM3 Q8 and LFM3 QAD respectively assigned a
 different category to seven, six and five facts.
 
@@ -71,7 +160,7 @@ The CPU matrix took 497.45 seconds. The corpus SHA-256 is
 
 All three manifest digests matched before and after the comparison.
 
-## Task-aware extraction
+## Task-aware extraction at temperature zero
 
 For LFM2.5 and LFM3 QAD, a matched long-transcript arm supplied the cache task
 focus to the same extraction request and told the model to ignore unrelated
@@ -141,6 +230,6 @@ They provide a signal for lower worker latency with hybrid context and leave
 any reliability advantage unestablished. The report records Pi's selected
 model and provider. These responses omitted the provider's model identifier.
 
-The CPU matrix and task-aware comparison took 767.07 seconds together. The
-repository-edit Agent Evals brought measured Session Memory evaluation time
-to 938.18 seconds across these workloads.
+The original CPU matrix and task-aware comparison took 767.07 seconds
+together. The repository-edit Agent Evals brought the original measured
+Session Memory evaluation time to 938.18 seconds across these workloads.

@@ -357,6 +357,8 @@ extractor tag, and estimated token threshold. Pass `--extract-only` to run
 the CPU extractor comparison without the Pi handoffs. Use `--include-cadence`
 to add the long transcript or `--cadence` to run it alone. Add `--task-aware`
 to test a task-focus prompt with the same input, model and batch settings.
+Pass `--recommended-sampling` to use Liquid AI's published sampling settings
+for each candidate. The report records the request configuration per model.
 
 Run `bun evals/session-memory-edit-live.ts` with optional extractor and worker
 model tags to compare conventional delegation, deterministic conversation search,

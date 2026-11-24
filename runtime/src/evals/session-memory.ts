@@ -34,7 +34,6 @@ const models = [
   'lfm3:1.7b-q8_0',
   'lfm3:1.7b-qad-q4_0',
 ] as const;
-const generation = memoryGeneration;
 const qualification = {
   criticalFacts:
     'Every scheduled update must retain expected critical facts with correct source attribution and no fixture contradiction.',
@@ -297,6 +296,7 @@ export async function runSessionMemoryEvaluation(
     includeCadence?: boolean;
     extractOnly?: boolean;
     taskAware?: boolean;
+    recommendedSampling?: boolean;
   },
 ) {
   const selectedModels = models.filter((model) => {
@@ -348,6 +348,17 @@ export async function runSessionMemoryEvaluation(
         candidates.push({ requestedModel, error: 'Ollama model is unavailable.', passed: false });
         continue;
       }
+      const generation = selection?.recommendedSampling
+        ? {
+            ...memoryGeneration,
+            options: {
+              ...memoryGeneration.options,
+              temperature: 0.1,
+              top_k: 50,
+              repeat_penalty: requestedModel === models[0] ? 1.05 : 1.1,
+            },
+          }
+        : memoryGeneration;
       const scenarios = [];
       for (const fixture of fixtures) {
         onProgress?.(`Evaluating ${requestedModel} on ${fixture.id}`);
@@ -394,7 +405,12 @@ export async function runSessionMemoryEvaluation(
           });
         }
       }
-      candidates.push({ identity, scenarios, passed: scenarios.every(({ passed }) => passed) });
+      candidates.push({
+        identity,
+        generation,
+        scenarios,
+        passed: scenarios.every(({ passed }) => passed),
+      });
     }
     const after = await listEvaluationModels(settings.endpoint, signal);
     const identities = [
@@ -414,7 +430,9 @@ export async function runSessionMemoryEvaluation(
       elapsedMs: Math.round(performance.now() - started),
       platform: platform(),
       cpu: { model: cpus()[0]?.model, logicalCount: cpus().length },
-      generation,
+      ...(selection?.recommendedSampling
+        ? { sampling: 'liquid-recommended' }
+        : { generation: memoryGeneration }),
       taskAware: selection?.taskAware ?? false,
       qualification,
       identityUnchanged,

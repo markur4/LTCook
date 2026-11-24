@@ -29,6 +29,7 @@ try {
       includeCadence: args.includes('--include-cadence'),
       extractOnly: args.includes('--extract-only'),
       taskAware: args.includes('--task-aware'),
+      recommendedSampling: args.includes('--recommended-sampling'),
     },
   );
   console.log(JSON.stringify(report, null, 2));
