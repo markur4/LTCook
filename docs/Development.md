@@ -342,7 +342,8 @@ relevant-source control in fresh native Pi sessions. The JSON report includes
 model digests, cold and warm residency, update latency, throughput and the
 model bytes reported by Ollama. An argument selects an installed downstream
 Pi model instead of the standard Bonsai model. Optional second and third
-arguments select one candidate tag and one cadence from the matrix.
+arguments select one candidate tag and one cadence from the matrix. See the
+[qualification results](../evals/session-memory-results.md).
 
 The runtime stores derived entries and their Paseo timeline checkpoint together
 in `session-memory.sqlite` under runtime state. A changed history epoch
