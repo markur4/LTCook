@@ -8,18 +8,65 @@ import {
   modelTag,
 } from '../runtime/src/evals/summarization-grader.js';
 import type { ToolDefinition } from '../runtime/src/tools/types.js';
+import type { RepositoryHit, RepositoryRetrieval } from '../runtime/src/repository/results.js';
 
 const endpoint = process.env.LTCOOK_OLLAMA_ENDPOINT ?? 'http://127.0.0.1:11434';
 const toolCallLimit = 16;
-const instructions = [
-  'Answer the repository question from verified source evidence.',
-  'After each tool response, decide whether a specific requested fact still needs evidence.',
-  'When you have evidence for every requested fact, return the final JSON immediately.',
-  'Make another tool call only when a different search can fill a specific gap. Avoid repeating the same search.',
-  'Use "not-found" when a relevant search returned ready and the material you reviewed offers no support.',
-  'Use "insufficient-evidence" when a search is unavailable or still indexing, or a partial or stale response leaves a specific gap.',
-  'In either case, return the requested JSON now when another search cannot help.',
-].join(' ');
+type SearchResult = {
+  status: RepositoryRetrieval['value']['status'];
+  results?: readonly RepositoryHit[];
+};
+type SearchAttempt = {
+  finished?: number;
+  requestKey?: string;
+  searches: readonly { result: SearchResult }[];
+};
+type StopReason = 'repeated-search' | 'retrieval-unavailable' | 'tool-budget';
+
+function evidenceKeys(results: readonly SearchResult[]): string[] {
+  return results.flatMap(({ results: hits }) =>
+    (hits ?? []).map(({ path, startLine, endLine, excerpt, excerptTruncated }) =>
+      JSON.stringify([path, startLine, endLine, excerpt, excerptTruncated]),
+    ),
+  );
+}
+
+/** Stop on exhausted searches in the fixed fixture using only observed tool results. */
+export function repositorySearchStop(attempts: readonly SearchAttempt[]): StopReason | undefined {
+  const [latest, previous, ...earlier] = attempts
+    .flatMap((attempt) =>
+      attempt.finished === undefined ? [] : [{ ...attempt, finished: attempt.finished }],
+    )
+    .toSorted((left, right) => right.finished - left.finished);
+  if (!latest || !previous) return;
+  const latestResults = latest.searches.map(({ result }) => result);
+  if (!latestResults.length) return;
+  if (
+    latestResults.every(({ status }) => status === 'unavailable') &&
+    previous.searches.length &&
+    previous.searches.every(({ result }) => result.status === 'unavailable')
+  )
+    return 'retrieval-unavailable';
+  if (!latest.requestKey || latestResults.some(({ status }) => status !== 'ready')) return;
+  const priorReady = [previous, ...earlier].filter(
+    ({ requestKey, searches }) =>
+      requestKey === latest.requestKey &&
+      searches.length > 0 &&
+      searches.every(({ result }) => result.status === 'ready'),
+  );
+  const priorEvidence = new Set(
+    priorReady.flatMap(({ searches }) => evidenceKeys(searches.map(({ result }) => result))),
+  );
+  if (priorReady.length && evidenceKeys(latestResults).every((entry) => priorEvidence.has(entry)))
+    return 'repeated-search';
+}
+
+const finishingPrompts = {
+  'repeated-search': 'Use the evidence already returned to produce the requested JSON.',
+  'tool-budget': 'Use the evidence already returned to produce the requested JSON.',
+  'retrieval-unavailable':
+    'The last searches were unavailable. If earlier evidence cannot answer the question, return the requested JSON with outcome "insufficient-evidence" and no facts.',
+} satisfies Record<StopReason, string>;
 
 /** Identify the installed Ollama model before running either arm. */
 export async function repositoryPiModel(model: string | undefined, signal: AbortSignal) {
@@ -38,6 +85,7 @@ export async function evaluateRepositoryWithPi({
   agentId,
   prompt,
   tools,
+  attempts,
   signal,
 }: {
   model?: string;
@@ -46,6 +94,7 @@ export async function evaluateRepositoryWithPi({
   agentId: string;
   prompt: string;
   tools: readonly ToolDefinition[];
+  attempts: readonly SearchAttempt[];
   signal: AbortSignal;
 }) {
   const started = performance.now();
@@ -76,19 +125,19 @@ export async function evaluateRepositoryWithPi({
     endpoint,
     model,
     directory,
-    instructions,
+    instructions: 'Answer the repository question using evidence from the available tools.',
     tools: customTools.map(({ name }) => name),
     customTools,
   });
   const cancel = () => void session.abort();
-  let budgetReached = false;
+  let stopReason: StopReason | undefined;
   const unsubscribe = session.subscribe((event) => {
-    if (event.type !== 'tool_execution_end' || toolCalls < toolCallLimit || budgetReached) return;
-    budgetReached = true;
+    if (event.type !== 'tool_execution_end' || stopReason) return;
+    stopReason =
+      repositorySearchStop(attempts) ?? (toolCalls >= toolCallLimit ? 'tool-budget' : undefined);
+    if (!stopReason) return;
     session.setActiveToolsByName([]);
-    void session
-      .steer('Use the evidence already returned to produce the requested JSON.')
-      .catch(cancel);
+    void session.steer(finishingPrompts[stopReason]).catch(cancel);
   });
   bounded.addEventListener('abort', cancel, { once: true });
   try {
@@ -133,7 +182,8 @@ export async function evaluateRepositoryWithPi({
       exitCode: 0,
       observedModel,
       usage,
-      toolBudgetReached: budgetReached,
+      toolBudgetReached: toolCalls >= toolCallLimit,
+      toolStopReason: stopReason,
     };
   } catch (error) {
     signal.throwIfAborted();
@@ -143,7 +193,8 @@ export async function evaluateRepositoryWithPi({
       started,
       exitCode: 1,
       observedModel: null,
-      toolBudgetReached: budgetReached,
+      toolBudgetReached: toolCalls >= toolCallLimit,
+      toolStopReason: stopReason,
       error: sanitizeEvaluationText(
         error instanceof Error ? error.message : 'Pi evaluation failed.',
       ),

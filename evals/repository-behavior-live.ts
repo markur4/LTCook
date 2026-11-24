@@ -596,6 +596,7 @@ try {
         tools: toolDefinitions.filter(
           ({ name }) => variant === 'locate' || name === REPO_SEARCH_TOOL_NAME,
         ),
+        attempts: calls.get(id) ?? [],
         signal: controller.signal,
       });
     }

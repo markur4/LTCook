@@ -151,5 +151,45 @@ The evidence supports a narrow exact-identifier workflow in authorized Pi.
 Broader conceptual workflows need stronger recall and an explicit stop
 condition that distinguishes retrieval failure from lack of relevant code.
 Keep the comparison descriptive until it covers more repositories and
-models. The observed timing differences do not establish a general Locate
-speedup.
+models. A general Locate speedup remains unverified.
+
+## Pi stopping-rule follow-up
+
+The baseline trace showed that every answerable Pi attempt received its last
+new verified source line within 2.3 seconds. Each still made 16 calls.
+The native adapter delivered usable evidence. The remaining gap was when to
+stop searching and how to interpret an unavailable provider.
+
+Three runs used the same Qwen 3.5 4B model digest, source and question fixture,
+ColGREP assets, warmed index policy, and paired order.
+
+| Design | Native task passes | Correct outage responses | 16-call safeguard reached |
+| --- | ---: | ---: | ---: |
+| Original cap and final-answer prompt | 8/8 | 0/2 | 10/10 |
+| Expanded initial instructions | 4/8 | 1/2 | 9/10 |
+| Stop on a repeat without new evidence or two unavailable calls | 8/8 | 2/2 | 0/10 |
+
+The final design uses completed tool replies and request identity. It allows
+a fallback after one unavailable call and asks Pi for the final answer when a
+repeat yields no new evidence or two consecutive calls are unavailable. The
+grade uses the same factual and citation checks. It reports the stopping
+intervention separately from task success.
+
+| Mean per native attempt | Search before | Search after | Locate available before | Locate available after |
+| --- | ---: | ---: | ---: | ---: |
+| Tool calls | 16 | 6.00 | 16 | 7.25 |
+| Repeated requests | 11.25 | 1.00 | 10.50 | 1.00 |
+| Elapsed time | 14.07 s | 5.88 s | 11.49 s | 5.54 s |
+| Serialized tool responses | 11,458 bytes | 6,221 bytes | 14,103 bytes | 4,648 bytes |
+
+Both final arms covered all five labeled ranges, and both correctly
+abstained after reviewing the genuine negative. The outage attempts ended
+after two calls each. All ten attempts used the harness stop. The result
+qualifies a stopping intervention within the evaluation fixture. Ordinary
+Pi sessions need their own verification before adopting the behavior.
+
+The prompt-only run was `bf0122ef-31b6-49b7-b94f-b79f1d89e73a`. The final
+run was `92386478-6399-473e-ac54-bf05cd71e9e6` with implementation SHA-256
+`b34be41dafd18016c39d2de159ae73fee2674ac4ce5a4831d0878e89abc0a0c4`.
+The single paired cohort supports comparison with the recorded baseline.
+Broader model and repository generalization remains unverified.
