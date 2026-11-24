@@ -92,6 +92,7 @@ function ObservedActivity(props: ActivityPanelProps & { selectedAgentId: string 
           <Section theme={theme} title="Services" />
           <ActivityServices
             theme={theme}
+            agentId={selectedAgentId}
             rag={snapshot.rag}
             memory={snapshot.memory}
             agentWorktree={snapshot.agent.worktree?.path}

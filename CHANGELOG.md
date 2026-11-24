@@ -53,7 +53,9 @@ All notable changes to `ltcook` will be documented in this file.
   the first agent chat in each workspace. The Explorer **+** menu offers
   **Activity**, **Team**, and **Tasks** on demand.
   Activity groups repeated tool calls and shows background summaries and
-  acknowledged delegation handoffs in the Session Memory card.
+  acknowledged delegation handoffs in the Session Memory card. Select
+  **Stored for this agent** to read the completed summaries and their source
+  sequence numbers.
 
 - `ltcook restart` stops the local runtime and reopens Paseo. On Linux and macOS,
   `--update` applies the registered AppRC update before starting.
@@ -218,9 +220,10 @@ All notable changes to `ltcook` will be documented in this file.
   `ltcook auth login openai --api-key` for Platform API key mode.
 
 - **Breaking:** 💥 Session Memory stores chronological UAMP and AAB summaries
-  in a new derived store. It uses LFM3 QAD Q4 on CPU with reasoning disabled
-  and includes bounded historical summaries for context. Original histories
-  remain searchable. Earlier extractive cache entries are superseded.
+  in a new derived store. It uses LFM3 QAD Q4 with reasoning disabled and
+  bounded historical summaries for context. Ollama uses GPU acceleration
+  when available and falls back to CPU. Original histories remain searchable.
+  Earlier extractive cache entries are superseded.
 
 <br>
 

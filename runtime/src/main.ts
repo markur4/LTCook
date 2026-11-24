@@ -323,7 +323,6 @@ async function run(): Promise<void> {
         const memorySettings = {
           ...summarization,
           model: process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || sessionMemoryModel,
-          cpuOnly: true,
           generation: JSON.stringify(sessionMemoryGeneration),
         };
         memory = new SessionMemory({

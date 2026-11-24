@@ -475,9 +475,11 @@ summary suffix, including history-dependent responses. A new epoch rebuilds
 from original history where native receipts establish the boundaries.
 
 The previous extractive summarizer is limited to the Agent Evals baseline.
-The production default runs local LFM3 QAD Q4 on CPU at temperature 0.4 with
-reasoning disabled. Memory work is asynchronous and starts
-only when foreground local inference is idle. See the
+The production default runs local LFM3 QAD Q4 at temperature 0.4 with
+reasoning disabled. Ollama uses GPU acceleration when available and falls
+back to CPU. A model already loaded on CPU may stay there until Ollama
+reloads it. Memory work is asynchronous and starts only when foreground
+local inference is idle. See the
 [architecture diagrams](Explanations.md#context-aware-session-memory) and the
 [CPU timing and GPU qualification results](context-aware-session-memory/QUALIFICATION.md#lean-single-seed-qualification).
 
