@@ -616,3 +616,43 @@ The final GPU comparison took 253.45 s. Static checks, 317 Bun Traditional
 Tests with two opt-in skips, and scripted Pi/Paseo Leader adoption passed.
 The 250 Python Traditional Tests also passed. Summarization qualification
 is recorded separately above.
+
+## Downstream qualification with GPT-6 Luna
+
+Both the original-source and compact Session Memory handoffs qualified on
+the two repository-edit fixtures at LTCook revision `88017c`. The single
+diagnostic run used Pi with GPT-6 Luna at high reasoning through the existing
+Codex sign-in. Pi recorded the requested model and provider. The responses
+did not include a separate model ID. LFM3 QAD Q4 ran at seed 17 with full
+GPU residency on the RTX 5090.
+
+| Fixture | Handoff | Executable checks | Turn completed | Tool loop | Pi elapsed |
+| --- | --- | --- | --- | --- | ---: |
+| Trace pairing | Original source | 4/4 | Yes | No | 14.48 s |
+| Trace pairing | Compact Session Memory | 4/4 | Yes | No | 19.39 s |
+| Workspace preparation | Original source | 4/4 | Yes | No | 20.18 s |
+| Workspace preparation | Compact Session Memory | 4/4 | Yes | No | 28.65 s |
+
+The executable checks and scope rules matched across both arms. Pi received
+the same file set and access to read, edit, and Session Memory. Luna made
+scoped edits using two or three tool calls per turn. It did not call the
+Session Memory tool. The compact evidence hashes matched the Bonsai comparison
+for both fixtures.
+
+The earlier local Bonsai original-source controls passed their implementation
+checks and failed turn completion. Trace pairing repeated successful searches
+after editing. Workspace preparation reached the response-length limit after
+editing. With the compact handoff, Bonsai passed trace pairing's edit checks
+and looped, and the workspace worker looped before editing. With the matched
+JSON presentation, the workspace worker repeatedly requested out-of-range
+sources and reached the time limit. These are observed limitations of the
+tested Bonsai configuration as a downstream worker.
+
+The Luna run completed in 136.59 s. The four passing arms close this
+implementation pass for the two fixtures under Luna. Summarization has its
+own qualification record above.
+
+```shell
+bun evals/session-memory-edit-live.ts --context-aware --audit-output \
+  lfm3:1.7b-qad-q4_0 gpt-6-luna
+```
