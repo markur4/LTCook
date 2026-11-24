@@ -19,9 +19,10 @@ test('uses native outcomes and preserves steering while treating an assignment a
     { seq: 3, author: 'user', turnId: '1', text: 'Also retain the original bytes.' },
     { seq: 4, author: 'agent', turnId: '1', text: 'The test passed and the bytes are intact.' },
     { seq: 5, author: 'runtime', turnId: '2', text: 'An approved assignment.' },
-    { seq: 6, author: 'agent', turnId: '2', text: 'Fixed the workspace cache.' },
-    { seq: 7, author: 'user', turnId: '3', text: 'A canceled prompt.' },
-    { seq: 8, author: 'agent', turnId: '3', text: 'A partial answer.' },
+    { seq: 6, author: 'user', turnId: '2', text: 'Use the workspace fallback.' },
+    { seq: 7, author: 'agent', turnId: '2', text: 'Fixed the workspace cache.' },
+    { seq: 8, author: 'user', turnId: '3', text: 'A canceled prompt.' },
+    { seq: 9, author: 'agent', turnId: '3', text: 'A partial answer.' },
   ];
   const outcomes = new Map<string, MemoryTurnOutcome>([
     ['1', 'completed'],
@@ -36,7 +37,7 @@ test('uses native outcomes and preserves steering while treating an assignment a
   ).toEqual([
     ['AAB', [2]],
     ['UAMP', [1, 3, 4]],
-    ['AAB', [6]],
+    ['AAB', [7]],
   ]);
 });
 

@@ -1,8 +1,18 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useComposer, useRpc, type PluginComposerItemProps } from '@getpaseo/plugin/client';
 import { Action, copyText, Modal, TextInput, useToast } from '@getpaseo/plugin/client/ui';
 import { Text, View } from 'react-native';
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSource } from '../../shared/pasted-text';
+
+function removeSourceReference(prompt: string, reference: string): string {
+  const index = prompt.indexOf(reference);
+  if (index < 0) return prompt;
+  const before = prompt.slice(0, index);
+  const after = prompt.slice(index + reference.length);
+  if (before.endsWith('\n\n')) return before.slice(0, -2) + after;
+  if (!before && after.startsWith('\n\n')) return after.slice(2);
+  return before + after;
+}
 
 export function PastedTextComposerItem({ theme }: PluginComposerItemProps) {
   const composer = useComposer();
@@ -13,6 +23,20 @@ export function PastedTextComposerItem({ theme }: PluginComposerItemProps) {
   const [text, setText] = useState('');
   const [preview, setPreview] = useState<string>();
   const drafts = composer.attachments.filter(({ sourceId }) => sourceId === pastedTextSource.id);
+  const knownReferences = useRef(new Set<string>());
+  useLayoutEffect(() => {
+    const current = new Set(drafts.map(({ item }) => item.identifier));
+    let prompt = composer.prompt;
+    for (const reference of knownReferences.current) {
+      if (!current.has(reference)) prompt = removeSourceReference(prompt, reference);
+    }
+    knownReferences.current = current;
+    // > Sending can clear native chips before the daemon binds the draft to its source.
+    if (prompt !== composer.prompt) {
+      composer.setPrompt(prompt);
+      setPreview(undefined);
+    }
+  }, [composer, drafts]);
   if (composer.agent.provider && !['ltcook', 'pi', 'codex'].includes(composer.agent.provider))
     return null;
   return (
@@ -70,7 +94,7 @@ export function PastedTextComposerItem({ theme }: PluginComposerItemProps) {
                   title="Remove"
                   onPress={async () => {
                     composer.removeAttachment({ sourceId: pastedTextSource.id, itemId: item.id });
-                    composer.setPrompt(composer.prompt.replace(item.identifier, '').trimEnd());
+                    composer.setPrompt(removeSourceReference(composer.prompt, item.identifier));
                     setPreview(undefined);
                     await discard({ id: item.id });
                   }}

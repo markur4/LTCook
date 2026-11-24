@@ -50,10 +50,13 @@ All notable changes to `ltcook` will be documented in this file.
 - `ltcook restart` stops the local runtime and reopens Paseo. On Linux and macOS,
   `--update` applies the registered AppRC update before starting.
 
-- Session Memory extracts sourced context from Paseo conversations in the
-  background. Agents in the same authorized Team and workspace can search it
-  and retrieve cited messages. Core can include focused Memory and recent
-  messages in a delegation handoff.
+- Session Memory summarizes completed Discussions and related Agent Actions
+  in the background. Authorized agents can search summaries and original
+  messages, retrieve cited sources, and opt into Session Memory for delegation.
+
+- Paseo's **Paste as attachment** composer control keeps reference text in a
+  separate attachment. LTCook stores submitted content on the daemon host
+  and makes it available to authorized agents through the source message.
 
 - RIED provides bounded directory maps, targeted source outlines, richer
   repository metadata, and live Git details with optional local base comparison.
@@ -199,14 +202,10 @@ All notable changes to `ltcook` will be documented in this file.
   through `ltcook auth login openai-codex` for ChatGPT or
   `ltcook auth login openai --api-key` for Platform API key mode.
 
-- Session Memory searches original conversation messages alongside extracted
-  evidence. Search and delegation fit context to token budgets and preserve
-  citations for the full source.
-
-- **Breaking:** 💥 Session Memory preserves original user messages and appends
-  categorized agent and tool findings. Each tool result entry now has one
-  `seq` and an `author`. The runtime rebuilds the derived cache from Paseo
-  history when it starts with the new format.
+- **Breaking:** 💥 Session Memory stores chronological UAMP and AAB summaries
+  in a new derived store. It uses LFM3 QAD Q4 on CPU with reasoning disabled
+  and includes bounded historical summaries for context. Original histories
+  remain searchable. Earlier extractive cache entries are superseded.
 
 <br>
 

@@ -135,20 +135,26 @@ export class MemoryStore {
     })();
   }
 
-  invalidate(agentId: string, from?: number) {
+  invalidate(agentId: string, epoch: string, from?: number) {
     this.database.transaction(() => {
       if (from === undefined) {
-        this.database.prepare('DELETE FROM memory_summary WHERE agent = ?').run(agentId);
-        this.database.prepare('DELETE FROM memory_prompt WHERE agent = ?').run(agentId);
+        this.database
+          .prepare('DELETE FROM memory_summary WHERE agent = ? AND epoch = ?')
+          .run(agentId, epoch);
+        this.database
+          .prepare('DELETE FROM memory_prompt WHERE agent = ? AND epoch = ?')
+          .run(agentId, epoch);
       } else {
         this.database
-          .prepare('DELETE FROM memory_summary WHERE agent = ? AND position >= ?')
-          .run(agentId, from);
+          .prepare('DELETE FROM memory_summary WHERE agent = ? AND epoch = ? AND position >= ?')
+          .run(agentId, epoch, from);
         this.database
-          .prepare('DELETE FROM memory_prompt WHERE agent = ? AND seq >= ?')
-          .run(agentId, from);
+          .prepare('DELETE FROM memory_prompt WHERE agent = ? AND epoch = ? AND seq >= ?')
+          .run(agentId, epoch, from);
       }
-      this.database.prepare('DELETE FROM memory_cursor WHERE agent = ?').run(agentId);
+      this.database
+        .prepare('DELETE FROM memory_cursor WHERE agent = ? AND epoch = ?')
+        .run(agentId, epoch);
     })();
   }
 

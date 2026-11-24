@@ -518,6 +518,16 @@ try {
   if (providerError) throw providerError;
   assert.equal(peerTurn.status, 'idle', peerTurn.error);
   assert(peerMemoryRead, 'The adjutant did not read the leader memory through its native Pi tool');
+  const peerUpdate = 'Inspect the fixture with the authorized native peer report.';
+  const peerDelivery = await leader.run(peerUpdate, { sourceAgentId: childId, timeoutMs: 30_000 });
+  if (providerError) throw providerError;
+  assert.equal(peerDelivery.status, 'idle', peerDelivery.error);
+  const deliveryMemory = await createPaseoMemorySource(host.api, secret).read(
+    leaderId,
+    undefined,
+    'tail',
+  );
+  assert.equal(deliveryMemory.messages.find(({ text }) => text === peerUpdate)?.author, 'runtime');
   const nativeControls = createHostClient(host.listen, { clientId: 'ltcook-override-acceptance' });
   try {
     await nativeControls.connect();

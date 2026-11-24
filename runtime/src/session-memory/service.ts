@@ -112,7 +112,7 @@ export class SessionMemory {
   private readonly budgets: MemoryBudgets;
   private readonly pending = new Map<string, { force: boolean; queuedAt: number }>();
   private readonly foreground = new Set<string>();
-  private readonly localTurns = new Map<string, string>();
+  private readonly activeTurns = new Map<string, string>();
   private readonly watchers = new Map<string, () => void>();
   private readonly abort = new AbortController();
   private drain?: Promise<void>;
@@ -156,12 +156,10 @@ export class SessionMemory {
     this.store.saveTurn(agentId, { ...turn, scope: prior?.scope ?? turn.scope });
     const key = JSON.stringify([agentId, turn.turnId]);
     if (turn.outcome === 'running') {
-      if (local) {
-        const previous = this.localTurns.get(agentId);
-        if (previous) this.foreground.delete(previous);
-        this.localTurns.set(agentId, key);
-        this.foregroundStarted(key);
-      }
+      const previous = this.activeTurns.get(agentId);
+      if (previous) this.foreground.delete(previous);
+      this.activeTurns.set(agentId, key);
+      if (local) this.foregroundStarted(key);
       if (this.options.source.watch && !this.watchers.has(agentId)) {
         this.watchers.set(
           agentId,
@@ -169,9 +167,12 @@ export class SessionMemory {
         );
       }
     } else {
-      this.watchers.get(agentId)?.();
-      this.watchers.delete(agentId);
-      if (this.localTurns.get(agentId) === key) this.localTurns.delete(agentId);
+      const active = this.activeTurns.get(agentId);
+      if (active === undefined || active === key) {
+        this.watchers.get(agentId)?.();
+        this.watchers.delete(agentId);
+        this.activeTurns.delete(agentId);
+      }
       this.foregroundEnded(key);
     }
     this.observe(agentId);
@@ -180,8 +181,8 @@ export class SessionMemory {
   agentClosed(agentId: string): void {
     this.watchers.get(agentId)?.();
     this.watchers.delete(agentId);
-    const foreground = this.localTurns.get(agentId);
-    this.localTurns.delete(agentId);
+    const foreground = this.activeTurns.get(agentId);
+    this.activeTurns.delete(agentId);
     if (foreground) this.foregroundEnded(foreground);
     this.observe(agentId, true);
   }
@@ -271,7 +272,7 @@ export class SessionMemory {
   }
 
   private async invalidate(agentId: string, epoch: string, from?: number) {
-    this.store.invalidate(agentId, from);
+    this.store.invalidate(agentId, epoch, from);
     await this.options.source.invalidateAttachments?.(agentId, epoch, from);
   }
 
@@ -319,13 +320,13 @@ export class SessionMemory {
         .filter(({ type }) => type === 'AAB')
         .flatMap(({ messages }) => messages.map(({ seq }) => seq)),
     ]);
-    const latestTurn = messages.at(-1)?.turnId;
+    const latestTurn = messages.findLast(({ turnId }) => turnId !== undefined)?.turnId;
     for (const message of messages) {
       const pending =
         message.turnId &&
+        message.turnId === latestTurn &&
         !outcomes.has(message.turnId) &&
-        (turns.get(message.turnId)?.outcome === 'running' ||
-          (!force && message.turnId === latestTurn));
+        (turns.get(message.turnId)?.outcome === 'running' || !force);
       const openAction =
         !force &&
         !message.turnId &&
@@ -432,15 +433,23 @@ export class SessionMemory {
       this.store.prompts(agentId, tail.epoch).map((item) => [item.seq, item]),
     );
     const through = state?.seq ?? -1;
-    let recent = tail.messages;
-    if (tail.start !== undefined && tail.start > Math.max(0, through) + 1) {
-      const page = await this.options.source
-        .read(agentId, state && state.seq >= 0 ? state : undefined)
-        .catch(() => undefined);
-      if (page && !page.reset && page.epoch === tail.epoch) {
-        recent = [...page.messages.filter(({ seq }) => seq < tail.start!), ...recent];
+    const recent: MemorySourceMessage[] = [];
+    let cursor = state && state.seq >= 0 ? state : undefined;
+    const tailStart = tail.start;
+    if (tailStart !== undefined) {
+      while (tailStart > Math.max(0, cursor?.seq ?? through) + 1) {
+        const page = await this.options.source.read(agentId, cursor).catch(() => undefined);
+        if (!page) break;
+        if (page.reset || page.epoch !== tail.epoch || page.latest < tail.latest) {
+          this.observe(agentId, true);
+          return 'Supplemental Session Memory. This context is potentially incomplete.';
+        }
+        if (page.through <= (cursor?.seq ?? through)) break;
+        recent.push(...page.messages.filter(({ seq }) => seq > through && seq < tailStart));
+        cursor = { epoch: tail.epoch, seq: page.through };
       }
     }
+    recent.push(...tail.messages);
     for (const item of recent)
       if (item.author === 'user')
         prompts.set(item.seq, { seq: item.seq, text: item.text, author: 'user' });

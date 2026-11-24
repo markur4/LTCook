@@ -119,9 +119,28 @@ function readMessages(
           return [{ ...origin, messageId: item.messageId, author: 'agent', text: item.text }];
         case 'tool_call': {
           if (item.status === 'running') return [];
-          if (item.agentMessage?.event === 'message')
+          // > Paseo displays delivered peer and system prompts as tool cards.
+          if (item.agentMessage)
             return [
-              { ...origin, intermediate: true, author: 'agent', text: item.agentMessage.text },
+              {
+                ...origin,
+                messageId: item.callId,
+                author: 'runtime',
+                text: item.agentMessage.text,
+              },
+            ];
+          if (
+            item.name === 'heartbeat' &&
+            item.callId.startsWith('paseo-system:') &&
+            item.detail.type === 'plain_text'
+          )
+            return [
+              {
+                ...origin,
+                messageId: item.callId,
+                author: 'runtime',
+                text: item.detail.text ?? '',
+              },
             ];
           const result = toolOutcome(item);
           return result

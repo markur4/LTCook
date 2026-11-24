@@ -148,24 +148,17 @@ test('searches older source text omitted by extraction and returns a full cited 
 });
 
 test('a handoff retains a pending correction behind a tool-heavy timeline tail', async () => {
+  const messages: MemorySourceMessage[] = [
+    first,
+    finding,
+    correction,
+    ...Array.from({ length: 5 }, (_, index) => ({ ...issue, seq: index + 4 })),
+  ];
   const memory = new SessionMemory({
     databasePath: ':memory:',
-    source: {
-      async read(_agentId, _cursor, direction) {
-        return direction === 'tail'
-          ? { epoch: 'fixture', latest: 50, start: 4, through: 50, reset: false, messages: [] }
-          : {
-              epoch: 'fixture',
-              latest: 50,
-              start: 1,
-              through: 48,
-              reset: false,
-              messages: [correction],
-            };
-      },
-    },
+    source: timeline(() => ({ epoch: 'fixture', messages })),
     async summarize() {
-      throw new Error('A handoff must never invoke extraction directly');
+      throw new Error('A handoff must never invoke summarization directly');
     },
   });
   try {
@@ -261,6 +254,91 @@ test('stores chronological summaries, preserves original authority, and removes 
   } finally {
     await memory.close();
     await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test('a delayed read cannot invalidate summaries rebuilt for a replacement history', async () => {
+  let epoch = 'initial';
+  let messages: MemorySourceMessage[] = [
+    { ...first, turnId: 'initial' },
+    { ...finding, turnId: 'initial' },
+  ];
+  const source = timeline(() => ({ epoch, messages }));
+  const readerWaiting = Promise.withResolvers<void>();
+  const releaseReader = Promise.withResolvers<void>();
+  let pauseRead = false;
+  let requests = 0;
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: {
+      async read(...args) {
+        if (pauseRead && args[2] === 'tail') {
+          pauseRead = false;
+          readerWaiting.resolve();
+          await releaseReader.promise;
+        }
+        return source.read(...args);
+      },
+    },
+    async summarize(type) {
+      requests++;
+      return { type, text: 'Retained model evidence.', complete: true, elapsedMs: 1 };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'initial', outcome: 'completed' }, false);
+    await eventually(async () => !(await memory.search('leader', '', '')).incomplete);
+
+    pauseRead = true;
+    const delayedRead = memory.search('leader', '', 'retained model');
+    await readerWaiting.promise;
+    epoch = 'replacement';
+    messages = [
+      { ...correction, seq: 1, turnId: 'replacement' },
+      { ...finding, turnId: 'replacement' },
+    ];
+    memory.turn('leader', { turnId: 'replacement', outcome: 'completed' }, false);
+    await eventually(async () => !(await memory.search('leader', '', '')).incomplete);
+    expect(requests).toBe(2);
+
+    releaseReader.resolve();
+    await delayedRead;
+    const rebuilt = await memory.search('leader', '', 'retained model');
+    expect(rebuilt.incomplete).toBe(false);
+    expect(rebuilt.matches).toMatchObject([
+      { epoch: 'replacement', entries: [{ kind: 'UAMP', sources: [1, 2] }] },
+    ]);
+    expect(requests).toBe(2);
+  } finally {
+    releaseReader.resolve();
+    await memory.close();
+  }
+});
+
+test('continues a newer turn when the older provider terminal event was missed', async () => {
+  const messages: MemorySourceMessage[] = [
+    { ...first, turnId: 'older' },
+    { seq: 2, author: 'tool', text: 'CACHE_CHECK PASS', turnId: 'older' },
+    { ...correction, turnId: 'newer' },
+    { seq: 4, author: 'agent', text: 'I will advance the cursor.', turnId: 'newer' },
+  ];
+  const completed: string[] = [];
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type) {
+      completed.push(type);
+      return { type, text: 'Observed evidence.', complete: true, elapsedMs: 1 };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'older', outcome: 'running' }, true);
+    memory.turn('leader', { turnId: 'newer', outcome: 'running' }, false);
+    memory.turn('leader', { turnId: 'newer', outcome: 'completed' }, false);
+    await eventually(async () => !(await memory.search('leader', '', '')).incomplete);
+    expect(completed).toEqual(['AAB', 'UAMP']);
+  } finally {
+    await memory.close();
   }
 });
 

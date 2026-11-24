@@ -53,7 +53,7 @@ export function identifyMemoryUnits(
     turn.push(message);
     turns.set(message.turnId, turn);
   }
-  const latestTurn = messages.at(-1)?.turnId;
+  const latestTurn = messages.findLast(({ turnId }) => turnId !== undefined)?.turnId;
   for (const [turnId, items] of turns) {
     const outcome = turnId ? outcomes.get(turnId) : undefined;
     const responses = items.filter(
