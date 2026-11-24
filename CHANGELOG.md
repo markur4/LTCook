@@ -216,9 +216,10 @@ All notable changes to `ltcook` will be documented in this file.
   `ltcook auth login openai --api-key` for Platform API key mode.
 
 - **Breaking:** 💥 Session Memory stores chronological UAMP and AAB summaries
-  in a new derived store. It uses LFM3 QAD Q4 on CPU with reasoning disabled
-  and includes bounded historical summaries for context. Original histories
-  remain searchable. Earlier extractive cache entries are superseded.
+  in a new derived store. It uses LFM3 QAD Q4 with reasoning disabled and
+  bounded historical summaries for context. Ollama uses GPU acceleration
+  when available and falls back to CPU. Original histories remain searchable.
+  Earlier extractive cache entries are superseded.
 
 <br>
 
