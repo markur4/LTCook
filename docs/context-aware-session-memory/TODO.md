@@ -11,5 +11,6 @@
 - [x] Preserve named tool outcomes and recover missing task identifiers from original messages.
 - [x] Prepare Immediate Context and the matched evaluation with identical source portions.
 - [x] Run the exact-retention replays and held-out index fixture on GPU. Review flagged claims and record the outcomes in [Immediate Context qualification](QUALIFICATION.md#immediate-context-qualification).
-- [ ] Qualify attachment summarization with a fixture that supplies the attachment to the summarizer. Recheck named outcomes and unsupported claims in the cache-recovery and rewind replays.
-- [ ] Qualify the Pi edits after establishing a passing workspace-preparation original-search control and resolving the Immediate Context timeouts.
+- [x] Qualify the attachment fixture and recheck exact named results. Measure the reference to a previous Discussion in the [lean single-seed run](QUALIFICATION.md#lean-single-seed-qualification).
+- [x] Establish passing original-source Pi controls for trace pairing and workspace preparation.
+- [ ] Qualify the Immediate Context Pi edits. Both candidate turns stopped on repeated tool calls, and workspace preparation failed the identical-replacement check.

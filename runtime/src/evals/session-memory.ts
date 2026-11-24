@@ -23,6 +23,7 @@ import {
 } from './session-memory-extractive.js';
 import { EVAL_MODEL, LUNA_EVALUATION, hash } from './setup.js';
 import { evaluateMemoryHandoff } from './session-memory-handoff.js';
+import { contradictsMemoryFact, matchesMemoryFact } from './session-memory-facts.js';
 import {
   memoryCadenceFixture,
   memoryFixtures,
@@ -146,15 +147,14 @@ function gradeMemory(
   const eligible = fixture.facts.filter(({ source }) => actualSources.has(source));
   const derived = entries.filter(({ author }) => author === 'agent' || author === 'tool');
   const evaluateFact = (fact: MemoryFixture['facts'][number]) => {
-    const matching = derived.filter(({ text }) => fact.expected.test(text));
+    const matching = derived.filter(({ text }) => matchesMemoryFact(fact, text));
     const source = actualSources.get(fact.source);
     return {
       label: fact.label,
       source: fact.source,
       critical: fact.critical ?? false,
       missing: !matching.length,
-      incorrect:
-        fact.contradicts !== undefined && derived.some(({ text }) => fact.contradicts?.test(text)),
+      incorrect: derived.some(({ text }) => contradictsMemoryFact(fact, text)),
       wrongAttribution: matching.some(
         ({ seq, author }) => seq !== fact.source || author !== source?.author,
       ),

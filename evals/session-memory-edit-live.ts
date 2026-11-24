@@ -45,6 +45,7 @@ import {
   editTranscript,
   sessionMemoryEditCases,
 } from './session-memory-edit-fixtures.js';
+import { MemoryEditProgress } from './session-memory-edit-progress.js';
 
 const root = path.resolve(import.meta.dir, '..');
 const { summarization } = resolveEvaluationContext({
@@ -58,7 +59,7 @@ const args = process.argv.slice(2);
 const contextAware = args.includes('--context-aware');
 const [
   extractorName = contextAware ? contextModel : 'LiquidAI/lfm2.5-1.2b-instruct:q8_0',
-  workerName = contextAware ? LUNA_EVALUATION.model : EVAL_MODEL,
+  workerName = EVAL_MODEL,
 ] = args.filter((value) => !value.startsWith('--'));
 if (contextAware && modelTag(extractorName) !== modelTag(contextModel))
   throw new Error('The context-aware comparison uses the configured Session Memory summarizer.');
@@ -71,8 +72,8 @@ const selectedStrategies = args
   .find((value) => value.startsWith('--strategy='))
   ?.slice('--strategy='.length)
   .split(',');
-const strategies = contextStrategies.filter(
-  (mode) => !selectedStrategies || selectedStrategies.includes(mode),
+const strategies = contextStrategies.filter((mode) =>
+  selectedStrategies ? selectedStrategies.includes(mode) : mode === 'immediate',
 );
 if (selectedStrategies && strategies.length !== selectedStrategies.length)
   throw new Error('Unknown or duplicate Session Memory strategy.');
@@ -171,32 +172,47 @@ async function editWithPi(input: {
       cwd: workspace,
       directory: path.join(arm, 'pi'),
       instructions:
-        'You are a worker implementing an authorized edit. Work in the supplied checkout. Edit only the assigned file. Use the latest confirmed user decision when there is relevant history. Make the smallest edit you can and keep the final report brief.',
+        'Implement the authorized edit in the supplied checkout. Edit only the assigned file. Use the latest explicit user decision. Once you have enough evidence, read the file and make the smallest edit. Reuse tool results. Finish with a brief report.',
       tools: ['read', 'edit', ...(mode === 'conventional' ? [] : [search.name])],
       customTools: mode === 'conventional' ? [] : [search],
     };
     const { session } = await (hostedSession ?? createLocalPiEvaluationSession)(options);
-    const bounded = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
+    const loop = new AbortController();
+    const bounded = AbortSignal.any([signal, loop.signal, AbortSignal.timeout(120_000)]);
     const abort = () => void session.abort();
     bounded.addEventListener('abort', abort, { once: true });
     const calls: Array<{ tool: string; failed: boolean }> = [];
+    const argumentsByCall = new Map<string, unknown>();
+    const progress = new MemoryEditProgress();
     const unsubscribe = session.agent.subscribe((event) => {
-      if (event.type === 'tool_execution_end')
+      if (event.type === 'tool_execution_start') argumentsByCall.set(event.toolCallId, event.args);
+      if (event.type === 'tool_execution_end') {
         calls.push({ tool: event.toolName, failed: event.isError });
+        if (
+          argumentsByCall.has(event.toolCallId) &&
+          progress.record(event.toolName, argumentsByCall.get(event.toolCallId), event.result)
+        )
+          loop.abort();
+        argumentsByCall.delete(event.toolCallId);
+      }
     });
     try {
       bounded.throwIfAborted();
-      await session.prompt(
-        [
-          fixture.assignment,
-          ...(mode === 'conventional'
-            ? [fixture.manualHandoff]
-            : [
-                'Use Session Memory and authorized source search for context needed to complete this assignment.',
-              ]),
-          ...(handoff ? [handoff] : []),
-        ].join('\n\n'),
-      );
+      await session
+        .prompt(
+          [
+            fixture.assignment,
+            ...(mode === 'conventional'
+              ? [fixture.manualHandoff]
+              : [
+                  'Use the supplied evidence first. If a required decision is missing, search Session Memory for specific terms, then read the matching original source.',
+                ]),
+            ...(handoff ? [handoff] : []),
+          ].join('\n\n'),
+        )
+        .catch((error: unknown) => {
+          if (!bounded.aborted || signal.aborted) throw error;
+        });
       const answers = session.messages.filter((message) => message.role === 'assistant');
       const lastAnswer = answers.at(-1);
       const stopReason = lastAnswer?.stopReason;
@@ -204,9 +220,11 @@ async function editWithPi(input: {
         ({ responseModel }) => responseModel && modelTag(responseModel) !== modelTag(model),
       )
         ? 'The Pi provider returned a different worker model.'
-        : bounded.aborted || !stopReason || ['error', 'aborted', 'length'].includes(stopReason)
-          ? sanitizeEvaluationText(lastAnswer?.errorMessage || 'Pi did not finish the edit turn.')
-          : undefined;
+        : loop.signal.aborted
+          ? 'Repeated tool calls returned unchanged results.'
+          : bounded.aborted || !stopReason || ['error', 'aborted', 'length'].includes(stopReason)
+            ? sanitizeEvaluationText(lastAnswer?.errorMessage || 'Pi did not finish the edit turn.')
+            : undefined;
       const usage = answers.reduce(
         (total, { usage }) => ({
           inputTokens: total.inputTokens + usage.input + usage.cacheRead + usage.cacheWrite,
@@ -273,66 +291,63 @@ try {
     const transcript = editTranscript(fixture);
     const messages = transcript.turns.flat();
     if (contextAware) {
-      const conventional = await editWithPi({
-        fixture,
-        mode: 'conventional',
-        handoff: '',
-        source: transcriptSource(messages),
-        model: worker.name,
-        hostedSession,
-      });
-      console.error(
-        `${fixture.id} conventional: ${conventional.passed ? 'passed' : 'failed'} in ${conventional.elapsedMs} ms`,
-      );
-      const arms = [];
-      const ordered = [
-        'original-search',
-        ...strategies.filter((mode) => mode !== 'original-search'),
-      ] as const;
-      let sourceEstimatedTokens = 0;
-      for (const mode of ordered) {
-        for (const seed of mode === 'original-search' ? [undefined] : seeds) {
-          const comparison = await compareContextMemory(transcript, {
-            settings: { ...summarization, cpuOnly: args.includes('--cpu-only') },
-            digest: extractor.digest,
-            weightsDigest: extractor.weightsDigest,
-            signal,
-            progress: (event) => console.error(event),
-            strategies: [mode],
-            seed,
-            auditOutput: args.includes('--audit-output'),
-          });
-          sourceEstimatedTokens = comparison.sourceEstimatedTokens;
-          const { handoff, ...summary } = comparison.arms[0]!;
-          console.error(`Running native Pi ${mode} edit for ${fixture.id}`);
-          const workerResult = await editWithPi({
-            fixture,
-            mode,
-            handoff: mode === 'original-search' ? '' : handoff,
-            source: transcriptSource(messages),
-            model: worker.name,
-            hostedSession,
-            seed,
-          });
-          arms.push({ ...summary, worker: workerResult });
-          console.error(
-            `${fixture.id} ${mode}: ${workerResult.passed ? 'passed' : 'failed'} in ${workerResult.elapsedMs} ms`,
-          );
+      const compare = (strategy: ContextStrategy, seed?: number) =>
+        compareContextMemory(transcript, {
+          settings: summarization,
+          digest: extractor.digest,
+          weightsDigest: extractor.weightsDigest,
+          signal,
+          progress: (event) => console.error(event),
+          strategies: [strategy],
+          seed,
+          auditOutput: args.includes('--audit-output'),
+        });
+      const edit = async (mode: ContextStrategy, handoff: string, seed?: number) => {
+        console.error(`Running native Pi ${mode} edit for ${fixture.id}`);
+        const result = await editWithPi({
+          fixture,
+          mode,
+          handoff,
+          source: transcriptSource(messages),
+          model: worker.name,
+          hostedSession,
+          seed,
+        });
+        console.error(
+          `${fixture.id} ${mode}: ${result.passed ? 'passed' : (result.error ?? 'failed edit checks')} in ${result.elapsedMs} ms`,
+        );
+        return result;
+      };
+      const control = await compare('original-search');
+      const { handoff: originalEvidence, ...original } = control.arms[0]!;
+      const originalControlRetrievedCriticalFacts = original.grade
+        .filter(({ critical }) => critical)
+        .every(({ retrievedByOriginalSearch }) => retrievedByOriginalSearch);
+      const baseline =
+        originalEvidence && originalControlRetrievedCriticalFacts
+          ? await edit('original-search', originalEvidence)
+          : undefined;
+      const arms = [{ ...original, worker: baseline }];
+      if (baseline?.passed) {
+        for (const mode of strategies.filter((item) => item !== 'original-search')) {
+          for (const seed of seeds) {
+            const comparison = await compare(mode, seed);
+            const { handoff, ...summary } = comparison.arms[0]!;
+            arms.push({ ...summary, worker: await edit(mode, handoff, seed) });
+          }
         }
-      }
-      const sourceControl = arms.find(({ strategy }) => strategy === 'original-search')?.worker;
+      } else
+        console.error(
+          `${fixture.id}: summary edits skipped because the original-source control did not pass.`,
+        );
       scenarios.push({
         fixture: fixture.id,
-        sourceEstimatedTokens,
+        sourceEstimatedTokens: control.sourceEstimatedTokens,
         transcriptHash: hash(JSON.stringify(messages)),
         arms,
-        conventional,
-        originalControlPassed: sourceControl?.passed ?? false,
-        originalControlRetrievedCriticalFacts:
-          sourceControl !== undefined &&
-          transcript.facts
-            .filter(({ critical }) => critical)
-            .every(({ label }) => sourceControl.retrievedFacts.includes(label)),
+        originalControlPassed: baseline?.passed ?? false,
+        originalControlRetrievedCriticalFacts,
+        comparisonInconclusive: !baseline?.passed,
       });
       continue;
     }

@@ -3,6 +3,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { MemoryFixture } from '../runtime/src/evals/session-memory-fixtures.js';
+import {
+  contradictsMemoryFact,
+  matchesMemoryFact,
+} from '../runtime/src/evals/session-memory-facts.js';
 import { peakRunnerRss, residency } from '../runtime/src/evals/session-memory.js';
 import {
   ollamaEndpoint,
@@ -25,10 +29,7 @@ import {
   sessionMemoryModel,
   summarizeMemory,
 } from '../runtime/src/session-memory/summarization.js';
-import {
-  estimateMemoryTokens,
-  memoryIdentifierMatches,
-} from '../runtime/src/session-memory/text.js';
+import { estimateMemoryTokens } from '../runtime/src/session-memory/text.js';
 import {
   identifyMemoryUnits,
   observedMemoryChecks,
@@ -40,9 +41,9 @@ export const contextStrategies = [
   'no-context',
   'task-context',
   'immediate',
-  'rolling',
   'original-search',
 ] as const;
+export const routineContextStrategies = ['task-context', 'immediate'] as const;
 export const defaultContextSeeds = [17] as const;
 
 export function contextSeeds(raw?: string) {
@@ -58,10 +59,24 @@ export function contextSeeds(raw?: string) {
 export type ContextStrategy = (typeof contextStrategies)[number];
 export const contextModel = sessionMemoryModel;
 
+function contextSettings(settings: OllamaSettings, seed?: number): OllamaSettings {
+  return {
+    ...settings,
+    model: contextModel,
+    keepAlive: 900,
+    cpuOnly: settings.cpuOnly ?? false,
+    generation: JSON.stringify({
+      ...sessionMemoryGeneration,
+      options: { ...sessionMemoryGeneration.options, seed },
+    }),
+  };
+}
+
 type Request = {
   kind?: MemoryUnit['type'];
   first: number;
   sources?: number[];
+  attachmentSources?: number[];
   sourceHash?: string;
   prefixHash?: string;
   historyIds?: string[];
@@ -106,6 +121,33 @@ function logicalUnits(fixture: MemoryFixture) {
   return identifyMemoryUnits(messages, prompts, 3000, true);
 }
 
+/** Benchmark one production-shaped request without running any preceding summaries. */
+export async function sampleContextMemory(
+  fixture: MemoryFixture,
+  input: { settings: OllamaSettings; digest: string; seed: number; signal: AbortSignal },
+) {
+  const settings = contextSettings({ ...input.settings, cpuOnly: true }, input.seed);
+  const unit = logicalUnits(fixture).find(
+    ({ type, messages }) => type === 'AAB' && messages.length === 1 && messages[0]?.seq === 8,
+  );
+  if (!unit) throw new Error('The CPU timing fixture has no isolated cache-check action.');
+  const [portion, extra] = prepareMemorySummaries(
+    { ...unit, task: unit.task ?? fixture.taskContext },
+    [],
+  );
+  if (!portion || extra) throw new Error('The CPU timing sample must fit in one request.');
+  const result = await summarizeMemory(settings, portion.prompt, input.signal, unit.type, true);
+  const loaded = await residency(ollamaEndpoint(settings.endpoint), input.digest, input.signal);
+  return {
+    fixture: fixture.id,
+    seed: input.seed,
+    sources: portion.sources,
+    originalEstimatedTokens: portion.sourceSize,
+    cpuVerified: !!loaded && loaded.bytes > 0 && loaded.gpuBytes === 0,
+    ...result,
+  };
+}
+
 const evaluationAgent = 'leader';
 const evaluationEpoch = 'fixed-history';
 
@@ -140,6 +182,7 @@ async function withProductionMemory(
   fixture: MemoryFixture,
   records: StoredMemorySummary[],
   signal: AbortSignal,
+  originalControl: boolean,
 ) {
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-handoff-'));
   const file = path.join(directory, 'memory.sqlite');
@@ -201,10 +244,33 @@ async function withProductionMemory(
         signal,
         true,
       );
+      const originalSearch = search.matches.flatMap(({ entries }) => entries);
+      const corrections = originalControl
+        ? await Promise.all(
+            fixture.correctionSources.map((seq) =>
+              memory.sourceMessage(evaluationAgent, '', {
+                agentId: evaluationAgent,
+                epoch: evaluationEpoch,
+                seq,
+              }),
+            ),
+          )
+        : [];
+      const originalHandoff =
+        originalControl && corrections.every((item) => item !== undefined)
+          ? 'Authorized original conversation evidence. Use the latest explicit user decision.\n' +
+            JSON.stringify(
+              [
+                ...originalSearch.filter(({ seq }) => !fixture.correctionSources.includes(seq)),
+                ...corrections,
+              ].map(({ seq, author, text }) => ({ seq, author, text })),
+            )
+          : '';
       return {
         handoff,
         handoffWithoutRecovery,
-        originalSearch: search.matches.flatMap(({ entries }) => entries),
+        originalSearch,
+        originalHandoff,
         originalSearchIncomplete: search.incomplete,
         originalSearchMs: performance.now() - searchStarted,
         assemblyMs: performance.now() - elapsed,
@@ -222,43 +288,8 @@ export function gradesMemoryFact(
   entry: Pick<MemorySearchEntry, 'seq' | 'sources' | 'text'>,
 ) {
   return (
-    (entry.sources ?? [entry.seq]).includes(fact.source) &&
-    fact.expected.test(entry.text) &&
-    (!fact.identifiers ||
-      memoryIdentifierMatches(entry.text, fact.identifiers).size === fact.identifiers.length)
+    (entry.sources ?? [entry.seq]).includes(fact.source) && matchesMemoryFact(fact, entry.text)
   );
-}
-
-/** Retain the former rolling window solely as a matched evaluation control. */
-function rollingControl(summaries: readonly MemoryHistoryEntry[]) {
-  const active: { line: string; cost: number }[] = [];
-  let used = 0;
-  const units = new Map<string, { type: MemoryUnit['type']; text: string[] }>();
-  for (const [index, summary] of summaries.entries()) {
-    if (summary.noUsefulInformation) continue;
-    const id = summary.unitId ?? String(index);
-    const unit = units.get(id) ?? { type: summary.type, text: [] };
-    unit.text.push(summary.text);
-    units.set(id, unit);
-  }
-  for (const unit of units.values()) {
-    const line = JSON.stringify({ type: unit.type, text: unit.text.join('\n') }) + '\n';
-    const cost = estimateMemoryTokens(line);
-    if (!line || cost > 4096) continue;
-    active.push({ line, cost });
-    used += cost;
-    if (used < 4096) continue;
-    while (used > 2048) used -= active.shift()!.cost;
-  }
-  return (available: number) => {
-    let first = 0;
-    let size = used;
-    while (size > available && first < active.length) size -= active[first++]!.cost;
-    return active
-      .slice(first)
-      .map(({ line }) => line)
-      .join('');
-  };
 }
 
 export async function compareContextMemory(
@@ -275,16 +306,7 @@ export async function compareContextMemory(
   },
 ) {
   const { signal, digest, weightsDigest, progress } = input;
-  const settings = {
-    ...input.settings,
-    model: contextModel,
-    keepAlive: 900,
-    cpuOnly: input.settings.cpuOnly ?? false,
-    generation: JSON.stringify({
-      ...sessionMemoryGeneration,
-      options: { ...sessionMemoryGeneration.options, seed: input.seed },
-    }),
-  };
+  const settings = contextSettings(input.settings, input.seed);
   const endpoint = ollamaEndpoint(settings.endpoint);
   const units = logicalUnits(fixture);
   const originals = fixture.turns.flat();
@@ -292,7 +314,7 @@ export async function compareContextMemory(
   const primaryTask = originals.find(({ author, scope }) => author === 'user' && !!scope?.taskId)
     ?.scope?.taskId;
   const arms = [];
-  for (const strategy of input.strategies ?? contextStrategies) {
+  for (const strategy of input.strategies ?? routineContextStrategies) {
     signal.throwIfAborted();
     progress?.(`${fixture.id} ${strategy}`);
     const started = performance.now();
@@ -343,8 +365,7 @@ export async function compareContextMemory(
         };
         const output: StoredMemorySummary['parts'] = [];
         const parts = prepareMemorySummaries(current, summaries, defaultMemoryBudgets, {
-          mode: strategy === 'rolling' ? 'no-context' : strategy,
-          selectPriorContext: strategy === 'rolling' ? rollingControl(summaries) : undefined,
+          mode: strategy,
         });
         for (const part of parts) {
           const started = performance.now();
@@ -366,6 +387,7 @@ export async function compareContextMemory(
               historyEstimatedTokens: part.historyEstimatedTokens,
               originalEstimatedTokens: part.sourceSize,
               sources: part.sources,
+              attachmentSources: part.attachmentSources,
               sourceHash,
               prefixHash: part.prefixHash,
               historyIds: part.historyIds,
@@ -387,6 +409,7 @@ export async function compareContextMemory(
             historyEstimatedTokens: part.historyEstimatedTokens,
             originalEstimatedTokens: part.sourceSize,
             sources: part.sources,
+            attachmentSources: part.attachmentSources,
             sourceHash,
             prefixHash: part.prefixHash,
             historyIds: part.historyIds,
@@ -411,23 +434,28 @@ export async function compareContextMemory(
         if (complete) evidence.push(...output.filter((part) => !part.noUsefulInformation));
       }
     }
-    const assembled = await withProductionMemory(fixture, records, signal);
+    const assembled = await withProductionMemory(
+      fixture,
+      records,
+      signal,
+      strategy === 'original-search',
+    );
     const grade = fixture.facts.map((fact) => {
       const source = sourceBySequence.get(fact.source);
-      const matches = (text: string) =>
-        fact.expected.test(text) &&
-        (!fact.identifiers ||
-          memoryIdentifierMatches(text, fact.identifiers).size === fact.identifiers.length);
+      const reference =
+        fact.contextSource === undefined ? undefined : sourceBySequence.get(fact.contextSource);
+      const matches = (text: string) => matchesMemoryFact(fact, text);
       return {
         label: fact.label,
         critical: !!fact.critical,
+        attachment: !!fact.attachment,
         sourceCovered:
           !!source &&
-          [source.text, ...(source.attachments ?? []).map(({ text }) => text)].some(matches),
-        suppliedToSummarizer: requests.some(
-          (request) =>
-            request.sources?.includes(fact.source) ??
-            (request.first <= fact.source && request.last >= fact.source),
+          (fact.attachment
+            ? (source.attachments ?? []).some(({ text }) => !!text && matches(text))
+            : [source.text, reference?.text].some((text) => !!text && matches(text))),
+        suppliedToSummarizer: requests.some((request) =>
+          (fact.attachment ? request.attachmentSources : request.sources)?.includes(fact.source),
         ),
         retained:
           strategy === 'original-search'
@@ -449,23 +477,18 @@ export async function compareContextMemory(
         retrievedByOriginalSearch: assembled.originalSearch.some((entry) =>
           gradesMemoryFact(fact, entry),
         ),
-        contradicted:
-          !!fact.contradicts &&
-          evidence.some(
-            ({ text }) =>
-              fact.contradicts!.test(text) &&
-              (!fact.identifiers ||
-                memoryIdentifierMatches(text, fact.identifiers).size === fact.identifiers.length),
-          ),
+        contradicted: evidence.some(({ text }) => contradictsMemoryFact(fact, text)),
       };
     });
     const loaded = requests.length ? await residency(endpoint, digest, signal) : undefined;
+    const handoff =
+      strategy === 'original-search' ? assembled.originalHandoff : assembled.handoff.text;
     arms.push({
       strategy,
       seed: input.seed,
       requests,
       grade,
-      handoff: assembled.handoff.text,
+      handoff,
       recoveredSources: assembled.handoff.recoveredSources,
       dispatchMs: assembled.handoff.elapsedMs,
       dispatchTimedOut: assembled.handoff.timedOut,
@@ -486,7 +509,7 @@ export async function compareContextMemory(
       originalSearchMs: assembled.originalSearchMs,
       originalSearchIncomplete: assembled.originalSearchIncomplete,
       elapsedMs: Math.round(performance.now() - started),
-      handoffEstimatedTokens: estimateMemoryTokens(assembled.handoff.text),
+      handoffEstimatedTokens: estimateMemoryTokens(handoff),
       outputTokensByType: Object.fromEntries(
         ['UAMP', 'AAB'].map((type) => [
           type,

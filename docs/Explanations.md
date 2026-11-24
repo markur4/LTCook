@@ -465,6 +465,9 @@ Immediate Context supplies the current Task objective and acceptance criteria
 when Core knows them. For an AAB it also supplies the initiating user
 instructions or runtime assignment and applicable steering. This material is
 separate from the current original messages and serves as instructions.
+An attachment on an initiating instruction is supplied as current reference
+evidence for the AAB. Its source sequence remains citable when the native
+turn ends with an action and produces no completed UAMP.
 One recent relevant completed UAMP provides background for references.
 A previous summary cannot establish that an Action occurred or a decision
 was accepted in the current unit.

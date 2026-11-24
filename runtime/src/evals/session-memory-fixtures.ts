@@ -6,6 +6,9 @@ export type MemoryFact = {
   expected: RegExp;
   identifiers?: readonly string[];
   source: number;
+  contextSource?: number;
+  attachment?: true;
+  check?: string;
   kind: Exclude<MemoryEntry['kind'], 'user'>;
   critical?: boolean;
   contradicts?: RegExp;
@@ -137,7 +140,7 @@ export const memoryFixtures: readonly MemoryFixture[] = [
         label: 'duplicate replay result',
         expected: /DUPLICATE_REPLAY_CASE.*pass|pass.*DUPLICATE_REPLAY_CASE/i,
         identifiers: ['DUPLICATE_REPLAY_CASE'],
-        contradicts: /DUPLICATE_REPLAY_CASE.*fail|fail.*DUPLICATE_REPLAY_CASE/i,
+        check: 'DUPLICATE_REPLAY_CASE',
         source: 9,
         kind: 'progress',
         critical: true,
@@ -217,7 +220,7 @@ export const memoryFixtures: readonly MemoryFixture[] = [
         label: 'rewind provider ID verification',
         expected: /PI_REWIND_PROVIDER_ID.*pass|pass.*PI_REWIND_PROVIDER_ID/i,
         identifiers: ['PI_REWIND_PROVIDER_ID'],
-        contradicts: /PI_REWIND_PROVIDER_ID.*fail|fail.*PI_REWIND_PROVIDER_ID/i,
+        check: 'PI_REWIND_PROVIDER_ID',
         source: 3,
         kind: 'progress',
         critical: true,
@@ -363,7 +366,7 @@ export const memoryFixtures: readonly MemoryFixture[] = [
         label: 'cache version guard result',
         expected: /CACHE_VERSION_GUARD.*pass|pass.*CACHE_VERSION_GUARD/i,
         identifiers: ['CACHE_VERSION_GUARD'],
-        contradicts: /CACHE_VERSION_GUARD.*fail|fail.*CACHE_VERSION_GUARD/i,
+        check: 'CACHE_VERSION_GUARD',
         source: 8,
         kind: 'progress',
         critical: true,
@@ -464,12 +467,20 @@ export function memoryAttachmentFixture(): MemoryFixture {
   return {
     ...base,
     id: 'paseo-rewind-with-pasted-reference',
-    turns: [[initial, ...base.turns[0]!.slice(1)], ...base.turns.slice(1)],
+    turns: [
+      [initial, base.turns[0]![1]!, base.turns[1]![0]!].map((item) => ({
+        ...item,
+        turnId: 'rewind-with-trailing-tool',
+      })),
+      [base.turns[1]![1]!, ...base.turns[2]!].map((item) => ({ ...item, turnId: 'rewind-plan' })),
+      base.turns.at(-1)!,
+    ],
     facts: [
       ...base.facts,
       {
         label: 'attached rewind verification name and source path',
         source: first.seq,
+        attachment: true,
         expected: /PASEO_REWIND_SOURCE[\s\S]{0,200}runtime\/src\/integrations\/paseo-memory\.ts/,
         identifiers: ['PASEO_REWIND_SOURCE', 'runtime/src/integrations/paseo-memory.ts'],
         critical: true,
@@ -547,7 +558,7 @@ export const memoryHeldOutFixture: MemoryFixture = {
       critical: true,
       identifiers: ['INDEX_RESTORE_FAILSAFE'],
       expected: /INDEX_RESTORE_FAILSAFE.*(?:pass|success)/i,
-      contradicts: /INDEX_RESTORE_FAILSAFE.*fail(?:ed|ure)?\b/i,
+      check: 'INDEX_RESTORE_FAILSAFE',
     },
     {
       label: 'retained index size',
@@ -563,6 +574,73 @@ export const memoryHeldOutFixture: MemoryFixture = {
       critical: true,
       identifiers: ['restoreIndexSnapshot', 'runtime/src/repository/index-restore.ts'],
       expected: /restoreIndexSnapshot|index-restore/,
+    },
+  ],
+};
+
+export const memoryDiscussionReferenceFixture: MemoryFixture = {
+  id: 'previous-discussion-reference',
+  taskContext: {
+    title: 'Workspace restart performance',
+    description: 'Carry out the approved improvement.',
+    acceptance: ['Preserve the public API.'],
+  },
+  turns: [
+    [
+      {
+        seq: 1,
+        turnId: 'proposal',
+        author: 'user',
+        text: 'The proposed restart improvement is to reuse selectWorkspaceSnapshot for compatible caches. Consider that option without changing code yet.',
+      },
+      {
+        seq: 2,
+        turnId: 'proposal',
+        author: 'agent',
+        text: 'Reusing selectWorkspaceSnapshot for compatible caches is feasible. No files have changed.',
+      },
+    ],
+    [
+      {
+        seq: 3,
+        turnId: 'approval',
+        author: 'user',
+        text: 'Implement that, but preserve the existing API.',
+      },
+      {
+        seq: 4,
+        turnId: 'approval',
+        author: 'agent',
+        text: 'I will carry out the request. No changes have been made yet.',
+      },
+    ],
+    [{ seq: 5, author: 'user', text: 'What work was approved?' }],
+  ],
+  flushAfter: [4],
+  originalSources: [1, 3],
+  correctionSources: [3],
+  focus: 'approved restart reuse selectWorkspaceSnapshot preserve existing API',
+  task: {
+    prompt: 'Report the proposed implementation symbol and public API requirement.',
+    expected: { symbol: 'selectWorkspaceSnapshot', preserveAPI: true },
+  },
+  facts: [
+    {
+      label: 'approved reference resolves to snapshot reuse',
+      source: 3,
+      contextSource: 1,
+      kind: 'decision',
+      critical: true,
+      identifiers: ['selectWorkspaceSnapshot'],
+      expected: /(?:reus|use).*selectWorkspaceSnapshot|selectWorkspaceSnapshot.*(?:reus|use)/i,
+    },
+    {
+      label: 'approval preserves the API',
+      source: 3,
+      kind: 'decision',
+      critical: true,
+      expected: /preserv.*API|API.*(?:unchanged|preserv)/i,
+      contradicts: /(?:change|replace) the (?:public|existing) API/i,
     },
   ],
 };

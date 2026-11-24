@@ -90,6 +90,29 @@ test('does not use commentary before a trailing tool result as the completed UAM
   ]);
 });
 
+test('supplies attached evidence to an action batch without a completed Discussion', () => {
+  const messages: MemorySourceMessage[] = [
+    {
+      seq: 1,
+      turnId: 'native',
+      author: 'user',
+      text: 'Use the attached verification guide.',
+      attachments: [{ id: 'guide', name: 'Guide', text: 'The exact reference is RETAIN_CACHE.' }],
+    },
+    { seq: 2, turnId: 'native', author: 'agent', text: 'I will check the cache.' },
+    { seq: 3, turnId: 'native', author: 'tool', text: 'Read the cache metadata.' },
+  ];
+  const units = identifyMemoryUnits(messages, new Map([['native', 'completed']]), 3000);
+  expect(units.map(({ type }) => type)).toEqual(['AAB']);
+  const [request] = prepareMemorySummaries(units[0]!, []);
+  expect(request?.attachmentSources).toEqual([1]);
+  expect(request?.sources).toEqual([1, 2, 3]);
+  expect(request?.text).toContain('The exact reference is RETAIN_CACHE.');
+  expect(parseMemorySummary('AAB', '{"pasted":"Reference RETAIN_CACHE."}').fields).toEqual({
+    pasted: 'Reference RETAIN_CACHE.',
+  });
+});
+
 test('uses the signed runtime assignment for context and ignores peer and heartbeat prompts', () => {
   const messages: MemorySourceMessage[] = [
     {
@@ -185,14 +208,8 @@ test('uses only the latest relevant completed UAMP for Immediate Context', () =>
   const [taskOnly] = prepareMemorySummaries(unit, history, defaultMemoryBudgets, {
     mode: 'task-context',
   });
-  const [control] = prepareMemorySummaries(unit, history, defaultMemoryBudgets, {
-    mode: 'no-context',
-    selectPriorContext: () => 'Previous comparison text.\n',
-  });
-  for (const other of [taskOnly, control]) {
-    expect(other?.text).toBe(part?.text);
-    expect(other?.sources).toEqual(part?.sources);
-  }
+  expect(taskOnly?.text).toBe(part?.text);
+  expect(taskOnly?.sources).toEqual(part?.sources);
 });
 
 test('keeps authoritative context above its soft target and protects the hard source budget', () => {

@@ -409,3 +409,74 @@ skills. The passing Bun run used the same test directories, masked the host
 skill directory for the process, and used a 20-second test limit. The Python
 command from `just test` ran separately. Traditional Tests and native
 acceptance took 77.38 s in aggregate.
+
+## Lean single-seed qualification
+
+The routine summary comparison on the RTX 5090 made 22 requests at seed 17
+and completed in 28.57 s. Both strategies used matching source portions and
+the same LFM3 QAD Q4 model. Counts below are critical facts in summaries and
+assembled handoffs. Every request completed and the grader flagged no
+contradictions.
+
+| Fixture | Task context summaries | Immediate Context summaries | Task context handoffs | Immediate Context handoffs |
+| --- | ---: | ---: | ---: | ---: |
+| Short cache recovery | 3/3 | 3/3 | 3/3 | 3/3 |
+| Rewind with pasted reference | 3/3 | 3/3 | 3/3 | 3/3 |
+| Previous Discussion reference | 1/2 | 2/2 | 1/2 | 2/2 |
+| Held-out index restore | 3/3 | 3/3 | 3/3 | 3/3 |
+
+The rewind fixture models a native turn ending in a tool outcome after
+assistant commentary. That turn yields an AAB. Its initiating attachment now
+appears in the AAB's current evidence and carries the original sequence in
+its citation. Both strategies kept the exact reference name and path.
+The previous Discussion fixture requires the later approval to name the
+reuse of `selectWorkspaceSnapshot` and preserve the public API. Immediate
+Context resolved the reference. Both strategies kept the API constraint.
+
+Named-result grading reads structured test and status pairs in the same
+record, or an adjacent identifier and status in a text statement. This
+recognizes multiline JSON and prevents one check from inheriting a nearby
+failure or pass. Traditional Tests exercise both reported grading errors.
+
+### Isolated CPU timing
+
+These requests summarized the same 194-character cache-check tool result
+at seed 17, without generating preceding summaries. The before and final
+requests used the same model and 2,048-token cap on an AMD Ryzen 9 9900X.
+Ollama verified 100% CPU residency for both.
+
+| Prompt | Input tokens | Output tokens | Prefill | Generation | Load | End-to-end |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Before | 534 | 175 | 1.011 s | 6.021 s | 3.327 s | 10.379 s |
+| Final | 491 | 49 | 0.978 s | 1.697 s | 0.002 s | 2.697 s |
+
+The before response repeated both outcomes across fields, added Task
+background, and printed empty fields. The final response kept both exact
+check outcomes and their observed details in one results field. The before
+request loaded the model and the final request reused it. Prefill and
+generation totaled 7.032 s and 2.675 s respectively.
+
+### Native Pi controls and edits
+
+Both local Bonsai original-source controls passed their executable checks
+after receiving the original search results and the exact latest correction.
+Pi then attempted the Immediate Context edits using the same model and
+fixture revisions. Both arms received handoffs containing the labeled
+critical facts. The tool loop guard stopped both candidate sessions.
+
+| Fixture | Original-source control | Immediate Context edit |
+| --- | --- | --- |
+| Trace pairing | Passed in 23.81 s | Stopped after 10 tool calls in 11.04 s. All four edit checks passed. |
+| Workspace preparation | Passed in 12.20 s | Stopped after 11 tool calls in 10.63 s. The identical-replacement check failed. |
+
+The edit runner took 106.81 s including summary requests and model loading.
+The lean GPU runs took 135.38 s in aggregate. Repository-edit qualification
+remains open because both candidate turns stopped at the tool-loop guard.
+These results measure one run of each original-source control.
+
+Static checks passed. Bun Traditional Tests recorded 315 passes and two
+opt-in skips with host Pi skills isolated. Python Traditional Tests recorded
+250 passes on six workers. Scripted native Pi/Paseo Leader adoption also
+passed. The Traditional Tests and native acceptance took 109.00 s in
+aggregate. Together with the GPU runs, the measured command times totaled
+244.38 s.

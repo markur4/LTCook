@@ -370,29 +370,28 @@ the three agent cases still use their original attempts.
 
 ### Session Memory qualification
 
-Run `bun evals/session-memory-handoff-live.ts` to compare chronological and
-generated presentations of the same six excerpts with paired fresh Pi
-sessions and identical tasks. The first optional argument selects the
-downstream model.
-
 Run `bun evals/session-memory-live.ts --context-aware` on the GPU host to
-compare no additional context, authoritative Task context, Immediate Context,
-and the former rolling window on the short and cadence cache-recovery fixtures.
-The runner keeps source portions, the model, and sampling settings matched.
-Run one seed per strategy in both Session Memory runners. They default to
-seed 17. Use `--seeds=43` to select another seed, `--fixture=ID` to select a
-fixture, or `--strategy=immediate,rolling` to focus the strategy comparison.
-Use `--held-out` for the held-out index fixture and `--full` for the original
-comparison corpus.
-Use GPU inference for every local model in development qualification. Use
-`--cpu-only` in a separate focused run to measure a production-model summary
-request on CPU. Record its fixture, strategy, source portion, model digest,
-processor, input and output token counts, and Ollama's prefill and generation
-times. Include model load and end-to-end request time so readers can interpret
-the two inference timings. The report records source coverage, summary quality
-by portion, retrieval within budget, and production handoff size and timing.
+compare authoritative Task context and Immediate Context on short cache
+recovery, an attachment on a turn with trailing tool evidence, a reference to
+a previous Discussion, and held-out index restore. The runner keeps source
+portions, the model, and sampling settings matched. Both Session Memory
+runners default to seed 17. Use `--seeds=43` to follow up on an ambiguous or
+failing result, `--fixture=ID` to select one fixture, or
+`--strategy=immediate` to focus one arm. Use `--full` for the expanded corpus
+or `--held-out` for the index fixture alone. The report checks that attached
+text reached the summarizer and grades exact named outcomes by source portion.
 Add `--audit-output` to include generated fixture summaries for manual
 hallucination and attribution review. Keep those reports local until reviewed.
+
+Run `bun evals/session-memory-live.ts --cpu-sample` on an idle Ollama listener
+to time one production-model cache-check summary. Repeat this measurement when
+the model, inference settings, or prompt size changes. Record CPU residency,
+model digest, source portion, input and output tokens, prefill and generation
+times, load time, and end-to-end latency.
+
+For handoff presentation changes, run `bun evals/session-memory-handoff-live.ts`
+to compare chronological and generated presentations of the same six excerpts
+in paired fresh Pi sessions. The first optional argument selects the Pi model.
 
 To replay the historical CPU extraction baseline, run
 `bun evals/session-memory-live.ts` on the fixed workflow corpus. The runner
@@ -421,20 +420,20 @@ GPT-6 Luna at low reasoning in native Pi. The replay uses the existing Codex
 sign-in and sends only the numbered excerpts of the synthetic evaluation
 fixture to the provider. It grades each batch on its own evidence.
 
-For the GPU repository-edit qualification in Pi, run both models locally.
+For changes affecting Pi handoffs, run the local GPU repository-edit
+qualification.
 
 ```shell
-bun evals/session-memory-edit-live.ts --context-aware \
-  lfm3:1.7b-qad-q4_0 ltcook-bonsai-2-27b-ctx65536:latest
+bun evals/session-memory-edit-live.ts --context-aware
 ```
 
-Use `--fixture=trace-pairing` for the summary omission and
-`--fixture=workspace-preparation` to re-establish the previously failed source
-control. The original-search and conventional controls run once per fixture.
-The conventional worker receives the manual handoff. A failed original-search
-control makes its matched comparison inconclusive. The runner defaults to
-GPT-6 Luna at high reasoning through existing Codex authorization when the Pi
-model argument is omitted.
+The default Pi worker is the prepared local Bonsai model. The runner retrieves
+original evidence and the latest correction and gives them to Pi for the
+first edit. A passing control enables the Immediate Context edit. A failing
+control leaves the comparison inconclusive and skips its summary arm. Pi
+stops after three consecutive tool calls repeat known requests with unchanged
+results. Use `--fixture=trace-pairing` or `--fixture=workspace-preparation` for
+the affected edit, and `--strategy=original-search` to verify only its control.
 
 To replay the historical extraction comparison on repository edits, run
 `bun evals/session-memory-edit-live.ts` with optional extractor and worker model
@@ -458,11 +457,10 @@ from original history where native receipts establish the boundaries.
 
 The previous extractive summarizer is limited to the Agent Evals baseline.
 The production default runs local LFM3 QAD Q4 on CPU at temperature 0.4 with
-reasoning disabled. The rolling-window evaluation control evicts in groups
-from 4,096 to 2,048 estimated tokens. Memory work is asynchronous and starts
+reasoning disabled. Memory work is asynchronous and starts
 only when foreground local inference is idle. See the
 [architecture diagrams](Explanations.md#context-aware-session-memory) and the
-[CPU timing and GPU qualification results](context-aware-session-memory/QUALIFICATION.md#immediate-context-qualification).
+[CPU timing and GPU qualification results](context-aware-session-memory/QUALIFICATION.md#lean-single-seed-qualification).
 
 ### Opt-in summarization utility comparison
 

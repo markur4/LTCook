@@ -332,6 +332,10 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- Session Memory includes attachments from initiating instructions in Agent
+  Action Batch summaries and preserves their source citations. Short tool
+  results use a compact prompt that keeps exact check outcomes together.
+
 - Session Memory delegation preserves explicit named tool outcomes and cites
   original messages for relevant identifiers omitted by summaries.
 

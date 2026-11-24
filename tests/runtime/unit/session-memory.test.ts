@@ -200,6 +200,41 @@ async function eventually(predicate: () => boolean | Promise<boolean>) {
   expect(await predicate()).toBe(true);
 }
 
+test('stores the attachment citation from a native turn with only a trailing action', async () => {
+  const messages: MemorySourceMessage[] = [
+    {
+      seq: 1,
+      turnId: 'native',
+      author: 'user',
+      text: 'Consult the attached reference.',
+      attachments: [
+        { id: 'ref', name: 'Guide', text: 'Keep ATTACHED_CHECK part of the next run.' },
+      ],
+    },
+    { seq: 2, turnId: 'native', author: 'agent', text: 'I will inspect the current result.' },
+    { seq: 3, turnId: 'native', author: 'tool', text: 'Observed CHECK_CACHE PASS.' },
+  ];
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type, request) {
+      expect(type).toBe('AAB');
+      expect(request.at(-1)?.content).toContain('Keep ATTACHED_CHECK part of the next run.');
+      return { type, text: 'Reference ATTACHED_CHECK.', complete: true, elapsedMs: 1 };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'native', outcome: 'completed' }, false);
+    await eventually(async () => !(await memory.search('leader', '', '', 'leader')).incomplete);
+    const search = await memory.search('leader', '', 'ATTACHED_CHECK', 'leader');
+    expect(search.matches.flatMap(({ entries }) => entries)).toContainEqual(
+      expect.objectContaining({ kind: 'AAB', sources: [1, 2, 3] }),
+    );
+  } finally {
+    await memory.close();
+  }
+});
+
 test('stores chronological summaries, preserves original authority, and removes a dependent suffix', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-'));
   const messages: MemorySourceMessage[] = [
