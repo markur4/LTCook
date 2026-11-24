@@ -15,6 +15,7 @@ import type { RepositoryHit, RepositoryRetrieval } from '../runtime/src/reposito
 import { openRepositoryWorkspace } from '../runtime/src/repository/workspace.js';
 import { createRepoLocateTool, REPO_LOCATE_TOOL_NAME } from '../runtime/src/tools/repo-locate.js';
 import { createRepoSearchTool, REPO_SEARCH_TOOL_NAME } from '../runtime/src/tools/repo-search.js';
+import { repositoryEvidenceText } from '../runtime/src/tools/repository-evidence-text.js';
 import type { ToolDefinition } from '../runtime/src/tools/types.js';
 import {
   addVerifiedSourceLines,
@@ -24,8 +25,16 @@ import {
   searchesForCreditCardValidation,
   type ExpectedRepositoryFact,
 } from './repository-behavior-grade.js';
-import { firstVerifiedCitationMs, gradeRepositoryCitations } from './repository-citations.js';
+import {
+  allRequiredEvidenceMs,
+  firstVerifiedCitationMs,
+  gradeRepositoryCitations,
+} from './repository-citations.js';
 import { repositoryFixturePaths, retrievalCorpus } from './repository-retrieval-fixtures.js';
+import {
+  repositoryTraversalCases,
+  repositoryTraversalSnapshot,
+} from './repository-traversal-fixtures.js';
 
 const Answer = Type.Object(
   { answer: Type.String(), citations: Type.Array(RepositoryCitation) },
@@ -48,7 +57,9 @@ type RepositoryCall = {
   finished?: number;
   requestKey?: string;
   resultBytes?: number;
+  agentTextBytes?: number;
   error?: string;
+  usedTrace?: boolean;
 };
 type BehaviorGrade = ReturnType<typeof gradeRepositoryBehavior>;
 type NativeObservation = Pick<
@@ -60,6 +71,8 @@ type NativeObservation = Pick<
   operationalFailure: boolean;
   toolCalls: number;
   serializedResultBytes: number;
+  agentTextBytes: number;
+  evidenceReadyMs: number | null;
 };
 
 const citationInstructions =
@@ -108,13 +121,14 @@ function describeRequest(
         input.symbol,
         input.symbols,
         input.query,
+        input.trace,
         input.location,
         paths,
         input.follow ?? false,
         input.base,
       ]),
       workspaceWide: paths.every((scope) => scope === '.' || scope === 'fixture'),
-      query: input.symbol ?? input.symbols?.join(' ') ?? input.query ?? '',
+      query: input.symbol ?? input.symbols?.join(' ') ?? input.query ?? input.trace?.question ?? '',
     };
   }
 }
@@ -147,8 +161,10 @@ function summarizeAutonomousCalls(
       mode: call.mode,
       error: call.error,
       followUp: call.followUp,
+      usedTrace: call.usedTrace,
       repeated,
       resultBytes: call.resultBytes ?? 0,
+      agentTextBytes: call.agentTextBytes ?? 0,
       newVerifiedSourceLines: uniqueSourceLines.get(call) ?? 0,
       startedMs: call.started - started,
       completedMs: call.finished === undefined ? undefined : call.finished - started,
@@ -183,6 +199,12 @@ function summarizeNativeRuns(observations: readonly NativeObservation[]) {
       const observed = runs.filter(({ operationalFailure }) => !operationalFailure);
       const total = (values: number[]) => values.reduce((sum, value) => sum + value, 0);
       const mean = (values: number[]) => (values.length ? total(values) / values.length : null);
+      const median = (values: number[]) => {
+        const sorted = values.toSorted((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        if (!sorted.length) return null;
+        return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+      };
       const outcomes = <T extends string>(field: (run: NativeObservation) => T, states: T[]) =>
         Object.fromEntries(
           states.map((status) => [status, runs.filter((run) => field(run) === status).length]),
@@ -208,7 +230,16 @@ function summarizeNativeRuns(observations: readonly NativeObservation[]) {
           coveredRanges: total(runs.map(({ retrieval }) => retrieval.covered)),
           labeledRanges,
           meanElapsedMs: mean(observed.map(({ elapsedMs }) => elapsedMs)),
+          medianVerifiedAnswerMs: median(
+            observed
+              .filter(({ taskSuccess }) => taskSuccess === 'passed')
+              .map(({ elapsedMs }) => elapsedMs),
+          ),
+          medianEvidenceReadyMs: median(
+            observed.flatMap(({ evidenceReadyMs }) => evidenceReadyMs ?? []),
+          ),
           meanToolCalls: mean(observed.map(({ toolCalls }) => toolCalls)),
+          meanAgentTextBytes: mean(observed.map(({ agentTextBytes }) => agentTextBytes)),
           meanSerializedResultBytes: mean(
             observed.map(({ serializedResultBytes }) => serializedResultBytes),
           ),
@@ -338,6 +369,7 @@ const {
     autonomous: explicitAutonomous,
     codex,
     case: selectedCase,
+    traversal,
   },
 } = parseArgs({
   options: {
@@ -346,12 +378,13 @@ const {
     autonomous: { type: 'boolean' },
     codex: { type: 'boolean' },
     case: { type: 'string' },
+    traversal: { type: 'boolean' },
   },
 });
 if (compareLocate && !codex) throw new Error('Guided --compare-locate requires --codex.');
-if (explicitAutonomous && compareLocate)
-  throw new Error('Choose either --autonomous or the guided --compare-locate.');
-const autonomous = !codex || explicitAutonomous;
+if ((explicitAutonomous || traversal) && compareLocate)
+  throw new Error('Choose autonomous evaluation or the guided --compare-locate.');
+const autonomous = !codex || explicitAutonomous || traversal;
 if (selectedCase !== undefined && !autonomous) throw new Error('--case requires --autonomous.');
 const paired = compareLocate || autonomous;
 const model = requestedModel ?? (paired && codex ? 'gpt-6.2-sol' : undefined);
@@ -366,16 +399,24 @@ if (codex && !executable) throw new Error('The optional Codex diagnostic needs C
 
 const piEvaluation = codex ? undefined : await import('./repository-behavior-pi.js');
 const checkout = path.resolve(import.meta.dir, '..');
-const referenceSources = new Map(
-  await Promise.all(
-    repositoryFixturePaths.map(
-      async (relative) =>
-        [relative, await readFile(path.join(checkout, relative), 'utf8')] as const,
-    ),
-  ),
+const traversalSnapshot = traversal ? await repositoryTraversalSnapshot(checkout) : undefined;
+const corpus = traversalSnapshot
+  ? undefined
+  : retrievalCorpus(
+      new Map(
+        await Promise.all(
+          repositoryFixturePaths.map(
+            async (relative) =>
+              [relative, await readFile(path.join(checkout, relative), 'utf8')] as const,
+          ),
+        ),
+      ),
+    );
+const sourceFiles = new Map(
+  traversalSnapshot?.files ??
+    [...(corpus?.files ?? [])].filter(([path]) => path.startsWith('fixture/')),
 );
-const corpus = retrievalCorpus(referenceSources);
-const files = [...corpus.files].filter(([relative]) => relative.startsWith('fixture/'));
+const files = [...sourceFiles];
 const cases = [
   {
     id: 'definition-caller-test',
@@ -407,26 +448,49 @@ const conceptualCase = {
     { id: 'upperBound', value: 255, evidenceIndex: 0 },
   ],
 } as const;
-const scenarios = (paired ? [cases[0], conceptualCase, cases[1]] : cases).map((scenario) => {
-  const question = corpus.questions.find(({ id }) => id === scenario.id);
-  if (!question) throw new Error(`No fixture evidence labels for ${scenario.id}.`);
-  const expectedFacts: ExpectedRepositoryFact[] = scenario.facts.map(
-    ({ id, value, evidenceIndex }) => {
-      const evidence = question.expected[evidenceIndex];
-      if (!evidence) throw new Error(`No fact evidence label for ${scenario.id}/${id}.`);
-      return { id, value, evidence };
-    },
+type Scenario = {
+  id: string;
+  prompt: string;
+  taskPrompt: string;
+  question: {
+    expected: ExpectedRepositoryFact['evidence'][];
+    group: 'lexical' | 'conceptual' | 'traversal';
+  };
+  expectedFacts: ExpectedRepositoryFact[];
+};
+
+function factInstructions(expectedFacts: readonly ExpectedRepositoryFact[]) {
+  return expectedFacts.map(
+    ({ id, value }) => `For an answer, include "${id}" with a ${typeof value} value.`,
   );
-  const taskPrompt = autonomousPrompt(
-    scenario.autonomousQuestion,
-    expectedFacts.length
-      ? expectedFacts.map(
-          ({ id, value }) => `For an answer, include "${id}" with a ${typeof value} value.`,
-        )
-      : ['If there is an implementation, include "implementationFile" with a string value.'],
-  );
-  return { ...scenario, question, expectedFacts, taskPrompt };
-});
+}
+
+const scenarios: Scenario[] = traversalSnapshot
+  ? repositoryTraversalCases(sourceFiles).map(({ id, question, expectedFacts }) => ({
+      id,
+      prompt: question,
+      question: { group: 'traversal', expected: expectedFacts.map(({ evidence }) => evidence) },
+      expectedFacts,
+      taskPrompt: autonomousPrompt(question, factInstructions(expectedFacts)),
+    }))
+  : (paired ? [cases[0], conceptualCase, cases[1]] : cases).map((scenario) => {
+      const question = corpus?.questions.find(({ id }) => id === scenario.id);
+      if (!question) throw new Error(`No fixture evidence labels for ${scenario.id}.`);
+      const expectedFacts: ExpectedRepositoryFact[] = scenario.facts.map(
+        ({ id, value, evidenceIndex }) => {
+          const evidence = question.expected[evidenceIndex];
+          if (!evidence) throw new Error(`No fact evidence label for ${scenario.id}/${id}.`);
+          return { id, value, evidence };
+        },
+      );
+      const taskPrompt = autonomousPrompt(
+        scenario.autonomousQuestion,
+        expectedFacts.length
+          ? factInstructions(expectedFacts)
+          : ['If there is an implementation, include "implementationFile" with a string value.'],
+      );
+      return { ...scenario, question, expectedFacts, taskPrompt };
+    });
 const schedule: {
   scenario: (typeof scenarios)[number];
   caseId: string;
@@ -440,7 +504,11 @@ const schedule: {
   searchFirst: index % 2 === 0,
   unavailable: false,
 }));
-if (autonomous) {
+if (traversal) {
+  schedule.push(
+    ...schedule.map((entry) => ({ ...entry, repetition: 2, searchFirst: !entry.searchFirst })),
+  );
+} else if (autonomous) {
   const conceptual = schedule.find(({ scenario }) => scenario.id === conceptualCase.id);
   if (!conceptual) throw new Error('No conceptual case for the reversed pair.');
   schedule.push({ ...conceptual, repetition: 2, searchFirst: !conceptual.searchFirst });
@@ -553,11 +621,16 @@ try {
         const active = blockedAgents.has(context.agentId) ? blockedTools.get(name) : tool;
         if (!active) throw new Error('Missing fixture tool.');
         const result = await active.invoke(input, context);
-        if (autonomous) call.resultBytes = Buffer.byteLength(JSON.stringify(result));
+        if (autonomous) {
+          call.resultBytes = Buffer.byteLength(JSON.stringify(result));
+          call.agentTextBytes = Buffer.byteLength(repositoryEvidenceText(name, result));
+        }
         if (name === REPO_LOCATE_TOOL_NAME && Value.Check(locate.outputSchema, result)) {
           call.followUp = result.followUp;
+          call.usedTrace = result.trace !== undefined;
           call.extraEvidence = [
             ...(result.source ? [result.source] : []),
+            ...(result.trace?.evidence ?? []),
             ...result.searches.flatMap(
               ({ connections }) => connections?.flatMap(({ from, to }) => [from, to]) ?? [],
             ),
@@ -623,7 +696,7 @@ try {
     }
     if (!mcp || !endpoint || !executable)
       throw new Error('The fixture MCP runtime is unavailable.');
-    // > The evaluator owns and populates this synthetic workspace, and grants only its files.
+    // > The evaluator grants only the files it copied into its disposable source workspace.
     const token = await mcp.grant(id, workspace, false, true);
     try {
       return await evaluateWithCodex(
@@ -664,6 +737,7 @@ try {
     blockedAgents.delete(id);
     const searches = observations.flatMap(({ searches: entries }) => entries);
     const isReadyInExpectedMode = ({ mode, result }: RepositoryCall['searches'][number]) =>
+      group !== 'traversal' &&
       result.status === 'ready' &&
       (group === 'lexical'
         ? mode === 'exact' && result.provider === 'ripgrep'
@@ -690,16 +764,16 @@ try {
           ...result,
           relevantToNegative,
         })),
-        files: corpus.files,
+        files: sourceFiles,
         extraEvidence: observations.flatMap(({ extraEvidence }) => extraEvidence ?? []),
       });
-      const toolCalls = summarizeAutonomousCalls(observations, turnStarted, corpus.files);
+      const toolCalls = summarizeAutonomousCalls(observations, turnStarted, sourceFiles);
       const firstSupport = scenario.expectedFacts.flatMap(({ id, value, evidence }) => {
         const citations =
           answer?.facts
             .filter((fact) => fact.id === id && fact.value === value)
             .flatMap((fact) => fact.citations) ?? [];
-        const elapsed = firstVerifiedCitationMs(citations, [evidence], replies, corpus.files);
+        const elapsed = firstVerifiedCitationMs(citations, [evidence], replies, sourceFiles);
         return elapsed === null ? [] : [elapsed];
       });
       const operationalFailure = run.exitCode !== 0 || grading.retrieval.invalidEvidence > 0;
@@ -708,6 +782,8 @@ try {
         (sum, { resultBytes }) => sum + resultBytes,
         0,
       );
+      const agentTextBytes = toolCalls.reduce((sum, { agentTextBytes }) => sum + agentTextBytes, 0);
+      const evidenceReadyMs = allRequiredEvidenceMs(expected, replies, sourceFiles);
       runFailed ||= operationalFailure;
       if (!unavailable && variant) {
         nativeObservations.push({
@@ -718,6 +794,8 @@ try {
           operationalFailure,
           toolCalls: toolCalls.length,
           serializedResultBytes,
+          agentTextBytes,
+          evidenceReadyMs,
         });
       }
       outcomes.push({
@@ -738,11 +816,13 @@ try {
               : 'inappropriate'
             : null,
         firstVerifiedCitationMs: firstSupport.length ? Math.min(...firstSupport) : null,
+        allRequiredEvidenceMs: evidenceReadyMs,
         toolSelection: {
-          expectedModeObserved: correctMode,
+          expectedModeObserved: traversal ? null : correctMode,
           firstTool: firstCall?.tool ?? null,
           locateUsed: observations.some(({ tool }) => tool === REPO_LOCATE_TOOL_NAME),
-          locateFirstWithExpectedMode: usedLocateFirst,
+          traceUsed: observations.some(({ usedTrace }) => usedTrace),
+          locateFirstWithExpectedMode: traversal ? null : usedLocateFirst,
         },
         toolMetrics: {
           calls: toolCalls.length,
@@ -751,6 +831,7 @@ try {
             ({ newVerifiedSourceLines }) => !newVerifiedSourceLines,
           ).length,
           serializedResultBytes,
+          agentTextBytes,
           totalToolElapsedMs: toolCalls.reduce((sum, { elapsedMs }) => sum + (elapsedMs ?? 0), 0),
         },
         toolCalls,
@@ -764,7 +845,7 @@ try {
       citations,
       expected,
       hits,
-      corpus.files,
+      sourceFiles,
     );
     const abstained = answer?.answer.trim() === '' && citations.length === 0;
     const passed =
@@ -798,7 +879,7 @@ try {
               citations,
               expected,
               replies,
-              corpus.files,
+              sourceFiles,
             ),
           }
         : {}),
@@ -846,14 +927,23 @@ try {
         runId,
         startedAt,
         evaluation: 'Behavior Evaluation',
-        setup: 'synthetic',
+        setup: traversal ? 'current' : 'synthetic',
         model: piModel?.name ?? model ?? null,
         ...(comparison ? { comparison } : {}),
         ...(autonomous
           ? {
               design: 'autonomous',
               agent: codex ? 'codex' : 'pi',
-              provenance: { ...provenance, ...(piModel ? { piModel } : {}) },
+              provenance: {
+                ...provenance,
+                ...(traversalSnapshot
+                  ? {
+                      repositoryRevision: traversalSnapshot.revision,
+                      sourceArchiveSha256: traversalSnapshot.archiveSha256,
+                    }
+                  : {}),
+                ...(piModel ? { piModel } : {}),
+              },
               nativeSummary: summarizeNativeRuns(nativeObservations),
             }
           : {}),
@@ -880,11 +970,13 @@ async function autonomousProvenance(checkout: string, codex: string | undefined,
     'evals/repository-behavior-pi.ts',
     'evals/repository-citations.ts',
     'evals/repository-retrieval.ts',
+    'evals/repository-traversal-fixtures.ts',
     'runtime/src/evals/summarization-decision.ts',
     'runtime/src/integrations/mcp.ts',
     'runtime/src/repository/evidence.ts',
     'runtime/src/repository/providers/colgrep.ts',
     'runtime/src/repository/providers/ripgrep.ts',
+    'runtime/src/repository/source-navigation.ts',
     'runtime/src/tools/repo-locate.ts',
     'runtime/src/tools/repo-search.ts',
     'runtime/src/tools/repository-evidence-text.ts',

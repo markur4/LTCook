@@ -233,7 +233,11 @@ and shells use their harness permissions for operations in other checkouts.
   instead. Locate groups verified definition, caller, test, and reference
   candidates and includes short numbered excerpts. Ask for several independent
   symbols in one lookup, open a hit's enclosing block by file and line, or ask
-  Locate to follow a local import, re-export, or wrapper. For Search and Locate,
+  Locate to follow a local import, re-export, or wrapper. For a multi-file
+  investigation, ask the agent to use Locate trace for the behavior, relevant
+  settings, and tests in one call. For example, ask “Trace how the launcher
+  enables Session Memory and how the runtime handles a stale citation. Cite the
+  configuration and the test assertion.” For Search and Locate,
   name a local Git base to prioritize changed files and related tests. Reopen the
   chat through Paseo after launching the updated runtime. See the
   [Locate contract](References.md#repository-locate).
