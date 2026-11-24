@@ -490,6 +490,7 @@ workspace-relative paths as `ltcook_repo_search`. Supply exactly one lookup.
 | `symbols` | Up to four distinct, single-line symbols. Results keep input order, with separate limits and diagnostics per symbol. |
 | `query` | One ColGREP hybrid stage and at most one exact ripgrep follow-up. |
 | `location` | Open `{path, line, maxLines?}` from a previous hit. Defaults to 24 lines, with a maximum of 60. |
+| `trace` | Follow several leads for one question and return their shared evidence, connections, and gaps. |
 
 For a location, `source` includes the anchor and a numbered excerpt. Locate
 selects the smallest enclosing JavaScript, TypeScript, or Python function,
@@ -512,6 +513,27 @@ source locations for both ends of a relative import, a re-export, or a simple
 delegating wrapper. An imported wrapper target stops at the import statement.
 Dynamic or ambiguous links can be omitted. Optional `paths` constrain hits,
 location lookups, and both ends of a connection.
+
+Use `trace: {question, leads?}` when an answer needs evidence from several files.
+Supply up to four independent `{mode, query}` leads. Use `hybrid` for a behavior,
+`exact` for an identifier, and `literal` for an exact string such as an RPC route
+or environment variable. Without explicit leads, Locate searches up to four
+question clauses separated by question marks or semicolons. Searches run in
+parallel. Ranked results can seed bounded exact lookups for verified callable
+or class names. Trace follows up to three verified JavaScript or TypeScript
+connections per path, including direct calls whose bindings can be resolved.
+An explicit `follow` is unnecessary for trace requests.
+
+Each `trace.evidence` entry has an ID and a source range. Tools render its
+excerpt with line numbers. Each lead lists its `evidenceIds` and `gaps`.
+Connections reference those IDs and the anchor line at both ends.
+`shared-literal` links show two files containing
+the same route or setting name. Check the excerpts to establish what each file
+does with the value. Evidence is deduplicated and bounded to 24 excerpts, 12,000
+source characters, and 12 connections. The traversal has a 15-second deadline.
+Gaps distinguish missing matches, unavailable or incomplete search, unresolved
+connections, and exhausted budgets. Read the lines that support each claim and
+use additional reads to close specific gaps.
 
 Optionally provide `base` with Search or a Locate search stage, for example
 `"base": "main"`. This prioritizes paths changed between the local base and

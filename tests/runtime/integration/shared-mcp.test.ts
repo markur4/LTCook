@@ -175,6 +175,30 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
         { mode: 'exact', provider: 'ripgrep', status: Bun.which('rg') ? 'ready' : 'unavailable' },
       ],
     });
+    const trace = (sdk: Client) =>
+      sdk.callTool({
+        name: 'ltcook_repo_locate',
+        arguments: {
+          trace: {
+            question: 'Find the workspace marker.',
+            leads: [{ mode: 'exact', query: 'otherWorkspace' }],
+          },
+          paths: ['other.ts'],
+        },
+      });
+    expect((await trace(unscoped.sdk)).isError).toBe(true);
+    if (Bun.which('rg')) {
+      const traced = await trace(two.sdk);
+      expect(traced.structuredContent).toMatchObject({
+        trace: {
+          leads: [{ evidenceIds: [1], gaps: [] }],
+          evidence: [{ id: 1, path: 'other.ts', startLine: 1 }],
+        },
+      });
+      expect(traced.content).toEqual([
+        { type: 'text', text: expect.stringContaining('1 | export const otherWorkspace = true;') },
+      ]);
+    }
     for (const args of [
       { paths: ['../first/source.ts'] },
       { paths: [path.join(first, 'source.ts')] },

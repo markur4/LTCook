@@ -130,8 +130,11 @@ Use consistent guidance across supported harnesses. When a harness discovers MCP
 tools on demand, put the tool name and its use case in the instructions the
 agent sees before discovery.
 
-For repository work, prefer `ltcook_repo_locate` when looking for the definition,
-callers, or tests of a known symbol. Batch independent symbols with `symbols`.
+For repository work, prefer `ltcook_repo_locate` with `trace` when a question
+requires evidence across several files. Provide up to four independent leads
+for different behaviors, known symbols, routes, or settings. For simpler
+lookups, use Locate to find the definition, callers, or tests of a known symbol.
+Batch independent symbols with `symbols`.
 Open the surrounding block from a hit with `location`, or use `follow: true`
 to check one local connection. Use ranked `ltcook_repo_search` when the
 question describes behavior but the relevant symbol is unknown. Use native
@@ -645,6 +648,25 @@ measures when returned evidence first supports a correct citation in the
 final answer. This field is `null` when no citation qualifies. Compare paired
 correctness before timing. Live runs are opt-in. Normal CI type-checks the
 runner and tests the deterministic graders.
+
+For multi-file traversal, run the opt-in real-repository cases from a committed
+checkout. The runner archives the revision and keeps the evaluation labels
+outside the agent's source corpus. It runs each Search-only and Locate pair in
+both orders. Available cases are `workspace-grant`, `paste-projection`, and
+`runtime-log-owner`.
+
+```shell
+bun evals/repository-behavior-live.ts --traversal
+bun evals/repository-behavior-live.ts --codex --traversal --case paste-projection
+```
+
+The report measures time to the first verified citation, time by which the
+last required range was returned, total turn time, and rendered tool-response
+bytes. The last measure is a proxy for tool context. These are isolated
+Search-only and Locate comparisons. To measure ordinary Codex CLI against
+Paseo, give both the same committed tree, model, reasoning, and shell access.
+Alternate run order and score citations before comparing elapsed times.
+Include a Paseo run with retrieval disabled to measure the tool's contribution.
 
 For a spot check of natural stopping, the native Paseo fixture can also send
 three questions to an installed loopback Ollama model. It starts ordinary Pi

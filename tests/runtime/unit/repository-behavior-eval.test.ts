@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import type { Static } from 'typebox';
 import {
   addVerifiedSourceLines,
@@ -6,6 +8,11 @@ import {
   searchesForCreditCardValidation,
   type RepositoryBehaviorAnswer,
 } from '../../../evals/repository-behavior-grade.js';
+import { allRequiredEvidenceMs } from '../../../evals/repository-citations.js';
+import {
+  repositoryTraversalCases,
+  repositoryTraversalSnapshot,
+} from '../../../evals/repository-traversal-fixtures.js';
 import type { RepositoryHit } from '../../../runtime/src/repository/results.js';
 import { repositorySearchStop } from '../../../evals/repository-behavior-pi.js';
 
@@ -83,6 +90,47 @@ test('Pi permits a fallback after one unavailable attempt and distinguishes inde
     ),
   ).toBeUndefined();
 });
+
+test('Pi stops repeat traversals only when they add no source evidence', () => {
+  const initial = {
+    searches: [],
+    extraEvidence: [hits[0]!],
+    requestKey: 'trace',
+    finished: 1,
+  };
+  const repeat = { ...initial, finished: 2 };
+  expect(repositorySearchStop([initial, repeat], 2, 1)).toBe('repeated-search');
+  expect(repositorySearchStop([initial, { ...repeat, extraEvidence: hits }], 2, 1)).toBeUndefined();
+  const empty = { ...initial, extraEvidence: [], traceStatus: 'ready' as const };
+  expect(repositorySearchStop([empty, { ...empty, finished: 2 }], 2, 1)).toBe('repeated-search');
+  const unavailable = { ...empty, traceStatus: 'unavailable' as const };
+  expect(repositorySearchStop([unavailable, { ...unavailable, finished: 2 }], 2, 1)).toBe(
+    'retrieval-unavailable',
+  );
+});
+
+test('evidence completion requires verified source for every label', () => {
+  const labels = [definition, check];
+  const first = { elapsedMs: 5, hits: [hits[0]!] };
+  const stale = { elapsedMs: 8, hits: [{ ...check, excerpt: 'expect(false).toBe(true);' }] };
+  const second = { elapsedMs: 13, hits: [hits[1]!] };
+  expect(allRequiredEvidenceMs(labels, [second, stale, first], files)).toBe(13);
+  expect(allRequiredEvidenceMs(labels, [first, stale], files)).toBeNull();
+  expect(allRequiredEvidenceMs([], [first, second], files)).toBeNull();
+});
+
+const checkout = path.resolve(import.meta.dir, '../../..');
+test.skipIf(!Bun.which('git') || !existsSync(path.join(checkout, '.git')))(
+  'traversal cases have source evidence in the committed archive and keep their labels outside it',
+  async () => {
+    const { files } = await repositoryTraversalSnapshot(checkout);
+    const cases = repositoryTraversalCases(files);
+    expect(cases.length).toBeGreaterThanOrEqual(3);
+    for (const { expectedFacts } of cases)
+      expect(new Set(expectedFacts.map(({ evidence }) => evidence.path)).size).toBeGreaterThan(2);
+    expect([...files.keys()].some((file) => file.startsWith('evals/'))).toBe(false);
+  },
+);
 
 test('Pi applies the safeguard when the native completions never reach the provider', () => {
   expect(repositorySearchStop([], 15, 1)).toBeUndefined();
