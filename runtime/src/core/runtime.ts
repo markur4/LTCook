@@ -31,6 +31,7 @@ import {
 } from '../paseo-plugin/shared/workspace-tools.js';
 
 import type { SessionMemory } from '../session-memory/service.js';
+import type { MemoryScope } from '../session-memory/units.js';
 
 type RuntimeOptions = {
   databasePath: string;
@@ -572,7 +573,14 @@ Task to register: ${input.description}`,
               'Agents may update only the status of tasks assigned to their bound native identity',
             );
         }
-        return this.store.updateTask(sessionId, command);
+        const updated = this.store.updateTask(sessionId, command);
+        if (updated.status === 'completed' && task.status !== 'completed') {
+          for (const assignment of this.store.listAssignments(sessionId)) {
+            if (assignment.taskId === task.id)
+              this.options.memory?.finalize(assignment.nativeAgentId);
+          }
+        }
+        return updated;
       }
       case 'step.create':
         this.requireLeader(actor, leader);
@@ -1203,6 +1211,40 @@ Task to register: ${input.description}`,
     return [
       ...new Set(memberships.filter(({ team }) => teams.has(team)).flatMap(({ agents }) => agents)),
     ];
+  }
+
+  memoryScope(agentId: string): MemoryScope | undefined {
+    if (this.closed) return undefined;
+    const sessions = this.store
+      .listSessions()
+      .filter(({ id }) =>
+        this.store
+          .listBindings(id)
+          .some(({ nativeAgentId, state }) => nativeAgentId === agentId && state === 'bound'),
+      );
+    if (sessions.length !== 1) return undefined;
+    const sessionId = sessions[0]!.id;
+    const assignments = this.store
+      .listAssignments(sessionId)
+      .filter(
+        ({ nativeAgentId, status }) =>
+          nativeAgentId === agentId && ['sending', 'sent'].includes(status),
+      );
+    if (assignments.length !== 1) return { sessionId };
+    const task = this.store.getTask(sessionId, assignments[0]!.taskId);
+    const steps = this.store
+      .listSteps(sessionId)
+      .filter(({ taskId, status }) => taskId === task.id && status === 'running');
+    const plans = task.passId
+      ? this.planning.list(sessionId).filter(({ passId }) => passId === task.passId)
+      : [];
+    return {
+      sessionId,
+      taskId: task.id,
+      passId: task.passId,
+      planId: plans.length === 1 ? plans[0]!.id : undefined,
+      stepId: steps.length === 1 ? steps[0]!.id : undefined,
+    };
   }
 
   private async deliverAssignment(assignment: Assignment): Promise<void> {

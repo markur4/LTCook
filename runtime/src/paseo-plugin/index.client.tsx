@@ -4,6 +4,8 @@ import { TeamsBrowser } from './client/screens/TeamsBrowser';
 import { TeamStatus } from './client/screens/TeamStatus';
 import { TeamComposerItem } from './client/components/TeamComposerItem';
 import { ModelComposerItem } from './client/components/ModelComposerItem';
+import { PastedTextComposerItem } from './client/components/PastedTextComposerItem';
+import { pastedTextSource } from './shared/pasted-text';
 
 export default function contribute(client: PluginClientContext) {
   const cleanup = [
@@ -36,6 +38,8 @@ export default function contribute(client: PluginClientContext) {
     }),
     client.addComposerItem({ id: 'team-selector', Component: TeamComposerItem }),
     client.addComposerItem({ id: 'model-selector', Component: ModelComposerItem }),
+    client.addAttachmentSource(pastedTextSource),
+    client.addComposerItem({ id: 'paste-text', Component: PastedTextComposerItem }),
     client.addCommandCenterItem({
       id: 'open-team-panel',
       title: 'Open Team panel',

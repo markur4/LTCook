@@ -1,7 +1,8 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type { PaseoApi } from '@getpaseo/client';
 import type { MemoryCursor, MemorySource } from '../session-memory/service.js';
-import type { MemoryMessage } from '../session-memory/extraction.js';
+import type { MemorySourceMessage } from '../session-memory/units.js';
+import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 
 const runtimePrefix = 'ltcook-runtime-';
 
@@ -20,7 +21,7 @@ function promptAuthor(
   id: string | undefined,
   agentId: string,
   secret?: string,
-): MemoryMessage['author'] {
+): MemorySourceMessage['author'] {
   if (!id) return 'unknown';
   if (!id.startsWith(runtimePrefix)) return 'user';
   const [nonce, marker] = id.slice(runtimePrefix.length).split('.');
@@ -30,8 +31,29 @@ function promptAuthor(
 }
 
 /** Use the host timeline so provider-specific stores remain owned by Paseo. */
-export function createPaseoMemorySource(api: PaseoApi, secret?: string): MemorySource {
+export function createPaseoMemorySource(
+  api: PaseoApi,
+  secret?: string,
+  documents?: PastedDocuments,
+): MemorySource {
   return {
+    invalidateAttachments: documents
+      ? (agentId, epoch, from) => documents.invalidate(agentId, epoch, from)
+      : undefined,
+    watch(agentId, notify) {
+      const unsubscribe = api.agents.ref(agentId).timeline.subscribe(({ event }) => {
+        if (
+          event.type === 'replacement' ||
+          event.type === 'subscription_restored' ||
+          (event.type === 'timeline' &&
+            event.item.type === 'tool_call' &&
+            event.item.status !== 'running')
+        )
+          notify();
+      });
+      void unsubscribe.ready.catch(() => {});
+      return unsubscribe;
+    },
     async read(agentId: string, cursor?: MemoryCursor, direction = 'after') {
       const timeline = api.agents.ref(agentId).timeline;
       if (!cursor && direction === 'after') {
@@ -52,6 +74,14 @@ export function createPaseoMemorySource(api: PaseoApi, secret?: string): MemoryS
         limit: 48,
       });
       if (page.error || !page.agent) throw new Error('Session Memory history is unavailable.');
+      const messages = readMessages(agentId, secret, page.entries);
+      if (documents) {
+        for (const message of messages) {
+          if (message.author !== 'user' && message.author !== 'unknown') continue;
+          const projected = await documents.project(agentId, page.epoch, message.seq, message.text);
+          if (projected.attachments.length) Object.assign(message, projected);
+        }
+      }
       return {
         epoch: page.epoch,
         latest: page.window.minSeq === 0 ? -1 : page.window.maxSeq,
@@ -59,7 +89,7 @@ export function createPaseoMemorySource(api: PaseoApi, secret?: string): MemoryS
         earliest: page.window.minSeq,
         through: page.endCursor?.seq ?? cursor?.seq ?? -1,
         reset: page.reset || page.staleCursor || page.gap,
-        messages: readMessages(agentId, secret, page.entries),
+        messages,
       };
     },
   };
@@ -71,25 +101,32 @@ function readMessages(
   agentId: string,
   secret: string | undefined,
   entries: Timeline['entries'],
-): MemoryMessage[] {
+): MemorySourceMessage[] {
   return entries
-    .flatMap(({ seqEnd, item }): MemoryMessage[] => {
+    .flatMap(({ seqEnd, turnId, timestamp, item }): MemorySourceMessage[] => {
+      const origin = { seq: seqEnd, turnId, timestamp };
       switch (item.type) {
         case 'user_message':
           return [
             {
-              seq: seqEnd,
+              ...origin,
+              messageId: item.messageId ?? item.clientMessageId,
               author: promptAuthor(item.clientMessageId, agentId, secret),
               text: item.text,
             },
           ];
         case 'assistant_message':
-          return [{ seq: seqEnd, author: 'agent', text: item.text }];
+          return [{ ...origin, messageId: item.messageId, author: 'agent', text: item.text }];
         case 'tool_call': {
+          if (item.status === 'running') return [];
           if (item.agentMessage?.event === 'message')
-            return [{ seq: seqEnd, author: 'agent', text: item.agentMessage.text }];
+            return [
+              { ...origin, intermediate: true, author: 'agent', text: item.agentMessage.text },
+            ];
           const result = toolOutcome(item);
-          return result ? [{ seq: seqEnd, author: 'tool', text: result }] : [];
+          return result
+            ? [{ ...origin, messageId: item.callId, author: 'tool', text: result }]
+            : [];
         }
         default:
           return [];
@@ -98,7 +135,7 @@ function readMessages(
     .filter(({ text }) => text.trim().length > 0);
 }
 
-/** Use structured outcomes instead of commands, tool arguments, or raw tool output. */
+/** Preserve typed tool results and verification lines while omitting commands and arbitrary logs. */
 function toolOutcome(
   item: Extract<Timeline['entries'][number]['item'], { type: 'tool_call' }>,
 ): string | undefined {
@@ -106,17 +143,39 @@ function toolOutcome(
   const { detail, status } = item;
   switch (detail.type) {
     case 'shell':
-      return typeof detail.exitCode === 'number'
-        ? `Shell command ${status} with exit code ${detail.exitCode}.`
-        : undefined;
+      return [
+        typeof detail.exitCode === 'number'
+          ? `Shell command ${status} with exit code ${detail.exitCode}.`
+          : `Shell command ${status}.`,
+        ...verificationLines(detail.output),
+      ].join('\n');
     case 'edit':
     case 'write':
-      return `File ${detail.type} ${status} for ${JSON.stringify(detail.filePath.slice(0, 320))}.`;
+    case 'read':
+      return `File ${detail.type} ${status} for ${JSON.stringify(detail.filePath)}.`;
     case 'search':
       return detail.toolName !== 'web_search' && typeof detail.numMatches === 'number'
-        ? `Workspace search ${status} with ${detail.numMatches} matches.`
+        ? [
+            `Workspace search ${status} with ${detail.numMatches} matches.`,
+            ...(detail.filePaths ?? []),
+          ].join('\n')
         : undefined;
     default:
       return undefined;
   }
+}
+
+function verificationLines(output?: string): string[] {
+  if (!output) return [];
+  return output
+    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
+    .split(/\r?\n/)
+    .filter((line) => {
+      const result =
+        /^\s*(?:\((?:pass|fail|skip)\)|[✓✗]|\d+\s+(?:passed|failed|skipped)|[A-Z][A-Z0-9_.-]*\s+(?:PASS|FAIL)\b|(?:prefill|generation|benchmark)\b.*\d)/i;
+      return (
+        result.test(line) &&
+        !/\b(?:secret|password|credential|authorization|api[_ -]?key)\b/i.test(line)
+      );
+    });
 }

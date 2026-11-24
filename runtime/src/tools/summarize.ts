@@ -89,6 +89,7 @@ async function readWorkspaceText(
 export function createSummarizeTool(
   settings: OllamaSettings,
   onUsage?: (usage: OllamaUsage) => void,
+  holdForeground?: () => () => void,
 ) {
   return defineTool({
     name: 'ltcook_summarize',
@@ -117,15 +118,20 @@ export function createSummarizeTool(
         throw new Error('Supply exactly one of text or path.');
       if (material === undefined || !material.trim()) throw new Error('Summary input is empty.');
       if (Buffer.byteLength(material, 'utf8') > limit) throw sizeError(limit);
-      return ollamaChat(
-        settings,
-        [
-          { role: 'system', content: SUMMARY_INSTRUCTIONS },
-          { role: 'user', content: focusPrefix(focus) + material },
-        ],
-        context.signal,
-        onUsage,
-      );
+      const release = holdForeground?.();
+      try {
+        return await ollamaChat(
+          settings,
+          [
+            { role: 'system', content: SUMMARY_INSTRUCTIONS },
+            { role: 'user', content: focusPrefix(focus) + material },
+          ],
+          context.signal,
+          onUsage,
+        );
+      } finally {
+        release?.();
+      }
     },
   });
 }

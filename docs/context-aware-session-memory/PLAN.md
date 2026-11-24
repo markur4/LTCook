@@ -16,7 +16,7 @@ conversation retrieval during pending work or a rewind.
 - Default to LFM3 QAD Q4 on CPU at temperature 0.4, top-k 50, repetition
   penalty 1.1, reasoning disabled, and a 2,048-token output cap with a
   16,384-token context. Keep independent general summarization configuration.
-- Use 4,000 historical tokens, grouped eviction to about 2,000, and an
+- Use 4,096 historical tokens, grouped eviction down to 2,048, and an
   8,000-token target including overhead. Preserve bounded portions and
   explicitly track coverage. Use the raw text of useful non-JSON responses.
 - Persist pasted text on the daemon host and bind it to its original message.

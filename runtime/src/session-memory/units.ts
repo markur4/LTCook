@@ -1,5 +1,6 @@
-import type { MemoryMessage } from './extraction.js';
-import { estimateMemoryTokens } from './extraction.js';
+import type { MemoryMessage } from './text.js';
+import { estimateMemoryTokens } from './text.js';
+import type { MemoryAttachment } from './pasted-documents.js';
 
 export type MemoryScope = {
   sessionId?: string;
@@ -15,7 +16,7 @@ export type MemorySourceMessage = MemoryMessage & {
   timestamp?: string;
   intermediate?: true;
   scope?: MemoryScope;
-  attachment?: { name: string; text?: string; truncated?: true };
+  attachments?: MemoryAttachment[];
 };
 
 export type MemoryTurnOutcome = 'completed' | 'failed' | 'canceled';
@@ -43,6 +44,7 @@ export function identifyMemoryUnits(
   outcomes: ReadonlyMap<string, MemoryTurnOutcome>,
   actionThreshold: number,
   flush = false,
+  recordedActions: ReadonlySet<number> = new Set(),
 ): MemoryUnit[] {
   const units: MemoryUnit[] = [];
   const turns = new Map<string | undefined, MemorySourceMessage[]>();
@@ -51,6 +53,7 @@ export function identifyMemoryUnits(
     turn.push(message);
     turns.set(message.turnId, turn);
   }
+  const latestTurn = messages.at(-1)?.turnId;
   for (const [turnId, items] of turns) {
     const outcome = turnId ? outcomes.get(turnId) : undefined;
     const responses = items.filter(
@@ -75,6 +78,7 @@ export function identifyMemoryUnits(
       tokens = 0;
     };
     for (const item of items) {
+      if (recordedActions.has(item.seq)) continue;
       if (item.author !== 'agent' && item.author !== 'tool') continue;
       if (item.author === 'agent' && !item.intermediate && (item === finalResponse || !outcome))
         continue;
@@ -83,12 +87,17 @@ export function identifyMemoryUnits(
       tokens += estimateMemoryTokens(item.text);
       if (tokens >= actionThreshold) finishActions();
     }
-    if (outcome === 'completed' && !hasUamp && finalResponse) {
+    if (
+      outcome === 'completed' &&
+      !hasUamp &&
+      finalResponse &&
+      !recordedActions.has(finalResponse.seq)
+    ) {
       if (actions.length && scopeKey(actions[0]?.scope) !== scopeKey(finalResponse.scope))
         finishActions();
       actions.push(finalResponse);
     }
-    if (outcome || flush) finishActions();
+    if (outcome || flush || (turnId && turnId !== latestTurn)) finishActions();
     if (hasUamp) {
       units.push({
         type: 'UAMP',

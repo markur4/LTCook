@@ -13,7 +13,13 @@ import { EvalRunService } from './evals/service.js';
 import { createEvalEngine } from './evals/engine.js';
 import { createPaseoMemorySource } from './integrations/paseo-memory.js';
 import { SessionMemory } from './session-memory/service.js';
-import { extractMemory, memoryGeneration } from './session-memory/extraction.js';
+import {
+  defaultMemoryBudgets,
+  sessionMemoryGeneration,
+  sessionMemoryModel,
+  summarizeMemory,
+} from './session-memory/summarization.js';
+import { PastedDocuments } from './session-memory/pasted-documents.js';
 import { catalogModelAliases, resolveModel } from './models/aliases.js';
 const EX_TEMPFAIL = 75;
 function isListenAddressInUse(error: unknown): boolean {
@@ -305,26 +311,45 @@ async function run(): Promise<void> {
       return;
     }
     const threshold = Number(process.env.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000');
+    const pastedDocuments = new PastedDocuments(
+      path.join(stateDirectory, 'pasted-documents'),
+      apiToken,
+    );
+    api.setPastedDocuments(pastedDocuments);
     if (threshold !== 0) {
       try {
         await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
         const memorySettings = {
           ...summarization,
-          model: process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || summarization.model,
+          model: process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || sessionMemoryModel,
           cpuOnly: true,
-          generation: JSON.stringify(memoryGeneration),
+          generation: JSON.stringify(sessionMemoryGeneration),
         };
         memory = new SessionMemory({
-          databasePath: path.join(stateDirectory, 'session-memory-v2.sqlite'),
-          source: createPaseoMemorySource(host.api, apiToken),
+          databasePath: path.join(stateDirectory, 'session-memory-v3.sqlite'),
+          source: createPaseoMemorySource(host.api, apiToken, pastedDocuments),
           threshold,
-          extract: (messages, signal) => extractMemory(memorySettings, messages, signal),
+          summarize: (type, prompt, signal) =>
+            summarizeMemory(memorySettings, prompt, signal, type),
+          model: memorySettings.model,
+          configuration: memorySettings.generation,
+          budgets: {
+            history: Number(
+              process.env.LTCOOK_SESSION_MEMORY_HISTORY_TOKENS ?? defaultMemoryBudgets.history,
+            ),
+            retained: Number(
+              process.env.LTCOOK_SESSION_MEMORY_RETAINED_TOKENS ?? defaultMemoryBudgets.retained,
+            ),
+            input: Number(
+              process.env.LTCOOK_SESSION_MEMORY_INPUT_TOKENS ?? defaultMemoryBudgets.input,
+            ),
+          },
           peers: (agentId, workspace) => runtime?.memoryPeers(agentId, workspace) ?? [],
           onFailure: () => {
             void telemetry.log('warn', 'session-memory.update_failed', {});
           },
         });
-        api.setSessionMemory(memory);
+        api.setSessionMemory(memory, (id) => runtime?.memoryScope(id));
         const activeMemory = memory;
         void host.api.agents
           .list()

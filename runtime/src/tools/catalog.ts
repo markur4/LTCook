@@ -20,7 +20,9 @@ export function createTools(
     createRiedTool(ried),
     repoSearch,
     createRepoLocateTool(repoSearch),
-    ...(ollama ? [createSummarizeTool(ollama)] : []),
+    ...(ollama
+      ? [createSummarizeTool(ollama, undefined, memory && (() => memory.holdForeground()))]
+      : []),
     ...(memory ? [createSessionMemoryTool(memory)] : []),
     ...(web ? createWebTools(web) : []),
   ];

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { PluginAttachmentItemSchema } from '@getpaseo/plugin';
 import { createHostClient } from '@getpaseo/client/node';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
@@ -16,7 +17,9 @@ import {
 import { catalogModelAliases } from '../../../runtime/src/models/aliases.js';
 import { TeamRegistry } from '../../../runtime/src/integrations/team-loader.js';
 import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
-import type { MemoryMessage } from '../../../runtime/src/session-memory/extraction.js';
+import type { MemoryMessage } from '../../../runtime/src/session-memory/text.js';
+import { PastedDocuments } from '../../../runtime/src/session-memory/pasted-documents.js';
+import type { MemorySourceMessage } from '../../../runtime/src/session-memory/units.js';
 import { createSessionMemoryTool } from '../../../runtime/src/tools/session-memory.js';
 
 const root = path.resolve(import.meta.dir, '../../..');
@@ -46,9 +49,13 @@ const team = teams.resolve('default-minimal');
 const leaderId = randomUUID();
 const requirementMessageId = randomUUID();
 const userRequirement = 'Keep the cobalt fixture unchanged.';
+const pastedText = 'Fixture reference material. '.repeat(100) + 'PASTE_REFERENCE_SENTINEL';
+const pastedDocuments = new PastedDocuments(path.join(directory, 'pasted-documents'), secret);
 const runtimeHandoff = 'Inspect the cobalt fixture for the acceptance case.';
 const memoryPrompt = 'Read the shared cobalt fixture requirement.';
 let peerMemoryRead = false;
+let attachmentReachedPi = false;
+let attachmentReachedUamp = false;
 let modelCalls = 0;
 let expectedModel = 'test';
 let providerError: unknown;
@@ -67,6 +74,9 @@ const provider = createHttpServer(async (request, response) => {
       'First inference began before persistent member reconciliation',
     );
     const userIndex = input.messages.findLastIndex((message) => message.role === 'user');
+    attachmentReachedPi ||= JSON.stringify(input.messages[userIndex]?.content ?? '').includes(
+      'PASTE_REFERENCE_SENTINEL',
+    );
     const readsMemory = JSON.stringify(input.messages[userIndex]?.content ?? '').includes(
       memoryPrompt,
     );
@@ -234,7 +244,7 @@ try {
       },
     });
   const startMemory = () => {
-    const source = createPaseoMemorySource(host!.api, secret);
+    const source = createPaseoMemorySource(host!.api, secret, pastedDocuments);
     const instance = new SessionMemory({
       databasePath: path.join(directory, 'session-memory.sqlite'),
       source: {
@@ -249,9 +259,16 @@ try {
       },
       threshold: 1,
       peers: (agentId, workspaceRoot) => runtime?.memoryPeers(agentId, workspaceRoot) ?? [],
-      async extract(messages) {
-        assert(messages.every(({ author }) => author === 'agent' || author === 'tool'));
-        return [];
+      async summarize(type, prompt) {
+        attachmentReachedUamp ||=
+          type === 'UAMP' &&
+          prompt.some(({ content }) => content.includes('PASTE_REFERENCE_SENTINEL'));
+        return {
+          type,
+          text: 'Observed native conversation evidence.',
+          complete: true,
+          elapsedMs: 0,
+        };
       },
     });
     api.setSessionMemory(instance);
@@ -262,6 +279,7 @@ try {
   api.setRuntime(runtime);
   const memoryTool = createSessionMemoryTool(memory);
   api.setWorkspaceMcp(new WorkspaceMcp([memoryTool], listen));
+  api.setPastedDocuments(pastedDocuments);
   api.setOpenWorkspaceHandler(async (request) =>
     runtime!.openSession({
       id: request.sessionId,
@@ -313,9 +331,24 @@ try {
     runtime.snapshot(leaderId).members.some(({ binding }) => binding?.state !== 'bound'),
     'Fixture failed to preserve the startup race',
   );
-  await leader.run(userRequirement, { timeoutMs: 30_000, messageId: requirementMessageId });
+  const requestAttachment = (bearer: string) =>
+    fetch(endpoint + '/v1/session-memory/paste', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nativeAgentId: leaderId, text: pastedText }),
+    });
+  assert.equal((await requestAttachment(agentBearer(secret, leaderId))).status, 403);
+  const attached = await requestAttachment(secret);
+  assert.equal(attached.status, 200);
+  const attachment = PluginAttachmentItemSchema.parse(await attached.json());
+  await leader.run(userRequirement + '\n\n' + attachment.identifier, {
+    timeoutMs: 30_000,
+    messageId: requirementMessageId,
+    attachments: [{ type: 'text', mimeType: 'text/plain', text: attachment.text }],
+  });
   if (providerError) throw providerError;
   assert.equal(modelCalls, 2);
+  assert(attachmentReachedPi);
   const deadline = Date.now() + 30_000;
   while (runtime.snapshot(leaderId).members.some(({ binding }) => binding?.state !== 'bound')) {
     if (Date.now() > deadline)
@@ -344,6 +377,11 @@ try {
     observedSources.get(userRequirement),
   );
   assert.equal(source.author, 'user');
+  assert.equal((source as MemorySourceMessage).attachments?.[0]?.text, pastedText);
+  await waitFor(
+    'the completed native UAMP with its attached source',
+    () => attachmentReachedUamp || undefined,
+  );
   const toolContext = {
     agentId: childId,
     workspaceRoot: workspace,
@@ -411,7 +449,7 @@ try {
       signal: AbortSignal.timeout(10_000),
     },
   );
-  assert.deepEqual(savedSource.source, {
+  assert.partialDeepStrictEqual(savedSource.source, {
     ...memoryReference,
     author: 'user',
     text: userRequirement,
@@ -468,7 +506,12 @@ try {
       { source: citation },
       { ...toolContext, signal: AbortSignal.timeout(5000) },
     );
-    assert.deepEqual(source.source, { ...citation, author: 'unknown', text: userRequirement });
+    assert.partialDeepStrictEqual(source.source, {
+      ...citation,
+      author: 'unknown',
+      text: userRequirement,
+      attachments: [{ id: attachment.id, name: 'Pasted text', text: pastedText }],
+    });
     return true;
   });
   const peerTurn = await host.api.agents.ref(childId).run(memoryPrompt, { timeoutMs: 30_000 });

@@ -107,8 +107,8 @@ describe('approved Pass scheduling', () => {
           return { epoch: 'fixture', latest: -1, through: -1, reset: false, messages: [] };
         },
       },
-      async extract() {
-        return [];
+      async summarize(type) {
+        return { type, text: '', complete: false, elapsedMs: 0 };
       },
     });
     const f = await fixture(defaultTeam, memory);

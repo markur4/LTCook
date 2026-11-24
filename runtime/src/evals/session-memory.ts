@@ -20,7 +20,7 @@ import {
   selectMemoryContext,
   type MemoryEntry,
   type MemoryMessage,
-} from '../session-memory/extraction.js';
+} from './session-memory-extractive.js';
 import { EVAL_MODEL, LUNA_EVALUATION, hash } from './setup.js';
 import { evaluateMemoryHandoff } from './session-memory-handoff.js';
 import {
@@ -99,7 +99,7 @@ function corpusHash(fixtures: readonly MemoryFixture[]) {
   );
 }
 
-async function residency(endpoint: URL, digest: string, signal: AbortSignal) {
+export async function residency(endpoint: URL, digest: string, signal: AbortSignal) {
   const response = await fetch(new URL('/api/ps', endpoint), {
     redirect: 'error',
     signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) as NonNullable<
@@ -115,7 +115,7 @@ async function residency(endpoint: URL, digest: string, signal: AbortSignal) {
   return loaded ? { bytes: loaded.size, gpuBytes: loaded.size_vram } : null;
 }
 
-async function peakRunnerRss(weightsDigest?: string) {
+export async function peakRunnerRss(weightsDigest?: string) {
   if (!weightsDigest || platform() !== 'linux') return undefined;
   const blob = `sha256-${weightsDigest.replace(/^sha256:/, '')}`;
   const processes = await readdir('/proc').catch(() => []);
