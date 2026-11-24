@@ -13,4 +13,4 @@
 - [x] Run the exact-retention replays and held-out index fixture on GPU. Review flagged claims and record the outcomes in [Immediate Context qualification](QUALIFICATION.md#immediate-context-qualification).
 - [x] Qualify the attachment fixture and recheck exact named results. Measure the reference to a previous Discussion in the [lean single-seed run](QUALIFICATION.md#lean-single-seed-qualification).
 - [x] Establish passing original-source Pi controls for trace pairing and workspace preparation.
-- [ ] Qualify automatic delegation. In the [delegation investigation](QUALIFICATION.md#automatic-delegation-investigation), the decision-last diagnostic passed both sets of executable checks. Both Pi turns still stopped on repeated searches.
+- [ ] Qualify automatic delegation. The [compact handoff comparison](QUALIFICATION.md#compact-production-delegation) found passing trace-pairing edits, a missing workspace-preparation edit, and unsuccessful turn completion in both formats. The workspace JSON arm continued beyond the known source sequence.

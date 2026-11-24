@@ -553,3 +553,66 @@ differences unresolved.
 
 The audited run and the two focused comparisons took 69.36 s, 75.64 s, and
 78.51 s. The diagnostic replays leave the normal qualification verdict open.
+
+## Compact production delegation
+
+Production selects evidence for the approved Task, removes duplicate text
+and explicitly tentative older proposals superseded by a later instruction,
+and places the latest applicable original user instruction last. Known Task
+scope excludes unrelated work. History without scope metadata uses query
+relevance. The compact projection shows source sequences and identifies
+historical verification outcomes. The stored originals and summary citations
+remain available for exact lookup.
+
+The two repository-edit comparisons use seed 17 and the local models on the
+RTX 5090. The JSON control renders the same selected evidence and citations in
+the same order, with the same worker instructions, lookup tool, and final
+decision. The report records one shared evidence hash per pair. The control
+reproduces the decision-last structure with the current selection and status
+rules. The earlier investigation used a different evidence selection.
+
+An earlier run of this comparison exposed two downstream retrieval patterns.
+Trace pairing reopened the original at sequence 4 successfully and continued
+searching for the historical test label after the passing edit. Those searches
+reported available history and returned the same references. Workspace
+preparation's JSON arm read the final instruction at sequence 31 and then
+requested all 103 sequences from 32 through 134. The transcript ends at 31.
+The requests changed each time, so the existing identical-call guard did not
+fire. The turn reached its 120-second safeguard without making an edit.
+
+The exact lookup now reports a missing reference separately from unavailable
+history and returns the latest known sequence when available. The
+search result also reports pending summaries, result truncation, and history
+availability independently. These are response semantics. The worker can
+still make the same calls and the evaluator uses the same loop guard and
+executable checks.
+
+| Fixture and handoff | Estimated handoff tokens | Implementation | Turn completion and tools |
+| --- | ---: | --- | --- |
+| Trace pairing, original-source control | 999 | Passed 4/4 checks | Loop guard after 9 calls |
+| Trace pairing, compact | 1,164 | Passed 4/4 checks | Loop guard after 11 calls |
+| Trace pairing, matched JSON | 1,539 | Passed 4/4 checks | Loop guard after 11 calls |
+| Workspace preparation, original-source control | 1,164 | Passed 4/4 checks | Response-length stop after 14 calls |
+| Workspace preparation, compact | 1,140 | Made no edit. Identical replacement failed. | Loop guard after 11 calls |
+| Workspace preparation, matched JSON | 1,454 | Made no edit. Identical replacement failed. | Timed out at 120 s after 117 calls |
+
+The final compact handoffs were 24% shorter for trace pairing and 22%
+shorter for workspace preparation. Both kept the complete final instruction
+at sequence 31. The unrelated navigation Task and explicitly tentative
+original proposals were absent from the selected handoffs.
+
+In the final workspace JSON run, 115 exact lookups included 104 nonexistent
+references, ending at sequence 135. The tool reported `not-found` and
+`latestSequence: 31` for each out-of-range lookup. History was available.
+The workspace compact worker instead repeated searches that returned the
+historical note. The trace-pairing workers continued searching after a
+correct patch. These traces show that readable handoffs and complete
+lookup responses can coexist with downstream tool loops. They leave
+the model's reason for continuing unresolved.
+
+Both original-source controls passed the implementation checks and failed
+turn completion, leaving automatic delegation qualification inconclusive.
+The final GPU comparison took 253.45 s. Static checks, 317 Bun Traditional
+Tests with two opt-in skips, and scripted Pi/Paseo Leader adoption passed.
+The 250 Python Traditional Tests also passed. Summarization qualification
+is recorded separately above.

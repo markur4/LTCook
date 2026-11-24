@@ -59,8 +59,8 @@ const args = process.argv.slice(2);
 const contextAware = args.includes('--context-aware');
 const auditOutput = args.includes('--audit-output');
 const compareCheckInstructions = args.includes('--compare-check-instructions');
-const compareDecisionOrder = args.includes('--compare-decision-order');
-if ((compareCheckInstructions || compareDecisionOrder) && !contextAware)
+const compareHandoffFormat = args.includes('--compare-handoff-format');
+if ((compareCheckInstructions || compareHandoffFormat) && !contextAware)
   throw new Error('Handoff comparisons require --context-aware.');
 const [
   extractorName = contextAware ? contextModel : 'LiquidAI/lfm2.5-1.2b-instruct:q8_0',
@@ -95,23 +95,8 @@ process.once('SIGTERM', cancel);
 const { signal } = controller;
 const run = promisify(execFile);
 type EditCase = (typeof sessionMemoryEditCases)[number];
-type EditDiagnostic = 'check-instructions' | 'decision-last';
+type EditDiagnostic = 'check-instructions' | 'json-decision-last';
 type ContextComparison = Awaited<ReturnType<typeof compareContextMemory>>;
-
-function decisionLast(handoff: string, decisionSeq?: number) {
-  const lines = handoff.split('\n');
-  const start = lines.indexOf('Original user messages in chronological order');
-  const end = lines.indexOf('Summaries and recent evidence in chronological order');
-  if (decisionSeq === undefined || start < 0 || end <= start) return;
-  const originals = lines.slice(start + 1, end);
-  const index = originals.findIndex((line) => {
-    const entry = JSON.parse(line) as { author: string; seq: number };
-    return entry.author === 'user' && entry.seq === decisionSeq;
-  });
-  if (index < 0) return;
-  const [decision] = lines.splice(start + 1 + index, 1);
-  return [...lines, 'Latest original user decision', decision].join('\n');
-}
 
 async function editWithPi(input: {
   fixture: EditCase;
@@ -360,6 +345,7 @@ try {
           strategies: [strategy],
           seed,
           auditOutput,
+          includeDecisionLastControl: compareHandoffFormat,
         });
       const edit = async (
         mode: ContextStrategy,
@@ -394,30 +380,31 @@ try {
           ? await edit('original-search', originalEvidence)
           : undefined;
       type EditOutcome = Awaited<ReturnType<typeof editWithPi>>;
-      const arms: (Omit<ContextComparison['arms'][number], 'handoff'> & {
+      const arms: (Omit<ContextComparison['arms'][number], 'handoff' | 'decisionLastJson'> & {
         worker?: EditOutcome;
         checkInstructionControl?: EditOutcome;
-        decisionOrderControl?: EditOutcome;
+        decisionLastJsonControl?: EditOutcome;
       })[] = [{ ...original, worker: baseline }];
-      if (baseline?.passed) {
+      // > The explicit format experiment still has a matched evidence pair if the worker control loops.
+      if (
+        baseline?.passed ||
+        (compareHandoffFormat && originalEvidence && originalControlRetrievedCriticalFacts)
+      ) {
         for (const mode of strategies.filter((item) => item !== 'original-search')) {
           for (const seed of seeds) {
             const comparison = await compare(mode, seed);
-            const { handoff, ...summary } = comparison.arms[0]!;
+            const { handoff, decisionLastJson, ...summary } = comparison.arms[0]!;
             const worker = await edit(mode, handoff, seed);
             const comparePresentation = mode === 'immediate' && worker.toolLoopDetected;
             const checkInstructionControl =
               compareCheckInstructions && comparePresentation
                 ? await edit(mode, handoff, seed, 'check-instructions')
                 : undefined;
-            const reordered =
-              compareDecisionOrder && comparePresentation
-                ? decisionLast(handoff, transcript.correctionSources.at(-1))
+            const decisionLastJsonControl =
+              mode === 'immediate' && decisionLastJson
+                ? await edit(mode, decisionLastJson, seed, 'json-decision-last')
                 : undefined;
-            const decisionOrderControl = reordered
-              ? await edit(mode, reordered, seed, 'decision-last')
-              : undefined;
-            arms.push({ ...summary, worker, checkInstructionControl, decisionOrderControl });
+            arms.push({ ...summary, worker, checkInstructionControl, decisionLastJsonControl });
           }
         }
       } else

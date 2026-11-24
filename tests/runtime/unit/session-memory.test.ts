@@ -124,6 +124,11 @@ test('searches older source text omitted by extraction and returns a full cited 
   });
   try {
     const result = await memory.search('reader', '', 'ArchiveSentinel', 'leader');
+    expect(result.status).toEqual({
+      summariesPending: true,
+      resultsTruncated: true,
+      originalHistory: 'available',
+    });
     expect(result.matches).toMatchObject([
       {
         agentId: 'leader',
@@ -134,11 +139,18 @@ test('searches older source text omitted by extraction and returns a full cited 
     expect(result.matches[0]?.entries).toHaveLength(1);
     expect(result.matches[0]?.entries[0]?.text).toContain('ArchiveSentinel');
     const reference = { agentId: 'leader', epoch: 'fixture', seq: 1 };
-    expect(await memory.sourceMessage('reader', '', reference)).toEqual({
+    expect((await memory.sourceMessage('reader', '', reference)).source).toEqual({
       ...reference,
       ...source,
     });
-    expect(await memory.sourceMessage('reader', '', { ...reference, seq: 2 })).toBeUndefined();
+    expect(await memory.sourceMessage('reader', '', { ...reference, seq: 2 })).toEqual({
+      lookup: 'not-found',
+      latestSequence: 49,
+    });
+    expect(await memory.sourceMessage('reader', '', { ...reference, seq: 50 })).toEqual({
+      lookup: 'not-found',
+      latestSequence: 49,
+    });
     await expect(memory.search('outsider', '', 'ArchiveSentinel', 'leader')).rejects.toThrow(
       'access denied',
     );
@@ -163,6 +175,86 @@ test('a handoff retains a pending correction behind a tool-heavy timeline tail',
   });
   try {
     expect(await memory.handoff('leader', 'cobalt')).toContain(correction.text);
+  } finally {
+    await memory.close();
+  }
+});
+
+test('places the latest applicable user decision after scoped, deduplicated evidence', async () => {
+  const task = { taskId: 'cache' };
+  const messages: MemorySourceMessage[] = [
+    { ...first, scope: task },
+    { seq: 2, author: 'user', text: 'Initial cache proposal: discard the cursor.', scope: task },
+    { ...correction, text: 'Final cache decision: advance the cursor.', scope: task },
+    { seq: 4, author: 'tool', text: 'CACHE_CHECK PASS.', scope: task },
+    { seq: 5, author: 'tool', text: 'CACHE_CHECK PASS.', scope: task },
+    {
+      seq: 6,
+      author: 'user',
+      text: 'Other cache project: remove the cursor.',
+      scope: { taskId: 'other' },
+    },
+    { seq: 7, author: 'user', text: 'What is the cache cursor status?', scope: task },
+  ];
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize() {
+      throw new Error('A handoff must never invoke summarization directly.');
+    },
+  });
+  try {
+    const result = await memory.handoffDetails(
+      'leader',
+      'cache cursor',
+      undefined,
+      true,
+      undefined,
+      task,
+    );
+    expect(result.selection?.decision?.seq).toBe(3);
+    expect(
+      result.text.endsWith('Original user [#3] Final cache decision: advance the cursor.'),
+    ).toBe(true);
+    expect(result.text).not.toContain('discard the cursor');
+    expect(result.text).not.toContain('remove the cursor');
+    expect(result.entries.filter(({ text }) => text === 'CACHE_CHECK PASS.')).toHaveLength(1);
+    expect(result.text).toContain('Historical tool outcome');
+  } finally {
+    await memory.close();
+  }
+});
+
+test('reports pending summaries separately from history availability and truncation', async () => {
+  const messages = [first, finding, correction];
+  const source = timeline(() => ({ epoch: 'one', messages }));
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: {
+      async read(agentId, cursor, direction) {
+        if (agentId === 'offline' || direction === 'before')
+          throw new Error('History unavailable.');
+        return source.read(agentId, cursor, direction);
+      },
+    },
+    async summarize() {
+      throw new Error('Search must never invoke summarization.');
+    },
+  });
+  try {
+    const partial = await memory.search('leader', '', 'cobalt', undefined, undefined, true);
+    expect(partial.status).toEqual({
+      summariesPending: true,
+      resultsTruncated: false,
+      originalHistory: 'partial',
+    });
+    expect(partial.matches[0]?.entries.some(({ seq }) => seq === correction.seq)).toBe(true);
+    const unavailable = await memory.search('offline', '', 'cobalt');
+    expect(unavailable.status).toEqual({
+      summariesPending: false,
+      resultsTruncated: false,
+      originalHistory: 'unavailable',
+    });
   } finally {
     await memory.close();
   }
@@ -225,7 +317,9 @@ test('stores the attachment citation from a native turn with only a trailing act
   });
   try {
     memory.turn('leader', { turnId: 'native', outcome: 'completed' }, false);
-    await eventually(async () => !(await memory.search('leader', '', '', 'leader')).incomplete);
+    await eventually(
+      async () => !(await memory.search('leader', '', '', 'leader')).status.summariesPending,
+    );
     const search = await memory.search('leader', '', 'ATTACHED_CHECK', 'leader');
     expect(search.matches.flatMap(({ entries }) => entries)).toContainEqual(
       expect.objectContaining({ kind: 'AAB', sources: [1, 2, 3] }),
@@ -263,7 +357,9 @@ test('stores chronological summaries, preserves original authority, and removes 
   try {
     memory.turn('leader', { turnId: '1', outcome: 'completed' }, false);
     memory.turn('leader', { turnId: '2', outcome: 'completed' }, false);
-    await eventually(async () => !(await memory.search('peer', '', '', 'leader')).incomplete);
+    await eventually(
+      async () => !(await memory.search('peer', '', '', 'leader')).status.summariesPending,
+    );
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain('initial-discovery');
     expect(memory.status('session', 'leader')).toMatchObject({
@@ -299,7 +395,7 @@ test('stores chronological summaries, preserves original authority, and removes 
       (await memory.search('peer', '', 'corrected-decision', 'leader')).matches[0]?.entries,
     ).toMatchObject([{ kind: 'UAMP', sources: [3, 4] }]);
     const reference = { agentId: 'leader', epoch: 'one', seq: 1 };
-    expect(await memory.sourceMessage('peer', '', reference)).toMatchObject({
+    expect((await memory.sourceMessage('peer', '', reference)).source).toMatchObject({
       messageId: 'native-user',
     });
     await expect(memory.sourceMessage('outsider', '', reference)).rejects.toThrow('access denied');
@@ -307,7 +403,9 @@ test('stores chronological summaries, preserves original authority, and removes 
     await memory.close();
     memory = new SessionMemory(options);
     memory.recover(['leader']);
-    await eventually(async () => !(await memory.search('peer', '', '', 'leader')).incomplete);
+    await eventually(
+      async () => !(await memory.search('peer', '', '', 'leader')).status.summariesPending,
+    );
     expect(prompts).toHaveLength(2);
     messages.splice(2);
     expect((await memory.search('peer', '', 'corrected-decision', 'leader')).matches).toEqual([]);
@@ -348,7 +446,7 @@ test('a delayed read cannot invalidate summaries rebuilt for a replacement histo
   });
   try {
     memory.turn('leader', { turnId: 'initial', outcome: 'completed' }, false);
-    await eventually(async () => !(await memory.search('leader', '', '')).incomplete);
+    await eventually(async () => !(await memory.search('leader', '', '')).status.summariesPending);
 
     pauseRead = true;
     const delayedRead = memory.search('leader', '', 'retained model');
@@ -359,13 +457,13 @@ test('a delayed read cannot invalidate summaries rebuilt for a replacement histo
       { ...finding, turnId: 'replacement' },
     ];
     memory.turn('leader', { turnId: 'replacement', outcome: 'completed' }, false);
-    await eventually(async () => !(await memory.search('leader', '', '')).incomplete);
+    await eventually(async () => !(await memory.search('leader', '', '')).status.summariesPending);
     expect(requests).toBe(2);
 
     releaseReader.resolve();
     await delayedRead;
     const rebuilt = await memory.search('leader', '', 'retained model');
-    expect(rebuilt.incomplete).toBe(false);
+    expect(rebuilt.status.summariesPending).toBe(false);
     expect(rebuilt.matches).toMatchObject([
       { epoch: 'replacement', entries: [{ kind: 'UAMP', sources: [1, 2] }] },
     ]);
@@ -396,7 +494,7 @@ test('continues a newer turn when the older provider terminal event was missed',
     memory.turn('leader', { turnId: 'older', outcome: 'running' }, true);
     memory.turn('leader', { turnId: 'newer', outcome: 'running' }, false);
     memory.turn('leader', { turnId: 'newer', outcome: 'completed' }, false);
-    await eventually(async () => !(await memory.search('leader', '', '')).incomplete);
+    await eventually(async () => !(await memory.search('leader', '', '')).status.summariesPending);
     expect(completed).toEqual(['AAB', 'UAMP']);
   } finally {
     await memory.close();
@@ -445,14 +543,9 @@ test('preserves checked tool evidence and uses originals for an omitted archived
     const check = await memory.handoff('leader', 'verified cache guard');
     expect(check).toContain('VERIFIED_CACHE_GUARD passed');
     expect(check).not.toContain('MADE_UP_CHECK');
-    const entries = (handoff: string) =>
-      handoff
-        .split('\n')
-        .filter((line) => line.startsWith('{'))
-        .map((line) => JSON.parse(line));
     for (const path of ['runtime/src/old-cache.ts', 'old-cache.ts']) {
-      const handoff = await memory.handoff('leader', `Check ${path}.`);
-      expect(entries(handoff)).toContainEqual(
+      const handoff = await memory.handoffDetails('leader', `Check ${path}.`);
+      expect(handoff.entries).toContainEqual(
         expect.objectContaining({
           seq: 3,
           author: 'agent',
@@ -461,8 +554,8 @@ test('preserves checked tool evidence and uses originals for an omitted archived
         }),
       );
     }
-    const attachment = await memory.handoff('leader', 'Locate cache/manifest.json.');
-    expect(entries(attachment)).toContainEqual(
+    const attachment = await memory.handoffDetails('leader', 'Locate cache/manifest.json.');
+    expect(attachment.entries).toContainEqual(
       expect.objectContaining({
         seq: 1,
         author: 'attachment',
@@ -530,7 +623,7 @@ test('gives foreground inference priority and exposes originals during a failed 
     memory.foregroundEnded('local-worker');
     await eventually(() => calls === 1);
     expect((await memory.search('leader', '', 'partial answer')).matches).toEqual([]);
-    expect((await memory.search('leader', '', 'cobalt')).incomplete).toBe(true);
+    expect((await memory.search('leader', '', 'cobalt')).status.summariesPending).toBe(true);
     expect(await memory.handoff('leader', 'cursor')).toContain(first.text);
   } finally {
     await memory.close();

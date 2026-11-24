@@ -36,6 +36,7 @@ import {
   type SessionMemory,
 } from '../session-memory/service.js';
 import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
+import { unavailableMemoryHandoff } from '../session-memory/handoff.js';
 
 type RuntimeOptions = {
   databasePath: string;
@@ -1287,7 +1288,7 @@ Task to register: ${input.description}`,
       );
     if (memory && leader?.nativeAgentId && leader.nativeAgentId !== assignment.nativeAgentId) {
       const unavailable = {
-        text: 'Supplemental Session Memory. This context is potentially incomplete.',
+        text: unavailableMemoryHandoff,
       };
       const deadline = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1302,6 +1303,7 @@ Task to register: ${input.description}`,
               (observation) => {
                 payload = observation;
               },
+              { sessionId: session.id, taskId: task.id, passId: task.passId },
             )
             .then((text) => ({ text, payload })),
           new Promise<typeof unavailable>((resolve) => {

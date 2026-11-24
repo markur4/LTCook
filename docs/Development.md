@@ -444,9 +444,12 @@ Use `--compare-check-instructions` to replay a looping Immediate Context edit
 with the same evidence and a clarification that the evaluator runs the named
 checks. The report records the diagnostic result independently of the normal
 qualification result.
-Use `--compare-decision-order` to replay a looping edit with the final
-original user decision placed after the other evidence. The experiment
-preserves the evidence rows and their citations.
+Use `--compare-handoff-format` to compare the compact handoff with a
+decision-last JSON control. Both presentations use the same selected evidence,
+source citations, and worker instructions. The audit reports their shared
+evidence hash. This diagnostic comparison can run after a failed worker
+control when original evidence is complete. Qualification remains inconclusive
+for that fixture.
 
 To replay the historical extraction comparison on repository edits, run
 `bun evals/session-memory-edit-live.ts` with optional extractor and worker model

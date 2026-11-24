@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { hash } from '../runtime/src/evals/setup.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -21,6 +22,10 @@ import {
   type MemorySearchEntry,
 } from '../runtime/src/session-memory/service.js';
 import { MemoryStore, type StoredMemorySummary } from '../runtime/src/session-memory/store.js';
+import {
+  memoryHandoffHeader,
+  type MemoryHandoffSelection,
+} from '../runtime/src/session-memory/handoff.js';
 import {
   defaultMemoryBudgets,
   type MemoryHistoryEntry,
@@ -212,7 +217,7 @@ async function withProductionMemory(
     try {
       const assemble = async (recoverOriginals: boolean) => {
         const start = performance.now();
-        const empty = {
+        const empty: Awaited<ReturnType<SessionMemory['handoffDetails']>> = {
           text: '',
           entries: [] as MemorySearchEntry[],
           recoveredSources: [] as number[],
@@ -225,6 +230,8 @@ async function withProductionMemory(
             fixture.focus,
             AbortSignal.any([signal, deadline]),
             recoverOriginals,
+            undefined,
+            fixture.turns.at(-1)?.find(({ author }) => author === 'user')?.scope,
           )
           .catch((error: unknown) => {
             signal.throwIfAborted();
@@ -248,11 +255,13 @@ async function withProductionMemory(
       const corrections = originalControl
         ? await Promise.all(
             fixture.correctionSources.map((seq) =>
-              memory.sourceMessage(evaluationAgent, '', {
-                agentId: evaluationAgent,
-                epoch: evaluationEpoch,
-                seq,
-              }),
+              memory
+                .sourceMessage(evaluationAgent, '', {
+                  agentId: evaluationAgent,
+                  epoch: evaluationEpoch,
+                  seq,
+                })
+                .then(({ source }) => source),
             ),
           )
         : [];
@@ -271,7 +280,7 @@ async function withProductionMemory(
         handoffWithoutRecovery,
         originalSearch,
         originalHandoff,
-        originalSearchIncomplete: search.incomplete,
+        originalSearchStatus: search.status,
         originalSearchMs: performance.now() - searchStarted,
         assemblyMs: performance.now() - elapsed,
       };
@@ -292,6 +301,18 @@ export function gradesMemoryFact(
   );
 }
 
+function renderDecisionLastJson(selection: MemoryHandoffSelection) {
+  return [
+    ...memoryHandoffHeader(selection),
+    ...(selection.evidence.length
+      ? ['Older supplemental evidence', ...selection.evidence.map((entry) => JSON.stringify(entry))]
+      : []),
+    ...(selection.decision
+      ? ['Latest applicable original user instruction', JSON.stringify(selection.decision)]
+      : []),
+  ].join('\n');
+}
+
 export async function compareContextMemory(
   fixture: MemoryFixture,
   input: {
@@ -302,6 +323,7 @@ export async function compareContextMemory(
     progress?: (message: string) => void;
     strategies?: readonly ContextStrategy[];
     auditOutput?: boolean;
+    includeDecisionLastControl?: boolean;
     seed?: number;
   },
 ) {
@@ -483,12 +505,18 @@ export async function compareContextMemory(
     const loaded = requests.length ? await residency(endpoint, digest, signal) : undefined;
     const handoff =
       strategy === 'original-search' ? assembled.originalHandoff : assembled.handoff.text;
+    const selection = assembled.handoff.selection;
     arms.push({
       strategy,
       seed: input.seed,
       requests,
       grade,
       handoff,
+      decisionLastJson:
+        input.includeDecisionLastControl && selection && assembled.handoff.text
+          ? renderDecisionLastJson(selection)
+          : undefined,
+      handoffEvidenceHash: selection ? hash(JSON.stringify(selection)) : undefined,
       recoveredSources: assembled.handoff.recoveredSources,
       dispatchMs: assembled.handoff.elapsedMs,
       dispatchTimedOut: assembled.handoff.timedOut,
@@ -507,7 +535,7 @@ export async function compareContextMemory(
           }
         : {}),
       originalSearchMs: assembled.originalSearchMs,
-      originalSearchIncomplete: assembled.originalSearchIncomplete,
+      originalSearchStatus: assembled.originalSearchStatus,
       elapsedMs: Math.round(performance.now() - started),
       handoffEstimatedTokens: estimateMemoryTokens(handoff),
       outputTokensByType: Object.fromEntries(

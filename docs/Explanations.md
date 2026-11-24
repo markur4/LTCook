@@ -461,6 +461,20 @@ from original tool results. LTCook searches the original conversation for
 requested paths and technical identifiers even when a summary already mentions
 them. It can include the cited evidence within the same handoff budget.
 
+Delegation handoffs use compact source references. The current Task guides the
+selection. The latest applicable original user instruction follows the older
+evidence, and the approved assignment governs scope and required verification.
+Tool outcomes from earlier work are labeled as historical. A source reference
+identifies the agent, conversation epoch, and original sequence for retrieval.
+Stored summaries retain their full provenance.
+
+Session Memory search reports pending summaries, result truncation, and
+original-history availability independently. Original messages can be
+available while summarization is pending. A bounded result may contain
+excerpts, and partial history means some originals could not be inspected.
+An exact source lookup also distinguishes a missing sequence from inaccessible
+history and includes the latest known sequence when the source can report it.
+
 Immediate Context supplies the current Task objective and acceptance criteria
 when Core knows them. For an AAB it also supplies the initiating user
 instructions or runtime assignment and applicable steering. This material is

@@ -334,6 +334,17 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- Session Memory delegation sends compact, Task-scoped evidence followed by the
+  latest applicable original user instruction. Historical tool outcomes are
+  identified separately from the assignment's required verification.
+
+- **Breaking:** 💥 The Session Memory tool replaces `incomplete` with
+  `status.summariesPending`, `status.resultsTruncated`, and
+  `status.originalHistory`. Tool consumers can distinguish a successful
+  original lookup from pending summarization, bounded results, or unavailable
+  history by reading the corresponding status field. Exact source lookups
+  report `lookup` and, when known, `latestSequence`.
+
 - Session Memory includes attachments from initiating instructions in Agent
   Action Batch summaries and preserves their source citations. Short tool
   results use a compact prompt that keeps exact check outcomes together.

@@ -9,7 +9,7 @@ const seq = Type.Integer({ minimum: 0 });
 const reference = { agentId, epoch, seq };
 
 export const sessionMemoryDescription =
-  'Search original conversation messages and UAMP or AAB summaries from your Session Memory and authorized teammates. Use specific terms. Summary source sequences identify the original evidence supplied to the cited portion. Read a full source with its agent ID, epoch, and sequence number. Original user instructions remain authoritative.';
+  'Search original messages and summaries from your Session Memory and authorized teammates. Reopen a cited original with its agent ID, epoch, and # sequence. An exact lookup reports whether the cited source was found and the latest known sequence where available. Pending summaries do not affect access to original messages. resultsTruncated means the reply is a bounded selection. originalHistory reports access to the history. Tool results from the conversation are historical evidence. Verify the current work according to the approved assignment.';
 
 export const sessionMemoryInput = Type.Object(
   {
@@ -21,7 +21,19 @@ export const sessionMemoryInput = Type.Object(
 );
 
 const result = Type.Object({
-  incomplete: Type.Boolean(),
+  status: Type.Object({
+    summariesPending: Type.Boolean(),
+    resultsTruncated: Type.Boolean(),
+    originalHistory: Type.Union([
+      Type.Literal('available'),
+      Type.Literal('partial'),
+      Type.Literal('unavailable'),
+    ]),
+  }),
+  lookup: Type.Optional(
+    Type.Union([Type.Literal('found'), Type.Literal('not-found'), Type.Literal('unavailable')]),
+  ),
+  latestSequence: Type.Optional(Type.Integer({ minimum: -1 })),
   matches: Type.Array(
     Type.Object({
       agentId,
@@ -78,12 +90,21 @@ export function createSessionMemoryTool(memory: SessionMemory) {
           input.agentId,
           context.signal,
         );
-      const source = await memory.sourceMessage(
+      const found = await memory.sourceMessage(
         context.agentId,
         context.workspaceRoot,
         input.source,
       );
-      return { incomplete: source === undefined, matches: [], ...(source ? { source } : {}) };
+      return {
+        status: {
+          summariesPending: false,
+          resultsTruncated: false,
+          originalHistory:
+            found.lookup === 'unavailable' ? ('unavailable' as const) : ('available' as const),
+        },
+        matches: [],
+        ...found,
+      };
     },
   });
 }
