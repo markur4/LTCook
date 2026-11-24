@@ -76,3 +76,38 @@ test('Clipping and embedded source controls cannot manufacture a numbered line',
     '[Excerpt clipped. The final displayed line may be incomplete.]',
   ]);
 });
+
+test('Locate separates candidate roles and renders the verified range', () => {
+  const text = repositoryEvidenceText(REPO_LOCATE_TOOL_NAME, {
+    followUp: 'not-needed',
+    searches: [
+      {
+        ...ready,
+        mode: 'exact',
+        query: 'locate',
+        results: [
+          {
+            role: 'definition',
+            path: 'locate.ts',
+            startLine: 7,
+            endLine: 8,
+            excerpt: 'function locate() {\n  return true;',
+          },
+          {
+            role: 'reference',
+            path: 'index.ts',
+            startLine: 1,
+            endLine: 1,
+            excerpt: 'export { locate };',
+          },
+        ],
+      },
+    ],
+  });
+  expect(text.split('\n\n').slice(2)).toEqual([
+    'Definition candidates',
+    '{"role":"definition","path":"locate.ts","startLine":7,"endLine":8}\n7 | function locate() {\n8 |   return true;',
+    'Reference candidates',
+    '{"role":"reference","path":"index.ts","startLine":1,"endLine":1}\n1 | export { locate };',
+  ]);
+});

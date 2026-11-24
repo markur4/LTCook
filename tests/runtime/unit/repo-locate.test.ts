@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdir, mkdtemp, realpath, rename, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
@@ -41,6 +41,51 @@ function context(workspaceRoot: string, signal = new AbortController().signal) {
 function hit(name: string, excerpt: string, excerptTruncated?: true) {
   return { name, excerpt, path: 'source.ts', startLine: 1, endLine: 1, excerptTruncated };
 }
+
+test.skipIf(!Bun.which('rg'))(
+  'Locate prioritizes roles over early references and verifies numbered context',
+  () =>
+    fixture(async (root) => {
+      await mkdir(path.join(root, 'tests'));
+      const references = Array.from({ length: 12 }, () => "import { locate } from './z-source';");
+      await writeFile(path.join(root, 'a-imports.ts'), references.join('\n') + '\n');
+      await writeFile(
+        path.join(root, 'b-caller.ts'),
+        "export const result = locate('project');\nexport const ready = true;\n",
+      );
+      await writeFile(
+        path.join(root, 'tests/locate.test.ts'),
+        "expect(locate('project')).toBeDefined();\n",
+      );
+      const definition = ['export function locate(', '  project: string,', ') {'];
+      await writeFile(
+        path.join(root, 'z-source.ts'),
+        [...definition, '  return project;', '}'].join('\n') + '\n',
+      );
+
+      const result = await createRepoLocateTool().invoke({ symbol: 'locate' }, context(root));
+      const search = result.searches[0]!;
+      expect(search.status).toBe('ready');
+      expect(search.truncated).toBe(true);
+      expect(search.results?.map(({ role }) => role)).toEqual([
+        'definition',
+        'caller',
+        'test',
+        'reference',
+        'reference',
+        'reference',
+      ]);
+      expect(search.results?.[0]).toEqual({
+        role: 'definition',
+        path: 'z-source.ts',
+        startLine: 1,
+        endLine: 3,
+        excerpt: definition.join('\n'),
+      });
+      expect(search.results?.[1]).toMatchObject({ path: 'b-caller.ts', endLine: 2 });
+      expect(search.results?.[2]).toMatchObject({ path: 'tests/locate.test.ts' });
+    }),
+);
 
 test('Locate uses exact search for a symbol and a verified identifier for conceptual follow-up', () =>
   fixture(async (root) => {
@@ -140,4 +185,31 @@ test('Locate propagates cancellation and refuses to return evidence after a work
     await expect(replaced.invoke({ query: 'find it' }, context(root))).rejects.toThrow(
       /workspace changed/,
     );
+  }));
+
+test('Locate reports a changed match instead of attaching context from a different source', () =>
+  fixture(async (root) => {
+    await writeFile(path.join(root, 'source.ts'), 'function different() {\n  return true;\n}\n');
+    const tool = createRepoLocateTool({
+      async search() {
+        return {
+          ...unavailable,
+          status: 'ready',
+          freshness: 'current',
+          partial: false,
+          diagnostics: [],
+          results: [hit('locate', 'function locate() {')],
+        };
+      },
+    });
+    await expect(tool.invoke({ symbol: 'locate' }, context(root))).resolves.toMatchObject({
+      searches: [
+        {
+          freshness: 'stale',
+          partial: true,
+          diagnostics: [{ code: 'source-changed' }],
+          results: [],
+        },
+      ],
+    });
   }));

@@ -191,6 +191,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🛠️ Changed
 
+- Repository Locate groups verified definitions, calls, tests, and references,
+  and adds short source excerpts to exact matches where context helps.
+
 - **Breaking:** 💥 Managed OpenAI models reuse the existing Codex CLI sign-in
   in Pi launches, Paseo sessions, and hosted evaluations. If needed, sign in
   through `ltcook auth login openai-codex` for ChatGPT or

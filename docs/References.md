@@ -493,11 +493,17 @@ as `ltcook_repo_search`. Supply exactly one nonempty, single-line `symbol` or
 | `query` | One ColGREP hybrid search, followed by at most one exact ripgrep search. |
 
 The follow-up uses the first ranked hit with a simple identifier that occurs
-as a whole identifier in its verified, unclipped excerpt. Each search uses the
-eight-result default. The ordered `searches` repeat the original search status,
-provider, diagnostics, and evidence fields and identify the `mode` and `query`.
-Use the excerpts to decide which locations establish a definition, caller, or
-test. A search may return a valid mention that establishes none of those roles.
+as a whole identifier in its verified, unclipped excerpt. Hybrid search uses
+the eight-candidate default. Exact search considers up to 48 matching lines.
+Each stage in `searches` identifies the `mode` and `query` and reports its status,
+provider, and diagnostics.
+
+Locate returns up to three candidates per role in each stage. It lists
+definitions first, followed by callers, tests, and references. Roles are based on
+recognizable JavaScript, TypeScript, and Python syntax and test paths. Use the
+excerpts to confirm the relationship when names are shared. Exact definition,
+caller, and test hits can include up to two following lines, with inclusive line ranges.
+`truncated` indicates omitted matches or clipped excerpts.
 
 `followUp` is `not-needed` for a symbol request, `attempted` after an exact
 follow-up returns an outcome, and `no-verified-symbol` when ranked evidence
