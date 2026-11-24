@@ -188,7 +188,9 @@ unconfirmed. Opening the panel does not start a search or build.
 
 **Session Memory** shows the selected agent's background summaries and last
 acknowledged delegation handoff. Stored and pending counts describe that
-agent's conversation. The handoff shows the sending agent, receipt time,
+agent's conversation. Select **Stored for this agent** to read its completed
+UAMP and AAB summaries, starting with the newest. Use **Load older summaries**
+to continue through the conversation. The handoff shows the sending agent, receipt time,
 payload size, and the number of summaries represented. A handoff can also
 carry original user instructions and tool evidence. The agent card shows
 model context usage when Paseo reports it. Summarization and search continue
