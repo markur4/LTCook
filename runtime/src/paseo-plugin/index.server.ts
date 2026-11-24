@@ -3,7 +3,7 @@ import type { PaseoApi } from '@getpaseo/client';
 import { z } from 'zod';
 import { defineRpc, PluginAttachmentItemSchema } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
-import { activitySubscription } from './shared/activity';
+import { activitySubscription, MemoryUnitCountsSchema } from './shared/activity';
 import { observeActivity, observedTimestamp } from './server/activity';
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
@@ -246,19 +246,13 @@ const activityServices = z.object({
       ]),
       lastSuccessfulSummaryAt: z.string().nullable(),
       lastError: z.object({ message: z.string() }).nullable(),
-      stored: z
-        .object({ uamp: z.number().int().nonnegative(), aab: z.number().int().nonnegative() })
-        .nullable(),
-      lastDelivered: z
-        .object({
-          sourceAgentId: z.string(),
-          recipientAgentId: z.string(),
-          deliveredAt: z.string(),
-          bytes: z.number().int().nonnegative(),
-          uamp: z.number().int().nonnegative(),
-          aab: z.number().int().nonnegative(),
-        })
-        .nullable(),
+      stored: MemoryUnitCountsSchema.nullable(),
+      lastDelivered: MemoryUnitCountsSchema.extend({
+        sourceAgentId: z.string(),
+        recipientAgentId: z.string(),
+        deliveredAt: z.string(),
+        bytes: z.number().int().nonnegative(),
+      }).nullable(),
       pendingUamp: z.number().int().nonnegative().nullable(),
       pendingAab: z.number().int().nonnegative().nullable(),
     })
@@ -346,32 +340,26 @@ export default function contribute(server: PluginServerContext) {
             ...(services?.rag.diagnostic ? { diagnostic: services.rag.diagnostic } : {}),
           },
           memory: {
-            scopeLabel: 'Selected agent storage',
-            context: null,
-            contextStage: delivery ? 'delivered' : 'unknown',
             summarization: services?.memoryDisabled
               ? 'disabled'
               : (memory?.summarization ?? 'unknown'),
             lastSummaryAt: memory?.lastSuccessfulSummaryAt
               ? observedTimestamp(memory.lastSuccessfulSummaryAt)
               : null,
-            pendingUamp: memory?.pendingUamp ?? null,
-            pendingAab: memory?.pendingAab ?? null,
-            uamp: { inContext: null, stored: memory?.stored?.uamp ?? null },
-            aab: { inContext: null, stored: memory?.stored?.aab ?? null },
+            stored: memory?.stored ?? null,
+            pending:
+              memory?.pendingUamp != null && memory.pendingAab != null
+                ? { uamp: memory.pendingUamp, aab: memory.pendingAab }
+                : null,
             ...(memory?.lastError?.message ? { diagnostic: memory.lastError.message } : {}),
-            ...(delivery
+            lastHandoff: delivery
               ? {
-                  sourceLabel: source ?? 'Leader',
-                  recipientLabel: agent.title ?? 'Selected agent',
-                  lastDelivery: {
-                    at: observedTimestamp(delivery.deliveredAt),
-                    bytes: delivery.bytes,
-                    uamp: delivery.uamp,
-                    aab: delivery.aab,
-                  },
+                  at: observedTimestamp(delivery.deliveredAt),
+                  bytes: delivery.bytes,
+                  sourceName: source ?? null,
+                  summaries: { uamp: delivery.uamp, aab: delivery.aab },
                 }
-              : {}),
+              : null,
           },
         };
       },

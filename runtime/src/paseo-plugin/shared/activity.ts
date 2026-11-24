@@ -52,21 +52,16 @@ const ragStatus = z.object({
   activity: z.enum(['idle', 'checking', 'indexing', 'updating', 'interrupted', 'error', 'unknown']),
   diagnostic: z.string().optional(),
 });
-const memoryCount = z.object({ inContext: count.nullable(), stored: count.nullable() });
+export const MemoryUnitCountsSchema = z.object({ uamp: count, aab: count });
 const sessionMemoryStatus = z.object({
-  scopeLabel: z.string(),
-  sourceLabel: z.string().optional(),
-  recipientLabel: z.string().optional(),
-  lastDelivery: z
+  lastHandoff: z
     .object({
       at: timestamp,
       bytes: count,
-      uamp: count,
-      aab: count,
+      sourceName: z.string().nullable(),
+      summaries: MemoryUnitCountsSchema,
     })
-    .optional(),
-  context: contextUsage.nullable(),
-  contextStage: z.enum(['assembled', 'delivered', 'unknown']),
+    .nullable(),
   summarization: z.enum([
     'summarizing',
     'queued',
@@ -77,10 +72,8 @@ const sessionMemoryStatus = z.object({
     'unknown',
   ]),
   lastSummaryAt: timestamp.nullable(),
-  pendingUamp: count.nullable(),
-  pendingAab: count.nullable(),
-  uamp: memoryCount,
-  aab: memoryCount,
+  stored: MemoryUnitCountsSchema.nullable(),
+  pending: MemoryUnitCountsSchema.nullable(),
   diagnostic: z.string().optional(),
 });
 
@@ -105,6 +98,7 @@ export type ActivitySnapshot = z.infer<typeof ActivitySnapshotSchema>;
 export type AgentActivity = z.infer<typeof agentActivity>;
 export type ContextUsage = z.infer<typeof contextUsage>;
 export type RagStatus = z.infer<typeof ragStatus>;
+export type MemoryUnitCounts = z.infer<typeof MemoryUnitCountsSchema>;
 export type SessionMemoryStatus = z.infer<typeof sessionMemoryStatus>;
 export type ToolCall = z.infer<typeof toolCall>;
 export type SkillLoad = z.infer<typeof skillLoad>;

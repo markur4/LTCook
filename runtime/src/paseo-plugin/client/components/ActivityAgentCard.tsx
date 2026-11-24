@@ -55,7 +55,27 @@ function orderTools(calls: ToolCall[]) {
       (a, b) =>
         (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt) || a.id.localeCompare(b.id),
     );
-  return { running, recent };
+  const byName = new Map<string, ToolCall[]>();
+  for (const call of [...running, ...recent]) {
+    const group = byName.get(call.name);
+    if (group) group.push(call);
+    else byName.set(call.name, [call]);
+  }
+  const groups = [...byName].map(([name, calls]) => {
+    const runningCount = calls.filter(({ status }) => status === 'running').length;
+    const failedCount = calls.filter(({ status }) => status === 'failed').length;
+    const status = runningCount ? 'running' : failedCount ? 'failed' : calls[0]!.status;
+    const details = [`${calls.length} calls`];
+    if (runningCount) details.push(`${runningCount} running`);
+    if (failedCount) details.push(`${failedCount} failed`);
+    return { name, calls, runningCount, status, details };
+  });
+  return {
+    running: running.length,
+    recent: recent.length,
+    groups,
+    runningGroups: groups.filter(({ runningCount }) => runningCount > 0).length,
+  };
 }
 
 function orderSkills(loads: SkillLoad[]) {
@@ -187,14 +207,14 @@ export function ActivityAgentCard({
   const [moreTools, setMoreTools] = useState(false);
   const [moreSkills, setMoreSkills] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const { running, recent } = orderTools(agent.tools ?? []);
-  const tools = [...running, ...recent];
+  const { running, recent, groups, runningGroups } = orderTools(agent.tools ?? []);
   const skills = orderSkills(agent.skills ?? []);
   const tool =
     preview?.kind === 'tool' &&
-    tools
-      .slice(0, moreTools ? undefined : running.length + RECENT_LIMIT)
-      .find((item) => item.id === preview.id);
+    groups
+      .slice(0, moreTools ? undefined : runningGroups + RECENT_LIMIT)
+      .find((item) => item.name === preview.id);
+  const singleCall = tool && tool.calls.length === 1 ? tool.calls[0] : undefined;
   const skill =
     preview?.kind === 'skill' &&
     skills.slice(0, moreSkills ? undefined : RECENT_LIMIT).find((item) => item.id === preview.id);
@@ -207,7 +227,7 @@ export function ActivityAgentCard({
     setPreview((current) => (current?.kind === next.kind && current.id === next.id ? null : next));
   const worktree = agent.worktree?.name ?? 'Worktree unavailable';
   const toolCount = agent.tools
-    ? [`${running.length} running`, `${recent.length} recent`]
+    ? [`${running} running`, `${recent} recent`]
     : ['Tools unavailable'];
   const skillCount = agent.skills
     ? `${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`
@@ -268,8 +288,8 @@ export function ActivityAgentCard({
       <ActivityChips
         theme={theme}
         label="Tools"
-        items={agent.tools === null ? null : tools}
-        recentOffset={running.length}
+        items={agent.tools === null ? null : groups}
+        recentOffset={runningGroups}
         expanded={moreTools}
         onToggle={() => setMoreTools(!moreTools)}
         empty="No observed calls"
@@ -277,11 +297,11 @@ export function ActivityAgentCard({
           const tone = item.status === 'running' ? 'running' : 'recent';
           return (
             <ActivityButton
-              key={item.id}
+              key={item.name}
               theme={theme}
-              label={`${item.name}, ${statusLabel(item.status)}`}
+              label={`${item.name}, ${item.calls.length === 1 ? statusLabel(item.status) : item.details.join(', ')}`}
               selected={tool === item}
-              onPress={() => choose({ kind: 'tool', id: item.id })}
+              onPress={() => choose({ kind: 'tool', id: item.name })}
             >
               <Icon
                 name={toolIcons[item.status]}
@@ -290,6 +310,7 @@ export function ActivityAgentCard({
               />
               <ActivityText theme={theme} tone={tone}>
                 {item.name}
+                {item.calls.length > 1 && ` ×${item.calls.length}`}
               </ActivityText>
             </ActivityButton>
           );
@@ -319,17 +340,42 @@ export function ActivityAgentCard({
         <ItemPreview
           theme={theme}
           name={tool.name}
-          description={tool.description}
-          preview={tool.preview}
-          status={statusLabel(tool.status)}
+          description={singleCall?.description}
+          preview={singleCall?.preview}
+          status={singleCall ? statusLabel(tool.status) : tool.details[0]!}
           tone={toolTones[tool.status]}
           onClose={() => setPreview(null)}
         >
-          {tool.durationMs !== undefined && (
+          {singleCall?.durationMs !== undefined && (
             <ActivityText theme={theme} tone="muted">
-              {tool.durationMs.toLocaleString()} ms
+              {singleCall.durationMs.toLocaleString()} ms
             </ActivityText>
           )}
+          {tool.calls.length > 1 &&
+            tool.calls.map((call) => (
+              <View
+                key={call.id}
+                accessible
+                accessibilityLabel={`${tool.name} call, ${statusLabel(call.status)}, ${new Date(call.startedAt).toLocaleTimeString()}`}
+                style={{ gap: 3, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}
+              >
+                <ActivityStatus
+                  theme={theme}
+                  label={statusLabel(call.status)}
+                  tone={toolTones[call.status]}
+                />
+                <ActivityText theme={theme} tone="muted">
+                  {new Date(call.startedAt).toLocaleTimeString()}
+                  {call.durationMs !== undefined && ` · ${call.durationMs.toLocaleString()} ms`}
+                </ActivityText>
+                {call.description && <ActivityText theme={theme}>{call.description}</ActivityText>}
+                {call.preview && (
+                  <ActivityText theme={theme} tone="muted">
+                    {call.preview}
+                  </ActivityText>
+                )}
+              </View>
+            ))}
         </ItemPreview>
       )}
       {skill && (

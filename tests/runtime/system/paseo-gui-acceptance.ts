@@ -138,17 +138,19 @@ async function clickButton(name: string): Promise<void> {
 const explorer = '[data-testid="workspace-explorer-sidebar"]';
 async function openExplorerPanel(name: string): Promise<void> {
   const addTab = `${explorer} [aria-label="New tab"]`;
+  const target = `explorer-add-${randomUUID()}`;
   await browser(
     'wait',
     '--fn',
-    `(() => {
-      const button = document.querySelector(${JSON.stringify(addTab)});
-      if (!button?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+    `[...document.querySelectorAll(${JSON.stringify(addTab)})].some(button => {
+      if (!button.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
       const rect = button.getBoundingClientRect();
-      return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
-    })()`,
+      if (!button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))) return false;
+      button.setAttribute('data-ltcook-explorer-add', ${JSON.stringify(target)});
+      return true;
+    })`,
   );
-  await browser('click', addTab);
+  await browser('click', `[data-ltcook-explorer-add="${target}"]`);
   await browser('find', 'role', 'menuitem', 'click', '--name', name, '--exact');
 }
 async function openActivityPanel(): Promise<void> {
@@ -663,15 +665,21 @@ try {
   await browser(
     'wait',
     '--fn',
-    `[...document.querySelectorAll('button,[role=button]')].some(button => /show.+older tools/i.test(button.getAttribute('aria-label') ?? ''))`,
+    `document.querySelectorAll('[aria-label="read, 8 calls"]').length === 1`,
   );
-  await browser('find', 'role', 'button', 'click', '--name', 'Show 3 older tools', '--exact');
+  await clickButton('read, 8 calls');
   await browser(
     'wait',
     '--fn',
-    `Boolean(document.querySelector('[aria-label="Hide 3 older tools"]'))`,
+    `document.querySelectorAll('[aria-label^="read call, Success,"]').length === 8`,
   );
-  await clickButton('Hide 3 older tools');
+  await clickButton('Close read preview');
+  await browser(
+    'wait',
+    '--fn',
+    `Boolean(document.querySelector('[aria-label="activity-fixture, observed skill load"]'))`,
+  );
+  await clickButton('activity-fixture, observed skill load');
   await openActivityPanel();
   await browser(
     'wait',
@@ -737,7 +745,7 @@ try {
   await browser(
     'wait',
     '--fn',
-    `document.querySelectorAll('[aria-label="bash, Running"]').length === 2`,
+    `document.querySelectorAll('[aria-label="bash, 2 calls, 2 running"]').length === 1`,
   );
   await inspectStage('native-activity-parallel-tools');
   await browser('wait', '--text', 'Activity parallel fixture done.');
@@ -768,6 +776,19 @@ try {
   await clickButton('Open Explorer sidebar');
   await browser('wait', '--text', 'Recent conversation activity');
   assert(activityRequests > requestsWhileHidden, 'Reopening Activity resumes observation');
+  stage = 'native-activity-memory-summaries';
+  await browser('wait', '[aria-label^="Session Memory,"][aria-label*="stored"]');
+  await browser('click', '[aria-label^="Session Memory,"]');
+  await browser('wait', '--text', 'Stored for this agent');
+  await browser('wait', '--text', 'No acknowledged handoff available for this agent.');
+  await browser('click', '[aria-label^="Session Memory,"]');
+
+  let acknowledgeMemory: (() => void) | undefined;
+  await memory.handoff(mobileSession.id, 'Summarize without Activity', undefined, (payload) => {
+    acknowledgeMemory = memory!.prepareDelivery(mobileSession.id, adjutantId, payload);
+  });
+  assert(acknowledgeMemory, 'The Leader supplied a measured handoff');
+  acknowledgeMemory();
 
   const panelNavigation = telemetry.begin('panel.navigation');
   try {
@@ -799,6 +820,14 @@ try {
   await clickButton('Open conversation');
   await waitForComposer('Adjutant');
   await inspectStage('panel-direct-child-conversation');
+  stage = 'native-activity-memory-handoff';
+  await openActivityPanel();
+  await browser('wait', '[aria-label^="Session Memory,"][aria-label*="Handoff received"]');
+  await browser('click', '[aria-label^="Session Memory,"]');
+  await browser('wait', '--text', 'Summaries represented');
+  const handoff = await browser('snapshot');
+  assert(handoff.includes(mobileLeader.agent.title), 'Activity names the sending Leader');
+  await browser('click', '[aria-label^="Session Memory,"]');
   await openExplorerPanel('Tasks');
   await browser('wait', '--text', 'Task Board');
   await inspectStage('contextual-task-board');
