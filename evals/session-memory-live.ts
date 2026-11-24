@@ -106,7 +106,12 @@ try {
           });
         }
       }
-      console.log(JSON.stringify({ model: modelInfo, results }, null, 2));
+      const after = await listEvaluationModels(summarization.endpoint, signal);
+      const identityUnchanged = after.some(
+        ({ name, digest }) => name === modelInfo.name && digest === modelInfo.digest,
+      );
+      console.log(JSON.stringify({ model: modelInfo, identityUnchanged, results }, null, 2));
+      if (!identityUnchanged) process.exitCode = 1;
     } else {
       const report = await runSessionMemoryEvaluation(
         summarization,

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -61,6 +62,7 @@ type Request = {
   kind?: MemoryUnit['type'];
   first: number;
   sources?: number[];
+  sourceHash?: string;
   prefixHash?: string;
   historyIds?: string[];
   authoritativeEstimatedTokens?: number;
@@ -248,7 +250,15 @@ function rollingControl(summaries: readonly MemoryHistoryEntry[]) {
     if (used < 4096) continue;
     while (used > 2048) used -= active.shift()!.cost;
   }
-  return active.map(({ line }) => line).join('');
+  return (available: number) => {
+    let first = 0;
+    let size = used;
+    while (size > available && first < active.length) size -= active[first++]!.cost;
+    return active
+      .slice(first)
+      .map(({ line }) => line)
+      .join('');
+  };
 }
 
 export async function compareContextMemory(
@@ -334,10 +344,11 @@ export async function compareContextMemory(
         const output: StoredMemorySummary['parts'] = [];
         const parts = prepareMemorySummaries(current, summaries, defaultMemoryBudgets, {
           mode: strategy === 'rolling' ? 'no-context' : strategy,
-          comparisonContext: strategy === 'rolling' ? rollingControl(summaries) : undefined,
+          selectPriorContext: strategy === 'rolling' ? rollingControl(summaries) : undefined,
         });
         for (const part of parts) {
           const started = performance.now();
+          const sourceHash = createHash('sha256').update(part.text).digest('hex');
           const result = await summarizeMemory(
             settings,
             part.prompt,
@@ -355,6 +366,7 @@ export async function compareContextMemory(
               historyEstimatedTokens: part.historyEstimatedTokens,
               originalEstimatedTokens: part.sourceSize,
               sources: part.sources,
+              sourceHash,
               prefixHash: part.prefixHash,
               historyIds: part.historyIds,
               authoritativeEstimatedTokens: part.authoritativeEstimatedTokens,
@@ -375,6 +387,7 @@ export async function compareContextMemory(
             historyEstimatedTokens: part.historyEstimatedTokens,
             originalEstimatedTokens: part.sourceSize,
             sources: part.sources,
+            sourceHash,
             prefixHash: part.prefixHash,
             historyIds: part.historyIds,
             authoritativeEstimatedTokens: part.authoritativeEstimatedTokens,

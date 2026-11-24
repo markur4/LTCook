@@ -250,16 +250,19 @@ export const memoryFixtures: readonly MemoryFixture[] = [
         {
           seq: 1,
           author: 'user',
+          scope: { taskId: 'runtime-rebuild-and-cache-recovery' },
           text: 'Reduce restart latency for the LTCook repository search cache. The initial plan may include rebuilding the cache automatically. Keep the runtime-owned SQLite file in AppRC state and preserve the local Ollama setup.',
         },
         {
           seq: 2,
           author: 'agent',
+          scope: { taskId: 'runtime-rebuild-and-cache-recovery' },
           text: 'I traced runtime startup before testing changes. The deployment launches a worker after AppRC resolution and the worker resolves its cache state from the selected workspace. This creates a useful boundary between workspace selection and cache IO. Repo search and artifact preparation currently happen through different commands, and neither should infer authority from whatever directories happen to exist.',
         },
         {
           seq: 3,
           author: 'tool',
+          scope: { taskId: 'runtime-rebuild-and-cache-recovery' },
           text: 'Traditional Tests check CACHE_OPEN_RESTART FAIL. fixture version marker=3, supported version=4; SQLite reports SQLITE_SCHEMA on first restart. CACHE_CLEAN_START PASS. No network connections were opened.',
         },
       ],
@@ -267,16 +270,19 @@ export const memoryFixtures: readonly MemoryFixture[] = [
         {
           seq: 4,
           author: 'user',
+          scope: { taskId: 'runtime-rebuild-and-cache-recovery' },
           text: 'Cache recovery correction: reject automatic rebuilding for this pass. Leave unsupported cache files unchanged. Report an explicit reset instruction. Preserve local Ollama settings and keep the acceptance path offline.',
         },
         {
           seq: 5,
           author: 'agent',
+          scope: { taskId: 'runtime-rebuild-and-cache-recovery' },
           text: 'The cache opener is openWorkspaceCache in runtime/src/tools/repository-evidence-text.ts. Startup selected the correct workspace. The cache owner saw a version mismatch and returned a schema error before creating a fresh cache. Adding a clear message there avoids changing the installer or workspace resolution. No cache file was edited in this check.',
         },
         {
           seq: 6,
           author: 'agent',
+          scope: { taskId: 'runtime-rebuild-and-cache-recovery' },
           text: 'I considered a repair job with a queue and retry, then set it aside. Typical sessions can already start once the cache is compatible, and retrying a version mismatch would only hide the actionable error. I will keep the first check to the restart path, then verify that the error path has no disk writes.',
         },
       ],
@@ -284,16 +290,19 @@ export const memoryFixtures: readonly MemoryFixture[] = [
         {
           seq: 7,
           author: 'user',
+          scope: { taskId: 'runtime-rebuild-and-cache-recovery' },
           text: 'Document the reset guidance in docs/Development.md. The task is a cache startup behavior and docs fix. It does not change the public session architecture, installer privileges, or model provisioning.',
         },
         {
           seq: 8,
           author: 'tool',
+          scope: { taskId: 'runtime-rebuild-and-cache-recovery' },
           text: 'Follow-up fixture CACHE_VERSION_GUARD PASS. Old cache bytes SHA256 match before and after startup. ERROR_RESET_HINT PASS. The new file was created only in the synthetic compatible-cache variant.',
         },
         {
           seq: 9,
           author: 'agent',
+          scope: { taskId: 'runtime-rebuild-and-cache-recovery' },
           text: 'The workspace test now covers the unsupported version and prints a reset message. Local inspection shows the incompatible file was preserved. I have not invoked the installer or contacted a service. A short setup guide could make the same boundary explicit to an operator who sees only the startup log.',
         },
       ],
@@ -306,6 +315,7 @@ export const memoryFixtures: readonly MemoryFixture[] = [
         {
           seq: 11,
           author: 'user',
+          scope: { taskId: 'runtime-rebuild-and-cache-recovery' },
           text: 'Final cache decision: use the manual reset instruction in docs/Development.md and preserve the existing file. Do not change the Ollama configuration or create network dependencies. The required verification is CACHE_VERSION_GUARD.',
         },
       ],

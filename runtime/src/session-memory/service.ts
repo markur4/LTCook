@@ -15,13 +15,16 @@ import {
 } from './store.js';
 import {
   defaultMemoryBudgets,
-  summaryStatements,
+  MemoryInputBudgetError,
+  relevantMemoryScope,
+  retrievableSummaryStatements,
   prepareMemorySummaries,
   type MemoryBudgets,
   type MemorySummaryResult,
 } from './summarization.js';
 import {
   identifyMemoryUnits,
+  isMemoryInstruction,
   scopeKey,
   observedMemoryChecks,
   type MemorySourceMessage,
@@ -185,15 +188,10 @@ function summaryEntries(summary: StoredMemorySummary): SearchEntry[] {
         .filter(({ author, seq }) => author === 'user' && part.sources.includes(seq))
         .map(({ seq }) => seq),
     };
-    const statements: SearchEntry[] = summaryStatements({ type: summary.type, ...part }).map(
-      (statement) => ({ ...entry, ...statement }),
-    );
-    try {
-      JSON.parse(part.text.replace(/^```(?:json)?\s*|\s*```$/gi, ''));
-    } catch {
-      statements.push({ ...entry, text: part.text });
-    }
-    return statements.length ? statements : [{ ...entry, text: part.text }];
+    return retrievableSummaryStatements({ type: summary.type, ...part }).map((statement) => ({
+      ...entry,
+      ...statement,
+    }));
   });
 }
 
@@ -430,12 +428,17 @@ export class SessionMemory {
     const receipt = this.store.turns(agentId, new Set([turnId])).get(turnId);
     if (!receipt || receipt.outcome !== 'running') return;
     const changes = receipt.changes ?? [];
-    if (scopeKey(changes.at(-1)?.scope ?? receipt.scope) === scopeKey(context.scope)) return;
+    const previous = changes.at(-1) ?? receipt;
+    if (
+      scopeKey(previous.scope) === scopeKey(context.scope) &&
+      JSON.stringify(previous.task) === JSON.stringify(context.task)
+    )
+      return;
     this.store.saveTurn(agentId, {
       ...receipt,
       changes: [...changes, { ...context, at: new Date().toISOString() }],
     });
-    this.observe(agentId);
+    this.observe(agentId, true);
   }
 
   agentClosed(agentId: string): void {
@@ -619,11 +622,14 @@ export class SessionMemory {
           task: context?.task ?? sources[0]?.task,
           instructions:
             context?.instructions ??
-            messages.filter(
-              ({ seq, author, turnId }) =>
-                seq < sources[0]!.seq &&
-                sources.some((item) => item.turnId && item.turnId === turnId) &&
-                (author === 'user' || (author === 'runtime' && !sources[0]?.task?.assignment)),
+            messages.filter((source) =>
+              sources.some(
+                (item) =>
+                  item.turnId &&
+                  item.turnId === source.turnId &&
+                  source.seq < item.seq &&
+                  isMemoryInstruction(source, item.task),
+              ),
             ),
         });
       }
@@ -642,6 +648,13 @@ export class SessionMemory {
     notePending();
 
     let checkpoint = through;
+    const retainCoverage = (unit: MemoryUnit) => {
+      checkpoint = Math.min(
+        checkpoint,
+        unit.messages[0]!.seq - 1,
+        ...(unit.instructions ?? []).map(({ seq }) => seq - 1),
+      );
+    };
     let hasOpenTurn = false;
     let belowThreshold = false;
     const scheduledActions = new Set([
@@ -684,21 +697,38 @@ export class SessionMemory {
       const existing = summaries.get(id);
       if (existing?.complete) continue;
       const position = unit.messages.at(-1)!.seq;
-      const earlier = [...summaries.values()]
-        .filter(
-          (summary) => summary.type === 'UAMP' && summary.complete && summary.position < position,
+      let latestUamp: StoredMemorySummary | undefined;
+      for (const summary of summaries.values()) {
+        if (
+          summary.type === 'UAMP' &&
+          summary.complete &&
+          summary.position < position &&
+          (!latestUamp || summary.position > latestUamp.position) &&
+          relevantMemoryScope(summary.scope, unit.scope) &&
+          summary.parts.some(({ text, noUsefulInformation }) => !noUsefulInformation && text.trim())
         )
-        .sort((a, b) => a.position - b.position);
-      const history = earlier.flatMap((summary) =>
-        summary.parts.map((part, index) => ({
-          ...part,
-          type: summary.type,
-          scope: summary.scope,
-          unitId: summary.id,
-          id: `${summary.id}/${index + 1}`,
-        })),
-      );
-      const parts = prepareMemorySummaries(unit, history, this.budgets);
+          latestUamp = summary;
+      }
+      const prior = latestUamp;
+      const history = prior
+        ? prior.parts.map((part, index) => ({
+            ...part,
+            type: prior.type,
+            scope: prior.scope,
+            unitId: prior.id,
+            id: `${prior.id}/${index + 1}`,
+          }))
+        : [];
+      let parts: ReturnType<typeof prepareMemorySummaries>;
+      try {
+        parts = prepareMemorySummaries(unit, history, this.budgets);
+      } catch (error) {
+        if (!(error instanceof MemoryInputBudgetError)) throw error;
+        retainCoverage(unit);
+        this.noteFailure(agentId, error.message);
+        this.options.onFailure?.();
+        continue;
+      }
       const historyHash = createHash('sha256')
         .update(JSON.stringify(parts.map(({ prompt }) => prompt)))
         .digest('hex');
@@ -751,7 +781,7 @@ export class SessionMemory {
             .finally(() => {
               this.inferenceAgentId = undefined;
             })
-            .catch(() => {
+            .catch((): MemorySummaryResult => {
               this.abort.signal.throwIfAborted();
               return {
                 type: unit.type,
@@ -792,11 +822,7 @@ export class SessionMemory {
         }
       }
       if (!summary.complete) {
-        checkpoint = Math.min(
-          checkpoint,
-          summary.sources[0]!.seq - 1,
-          ...(unit.instructions ?? []).map(({ seq }) => seq - 1),
-        );
+        retainCoverage(unit);
         if (!(await this.currentHistory(agentId, epoch, latest))) return true;
         this.store.saveSummary(summary);
       }
@@ -895,6 +921,8 @@ export class SessionMemory {
     const { tail, state, summaries, sourceGeneration } = await this.current(agentId);
     signal.throwIfAborted();
     const sourceActivity = this.agentActivity(agentId);
+    if (tail.reset || sourceGeneration === undefined)
+      return { text: incompleteHandoff, entries: [], recoveredSources: [] };
     const prompts = new Map(
       this.store.prompts(agentId, tail.epoch).map((item) => [item.seq, item]),
     );
@@ -1022,6 +1050,8 @@ export class SessionMemory {
       }
       evidence = selectEvidence(identifiers);
     }
+    if (sourceActivity.generation !== sourceGeneration || sourceActivity.epoch !== tail.epoch)
+      return { text: incompleteHandoff, entries: [], recoveredSources: [] };
     const selectedKeys = new Set(
       [...borrowedSources.keys()].map(({ seq, author }) => JSON.stringify([seq, author])),
     );
@@ -1060,13 +1090,7 @@ export class SessionMemory {
       ...evidence.selected.sort((a, b) => a.seq - b.seq).map(handoffLine),
     ].join('\n');
     signal.throwIfAborted();
-    if (
-      observePayload &&
-      sourceGeneration !== undefined &&
-      !tail.reset &&
-      sourceActivity.epoch === tail.epoch &&
-      sourceActivity.generation === sourceGeneration
-    ) {
+    if (observePayload) {
       const types = new Map<string, MemoryUnit['type']>();
       for (const { summaryId, kind } of evidence.selected) {
         if (summaryId && (kind === 'UAMP' || kind === 'AAB')) types.set(summaryId, kind);

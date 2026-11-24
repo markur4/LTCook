@@ -1,5 +1,9 @@
 # Context-aware Session Memory
 
+This plan records the original implementation. Immediate Context supersedes
+its production rolling-window design. The former window remains an evaluation
+control. See the current [Session Memory design](../Explanations.md#context-aware-session-memory).
+
 The approved goal is to replace production excerpt extraction with chronological
 UAMP and AAB summaries. Retain the native conversation as the source of
 authority, keep delegation enrichment opt-in, and continue authorized original

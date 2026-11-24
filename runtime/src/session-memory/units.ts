@@ -15,6 +15,7 @@ export type MemorySourceMessage = MemoryMessage & {
   messageId?: string;
   timestamp?: string;
   intermediate?: true;
+  runtimeAssignment?: true;
   scope?: MemoryScope;
   task?: MemoryTaskContext;
   tool?: {
@@ -69,6 +70,10 @@ export function scopeKey(scope: MemoryScope | undefined): string {
   ]);
 }
 
+export function isMemoryInstruction(source: MemorySourceMessage, task?: MemoryTaskContext) {
+  return source.author === 'user' || (source.runtimeAssignment === true && !task?.assignment);
+}
+
 /** Derive boundaries from native receipts and ordered canonical timeline entries. */
 export function identifyMemoryUnits(
   messages: readonly MemorySourceMessage[],
@@ -110,12 +115,9 @@ export function identifyMemoryUnits(
     const initiatingPrompt = items.find(
       ({ author }) => author === 'user' || author === 'runtime' || author === 'unknown',
     );
-    const lastResponse = items.findLastIndex(
-      ({ author, intermediate }) => author === 'agent' && !intermediate,
+    const lastAction = items.findLastIndex(
+      ({ author, intermediate }) => author === 'tool' || !!intermediate,
     );
-    const lastAction = items
-      .slice(0, lastResponse)
-      .findLastIndex(({ author, intermediate }) => author === 'tool' || !!intermediate);
     const finalResponses = items
       .slice(lastAction + 1)
       .filter(
@@ -143,8 +145,7 @@ export function identifyMemoryUnits(
       )
         finishActions();
       const instructions = items.filter(
-        ({ author, seq }) =>
-          seq < item.seq && (author === 'user' || (author === 'runtime' && !item.task?.assignment)),
+        (source) => source.seq < item.seq && isMemoryInstruction(source, item.task),
       );
       context = [
         ...new Map([...context, ...instructions].map((source) => [source.seq, source])).values(),

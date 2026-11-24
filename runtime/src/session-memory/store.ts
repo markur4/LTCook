@@ -51,7 +51,7 @@ export type MemoryState = { epoch: string; seq: number };
 const taskContextSchema = z.object({
   title: z.string(),
   description: z.string(),
-  acceptance: z.array(z.string()),
+  acceptance: z.array(z.string()).readonly(),
   assignment: z.string().optional(),
 });
 const turnSchema = z.object({

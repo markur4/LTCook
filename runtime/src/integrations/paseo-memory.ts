@@ -106,15 +106,21 @@ function readMessages(
     .flatMap(({ seqEnd, turnId, timestamp, item }): MemorySourceMessage[] => {
       const origin = { seq: seqEnd, turnId, timestamp };
       switch (item.type) {
-        case 'user_message':
+        case 'user_message': {
+          const author = promptAuthor(item.clientMessageId, agentId, secret);
+          const runtimeAssignment =
+            author === 'runtime' &&
+            /^Assignment ID: .+\. Task ID: .+\. Attempt: \d+\.\n/.test(item.text);
           return [
             {
               ...origin,
               messageId: item.messageId ?? item.clientMessageId,
-              author: promptAuthor(item.clientMessageId, agentId, secret),
+              author,
+              ...(runtimeAssignment ? { runtimeAssignment: true as const } : {}),
               text: item.text,
             },
           ];
+        }
         case 'assistant_message':
           return [{ ...origin, messageId: item.messageId, author: 'agent', text: item.text }];
         case 'tool_call': {

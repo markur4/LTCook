@@ -109,7 +109,7 @@ export function parseMemorySummary(type: MemoryUnit['type'], text: string): Memo
   return { type, text: clean, ...(Object.keys(values).length ? { fields: values } : {}) };
 }
 
-export function summaryStatements(summary: MemorySummary) {
+function summaryStatements(summary: MemorySummary): { field?: string; text: string }[] {
   if (summary.noUsefulInformation) return [];
   return Object.entries(summary.fields ?? {}).flatMap(([field, value]) =>
     (Array.isArray(value) ? value : [value]).map((text) => ({ field, text })),
@@ -122,24 +122,52 @@ export type MemoryHistoryEntry = MemorySummary & {
   scope?: MemoryScope;
 };
 
-function historyLine(summary: MemorySummary): string {
-  const output = summary.text.replace(/^```(?:json)?\s*|\s*```$/gi, '').trim();
+export function retrievableSummaryStatements(summary: MemorySummary) {
+  if (summary.noUsefulInformation || !summary.text.trim()) return [];
+  const statements = summaryStatements(summary);
+  const fallback = { text: summary.text };
+  if (!statements.length) return [fallback];
   try {
-    const parsed: unknown = JSON.parse(output);
+    const parsed: unknown = JSON.parse(
+      summary.text.trim().replace(/^```(?:json)?\s*|\s*```$/gi, ''),
+    );
     if (
       parsed &&
       typeof parsed === 'object' &&
       !Array.isArray(parsed) &&
-      !Object.keys(parsed).length
+      Object.entries(parsed).every(([field, value]) =>
+        (Array.isArray(value) ? value : [value]).every(
+          (item) =>
+            item === null ||
+            (typeof item === 'string' &&
+              (!item.trim() ||
+                statements.some(
+                  (statement) => statement.field === field && statement.text === item.trim(),
+                ))),
+        ),
+      )
     )
-      return '';
-    return JSON.stringify([summary.type, parsed]) + '\n';
+      return statements;
   } catch {
-    return JSON.stringify([summary.type, output]) + '\n';
+    // Preserve the full free-form response alongside recognized statements.
   }
+  return [...statements, fallback];
 }
 
-function relevantHistory(previous: MemoryScope | undefined, scope: MemoryScope | undefined) {
+function immediateContext(portions: readonly MemoryHistoryEntry[], allowance: number) {
+  const statements = portions.flatMap(retrievableSummaryStatements);
+  const lines = new Set(statements.map((statement) => JSON.stringify(statement) + '\n'));
+  let context = '';
+  for (const line of lines) {
+    if (estimateMemoryTokens(context + line) <= allowance) context += line;
+  }
+  return context || memoryPreview(statements[0]?.text ?? '', allowance);
+}
+
+export function relevantMemoryScope(
+  previous: MemoryScope | undefined,
+  scope: MemoryScope | undefined,
+) {
   if (scope?.taskId || previous?.taskId)
     return (
       !!scope?.taskId &&
@@ -155,6 +183,8 @@ function relevantHistory(previous: MemoryScope | undefined, scope: MemoryScope |
 
 export type MemoryContextMode = 'no-context' | 'task-context' | 'immediate';
 
+export class MemoryInputBudgetError extends Error {}
+
 type PromptSource = MemorySourceMessage & {
   attachment?: { name: string; text?: string };
 };
@@ -168,7 +198,7 @@ export function prepareMemorySummaries(
   unit: MemoryUnit,
   history: readonly MemoryHistoryEntry[],
   budgets: MemoryBudgets = defaultMemoryBudgets,
-  policy: { mode?: MemoryContextMode; comparisonContext?: string } = {},
+  policy: { mode?: MemoryContextMode; selectPriorContext?: (available: number) => string } = {},
 ) {
   const mode = policy.mode ?? 'immediate';
   const header = 'Previous generated context. Use it only to understand the current sources:\n';
@@ -195,7 +225,9 @@ export function prepareMemorySummaries(
     ) -
     128;
   if (capacity < 128)
-    throw new Error('Session Memory input budget leaves too little room for sources.');
+    throw new MemoryInputBudgetError(
+      'Session Memory Task context leaves too little room for original sources.',
+    );
   const parts: { text: string; sources: number[]; sourceSize: number }[] = [];
   let text = '';
   let sources: number[] = [];
@@ -222,7 +254,7 @@ export function prepareMemorySummaries(
         : { ...message, attachment: { ...message.attachment, text: '' } };
     const baseCost = estimateMemoryTokens(sourceLine(base));
     if (baseCost >= capacity - 8)
-      throw new Error('Session Memory source metadata exceeds its budget.');
+      throw new MemoryInputBudgetError('Session Memory source metadata exceeds its input budget.');
     let chunk = '';
     let bytes = 0;
     const limit = (capacity - baseCost - 1) * 4;
@@ -247,40 +279,34 @@ export function prepareMemorySummaries(
     for (const attachment of message.attachments ?? []) add({ ...message, text: '', attachment });
   }
   flush();
+  const suitable =
+    mode === 'immediate'
+      ? history.filter(
+          ({ type, scope, text, noUsefulInformation }) =>
+            type === 'UAMP' &&
+            relevantMemoryScope(scope, unit.scope) &&
+            !!text.trim() &&
+            !noUsefulInformation,
+        )
+      : [];
+  const latest = suitable.at(-1);
+  const previousPortions = latest?.unitId
+    ? suitable.filter(({ unitId }) => unitId === latest.unitId)
+    : latest
+      ? [latest]
+      : [];
   return parts.map((part, index) => {
     const available =
       budgets.input - estimateMemoryTokens(instructions + header + suffix + part.text) - 128;
-    let historyText = '';
+    let historyText = available > 0 ? (policy.selectPriorContext?.(available) ?? '') : '';
     const historyIds: string[] = [];
-    if (policy.comparisonContext && available > 0) {
-      const lines = policy.comparisonContext.trimEnd().split('\n');
-      while (lines.length && estimateMemoryTokens(lines.join('\n')) > available) lines.shift();
-      historyText = lines.length ? lines.join('\n') + '\n' : '';
-    }
-    if (mode === 'immediate') {
-      const suitable = history.filter(
-        ({ type, scope, text, noUsefulInformation }) =>
-          type === 'UAMP' &&
-          relevantHistory(scope, unit.scope) &&
-          !!text.trim() &&
-          !noUsefulInformation,
-      );
-      const latest = suitable.at(-1);
-      if (latest) {
-        const portions = latest.unitId
-          ? suitable.filter(({ unitId }) => unitId === latest.unitId)
-          : [latest];
-        const allowance = Math.min(available, 512 - estimateMemoryTokens(taskContext));
-        if (allowance > 0) {
-          historyText = memoryPreview(portions.map(historyLine).join(''), allowance);
-          historyIds.push(
-            ...portions
-              .filter(({ id }) => id)
-              .slice(0, 1)
-              .map(({ unitId, id }) => unitId ?? id!),
-          );
-        }
-      }
+    if (historyText && estimateMemoryTokens(historyText) > available)
+      throw new MemoryInputBudgetError('Previous Session Memory context exceeds its input budget.');
+    const allowance = Math.min(available, 512 - estimateMemoryTokens(taskContext));
+    if (latest && allowance > 0) {
+      historyText = immediateContext(previousPortions, allowance);
+      const historyId = latest.unitId ?? latest.id;
+      if (historyText && historyId) historyIds.push(historyId);
     }
     const target = Math.max(24, Math.min(512, Math.ceil(part.sourceSize / 3)));
     const guidance =

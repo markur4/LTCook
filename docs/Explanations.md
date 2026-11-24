@@ -457,9 +457,9 @@ authorized context. Each summary cites its native source sequences, including
 which sequences are original user instructions.
 
 An opt-in delegation handoff can include explicit, named check outcomes
-from original tool results. When a requested path or technical identifier
-is absent from the selected context, LTCook searches the original
-conversation and includes the cited source within the same handoff budget.
+from original tool results. LTCook searches the original conversation for
+requested paths and technical identifiers even when a summary already mentions
+them. It can include the cited evidence within the same handoff budget.
 
 Immediate Context supplies the current Task objective and acceptance criteria
 when Core knows them. For an AAB it also supplies the initiating user

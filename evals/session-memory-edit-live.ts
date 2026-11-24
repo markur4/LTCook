@@ -320,14 +320,19 @@ try {
           );
         }
       }
+      const sourceControl = arms.find(({ strategy }) => strategy === 'original-search')?.worker;
       scenarios.push({
         fixture: fixture.id,
         sourceEstimatedTokens,
         transcriptHash: hash(JSON.stringify(messages)),
         arms,
         conventional,
-        originalControlPassed:
-          arms.find(({ strategy }) => strategy === 'original-search')?.worker.passed ?? false,
+        originalControlPassed: sourceControl?.passed ?? false,
+        originalControlRetrievedCriticalFacts:
+          sourceControl !== undefined &&
+          transcript.facts
+            .filter(({ critical }) => critical)
+            .every(({ label }) => sourceControl.retrievedFacts.includes(label)),
       });
       continue;
     }
