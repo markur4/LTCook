@@ -22,6 +22,7 @@ import {
 import {
   budgetMemoryText,
   estimateMemoryTokens,
+  memoryIdentifierMatches,
   memoryRelevance,
   missingMemoryIdentifiers,
 } from '../runtime/src/session-memory/text.js';
@@ -120,9 +121,13 @@ function handoffFor(fixture: MemoryFixture, evidence: Evidence[], recoverSources
       memoryRelevance(b.text, fixture.focus) - memoryRelevance(a.text, fixture.focus) ||
       b.sources.at(-1)! - a.sources.at(-1)!,
   );
-  const pack = (entries: Evidence[]) =>
-    budgetMemoryText(entries, 900, fixture.focus, (item) =>
-      estimateMemoryTokens(JSON.stringify(item)),
+  const pack = (entries: Evidence[], identifiers: readonly string[] = []) =>
+    budgetMemoryText(
+      entries,
+      900,
+      fixture.focus,
+      (item) => estimateMemoryTokens(JSON.stringify(item) + '\n'),
+      identifiers,
     );
   let selected = pack(ranked).selected;
   let recovered: Evidence[] = [];
@@ -131,24 +136,27 @@ function handoffFor(fixture: MemoryFixture, evidence: Evidence[], recoverSources
       fixture.focus,
       [...user.selected, ...selected].map(({ text }) => text).join('\n'),
     );
-    const query = identifiers.join(' ');
-    if (query) {
+    if (identifiers.length) {
       recovered = context
-        .filter(({ author }) => author !== 'user' && author !== 'runtime')
+        .filter(({ author }) => author !== 'runtime')
         .flatMap(({ seq, text, attachments }) =>
           [text, ...(attachments ?? []).map((item) => item.text)]
-            .filter((body) => memoryRelevance(body, query) > 0)
-            .map((body) => ({ sources: [seq], text: body })),
+            .map((body) => ({
+              evidence: { sources: [seq], text: body },
+              score: memoryIdentifierMatches(body, identifiers).size,
+            }))
+            .filter(({ score }) => score > 0),
         )
         .sort(
           (a, b) =>
-            memoryRelevance(b.text, query) - memoryRelevance(a.text, query) ||
-            b.sources[0]! - a.sources[0]!,
-        );
-      selected = pack([...recovered, ...ranked]).selected;
+            b.score - a.score || b.evidence.sources[0]! - a.evidence.sources[0]!,
+        )
+        .map(({ evidence }) => evidence);
+      selected = pack([...recovered, ...ranked], identifiers).selected;
     }
   }
   const chronological = selected.sort((a, b) => a.sources.at(-1)! - b.sources.at(-1)!);
+  const recoveredReferences = new Set(recovered.map(({ sources }) => sources));
   const recent = last.filter(({ author }) => author !== 'runtime' && author !== 'user');
   const supplied = [
     ...user.selected.map(({ seq, text }) => ({ sources: [seq], text })),
@@ -157,7 +165,13 @@ function handoffFor(fixture: MemoryFixture, evidence: Evidence[], recoverSources
   ];
   return {
     supplied,
-    recoveredSources: [...new Set(recovered.flatMap(({ sources }) => sources))],
+    recoveredSources: [
+      ...new Set(
+        chronological
+          .filter(({ sources }) => recoveredReferences.has(sources))
+          .flatMap(({ sources }) => sources),
+      ),
+    ],
     text: [
       'Follow the current assignment and latest original user instructions. Resolve uncertain decisions against original user messages. Prefer original tool results for observed outcomes.',
       'Original user messages',
@@ -322,6 +336,10 @@ export async function compareContextMemory(
       strategy === 'logical' || strategy === 'rolling',
     );
     const grade = fixture.facts.map((fact) => {
+      const hasIdentifiers = (text: string) =>
+        !fact.identifiers ||
+        memoryIdentifierMatches(text, fact.identifiers).size === fact.identifiers.length;
+      const retainsFact = (text: string) => fact.expected.test(text) && hasIdentifiers(text);
       const directUser = preservePromptMessages([sourceBySequence.get(fact.source)!]).map(
         ({ text }) => text,
       );
@@ -330,8 +348,9 @@ export async function compareContextMemory(
         ...evidence.filter(({ sources }) => sources.includes(fact.source)).map(({ text }) => text),
       ];
       const contradicted =
-        !!fact.contradicts && evidence.some(({ text }) => fact.contradicts!.test(text));
-      const retained = relevant.some((text) => fact.expected.test(text));
+        !!fact.contradicts &&
+        evidence.some(({ text }) => fact.contradicts!.test(text) && hasIdentifiers(text));
+      const retained = relevant.some(retainsFact);
       return {
         label: fact.label,
         critical: !!fact.critical,
@@ -339,10 +358,10 @@ export async function compareContextMemory(
         retainedWithObservedChecks:
           retained ||
           observedChecks.some(
-            ({ sources, text }) => sources.includes(fact.source) && fact.expected.test(text),
+            ({ sources, text }) => sources.includes(fact.source) && retainsFact(text),
           ),
         retainedInHandoff: handoff.supplied.some(
-          ({ sources, text }) => sources.includes(fact.source) && fact.expected.test(text),
+          ({ sources, text }) => sources.includes(fact.source) && retainsFact(text),
         ),
         contradicted,
       };

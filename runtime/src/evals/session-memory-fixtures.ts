@@ -4,6 +4,7 @@ import type { MemorySourceMessage } from '../session-memory/units.js';
 export type MemoryFact = {
   label: string;
   expected: RegExp;
+  identifiers?: readonly string[];
   source: number;
   kind: Exclude<MemoryEntry['kind'], 'user'>;
   critical?: boolean;
@@ -105,6 +106,7 @@ export const memoryFixtures: readonly MemoryFixture[] = [
       {
         label: 'replay source path',
         expected: /runtime\/src\/invoice\/replay\.ts/,
+        identifiers: ['runtime/src/invoice/replay.ts'],
         source: 4,
         kind: 'reference',
         critical: true,
@@ -112,6 +114,7 @@ export const memoryFixtures: readonly MemoryFixture[] = [
       {
         label: 'replay function name',
         expected: /\bretryInvoice\b/,
+        identifiers: ['retryInvoice'],
         source: 4,
         kind: 'reference',
         critical: true,
@@ -132,6 +135,7 @@ export const memoryFixtures: readonly MemoryFixture[] = [
       {
         label: 'duplicate replay result',
         expected: /DUPLICATE_REPLAY_CASE.*pass|pass.*DUPLICATE_REPLAY_CASE/i,
+        identifiers: ['DUPLICATE_REPLAY_CASE'],
         contradicts: /DUPLICATE_REPLAY_CASE.*fail|fail.*DUPLICATE_REPLAY_CASE/i,
         source: 9,
         kind: 'progress',
@@ -204,12 +208,14 @@ export const memoryFixtures: readonly MemoryFixture[] = [
       {
         label: 'native acceptance test path',
         expected: /tests\/runtime\/system\/paseo-leader-acceptance\.ts/,
+        identifiers: ['tests/runtime/system/paseo-leader-acceptance.ts'],
         source: 2,
         kind: 'reference',
       },
       {
         label: 'rewind provider ID verification',
         expected: /PI_REWIND_PROVIDER_ID.*pass|pass.*PI_REWIND_PROVIDER_ID/i,
+        identifiers: ['PI_REWIND_PROVIDER_ID'],
         contradicts: /PI_REWIND_PROVIDER_ID.*fail|fail.*PI_REWIND_PROVIDER_ID/i,
         source: 3,
         kind: 'progress',
@@ -324,6 +330,7 @@ export const memoryFixtures: readonly MemoryFixture[] = [
       {
         label: 'cache opener location',
         expected: /runtime\/src\/tools\/repository-evidence-text\.ts/,
+        identifiers: ['runtime/src/tools/repository-evidence-text.ts'],
         source: 5,
         kind: 'reference',
         critical: true,
@@ -331,6 +338,7 @@ export const memoryFixtures: readonly MemoryFixture[] = [
       {
         label: 'cache opener symbol',
         expected: /\bopenWorkspaceCache\b/,
+        identifiers: ['openWorkspaceCache'],
         source: 5,
         kind: 'reference',
         critical: true,
@@ -338,6 +346,7 @@ export const memoryFixtures: readonly MemoryFixture[] = [
       {
         label: 'cache version guard result',
         expected: /CACHE_VERSION_GUARD.*pass|pass.*CACHE_VERSION_GUARD/i,
+        identifiers: ['CACHE_VERSION_GUARD'],
         contradicts: /CACHE_VERSION_GUARD.*fail|fail.*CACHE_VERSION_GUARD/i,
         source: 8,
         kind: 'progress',
@@ -445,6 +454,7 @@ export function memoryAttachmentFixture(): MemoryFixture {
         label: 'attached rewind verification name and source path',
         source: first.seq,
         expected: /PASEO_REWIND_SOURCE[\s\S]{0,200}runtime\/src\/integrations\/paseo-memory\.ts/,
+        identifiers: ['PASEO_REWIND_SOURCE', 'runtime/src/integrations/paseo-memory.ts'],
         critical: true,
         kind: 'reference',
       },

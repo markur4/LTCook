@@ -1,9 +1,10 @@
 # Context-aware Session Memory qualification
 
-The runtime passed local verification and was approved for integration ahead
-of model qualification. Rolling history remains below the critical-retention
-target. The matched Pi edits are recorded below, and focused retention replays
-continue on the existing model profile. Delegation enrichment stays opt-in.
+The initial runtime passed local verification and was integrated ahead of
+model qualification. Rolling history remains below the critical-retention
+target. The retention follow-up received code review. The user requested
+merging the final corrections with verification paused until GPU access.
+Delegation enrichment stays opt-in.
 
 ## Method
 
@@ -244,6 +245,23 @@ It searches original conversation messages for technical identifiers absent
 from a delegation handoff, within the existing handoff token budget. It runs
 the same model with the same inference settings. Focused measurements score
 the model output and the selected handoff separately.
+
+| Follow-up replay | Model evidence | With observed checks | In selected handoff | Complete requests | Prefill | Generation | End-to-end |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Short cache recovery, rolling history | 3/3 | 3/3 | 3/3 | 6/6 | 46.15 s | 209.31 s | 255.63 s |
+
+The short replay recovered the missing test result in the model output itself.
+This replay required no original-source lookup. A Traditional Test separately
+verifies exact original-source recovery when a completed summary omits a
+requested implementation path. The short replay had higher latency than the
+pre-fix run under a shared CPU workload.
+
+The short result predates the final exact-match grader and selection logic.
+The follow-up long replay was stopped before it produced a complete report,
+and the queued trace-pairing replay did not start. Final exact retention,
+repository-edit behavior, and performance remain unverified for the
+reviewed follow-up. The merged initial runtime's local checks are recorded
+below.
 
 ## Local verification
 

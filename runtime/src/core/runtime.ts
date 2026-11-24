@@ -1261,15 +1261,20 @@ Task to register: ${input.description}`,
       );
     if (memory && leader?.nativeAgentId && leader.nativeAgentId !== assignment.nativeAgentId) {
       const unavailable = 'Supplemental Session Memory. This context is potentially incomplete.';
+      const deadline = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         supplemental = await Promise.race([
           memory.handoff(
             leader.nativeAgentId,
             `${task.title} ${task.description} ${task.acceptance} ${assignment.handoff}`,
+            deadline.signal,
           ),
           new Promise<string>((resolve) => {
-            timer = setTimeout(() => resolve(unavailable), 500);
+            timer = setTimeout(() => {
+              deadline.abort();
+              resolve(unavailable);
+            }, 500);
           }),
         ]);
       } catch {

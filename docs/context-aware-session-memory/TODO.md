@@ -9,4 +9,4 @@
 - [x] Complete pass review.
 - [x] Integrate the reviewed implementation as requested.
 - [x] Preserve named tool outcomes and recover missing task identifiers from original messages.
-- [ ] Complete focused retention replays and decide qualification from the measured results.
+- [ ] Resume final verification and focused exact-retention replays when GPU access is available. Qualification remains open.

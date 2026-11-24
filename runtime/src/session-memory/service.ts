@@ -3,6 +3,7 @@ import {
   budgetMemoryText,
   memoryRelevance,
   estimateMemoryTokens,
+  memoryIdentifierMatches,
   missingMemoryIdentifiers,
 } from './text.js';
 import {
@@ -434,8 +435,11 @@ export class SessionMemory {
     return { tail, summaries, state };
   }
 
-  async handoff(agentId: string, query: string): Promise<string> {
+  async handoff(agentId: string, query: string, deadline?: AbortSignal): Promise<string> {
+    const signal = deadline ? AbortSignal.any([deadline, this.abort.signal]) : this.abort.signal;
+    signal.throwIfAborted();
     const { tail, state, summaries } = await this.current(agentId);
+    signal.throwIfAborted();
     const prompts = new Map(
       this.store.prompts(agentId, tail.epoch).map((item) => [item.seq, item]),
     );
@@ -446,6 +450,7 @@ export class SessionMemory {
     if (tailStart !== undefined) {
       while (tailStart > Math.max(0, cursor?.seq ?? through) + 1) {
         const page = await this.options.source.read(agentId, cursor).catch(() => undefined);
+        signal.throwIfAborted();
         if (!page) break;
         if (page.reset || page.epoch !== tail.epoch || page.latest < tail.latest) {
           this.observe(agentId, true);
@@ -501,7 +506,7 @@ export class SessionMemory {
       ),
     ];
     const borrowedSources = new Set<SearchEntry>();
-    const selectEvidence = () =>
+    const selectEvidence = (identifiers: readonly string[] = []) =>
       budgetMemoryText(
         candidates.sort(
           (a, b) =>
@@ -511,7 +516,8 @@ export class SessionMemory {
         ),
         900,
         query,
-        (entry) => estimateMemoryTokens(JSON.stringify(entry)),
+        (entry) => estimateMemoryTokens(JSON.stringify(entry) + '\n'),
+        identifiers,
       );
     let evidence = selectEvidence();
     const identifiers = missingMemoryIdentifiers(
@@ -523,31 +529,35 @@ export class SessionMemory {
       const discovered = await this.searchConversation(
         agentId,
         identifiers.join(' '),
-        this.abort.signal,
+        signal,
         {
           tail,
           state,
           summaries: [],
+          identifiers,
         },
       ).catch(() => undefined);
+      signal.throwIfAborted();
       if (discovered?.stale) {
         this.observe(agentId, true);
         return 'Supplemental Session Memory. This context is potentially incomplete.';
       }
       originalSearchIncomplete = !discovered || discovered.incomplete;
-      const represented = new Set(
-        [...candidates, ...users.selected].map(({ seq, author, text }) =>
-          JSON.stringify([seq, author, text]),
-        ),
-      );
+      const evidenceKey = ({ seq, author, text }: { seq: number; author: string; text: string }) =>
+        JSON.stringify([seq, author, text]);
+      const represented = new Map(candidates.map((entry) => [evidenceKey(entry), entry]));
+      const selectedUserKeys = new Set(users.selected.map(evidenceKey));
       for (const { agentId: _agentId, epoch, score: _score, ...entry } of discovered?.hits ?? []) {
-        const key = JSON.stringify([entry.seq, entry.author, entry.text]);
-        if (epoch !== tail.epoch || represented.has(key)) continue;
-        represented.add(key);
-        borrowedSources.add(entry);
-        candidates.push(entry);
+        const key = evidenceKey(entry);
+        if (epoch !== tail.epoch || selectedUserKeys.has(key)) continue;
+        const existing = represented.get(key);
+        borrowedSources.add(existing ?? entry);
+        if (!existing) {
+          represented.set(key, entry);
+          candidates.push(entry);
+        }
       }
-      evidence = selectEvidence();
+      evidence = selectEvidence(identifiers);
     }
     if (!users.selected.length && !evidence.selected.length) return '';
     return [
@@ -560,7 +570,11 @@ export class SessionMemory {
           through < tail.latest ||
           users.incomplete ||
           evidence.incomplete ||
-          originalSearchIncomplete,
+          originalSearchIncomplete ||
+          missingMemoryIdentifiers(
+            query,
+            [...users.selected, ...evidence.selected].map(({ text }) => text).join('\n'),
+          ).length > 0,
       }),
       'Original user messages in chronological order',
       ...users.selected.sort((a, b) => a.seq - b.seq).map((item) => JSON.stringify(item)),
@@ -573,13 +587,20 @@ export class SessionMemory {
     id: string,
     query: string,
     signal: AbortSignal,
-    view?: { tail: MemoryPage; state?: MemoryState; summaries: readonly StoredMemorySummary[] },
+    view?: {
+      tail: MemoryPage;
+      state?: MemoryState;
+      summaries: readonly StoredMemorySummary[];
+      identifiers: readonly string[];
+    },
   ) {
     const { state, tail, summaries } = view ?? (await this.current(id));
     let incomplete = !state || state.seq < tail.latest || tail.reset;
     let hits: SearchHit[] = [];
     const add = (entry: SearchEntry) => {
-      const score = memoryRelevance(entry.text, query);
+      const score = view
+        ? memoryIdentifierMatches(entry.text, view.identifiers).size
+        : memoryRelevance(entry.text, query);
       if (query && !score) return;
       hits.push({ ...entry, agentId: id, epoch: tail.epoch, score });
     };
@@ -598,7 +619,13 @@ export class SessionMemory {
             text: attachment.text,
           });
       }
-      const budgeted = budgetMemoryText(hits.sort(compareHits), searchTokens, query, searchCost);
+      const budgeted = budgetMemoryText(
+        hits.sort(compareHits),
+        searchTokens,
+        query,
+        searchCost,
+        view?.identifiers,
+      );
       hits = budgeted.selected;
       incomplete ||= budgeted.incomplete;
       if (page.start === undefined || page.start <= (page.earliest ?? 1)) break;
@@ -607,7 +634,7 @@ export class SessionMemory {
         { epoch: tail.epoch, seq: page.start },
         'before',
       );
-      if (previous.epoch !== tail.epoch || previous.latest < tail.latest)
+      if (previous.epoch !== tail.epoch || previous.latest < tail.latest || (view && previous.reset))
         return { hits: [], incomplete: true, stale: true };
       if (previous.reset || previous.start === undefined || previous.start >= page.start) {
         incomplete = true;
