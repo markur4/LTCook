@@ -47,6 +47,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- `ltcook restart` stops the local runtime and reopens Paseo. On Linux and macOS,
+  `--update` applies the registered AppRC update before starting.
+
 - Session Memory extracts sourced context from Paseo conversations in the
   background. Agents in the same authorized Team and workspace can search it
   and retrieve cited messages. Core can include focused Memory and recent

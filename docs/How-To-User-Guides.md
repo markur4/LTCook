@@ -82,8 +82,8 @@ Runtime launches omit an unset or empty `CONTAINER_CONNECTION`, preserving Podma
 default engine selection. Set it to a configured Podman connection name only when
 a remote engine is intended.
 
-To update and restart an editable installation, run `just restart` from the
-checkout. It runs `ltcook stop`, `ltcook app update`, and `ltcook serve` in order.
+On Linux or macOS, run `just restart` from the checkout to update and restart an
+editable installation. It runs `ltcook stop`, `ltcook app update`, and `ltcook serve` in order.
 AppRC selects the registered checkout, which must be clean and track an upstream
 branch. It runs `just build-assets` before synchronizing Python and refreshing
 registration, even if Git is already current.
@@ -127,6 +127,11 @@ browser, and follows backend logs. From WSL it opens the Windows browser through
 on the browser. Ctrl+C detaches the log viewer and leaves the runtime running.
 Stop that runtime explicitly with `ltcook stop`; Compose containers remain managed
 separately by `ltcook services stop`.
+
+Run `ltcook restart` to stop the runtime and reopen Paseo. On Linux or macOS,
+use `ltcook restart --update` (or `-u`) to apply the registered AppRC update
+before starting. On Windows, stop LTCook, run `ltcook app update`, and run
+`ltcook serve` once AppRC finishes the update.
 
 For a browser-free foreground server, use `ltcook launch runtime`. Ctrl+C stops
 a server started by that foreground command; reusing a server does not take over

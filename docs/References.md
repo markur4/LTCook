@@ -57,6 +57,7 @@ commands provide launch operations and diagnostics:
 | --- | --- |
 | `ltcook`, `ltcook serve` | Start/reuse the local runtime, open Paseo in the host default browser, and follow backend logs; Ctrl+C detaches. |
 | `ltcook stop` | Gracefully stop the matching local runtime; does not stop Compose containers or close browser tabs. |
+| `ltcook restart` | Stop the matching local runtime and reopen Paseo. Add `-u` or `--update` on Linux or macOS to apply the registered AppRC update before starting. |
 | `ltcook --help` | Show application and mounted AppRC command help. |
 | `ltcook --version`, `ltcook -V` | Print the installed package version before runtime preparation. |
 | `ltcook app doctor --verbose --json` | Include package/interpreter metadata, paths, configuration and resource diagnostics. |
