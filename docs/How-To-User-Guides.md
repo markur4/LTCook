@@ -173,6 +173,24 @@ The contextual **Team** panel is secondary to the Leader chat:
   report, plus native model/activity when available. **Open conversation** uses
   Paseo's existing chat and is unavailable for disconnected members.
 
+Open **Open Activity panel** from Paseo's Command Center while viewing an
+agent conversation. Activity opens in the right Explorer. Expand the agent or a
+direct subagent to inspect running and recent tools, observed skill loads, and
+model context usage when available. The separate conversation button opens a
+subagent's native chat. Use the same command in a workspace whose Explorer has
+no Activity tab yet.
+
+Expand **RAG Index** to see the worktree that the selected conversation is
+authorized to search. Index availability and indexing activity are independent.
+**Checking index** means a ranked query is active and its indexing phase is
+unconfirmed. Opening the panel does not start a search or build.
+
+**Session Memory** shows the selected agent's stored summaries and the last
+acknowledged memory payload sent to that agent, where measured. The memory
+payload may come from a different agent's stored summaries. Current model
+context and unmeasured counts appear as unknown. Background Session Memory and
+search operations continue independently of panel visibility.
+
 ## Use workspace tools in Pi or Codex
 
 Open an ordinary Pi or Codex chat in a workspace through LTCook's Paseo host.

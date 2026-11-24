@@ -12,6 +12,7 @@ import type {
 import { canonicalWorkspace } from '../core/workspace.js';
 import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
+import type { PaseoHost } from './paseo.js';
 import type { SessionMemory } from '../session-memory/service.js';
 import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
@@ -22,6 +23,8 @@ import {
   REPO_SEARCH_TIMEOUT_MS,
 } from '../paseo-plugin/shared/workspace-tools.js';
 import { isWebTool } from '../tools/web.js';
+import { openRepositoryWorkspace } from '../repository/workspace.js';
+import { createColgrepProvider } from '../repository/providers/colgrep.js';
 import { validateRiedRequest } from '../repository/requests.js';
 import { z } from 'zod';
 import { ResolvedModelSchema, type ResolvedModel } from '../models/aliases.js';
@@ -76,10 +79,18 @@ export function agentBearer(secret: string, nativeAgentId: string): string {
 export class RuntimeApi {
   private server: Server | undefined;
   private memory?: SessionMemory;
+  private readonly memoryDisabled: boolean;
   private memoryContext?: (
     agentId: string,
   ) => { scope?: MemoryScope; task?: MemoryTaskContext } | undefined;
   private pastedDocuments?: PastedDocuments;
+  private readonly activityColgrep = createColgrepProvider();
+  private providerSubagents?: PaseoHost['listProviderSubagents'];
+
+  setProviderSubagents(list: PaseoHost['listProviderSubagents']): void {
+    this.providerSubagents = list;
+  }
+
   private runtime: RuntimeController | undefined;
   private readonly sessions = new Map<string, string>();
   private readonly pendingSessions = new Map<
@@ -140,6 +151,8 @@ export class RuntimeApi {
     private readonly telemetry?: Telemetry,
   ) {
     this.runtime = runtime;
+    this.memoryDisabled =
+      Number(startupEnvironment.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000') === 0;
     this.startupShellEnvironment = captureShellEnvironment(startupEnvironment);
   }
   setRuntime(runtime: RuntimeController): void {
@@ -247,6 +260,7 @@ export class RuntimeApi {
           '/v1/workspace-tool',
           '/v1/session-memory/observe',
           '/v1/session-memory/paste',
+          '/v1/activity/services',
           '/v1/mcp/grant',
           '/v1/mcp/revoke',
           '/v1/evaluation/observe',
@@ -380,6 +394,67 @@ export class RuntimeApi {
         } else {
           response.writeHead(200).end(JSON.stringify(await this.pastedDocuments.draft(input.text)));
         }
+        return;
+      }
+      if (request.url === '/v1/activity/services') {
+        if (actor.kind !== 'user') {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        const agentId = input.nativeAgentId;
+        if (typeof agentId !== 'string' || !agentId) {
+          response.writeHead(400).end('{}');
+          return;
+        }
+        const timelineEpoch =
+          'timelineEpoch' in parsed && typeof parsed.timelineEpoch === 'string'
+            ? parsed.timelineEpoch
+            : undefined;
+        const session = input.sessionId ? this.runtime?.snapshot(input.sessionId) : undefined;
+        if (
+          session &&
+          !session.members.some(
+            ({ binding }) => binding?.state === 'bound' && binding.nativeAgentId === agentId,
+          )
+        ) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        const registeredWorkspace = session && this.sessions.get(session.session.id);
+        const workspace = session
+          ? registeredWorkspace === session.session.workspaceRoot
+            ? await openRepositoryWorkspace(registeredWorkspace)
+                .then((opened) => (opened.root === registeredWorkspace ? opened : undefined))
+                .catch(() => undefined)
+            : undefined
+          : await this.workspaceMcp?.repositorySearchWorkspace(agentId);
+        const [rag, subagents] = await Promise.all([
+          workspace
+            ? this.activityColgrep.readStatus(workspace)
+            : {
+                availability: 'unavailable',
+                activity: 'unknown',
+                diagnostic: 'Repository search scope is unavailable.',
+              },
+          this.providerSubagents?.(agentId).catch(() => undefined),
+        ]);
+        const memory = this.memory?.status(session?.session.id, agentId, timelineEpoch);
+        const assignment = session?.assignments.find(
+          (value) =>
+            value.nativeAgentId === agentId &&
+            (value.status === 'sending' || value.status === 'sent'),
+        );
+        const task = session?.tasks.find((value) => value.id === assignment?.taskId);
+        response.writeHead(200).end(
+          JSON.stringify({
+            rag,
+            task: task?.title,
+            subagents,
+            workspace: workspace && { root: workspace.root, identity: workspace.identity },
+            memory,
+            memoryDisabled: this.memoryDisabled,
+          }),
+        );
         return;
       }
       if (request.url === '/v1/session-memory/observe') {

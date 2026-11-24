@@ -231,7 +231,33 @@ test('stores chronological summaries, preserves original authority, and removes 
     await eventually(async () => !(await memory.search('peer', '', '', 'leader')).incomplete);
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain('initial-discovery');
-    const handoff = await memory.handoff('leader', 'cursor');
+    expect(memory.status('session', 'leader')).toMatchObject({
+      stored: { agentId: 'leader', epoch: 'one', uamp: 2, aab: 0 },
+      lastDelivered: null,
+      currentContext: null,
+    });
+    let acknowledge: (() => void) | undefined;
+    const handoff = await memory.handoff('leader', 'cursor', undefined, (payload) => {
+      acknowledge = memory.prepareDelivery('session', 'worker', payload);
+    });
+    expect(acknowledge).toBeDefined();
+    expect(memory.status('session', 'worker').lastDelivered).toBeNull();
+    acknowledge?.();
+    expect(memory.status('session', 'worker')).toMatchObject({
+      stored: null,
+      currentContext: null,
+      lastDelivered: {
+        sourceAgentId: 'leader',
+        recipientAgentId: 'worker',
+        bytes: Buffer.byteLength(handoff),
+      },
+    });
+    expect(memory.status('different-session', 'worker').lastDelivered).toBeNull();
+    expect(memory.status('session', 'leader', 'replacement').stored).toBeNull();
+    expect(memory.status('session', 'worker', 'replacement')).toMatchObject({
+      currentContext: null,
+      lastDelivered: { recipientEpoch: null },
+    });
     expect(handoff).toContain(first.text);
     expect(handoff).toContain(correction.text);
     expect(
@@ -379,7 +405,8 @@ test('preserves checked tool evidence and uses originals for an omitted archived
   try {
     memory.turn('leader', { turnId: 'older', outcome: 'completed' }, false);
     memory.turn('leader', { turnId: 'newer', outcome: 'completed' }, false);
-    await eventually(async () => !(await memory.search('leader', '', '')).incomplete);
+    // > The long archived source deliberately exceeds the search result budget.
+    await eventually(() => memory.status(undefined, 'leader').stored?.coveredThrough === 5);
     const check = await memory.handoff('leader', 'verified cache guard');
     expect(check).toContain('VERIFIED_CACHE_GUARD passed');
     expect(check).not.toContain('MADE_UP_CHECK');

@@ -310,6 +310,7 @@ async function run(): Promise<void> {
       host = undefined;
       return;
     }
+    api.setProviderSubagents(host.listProviderSubagents);
     const threshold = Number(process.env.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000');
     const pastedDocuments = new PastedDocuments(
       path.join(stateDirectory, 'pasted-documents'),
