@@ -24,6 +24,9 @@ import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js'
 import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
 import { createWebTools, type WebToolService } from '../../../runtime/src/tools/web.js';
 import { captureShellEnvironment } from '../../../runtime/src/integrations/shell-environment.js';
+import { storedSummariesRpc } from '../../../runtime/src/paseo-plugin/shared/activity.js';
+import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
+import { MemoryStore } from '../../../runtime/src/session-memory/store.js';
 
 const directories: string[] = [];
 afterEach(() => {
@@ -108,6 +111,88 @@ function snapshotFor(
 }
 
 describe('native runtime boundary', () => {
+  test('only the user can page completed summaries for the requested agent and current history', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-summary-reader-'));
+    directories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const store = new MemoryStore(databasePath);
+    try {
+      for (let position = 1; position <= 12; position++) {
+        store.saveSummary({
+          id: `summary-${position}`,
+          agentId: 'selected',
+          sessionId: 'session-1',
+          epoch: 'original',
+          type: position % 2 ? 'UAMP' : 'AAB',
+          position,
+          sources: [{ seq: position, author: 'agent' }],
+          createdAt: '2026-01-01T00:00:00Z',
+          historyHash: 'fixture',
+          parts: [{ text: `Stored body ${position}`, sources: [position] }],
+          expectedParts: 1,
+          complete: position !== 11,
+        });
+      }
+      store.saveSummary({
+        ...store.summaries('selected', 'original')[0]!,
+        agentId: 'other-agent',
+        parts: [{ text: 'Other agent summary', sources: [1] }],
+      });
+    } finally {
+      store.close();
+    }
+    let epoch = 'original';
+    const memory = new SessionMemory({
+      databasePath,
+      source: {
+        async read() {
+          return { epoch, latest: 11, through: 11, reset: false, messages: [] };
+        },
+      },
+      async summarize() {
+        throw new Error('Reading stored summaries must never invoke inference.');
+      },
+    });
+    const master = 'test-master-secret';
+    const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`);
+    api.setSessionMemory(memory);
+    const endpoint = await api.listen();
+    const readPage = (body: object, token = master) =>
+      fetch(`${endpoint}/v1/activity/stored-summaries`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ agentId: 'selected', ...body }),
+      });
+    try {
+      const agent = await readPage({ nativeAgentId: 'selected' }, agentBearer(master, 'selected'));
+      expect(agent.status).toBe(403);
+      const firstResponse = await readPage({});
+      expect(firstResponse.status).toBe(200);
+      const first = storedSummariesRpc.output.parse(await firstResponse.json());
+      expect(first.summaries.map(({ id }) => id)).toEqual(
+        Array.from({ length: 8 }, (_, index) => `summary-${10 - index}`),
+      );
+      expect(first.summaries[0]).toMatchObject({
+        type: 'AAB',
+        parts: [{ text: 'Stored body 10', sources: [10] }],
+      });
+      expect(first.next).not.toBeNull();
+      const second = storedSummariesRpc.output.parse(
+        await (await readPage({ before: first.next })).json(),
+      );
+      expect(second.summaries.map(({ id }) => id)).toEqual(['summary-2', 'summary-1']);
+      expect(second.next).toBeNull();
+      epoch = 'replacement';
+      expect((await readPage({ before: first.next })).status).toBe(400);
+      expect(storedSummariesRpc.output.parse(await (await readPage({})).json()).summaries).toEqual(
+        [],
+      );
+    } finally {
+      await api.close();
+      await memory.close();
+    }
+  });
+
   test('separates authenticated user authority from native-ID-bound agent authority', async () => {
     const master = 'test-master-secret';
     const nativeAgentId = 'paseo-agent-42';

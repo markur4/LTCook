@@ -53,7 +53,9 @@ All notable changes to `ltcook` will be documented in this file.
   the first agent chat in each workspace. The Explorer **+** menu offers
   **Activity**, **Team**, and **Tasks** on demand.
   Activity groups repeated tool calls and shows background summaries and
-  acknowledged delegation handoffs in the Session Memory card.
+  acknowledged delegation handoffs in the Session Memory card. Select
+  **Stored for this agent** to read the completed summaries and their source
+  sequence numbers.
 
 - `ltcook restart` stops the local runtime and reopens Paseo. On Linux and macOS,
   `--update` applies the registered AppRC update before starting.

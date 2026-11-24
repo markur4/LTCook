@@ -3,7 +3,11 @@ import type { PaseoApi } from '@getpaseo/client';
 import { z } from 'zod';
 import { defineRpc, PluginAttachmentItemSchema } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
-import { activitySubscription, MemoryUnitCountsSchema } from './shared/activity';
+import {
+  activitySubscription,
+  MemoryUnitCountsSchema,
+  storedSummariesRpc,
+} from './shared/activity';
 import { observeActivity, observedTimestamp } from './server/activity';
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
@@ -274,6 +278,14 @@ const activityServices = z.object({
 });
 
 export default function contribute(server: PluginServerContext) {
+  server.handle(storedSummariesRpc, async (input, { paseo }) => {
+    const entry = await paseo.agents.ref(input.agentId).refresh();
+    if (!entry || entry.agent.archivedAt)
+      throw new Error('The Activity conversation is unavailable.');
+    return storedSummariesRpc.output.parse(
+      await runtimeJson('/v1/activity/stored-summaries', input),
+    );
+  });
   server.handle(activitySubscription, ({ agentId }, { paseo, signal, push }) =>
     observeActivity(
       paseo,

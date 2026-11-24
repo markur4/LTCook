@@ -1,4 +1,4 @@
-import { defineSubscription } from '@getpaseo/plugin';
+import { defineRpc, defineSubscription } from '@getpaseo/plugin';
 import { z } from 'zod';
 
 const id = z.string().min(1);
@@ -94,6 +94,24 @@ export const activitySubscription = defineSubscription({
   event: ActivitySnapshotSchema,
 });
 
+const summaryCursor = z.object({ epoch: id, position: count, id });
+export const storedSummariesRpc = defineRpc({
+  name: 'ltcook.activity.stored-summaries',
+  input: z.object({ agentId: id, before: summaryCursor.optional() }),
+  output: z.object({
+    summaries: z.array(
+      z.object({
+        id,
+        type: z.enum(['UAMP', 'AAB']),
+        createdAt: z.string(),
+        parts: z.array(z.object({ text: z.string(), sources: z.array(count) })),
+      }),
+    ),
+    next: summaryCursor.nullable(),
+  }),
+});
+
+export type StoredSummariesPage = z.infer<typeof storedSummariesRpc.output>;
 export type ActivitySnapshot = z.infer<typeof ActivitySnapshotSchema>;
 export type AgentActivity = z.infer<typeof agentActivity>;
 export type ContextUsage = z.infer<typeof contextUsage>;

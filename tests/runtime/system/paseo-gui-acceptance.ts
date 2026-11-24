@@ -780,6 +780,10 @@ try {
   await browser('wait', '[aria-label^="Session Memory,"][aria-label*="stored"]');
   await browser('click', '[aria-label^="Session Memory,"]');
   await browser('wait', '--text', 'Stored for this agent');
+  await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
+  await browser('wait', '--text', 'Background summary fixture');
+  await browser('wait', '--text', 'UAMP · User–agent message pair');
+  await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
   await browser('wait', '--text', 'No acknowledged handoff available for this agent.');
   await browser('click', '[aria-label^="Session Memory,"]');
 

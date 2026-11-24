@@ -16,6 +16,7 @@ import {
 import {
   MemoryStore,
   type MemoryState,
+  type MemorySummaryCursor,
   type MemoryTurn,
   type StoredMemorySummary,
 } from './store.js';
@@ -292,6 +293,31 @@ export class SessionMemory {
       currentContext: null,
       pendingUamp: activity?.pending?.uamp ?? null,
       pendingAab: activity?.pending?.aab ?? null,
+    };
+  }
+
+  async readStoredSummaries(agentId: string, before?: MemorySummaryCursor) {
+    const generation = this.activity.get(agentId)?.generation;
+    const tail = await this.options.source.read(agentId, undefined, 'tail');
+    this.abort.signal.throwIfAborted();
+    const state = this.store.state(agentId);
+    if (
+      tail.reset ||
+      (generation !== undefined && this.activity.get(agentId)?.generation !== generation) ||
+      (state?.epoch === tail.epoch && state.seq > tail.latest) ||
+      (before && (before.epoch !== tail.epoch || before.position > tail.latest))
+    ) {
+      throw new Error('Conversation history changed. Reopen the stored summaries.');
+    }
+    const { summaries, next } = this.store.summaryPage(agentId, tail.epoch, tail.latest, before);
+    return {
+      summaries: summaries.map(({ id, type, createdAt, parts }) => ({
+        id,
+        type,
+        createdAt,
+        parts: parts.map(({ text, sources }) => ({ text, sources })),
+      })),
+      next,
     };
   }
 

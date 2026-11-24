@@ -46,6 +46,7 @@ const summarySchema = z.object({
   complete: z.boolean(),
 });
 export type StoredMemorySummary = z.infer<typeof summarySchema>;
+export type MemorySummaryCursor = Pick<StoredMemorySummary, 'epoch' | 'position' | 'id'>;
 export type MemoryState = { epoch: string; seq: number };
 
 const taskContextSchema = z.object({
@@ -129,6 +130,35 @@ export class MemoryStore {
       )
       .all(agentId, epoch) as { value: string }[];
     return rows.map(({ value }) => summarySchema.parse(JSON.parse(value)));
+  }
+
+  summaryPage(agentId: string, epoch: string, through: number, before?: MemorySummaryCursor) {
+    const pageSize = 8;
+    const rows = this.database
+      .prepare(
+        `SELECT value FROM memory_summary
+         WHERE agent = ? AND epoch = ? AND position <= ?
+           AND json_extract(value, '$.complete') = 1
+           ${before ? 'AND (position, id) < (?, ?)' : ''}
+         ORDER BY position DESC, id DESC LIMIT ?`,
+      )
+      .all(
+        agentId,
+        epoch,
+        through,
+        ...(before ? [before.position, before.id] : []),
+        pageSize + 1,
+      ) as {
+      value: string;
+    }[];
+    const summaries = rows
+      .slice(0, pageSize)
+      .map(({ value }) => summarySchema.parse(JSON.parse(value)));
+    const last = summaries.at(-1);
+    return {
+      summaries,
+      next: rows.length > pageSize && last ? { epoch, position: last.position, id: last.id } : null,
+    };
   }
 
   saveSummary(summary: StoredMemorySummary) {
