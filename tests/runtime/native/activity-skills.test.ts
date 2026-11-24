@@ -9,8 +9,8 @@ type TimelineItem = Awaited<
 
 const catalog = {
   commands: [
-    { name: 'workflow', description: 'Project workflow', kind: 'skill' },
-    { name: 'verification', description: 'Project checks', kind: 'skill' },
+    { name: 'workflow', description: 'Project workflow', argumentHint: '', kind: 'skill' },
+    { name: 'verification', description: 'Project checks', argumentHint: '', kind: 'skill' },
   ],
   error: null,
 } satisfies Pick<PaseoAgentCommandsResult, 'commands' | 'error'>;
@@ -21,6 +21,7 @@ function shell(command: string, output: string, exitCode = 0): TimelineItem {
     name: 'shell',
     callId: command,
     status: 'completed',
+    error: null,
     detail: { type: 'shell', command, output, exitCode },
   };
 }
@@ -115,8 +116,13 @@ test('idle Codex Activity distinguishes no observed loads from an unavailable ca
     [
       shell('cat /skills/workflow/README.md', header),
       shell('cat /skills/workflow/SKILL.md', header, 1),
+      shell("sed -n '50,55p' /skills/workflow/SKILL.md", header),
       shell('cat /skills/workflow/SKILL.md | head -n 20', header),
       shell('echo /skills/workflow/SKILL.md', header),
+      {
+        type: 'user_message',
+        text: '<skill name="workflow" location="/skills/workflow/SKILL.md">\nBody',
+      },
     ],
     catalog,
   );

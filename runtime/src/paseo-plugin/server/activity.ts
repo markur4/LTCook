@@ -41,7 +41,7 @@ function status(agent: PaseoAgent): AgentActivity['status'] {
 function codexSkillRead(command: string, output?: string): string | undefined {
   // > Codex reports file reads as shell calls. Require a direct read and the returned front matter.
   const reader =
-    /^(?:cat|head(?:[ \t]+(?:-n[ \t]*|-)\d+)?|sed[ \t]+-n[ \t]+(['"]?)\d+(?:,\d+)?p\1)[ \t]+(?:--[ \t]+)?(.+)$/;
+    /^(?:cat|head(?:[ \t]+(?:-n[ \t]*|-)\d+)?|sed[ \t]+-n[ \t]+(['"]?)1,\d+p\1)[ \t]+(?:--[ \t]+)?(.+)$/;
   const operand = reader.exec(command.trim())?.[2];
   if (!operand || !output) return undefined;
   const token = /^(?:"([^"]+)"|'([^']+)'|([^\s<>&|;$*?]+))$/.exec(operand);
@@ -286,6 +286,7 @@ class AgentTimeline {
 
   private accept(item: TimelineItem, seq: number, timestamp: number): void {
     if (item.type === 'user_message') {
+      if (this.provider !== 'pi' && this.provider !== 'ltcook') return;
       const skill = /^<skill name="([^"]+)" location="([^"]+)">\n/.exec(item.text);
       if (skill) {
         const [, name, location] = skill;
