@@ -175,6 +175,9 @@ Both harnesses get the same enabled LTCook workspace tools. Pi shows them
 directly, and Codex may discover them through tool search. Some Codex modes ask
 for permission before calling an MCP tool.
 
+LTCook adds tool-choice guidance to the launch instructions for both harnesses.
+Agents see when to choose Search or Locate before they start looking for tools.
+
 Open the project directory you want the agent to use. LTCook reads files in
 that workspace through its tool connection, and the agent can use the results
 in model requests. Store credentials outside agent workspaces. Native editors

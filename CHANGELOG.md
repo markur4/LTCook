@@ -316,6 +316,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- Pi and Codex chats on the LTCook Paseo host receive repository tool guidance
+  at launch so they can choose Search or Locate before tool discovery.
+
 - Pi and Codex chats opened through LTCook's Paseo host receive the same enabled
   workspace tools, including repository Search and Locate, RIED source outlines,
   and file summarization.
