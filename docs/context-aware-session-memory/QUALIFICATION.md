@@ -1,8 +1,9 @@
 # Context-aware Session Memory qualification
 
-The runtime passes local verification. Rolling history remains below the
-critical-retention target in the recorded CPU comparison. The matched Pi edit
-run and focused retention replays are in progress.
+The runtime passed local verification and was approved for integration ahead
+of model qualification. Rolling history remains below the critical-retention
+target. The matched Pi edits are recorded below, and focused retention replays
+continue on the existing model profile. Delegation enrichment stays opt-in.
 
 ## Method
 
@@ -179,8 +180,8 @@ different output lengths and shared the CPU with another workload.
 
 ## Repository edits in Pi
 
-Both native controls used GPT-6 Luna with high reasoning in Pi through the
-existing Codex authorization. Each worker edited disposable files from the
+Pi requested GPT-6 Luna with high reasoning through the existing Codex
+authorization in all downstream arms. Each worker edited disposable files from the
 same pinned LTCook revision. The grader checked the actual target edit,
 untouched sibling files, and executable behavior.
 
@@ -193,6 +194,38 @@ The first long comparison stopped during rolling-history summarization at
 Ollama's 120-second request limit. The edit runner now records such a request
 as incomplete and proceeds with source-backed Pi evaluation. Failed original
 controls make the corresponding downstream comparison inconclusive.
+
+
+### Matched edit run
+
+| LTCook edit | Strategy | Pi result | Completed summary requests | CPU summarization time | Pi edit time | Pi input tokens |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Trace pairing | Conventional delegation | Passed | — | — | 34.87 s | 3,677 |
+| Trace pairing | Original search | Passed | — | — | 22.98 s | 6,681 |
+| Trace pairing | Extractive | Passed | 2/2 | 63.14 s | 14.09 s | 6,942 |
+| Trace pairing | Token-based abstractive | Passed | 2/2 | 48.72 s | 21.11 s | 8,961 |
+| Trace pairing | Logical without history | Passed | 8/8 | 116.53 s | 19.69 s | 7,175 |
+| Trace pairing | Logical with rolling history | Passed | 6/8 | 254.98 s | 19.74 s | 7,324 |
+| Workspace preparation | Conventional delegation | Passed | — | — | 24.58 s | 3,415 |
+| Workspace preparation | Original search | Timed out | — | — | 120.01 s | 694 |
+| Workspace preparation | Extractive | Passed | 2/2 | 61.32 s | 13.39 s | 6,801 |
+| Workspace preparation | Token-based abstractive | Passed | 2/2 | 38.75 s | 24.59 s | 13,389 |
+| Workspace preparation | Logical without history | Passed | 8/8 | 122.85 s | 11.31 s | 6,835 |
+| Workspace preparation | Logical with rolling history | Passed | 8/8 | 174.80 s | 16.70 s | 6,954 |
+
+Trace pairing passed with every input strategy and with conventional
+delegation in the matched run. Its prior conventional attempt failed the
+duplicate-begin rule. The rolling arm still omitted the labeled implementation
+path and left two of eight summary requests incomplete at the 2,048-token cap.
+This fixture shows that successful repository edits and reliable summary
+coverage need separate checks.
+
+The original-search control timed out in the matched workspace preparation
+run. Its earlier standalone counterpart passed. The matched workspace
+comparison is inconclusive. The remaining workspace arms all passed their
+executable edit checks. The matched edit run took 20 minutes 24 seconds
+including all summarizer requests and native Pi turns. Ollama's model digest
+stayed fixed.
 
 ## Local verification
 

@@ -5,5 +5,7 @@
 - [x] Switch delegation and search to authorized original messages and individually stored summaries.
 - [x] Implement the supported paste-to-attachment control and durable source retrieval.
 - [x] Update the glossary, architecture documentation, and cache diagrams.
-- [ ] Run Traditional Tests and matched native Pi Agent Evals. Record qualification and cache behavior.
-- [ ] Complete pass review and integration.
+- [x] Run Traditional Tests and matched native Pi Agent Evals. Record cache behavior and the initial qualification verdict.
+- [x] Complete pass review.
+- [ ] Integrate the reviewed implementation as requested.
+- [ ] Complete focused retention replays and fix the qualification gaps.
