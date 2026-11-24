@@ -427,14 +427,11 @@ LTCook issues a workspace-scoped bearer during an authenticated launch or
 resume. A warm reopen in the same workspace reuses the grant. Archiving the
 chat or changing its authorized workspace revokes the grant. Restarting the
 runtime clears in-memory credentials, and reopening a chat configures a new
-connection. The shared catalog provides `ltcook_ried`, `ltcook_summarize`,
-`ltcook_web_search`, `ltcook_web_fetch`, and `ltcook_web_content`. Clients may
-qualify these names with the server name `ltcook_workspace`.
-
-`ltcook_repo_search` is available in Team and standalone Pi and in ordinary Pi
-chats through LTCook's Paseo launch hook. The hook does not report Codex's
-effective host read scope, so ordinary Codex chats receive inventory, text
-summarization, and web tools through this connection.
+connection. Both harnesses receive the same enabled workspace tools, including
+`ltcook_ried` with source outlines, `ltcook_repo_search`, `ltcook_repo_locate`,
+file and text `ltcook_summarize`, and the web tools. Clients may qualify these
+names with the server name `ltcook_workspace`. Team and standalone Pi can also
+use Search and Locate through their native LTCook integration.
 
 | `mode` | Provider | Meaning of `query` |
 | --- | --- | --- |
@@ -525,8 +522,8 @@ SearXNG and URL retrieval uses the HTTP/Crawl4AI settings.
   Archiving the agent or restarting the runtime ends access to stored results.
 
 `ltcook_summarize` takes one of `text` or `path` plus an optional `focus`.
-Pi's workspace grant allows regular UTF-8 files within its resolved workspace.
-Codex uses text input. The result includes `summary`, `model`, and
+The authenticated Pi or Codex workspace connection can read regular UTF-8 files
+in its resolved workspace. The result includes `summary`, `model`, and
 `incomplete`, which is true if generation was cut off. The local request
 has a two-minute timeout.
 

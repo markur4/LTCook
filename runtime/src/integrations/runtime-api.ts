@@ -377,9 +377,9 @@ export class RuntimeApi {
         }
         if (typeof input.workspaceRoot !== 'string')
           throw new Error('A trusted launch workspace is required.');
-        // > The Paseo hook authorizes Pi reads. The Codex launch directory does not carry host read scope.
+        // > The authenticated Paseo launch authorizes LTCook reads in its workspace.
         const provider = 'provider' in parsed ? parsed.provider : undefined;
-        const workspaceFileAccess = provider === 'pi';
+        const workspaceFileAccess = provider === 'pi' || provider === 'codex';
         const token = await this.workspaceMcp.grant(
           input.nativeAgentId,
           input.workspaceRoot,

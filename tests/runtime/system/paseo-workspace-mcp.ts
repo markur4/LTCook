@@ -78,6 +78,26 @@ function verifyRetryEvidence(content: string) {
   assert.doesNotMatch(content, /^2 \| .*return 48;|^3 \| .*return 12;/m);
 }
 
+function verifyCodexRetryEvidence(content: string) {
+  const result: unknown = JSON.parse(content.replace(/^Wall time:[^\n]*\nOutput:\n/, ''));
+  const search = Value.Check(RepositoryLocateOutputSchema, result) ? result.searches[0] : result;
+  assert(Value.Check(RepositorySearchOutputSchema, search));
+  assert.equal(search.provider, 'ripgrep');
+  assert.equal(search.status, 'ready');
+  for (const line of [2, 3]) {
+    assert(
+      search.results.some(
+        (hit) =>
+          hit.path === retryPath &&
+          hit.startLine === line &&
+          hit.endLine === line &&
+          hit.excerpt === retrySource.split('\n')[line - 1],
+      ),
+      `Missing verified evidence for ${retryPath}:${line}.`,
+    );
+  }
+}
+
 const provider = createServer(async (request, response) => {
   try {
     if (request.method === 'GET') {
@@ -126,8 +146,12 @@ const provider = createServer(async (request, response) => {
     let namespace: string | undefined;
     if (result) {
       if (verifyRepositoryResult) {
-        assert.equal(typeof result.content, 'string', `${marker} needs Pi tool text.`);
-        verifyRepositoryResult(result.content);
+        const output = codex ? result.output : result.content;
+        const content = Array.isArray(output)
+          ? output.map((item: { text?: string }) => item.text ?? '').join('\n')
+          : output;
+        assert.equal(typeof content, 'string', `${marker} needs tool text.`);
+        verifyRepositoryResult(content);
         verifiedRepositoryCases.push(marker.slice('call_'.length));
       } else {
         const returned = JSON.stringify(result);
@@ -179,12 +203,7 @@ const provider = createServer(async (request, response) => {
               execution: 'client',
               id: 'search_' + marker,
               call_id: 'search_' + marker,
-              arguments: {
-                query:
-                  tool === 'ltcook_ried'
-                    ? 'repository environment inventory ried'
-                    : 'summarize text using local Ollama',
-              },
+              arguments: { query: tool },
               status: 'completed',
             }
           : {
@@ -559,6 +578,20 @@ try {
   await exercise(ordinaryCodex, 'codex_fresh');
   await ordinaryCodex.reload();
   await exercise(ordinaryCodex, 'codex_warm_resume');
+  if (Bun.which('rg')) {
+    await exercise(
+      ordinaryCodex,
+      'codex_locate_ripgrep',
+      { symbol: 'channel', paths: [retryPath] },
+      verifyCodexRetryEvidence,
+    );
+    await exercise(
+      ordinaryCodex,
+      'codex_searches_ripgrep',
+      { query: 'channel', mode: 'exact', paths: [retryPath] },
+      verifyCodexRetryEvidence,
+    );
+  }
   await stop();
   process.env.LTCOOK_COLGREP_DEPLOYMENT = path.join(fixture, 'missing-colgrep-assets');
   active = await start();
@@ -577,8 +610,8 @@ try {
   await exerciseLive(active, 'unavailable');
   await exercise(active.api.agents.ref(ordinaryCodex.id), 'codex_restart_resume');
   await exercise(resumedPi, 'pi_summarizes_file', { path: 'notes.txt' });
-  await exercise(active.api.agents.ref(ordinaryCodex.id), 'codex_summarizes_text', {
-    text: material,
+  await exercise(active.api.agents.ref(ordinaryCodex.id), 'codex_summarizes_file', {
+    path: 'notes.txt',
   });
   console.log(
     JSON.stringify({ result: 'passed', verifiedToolCalls: calls, verifiedRepositoryCases }),

@@ -316,6 +316,10 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- Pi and Codex chats opened through LTCook's Paseo host receive the same enabled
+  workspace tools, including repository Search and Locate, RIED source outlines,
+  and file summarization.
+
 - Repository Search and Locate show explicit line numbers in agent-facing
   excerpts so adjacent source lines can be cited precisely. Structured results
   retain their existing path, range, and excerpt fields.

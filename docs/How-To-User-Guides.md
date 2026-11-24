@@ -171,8 +171,14 @@ The contextual **Team** panel is secondary to the Leader chat:
 
 Open an ordinary Pi or Codex chat in a workspace through LTCook's Paseo host.
 Paseo attaches the local tool connection when it opens or resumes the chat.
-Pi shows the LTCook tools directly, and Codex may discover them through tool
-search. Some Codex modes ask for permission before calling an MCP tool.
+Both harnesses get the same enabled LTCook workspace tools. Pi shows them
+directly, and Codex may discover them through tool search. Some Codex modes ask
+for permission before calling an MCP tool.
+
+Open the project directory you want the agent to use. LTCook reads files in
+that workspace through its tool connection, and the agent can use the results
+in model requests. Store credentials outside agent workspaces. Native editors
+and shells use their harness permissions for operations in other checkouts.
 
 - Use `ltcook_web_search` for SearXNG, `ltcook_web_fetch` for URLs, and
   `ltcook_web_content` for stored search/page results. All three use the
@@ -183,30 +189,25 @@ search. Some Codex modes ask for permission before calling an MCP tool.
   conventions, detected tools, and project scripts. Ask for the Git section
   to see live branch and working-tree details. You can name a locally
   available base branch or commit for comparison.
-- Ask RIED to map a directory for a bounded file tree. In a Pi chat with
-  workspace file access, ask for an outline of a specific source file or
-  directory. Ordinary Codex chats can use maps and inventory. See the
-  [RIED operations and limits](References.md#repository-inventory).
-- In Pi, use `ltcook_repo_search` for source evidence. Ask for an
+- Ask RIED to map a directory for a bounded file tree or outline a specific
+  source file or directory. See the [RIED operations and limits](References.md#repository-inventory).
+- Use `ltcook_repo_search` for source evidence. Ask for an
   exact identifier to use ripgrep or ask a question by meaning to use ColGREP.
   Add a relative path to narrow results. The first ColGREP search builds the
   workspace index and can take longer than later searches. If another request
   is populating the index, retry once it finishes. If ColGREP assets are missing
   or damaged, repeat the [installation procedure](#install-from-a-checkout).
-- Ask Pi to use `ltcook_repo_locate` when you want source locations
+- Use `ltcook_repo_locate` when you want source locations
   for a definition, caller, or test. For example, ask “Locate the implementation
   and callers of `resolveLaunch`.” For an unfamiliar symbol, describe the behavior
   instead. Locate returns evidence candidates that the agent can inspect and
   cite. A conceptual search may be followed by exact search for a verified
   identifier. Reopen the chat through Paseo after launching the updated runtime
   to discover Locate. See the [Locate contract](References.md#repository-locate).
-  The Paseo launch hook does not provide Codex's effective read scope, so the
-  workspace tool connection omits Search and Locate in ordinary Codex chats.
-- Ask for a summary using `ltcook_summarize`. Supply text or ask Pi to summarize
+- Ask for a summary using `ltcook_summarize`. Supply text or ask to summarize
   one regular UTF-8 file from the selected workspace, up to 24 KiB. An optional
-  focus tells the summarizer what to emphasize. Codex accepts text because its
-  file-read policy is outside the workspace connection's authority. Check
-  consequential details such as identifiers and negated actions against the source.
+  focus tells the summarizer what to emphasize. Check consequential details
+  such as identifiers and negated actions against the source.
 
 The summarizer uses `@tiny-local`, which defaults to Spark X2.6 4B Q8_0 with
 reasoning off. Pull it on the configured Ollama instance before the first

@@ -375,10 +375,14 @@ describes the bounded scan. A complete response has neither `partial` nor
 [retrieval benchmark](Development.md#repository-retrieval-evaluation).
 
 Standalone Pi uses its native workspace, Team Pi uses its bound Session, and
-ordinary Paseo Pi and Codex use their authenticated workspace grants. Codex's
-search grant authorizes bounded evidence from both providers. General file
-reads for outlines and summarization use a separate grant. LTCook setup
-prepares the optional ColGREP assets. Indexing starts on the first ranked search.
+ordinary Paseo Pi and Codex use their authenticated launch workspace. For both
+Paseo harnesses, that workspace authorizes LTCook's bounded repository search,
+source outlines, and file summarization. LTCook binds the connection to the
+canonical workspace and applies each tool's path checks. Native editors and
+shells use the harness's own permissions and any Team execution rules.
+
+LTCook setup prepares the optional ColGREP assets. Indexing starts on the first
+ranked search.
 
 ## Coordination and recovery
 

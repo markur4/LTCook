@@ -115,6 +115,10 @@ installations, shared services and external workspaces are outside the instance.
   preserve original shell provenance between workspace resolutions.
 - Keep secret settings marked `secret=True`, and never log or document their
   values. Redaction controls display; it does not encrypt the AppRC-managed file.
+- Give supported harnesses the same enabled LTCook workspace tools. The
+  authenticated launch workspace authorizes LTCook's project file reads.
+  Native editors and shells use the harness's own permissions. See
+  [Repository Core and RIED](docs/Explanations.md#repository-core-and-ried).
 - Keep Python launch/configuration concerns in `src/ltcook`, lifecycle and
   installer ownership in `src/ltcook_distr`, and developer packaging helpers in
   `src/ltcook_dev`. The wheel's `BuildPy` step copies only a validated canonical

@@ -26,7 +26,7 @@ async function localAuthority(): Promise<string> {
   return `127.0.0.1:${address.port}`;
 }
 
-test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthorized access', async () => {
+test('ordinary Pi and Codex share workspace tool access across reconnect and enforce workspace boundaries', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'ltcook-mcp-'));
   const first = path.join(root, 'first');
   const second = path.join(root, 'second');
@@ -78,36 +78,28 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
     const secondToken = await grant('codex-two', second, 'codex');
     const one = await client(firstToken);
     const two = await client(secondToken);
-    const piInSecond = await client(await grant('pi-two', second, 'pi'));
     const unscoped = await client(await grant('unscoped', second));
-    const piTools = (await one.sdk.listTools()).tools.map(({ name }) => name);
+    const piTools = (await one.sdk.listTools()).tools;
     const codexTools = (await two.sdk.listTools()).tools;
-    expect(piTools).toContain('ltcook_ried');
-    expect(piTools).toContain('ltcook_repo_search');
-    expect(piTools).toContain('ltcook_repo_locate');
+    expect(codexTools).toEqual(piTools);
     expect(codexTools.map(({ name }) => name)).toContain('ltcook_ried');
-    expect(codexTools.map(({ name }) => name)).not.toContain('ltcook_repo_search');
-    expect(codexTools.map(({ name }) => name)).not.toContain('ltcook_repo_locate');
-    const authorizedTools = (await piInSecond.sdk.listTools()).tools;
-    expect(
-      authorizedTools.find(({ name }) => name === 'ltcook_repo_search')?.annotations,
-    ).toMatchObject({
-      readOnlyHint: true,
-      openWorldHint: false,
-    });
+    expect(codexTools.find(({ name }) => name === 'ltcook_repo_search')?.annotations).toMatchObject(
+      {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    );
     expect((await unscoped.sdk.listTools()).tools.map(({ name }) => name)).not.toContain(
       'ltcook_repo_search',
     );
-    for (const sdk of [two.sdk, unscoped.sdk]) {
-      const deniedSearch = await sdk.callTool({
-        name: 'ltcook_repo_search',
-        arguments: { query: 'otherWorkspace', mode: 'exact', paths: ['other.ts'] },
-      });
-      expect(deniedSearch.isError).toBe(true);
-      expect(deniedSearch.content).toEqual([{ type: 'text', text: 'Unknown LTCook tool.' }]);
-    }
+    const deniedSearch = await unscoped.sdk.callTool({
+      name: 'ltcook_repo_search',
+      arguments: { query: 'otherWorkspace', mode: 'exact', paths: ['other.ts'] },
+    });
+    expect(deniedSearch.isError).toBe(true);
+    expect(deniedSearch.content).toEqual([{ type: 'text', text: 'Unknown LTCook tool.' }]);
     expect(
-      authorizedTools.find(({ name }) => name === 'ltcook_repo_locate')?.annotations?.readOnlyHint,
+      codexTools.find(({ name }) => name === 'ltcook_repo_locate')?.annotations?.readOnlyHint,
     ).toBe(true);
     expect((await unscoped.sdk.listTools()).tools.map(({ name }) => name)).not.toContain(
       'ltcook_repo_locate',
@@ -118,12 +110,11 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
         arguments: { symbol: 'otherWorkspace', ...args },
       });
     expect((await locate(unscoped.sdk)).isError).toBe(true);
-    expect((await locate(two.sdk, { paths: ['other.ts'] })).isError).toBe(true);
-    expect((await locate(piInSecond.sdk, { paths: ['../first/source.ts'] })).isError).toBe(true);
-    expect((await locate(piInSecond.sdk, { paths: ['escape.ts'] })).isError).toBe(true);
-    expect((await locate(piInSecond.sdk, { paths: ['private.pem'] })).isError).toBe(true);
+    expect((await locate(two.sdk, { paths: ['../first/source.ts'] })).isError).toBe(true);
+    expect((await locate(two.sdk, { paths: ['escape.ts'] })).isError).toBe(true);
+    expect((await locate(two.sdk, { paths: ['private.pem'] })).isError).toBe(true);
     const search = (args: Record<string, unknown>) =>
-      piInSecond.sdk.callTool({
+      two.sdk.callTool({
         name: 'ltcook_repo_search',
         arguments: { query: 'otherWorkspace', mode: 'exact', ...args },
       });
@@ -141,7 +132,7 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
           }
         : { status: 'unavailable', diagnostics: [{ code: 'missing-executable' }] }),
     });
-    const located = await locate(piInSecond.sdk);
+    const located = await locate(two.sdk, { paths: ['other.ts'] });
     expect(located.isError).not.toBe(true);
     expect(located.structuredContent).toMatchObject({
       followUp: 'not-needed',
@@ -210,6 +201,14 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
           arguments: { operation: 'outline', target: 'other.ts' },
         })
       ).isError,
+    ).not.toBe(true);
+    expect(
+      (
+        await unscoped.sdk.callTool({
+          name: 'ltcook_ried',
+          arguments: { operation: 'outline', target: 'other.ts' },
+        })
+      ).isError,
     ).toBe(true);
     expect(
       (
@@ -257,9 +256,10 @@ test('ordinary MCP RIED uses launch grants across reconnect and rejects unauthor
       (await resumed.sdk.callTool({ name: 'ltcook_ried', arguments: { operation: 'refresh' } }))
         .structuredContent,
     ).toMatchObject({ value: { workspaceRoot: second } });
-    expect((await locate(resumed.sdk, { paths: ['other.ts'] })).isError).toBe(true);
+    expect((await locate(resumed.sdk, { paths: ['other.ts'] })).isError).not.toBe(true);
     const authorizedToken = await grant('pi-two', second, 'pi');
-    const unscopedToken = await grant('pi-two', second, 'codex');
+    expect(await grant('pi-two', second, 'codex')).toBe(authorizedToken);
+    const unscopedToken = await grant('pi-two', second);
     expect(unscopedToken).not.toBe(authorizedToken);
     expect(
       (await fetch(`${base}/mcp`, { headers: { authorization: `Bearer ${authorizedToken}` } }))
@@ -330,7 +330,8 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
   const address = ollama.address();
   if (!address || typeof address === 'string') throw new Error('No fixture Ollama port.');
   const authority = await localAuthority();
-  const api = new RuntimeApi(undefined, 'fixture-unshared-secret', authority);
+  const secret = 'fixture-unshared-secret';
+  const api = new RuntimeApi(undefined, secret, authority);
   const mcp = new WorkspaceMcp(
     createTools(new RiedService(path.join(root, 'cache'), undefined, () => ({ PATH: '' })), {
       endpoint: `http://127.0.0.1:${address.port}`,
@@ -341,8 +342,17 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
   );
   const clients: Client[] = [];
   api.setWorkspaceMcp(mcp);
-  async function session(agentId: string, workspaceFileAccess: boolean) {
-    const token = await mcp.grant(agentId, workspace, workspaceFileAccess);
+  async function session(agentId: string, provider?: 'pi' | 'codex') {
+    const response = await fetch(`http://${authority}/v1/mcp/grant`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${secret}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ nativeAgentId: agentId, workspaceRoot: workspace, provider }),
+    });
+    expect(response.status).toBe(200);
+    const { token } = (await response.json()) as { token: string };
     const client = new Client({ name: agentId, version: '1.0.0' });
     const transport = new StreamableHTTPClientTransport(new URL(`http://${authority}/mcp`), {
       requestInit: { headers: { authorization: `Bearer ${token}` } },
@@ -353,16 +363,13 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
   }
   try {
     await api.listen();
-    const { client: pi } = await session('pi', true);
+    const { client: pi } = await session('pi', 'pi');
     const {
       client: codex,
       transport: codexTransport,
       token: codexToken,
-    } = await session('codex', false);
-    expect((await pi.listTools()).tools.map(({ name }) => name)).toEqual([
-      'ltcook_ried',
-      'ltcook_summarize',
-    ]);
+    } = await session('codex', 'codex');
+    const { client: unscoped } = await session('unscoped');
     const summarize = (client: Client, args: Record<string, unknown>, signal?: AbortSignal) =>
       client.callTool({ name: 'ltcook_summarize', arguments: args }, undefined, { signal });
     for (const args of [
@@ -375,9 +382,9 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
       { path: 'binary' },
       { path: workspace },
     ]) {
-      expect((await summarize(pi, args)).isError).toBe(true);
+      expect((await summarize(codex, args)).isError).toBe(true);
     }
-    expect((await summarize(codex, { path: 'notes.txt' })).isError).toBe(true);
+    expect((await summarize(unscoped, { path: 'notes.txt' })).isError).toBe(true);
     expect(requests).toHaveLength(0);
     expect(
       (await summarize(pi, { path: 'notes.txt', focus: 'Deployment decision' })).structuredContent,
@@ -398,11 +405,12 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
     expect(requests.map(({ think }) => think)).toEqual([true, false]);
     mode = 'recover';
     let before = requests.length;
-    expect((await summarize(codex, { text: material })).structuredContent).toMatchObject({
+    expect((await summarize(codex, { path: 'notes.txt' })).structuredContent).toMatchObject({
       incomplete: false,
       summary: 'R-17 passed 42 checks and did not deploy.',
     });
     expect(requests.slice(before).map(({ think }) => think)).toEqual([true, false]);
+    expect(requests[before]?.messages[1]?.content).toContain(material);
     const settings = {
       endpoint: `http://127.0.0.1:${address.port}`,
       model: LFM3_SUMMARIZER_MODEL,
