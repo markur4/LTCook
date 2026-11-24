@@ -405,7 +405,8 @@ test('preserves checked tool evidence and uses originals for an omitted archived
   try {
     memory.turn('leader', { turnId: 'older', outcome: 'completed' }, false);
     memory.turn('leader', { turnId: 'newer', outcome: 'completed' }, false);
-    await eventually(async () => !(await memory.search('leader', '', '')).incomplete);
+    // > The long archived source deliberately exceeds the search result budget.
+    await eventually(() => memory.status(undefined, 'leader').stored?.coveredThrough === 5);
     const check = await memory.handoff('leader', 'verified cache guard');
     expect(check).toContain('VERIFIED_CACHE_GUARD passed');
     expect(check).not.toContain('MADE_UP_CHECK');

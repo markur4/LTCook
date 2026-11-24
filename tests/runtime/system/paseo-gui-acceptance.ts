@@ -135,6 +135,17 @@ async function inspectStage(name: string): Promise<void> {
 async function clickButton(name: string): Promise<void> {
   await browser('find', 'role', 'button', 'click', '--name', name, '--exact');
 }
+async function openActivityPanel(): Promise<void> {
+  await browser('press', 'Control+k');
+  await browser(
+    'find',
+    'placeholder',
+    'Search commands, files, workspaces, and agents...',
+    'fill',
+    'Open Activity panel',
+  );
+  await clickButton('Open Activity panel');
+}
 async function tapNativeChoice(name: string): Promise<void> {
   const target = `native-touch-${randomUUID()}`;
   await browser(
@@ -589,15 +600,7 @@ try {
   });
 
   assert.equal((await crossAgent.refresh())?.agent.workspaceId, differentWorkspace.id);
-  await browser('press', 'Control+k');
-  await browser(
-    'find',
-    'placeholder',
-    'Search commands, files, workspaces, and agents...',
-    'fill',
-    'Open Activity panel',
-  );
-  await clickButton('Open Activity panel');
+  await openActivityPanel();
   await browser('wait', '--text', 'Recent conversation activity');
   assert(
     (await browser('snapshot')).includes('Close Explorer sidebar'),
@@ -630,6 +633,12 @@ try {
     `Boolean(document.querySelector('[aria-label="Hide 3 older tools"]'))`,
   );
   await clickButton('Hide 3 older tools');
+  await openActivityPanel();
+  await browser(
+    'wait',
+    '--fn',
+    `Boolean(document.querySelector('[aria-label="Close activity-fixture preview"]'))`,
+  );
   await browser('set', 'viewport', '1100', '950');
   await browser(
     'wait',

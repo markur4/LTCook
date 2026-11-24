@@ -141,8 +141,9 @@ export function memoryRelevance(text: string, query: string): number {
 }
 
 export function missingMemoryIdentifiers(query: string, context: string): string[] {
-  const identifiers = [...new Set(Array.from(memoryIdentifierTokens(query), ({ term }) => term))]
-    .filter((term) => /[_./]|[a-z][A-Z]|[A-Z][0-9]/.test(term));
+  const identifiers = [
+    ...new Set(Array.from(memoryIdentifierTokens(query), ({ term }) => term)),
+  ].filter((term) => /[_./]|[a-z][A-Z]|[A-Z][0-9]/.test(term));
   const matches = memoryIdentifierMatches(context, identifiers);
   return identifiers.filter((term) => !matches.has(term));
 }

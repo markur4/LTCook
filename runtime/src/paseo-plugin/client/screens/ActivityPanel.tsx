@@ -185,7 +185,7 @@ function FocusedActivity(props: ActivityPanelProps) {
   return (
     <ObservedActivity
       {...props}
-      key={JSON.stringify([host.id, props.workspaceId, selectedAgentId, props.revision])}
+      key={JSON.stringify([host.id, props.workspaceId, selectedAgentId])}
       selectedAgentId={selectedAgentId}
     />
   );

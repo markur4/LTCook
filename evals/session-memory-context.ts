@@ -147,10 +147,7 @@ function handoffFor(fixture: MemoryFixture, evidence: Evidence[], recoverSources
             }))
             .filter(({ score }) => score > 0),
         )
-        .sort(
-          (a, b) =>
-            b.score - a.score || b.evidence.sources[0]! - a.evidence.sources[0]!,
-        )
+        .sort((a, b) => b.score - a.score || b.evidence.sources[0]! - a.evidence.sources[0]!)
         .map(({ evidence }) => evidence);
       selected = pack([...recovered, ...ranked], identifiers).selected;
     }
