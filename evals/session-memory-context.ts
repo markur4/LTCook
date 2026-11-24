@@ -79,13 +79,20 @@ function logicalUnits(fixture: MemoryFixture) {
   let turn: MemorySourceMessage[] = [];
   const addTurn = () => {
     if (!turn.length) return;
-    const turnId = String(turn[0]!.seq);
+    const turnId = turn[0]!.turnId ?? String(turn[0]!.seq);
     if (turn.some(({ author }) => author === 'agent')) prompts.set(turnId, 'completed');
     messages.push(...turn.map((message) => ({ ...message, turnId })));
     turn = [];
   };
   for (const source of fixture.turns.slice(0, -1).flat()) {
-    if (source.author === 'user' || source.author === 'runtime' || source.author === 'unknown')
+    if (
+      source.turnId !== undefined
+        ? source.turnId !== turn[0]?.turnId
+        : turn[0]?.turnId !== undefined ||
+          source.author === 'user' ||
+          source.author === 'runtime' ||
+          source.author === 'unknown'
+    )
       addTurn();
     turn.push(source);
   }

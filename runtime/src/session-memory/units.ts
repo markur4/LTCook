@@ -80,22 +80,16 @@ export function identifyMemoryUnits(
     for (const item of items) {
       if (recordedActions.has(item.seq)) continue;
       if (item.author !== 'agent' && item.author !== 'tool') continue;
-      if (item.author === 'agent' && !item.intermediate && (item === finalResponse || !outcome))
+      if (
+        item.author === 'agent' &&
+        !item.intermediate &&
+        (!outcome || (item === finalResponse && (hasUamp || outcome !== 'completed')))
+      )
         continue;
       if (actions.length && scopeKey(actions[0]?.scope) !== scopeKey(item.scope)) finishActions();
       actions.push(item);
       tokens += estimateMemoryTokens(item.text);
       if (tokens >= actionThreshold) finishActions();
-    }
-    if (
-      outcome === 'completed' &&
-      !hasUamp &&
-      finalResponse &&
-      !recordedActions.has(finalResponse.seq)
-    ) {
-      if (actions.length && scopeKey(actions[0]?.scope) !== scopeKey(finalResponse.scope))
-        finishActions();
-      actions.push(finalResponse);
     }
     if (outcome || flush || (turnId && turnId !== latestTurn)) finishActions();
     if (hasUamp) {

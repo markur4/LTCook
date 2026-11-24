@@ -390,12 +390,18 @@ export function memoryCadenceFixture(): MemoryFixture {
   const turns = base.turns.flatMap((turn, index) => {
     const relevant = turn.map(({ seq: original, ...message }) => {
       sources.set(original, ++seq);
-      return { seq, ...message };
+      return { seq, ...message, turnId: `cache-${index}` };
     });
     const interleaved = reports.slice(index * 3, (index + 1) * 3);
     return [
       relevant,
-      ...interleaved.map((report) => report.map((message) => ({ seq: ++seq, ...message }))),
+      ...interleaved.map((report, reportIndex) =>
+        report.map((message) => ({
+          seq: ++seq,
+          ...message,
+          turnId: `documentation-${index}-${reportIndex}`,
+        })),
+      ),
     ];
   });
   return {

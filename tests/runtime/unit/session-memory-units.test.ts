@@ -64,6 +64,19 @@ test('flushes AAs at the threshold and the next known execution scope', () => {
   expect(identifyMemoryUnits(messages, new Map(), 8, true).at(-1)?.scope).toEqual({ taskId: 'b' });
 });
 
+test('keeps completed non-Discussion responses in chronological Agent Action order', () => {
+  const messages: MemorySourceMessage[] = [
+    { seq: 1, turnId: 'native', author: 'runtime', text: 'Check cache behavior.' },
+    { seq: 2, turnId: 'native', author: 'tool', text: 'Initial check passed.' },
+    { seq: 3, turnId: 'native', author: 'agent', text: 'Initial behavior verified.' },
+    { seq: 4, turnId: 'native', author: 'tool', text: 'Final check passed.' },
+  ];
+  const units = identifyMemoryUnits(messages, new Map([['native', 'completed']]), 3000);
+  expect(units).toHaveLength(1);
+  expect(units[0]?.type).toBe('AAB');
+  expect(units[0]?.messages.map(({ seq }) => seq)).toEqual([2, 3, 4]);
+});
+
 test('keeps free-form summaries and reads recognizable fields opportunistically', () => {
   expect(parseMemorySummary('UAMP', 'intent: Keep CACHE_GUARD.\nSome deliberate prose.')).toEqual({
     type: 'UAMP',
