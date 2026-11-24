@@ -171,6 +171,8 @@ whenever you need them.
   usage when available. Repeated calls share one entry per tool. Select a tool
   to see the individual calls. The conversation button opens a subagent's
   native chat.
+  For Codex, Activity recognizes direct reads of a registered skill's
+  `SKILL.md` when Paseo reports the successful read and its front matter.
 - **Team** shows the focused LTCook Session's Leader, persistent and temporary
   members, available temporary roles, active Passes, progress, and blockers.
   **Agent Focus** shows role settings, assignments, handoffs, and reports.
