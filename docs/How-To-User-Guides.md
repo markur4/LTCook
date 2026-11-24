@@ -82,11 +82,11 @@ Runtime launches omit an unset or empty `CONTAINER_CONNECTION`, preserving Podma
 default engine selection. Set it to a configured Podman connection name only when
 a remote engine is intended.
 
-To update an editable installation, run `ltcook stop`, then `ltcook app update`
-and `ltcook` to start the refreshed runtime. AppRC selects the registered
-checkout, which must be clean and track an upstream branch. It runs
-`just build-assets` before synchronizing Python and refreshing registration,
-even if Git is already current.
+To update and restart an editable installation, run `just restart` from the
+checkout. It runs `ltcook stop`, `ltcook app update`, and `ltcook serve` in order.
+AppRC selects the registered checkout, which must be clean and track an upstream
+branch. It runs `just build-assets` before synchronizing Python and refreshing
+registration, even if Git is already current.
 
 If your installed AppRC predates asset preparation, fast-forward the checkout,
 run `just sync`, then repeat the editable registration command above once to
