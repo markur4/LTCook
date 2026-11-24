@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { EVAL_MODEL, hash } from './setup.js';
-import { createLocalPiEvaluationSession } from './summarization-decision.js';
+import {
+  createLocalPiEvaluationSession,
+  type PiEvaluationSampling,
+} from './summarization-decision.js';
 import { inspectEvaluationModel, listEvaluationModels, modelTag } from './summarization-grader.js';
 
 type ExpectedFields = Readonly<Record<string, string | number | boolean>>;
@@ -15,8 +18,7 @@ const workerInstructions =
   'supplemental evidence. Return only one JSON object.';
 const responseSchema = z.record(z.string(), z.unknown());
 
-/** Grade one fresh local Pi worker against the same exact fields across context presentations. */
-export async function evaluateMemoryHandoff(input: {
+type HandoffInput = {
   endpoint: string;
   model: string;
   directory: string;
@@ -24,7 +26,38 @@ export async function evaluateMemoryHandoff(input: {
   task: HandoffTask;
   context: string;
   instructions?: string;
-}) {
+  sampling?: PiEvaluationSampling;
+  verifyCpu?: () => Promise<boolean>;
+  onFallback?: () => void;
+};
+
+/** Grade fresh local Pi sessions and retain both results when thinking is needed. */
+export async function evaluateMemoryHandoff(input: HandoffInput) {
+  async function run(thinking: boolean) {
+    const start = performance.now();
+    const attempt = await evaluateMemoryHandoffAttempt(input, thinking).catch((failure) => {
+      input.signal.throwIfAborted();
+      if (!input.sampling) throw failure;
+      return {
+        passed: false,
+        elapsedMs: Math.round(performance.now() - start),
+        error: failure instanceof Error ? failure.message : 'The Pi handoff failed.',
+        inputTokens: undefined,
+        outputTokens: undefined,
+      };
+    });
+    if (!input.verifyCpu) return attempt;
+    const cpuVerified = await input.verifyCpu();
+    return { ...attempt, cpuVerified, passed: attempt.passed && cpuVerified };
+  }
+  const initial = await run(false);
+  if (initial.passed || !input.sampling) return initial;
+  input.onFallback?.();
+  const retry = await run(true);
+  return { ...retry, reasoningFallback: { initial, recovered: retry.passed } };
+}
+
+async function evaluateMemoryHandoffAttempt(input: HandoffInput, thinking: boolean) {
   const { endpoint, model, directory, signal, task, context } = input;
   const fields = Object.keys(task.expected);
   signal.throwIfAborted();
@@ -32,6 +65,8 @@ export async function evaluateMemoryHandoff(input: {
     endpoint,
     model,
     directory,
+    sampling: input.sampling,
+    thinking,
     instructions:
       input.instructions ?? `${workerInstructions} Use these fields: ${fields.join(', ')}.`,
   });
@@ -77,6 +112,13 @@ export async function evaluateMemoryHandoff(input: {
       elapsedMs: Math.round(performance.now() - started),
       inputTokens: answer.usage.input + answer.usage.cacheRead + answer.usage.cacheWrite,
       outputTokens: answer.usage.output,
+      ...(input.sampling
+        ? {
+            thinkingLevel: answer.thinkingLevel,
+            thinkingPresent: answer.content.some(({ type }) => type === 'thinking'),
+            reasoningTokens: answer.usage.reasoning,
+          }
+        : {}),
       missing,
       incorrect,
       actual,

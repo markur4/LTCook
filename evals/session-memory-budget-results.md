@@ -11,7 +11,9 @@ messages directly from Paseo.
 The [focused follow-up](#focused-follow-up-with-a-2048-token-cap) found that
 both LFM3 variants passed the long fixture at temperature 0.4 with a
 2,048-token cap. QAD Q4 used about half the request time of Q8 and less RAM.
-The three short fixtures have only been qualified under the earlier settings.
+The [full QAD Q4 qualification](#full-qad-q4-qualification) subsequently
+passed all extraction and hybrid Pi checks. The invoice original-source
+control failed and prevented full qualification.
 
 ## Sampling settings and reasoning
 
@@ -155,6 +157,39 @@ manifests and cadence corpus SHA-256
 `09461ba3abb041b0480998da59ffa89a2518c2ff5001ac8c590b23985c88c348`.
 The 0.1 and 0.4 runs took 893.41 and 384.82 seconds respectively. The result
 reflects one sampled execution per candidate and temperature.
+
+### Full QAD Q4 qualification
+
+The full run used QAD Q4 on CPU for extraction and both native Pi handoff
+arms. Each request started with reasoning off at temperature 0.4 and kept
+the 2,048-token cap on retries. The runner retries a failed extraction
+batch or handoff once using the same model's Boolean thinking mode. The
+original-source control and hybrid Pi handoff both count toward the
+qualification verdict.
+
+```sh
+bun evals/session-memory-live.ts lfm3:1.7b-qad-q4_0 lfm3:1.7b-qad-q4_0 --include-cadence --recommended-sampling --output-cap=2048 --temperature=0.4 --reasoning-fallback
+```
+
+| Fixture | Extraction latency | Pi original-source latency | Pi hybrid latency | Combined latency | Fixture verdict |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Invoice replay | 6.78 s · Pass | 61.44 s · Fail | 4.51 s · Pass | 72.73 s | Fail |
+| Paseo rewind | 5.93 s · Pass | 2.91 s · Pass | 4.06 s · Pass | 12.89 s | Pass |
+| Cache recovery, short | 12.96 s · Pass | 4.15 s · Pass | 5.32 s · Pass | 22.42 s | Pass |
+| Cache recovery, 92 messages | 91.99 s · Pass | 3.99 s · Pass | 5.64 s · Pass | 101.61 s | Pass |
+| **Total** | **117.65 s · 4/4** | **72.48 s · 3/4** | **19.52 s · 4/4** | **209.65 s** | **3/4** |
+
+Latencies sum model request times, including retries. The runner took
+209.80 seconds. It verified CPU residency for each request and confirmed
+the model manifest stayed fixed. All eight extraction requests returned
+valid outputs with zero measured reasoning tokens.
+
+The only thinking retry was the invoice original-source control. The
+reasoning-off attempt took 5.11 seconds and gave incorrect values for
+`acceptanceTest` and `emptyBatchCursor`. The retry took 56.33 seconds and
+reached the 2,048-token cap without a complete answer. The hybrid invoice
+handoff supplied correct values for every field on its reasoning-off
+attempt. No check passed on a thinking retry.
 
 ### Low-reasoning fallback in native Pi
 

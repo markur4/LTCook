@@ -29,7 +29,7 @@ import {
   type MemoryFixture,
 } from './session-memory-fixtures.js';
 import { inspectEvaluationModel, listEvaluationModels, modelTag } from './summarization-grader.js';
-import { prepareLunaPiEvaluation } from './summarization-decision.js';
+import { prepareLunaPiEvaluation, type PiEvaluationSampling } from './summarization-decision.js';
 
 const models = [
   'LiquidAI/lfm2.5-1.2b-instruct:q8_0',
@@ -337,6 +337,10 @@ export async function evaluateMemoryFixture(input: {
   weightsDigest?: string;
   taskAware?: boolean;
   finalize?: boolean;
+  reasoningGeneration?: string;
+  handoffSampling?: PiEvaluationSampling;
+  verifyHandoffCpu?: () => Promise<boolean>;
+  onFallback?: (stage: string) => void;
 }) {
   const { fixture, settings, digest, threshold, downstreamModel, directory, signal } = input;
   const endpoint = ollamaEndpoint(settings.endpoint);
@@ -351,9 +355,8 @@ export async function evaluateMemoryFixture(input: {
       0,
     );
 
-  async function update() {
-    const pending = seen.slice(processed);
-    entries = mergeMemoryEntries(entries, preservePromptMessages(pending));
+  async function attemptUpdate(pending: MemoryMessage[], attemptSettings: OllamaSettings) {
+    let nextEntries = entries;
     let usage: OllamaUsage | undefined;
     let metrics: OllamaChatMetrics | undefined;
     let error: string | undefined;
@@ -363,7 +366,7 @@ export async function evaluateMemoryFixture(input: {
     const start = performance.now();
     try {
       if (attempted) {
-        const additions = await extractMemory(settings, pending, signal, {
+        const additions = await extractMemory(attemptSettings, pending, signal, {
           focus: input.taskAware ? fixture.focus : undefined,
           onUsage(value) {
             usage = value;
@@ -372,10 +375,9 @@ export async function evaluateMemoryFixture(input: {
             metrics = value;
           },
         });
-        entries = mergeMemoryEntries(entries, additions);
+        nextEntries = mergeMemoryEntries(nextEntries, additions);
         output = 'valid';
       }
-      processed = seen.length;
     } catch (failure) {
       signal.throwIfAborted();
       output = failure instanceof MemoryOutputError ? 'invalid' : 'unavailable';
@@ -383,10 +385,12 @@ export async function evaluateMemoryFixture(input: {
     }
     const elapsedMs = performance.now() - start;
     const after = attempted ? await residency(endpoint, digest, signal) : null;
-    return {
+    const record = {
       firstSeq: pending.at(0)?.seq,
       lastSeq: pending.at(-1)?.seq,
-      checkpointSeq: seen[processed - 1]?.seq ?? null,
+      checkpointSeq:
+        seen[(output === 'valid' || output === 'skipped' ? seen.length : processed) - 1]?.seq ??
+        null,
       estimatedInputTokens: estimatedTokens(pending),
       residencyBefore: !attempted ? undefined : before ? 'loaded' : 'unloaded',
       elapsedMs: Math.round(elapsedMs),
@@ -400,8 +404,43 @@ export async function evaluateMemoryFixture(input: {
       cpuVerified: after?.gpuBytes === 0,
       output,
       error,
-      grade: gradeMemory(entries, seen, fixture),
+      grade: gradeMemory(nextEntries, seen, fixture),
     };
+    return {
+      entries: nextEntries,
+      record,
+      batchPassed:
+        output === 'valid' &&
+        record.cpuVerified &&
+        gradeMemory(nextEntries, pending, fixture).passed,
+    };
+  }
+
+  async function update() {
+    const pending = seen.slice(processed);
+    entries = mergeMemoryEntries(entries, preservePromptMessages(pending));
+    const initial = await attemptUpdate(pending, settings);
+    let selected = initial;
+    let reasoningFallback;
+    if (input.reasoningGeneration && initial.record.output !== 'skipped' && !initial.batchPassed) {
+      input.onFallback?.(
+        `extraction messages ${initial.record.firstSeq}–${initial.record.lastSeq}`,
+      );
+      const retry = await attemptUpdate(pending, {
+        ...settings,
+        generation: input.reasoningGeneration,
+      });
+      if (retry.batchPassed) selected = retry;
+      reasoningFallback = {
+        initial: initial.record,
+        retry: retry.record,
+        recovered: retry.batchPassed,
+      };
+    }
+    entries = selected.entries;
+    if (selected.record.output === 'valid' || selected.record.output === 'skipped')
+      processed = seen.length;
+    return { ...selected.record, reasoningFallback };
   }
 
   for (const turn of fixture.turns.slice(0, -1)) {
@@ -444,6 +483,9 @@ export async function evaluateMemoryFixture(input: {
         directory,
         signal,
         task: fixture.task,
+        sampling: input.handoffSampling,
+        verifyCpu: input.verifyHandoffCpu,
+        onFallback: () => input.onFallback?.('Pi hybrid handoff'),
       });
   return {
     fixture: fixture.id,
@@ -478,6 +520,7 @@ export async function runSessionMemoryEvaluation(
     recommendedSampling?: boolean;
     outputCap?: number;
     temperature?: number;
+    reasoningFallback?: boolean;
   },
 ) {
   const selectedModels = models.filter((model) => {
@@ -521,6 +564,13 @@ export async function runSessionMemoryEvaluation(
     const downstreamIdentity = selection?.extractOnly ? undefined : await inspect(downstreamModel);
     if (!downstreamIdentity && !selection?.extractOnly)
       throw new Error('The downstream Pi evaluation model is unavailable.');
+    const handoffSampling = selection?.reasoningFallback ? { temperature, outputCap } : undefined;
+    const verifyHandoffCpu =
+      downstreamIdentity && handoffSampling
+        ? async () =>
+            (await residency(ollamaEndpoint(settings.endpoint), downstreamIdentity.digest, signal))
+              ?.gpuBytes === 0
+        : undefined;
 
     const baseline = [];
     for (const fixture of downstreamIdentity ? fixtures : []) {
@@ -535,7 +585,14 @@ export async function runSessionMemoryEvaluation(
         directory: path.join(directory, 'original', fixture.id),
         signal,
         task: fixture.task,
+        sampling: handoffSampling,
+        verifyCpu: verifyHandoffCpu,
+        onFallback: () =>
+          onProgress?.(`Retrying ${fixture.id} original-source Pi control with thinking enabled`),
       });
+      onProgress?.(
+        `${fixture.id} original-source Pi control ${result.passed ? 'passed' : 'failed'}`,
+      );
       baseline.push({ fixture: fixture.id, messages: sources.length, ...result });
     }
     const candidates = [];
@@ -576,6 +633,13 @@ export async function runSessionMemoryEvaluation(
             signal,
             extractOnly: selection?.extractOnly,
             taskAware: selection?.taskAware,
+            reasoningGeneration: selection?.reasoningFallback
+              ? JSON.stringify({ ...generation, think: true })
+              : undefined,
+            handoffSampling,
+            verifyHandoffCpu,
+            onFallback: (stage) =>
+              onProgress?.(`Retrying ${fixture.id} ${stage} with thinking enabled`),
           });
           const original = baseline.find(({ fixture: id }) => id === fixture.id);
           const originalInput = original?.inputTokens;
@@ -592,6 +656,9 @@ export async function runSessionMemoryEvaluation(
             contextReduction,
             passed: result.passed && (selection?.extractOnly || original?.passed === true),
           });
+          onProgress?.(
+            `${fixture.id} extraction and hybrid handoff ${result.passed ? 'passed' : 'failed'}`,
+          );
         } catch (error) {
           signal.throwIfAborted();
           scenarios.push({
@@ -631,6 +698,7 @@ export async function runSessionMemoryEvaluation(
           }
         : { generation: baseGeneration }),
       taskAware: selection?.taskAware ?? false,
+      ...(selection?.reasoningFallback ? { reasoningFallback: true, handoffSampling } : {}),
       qualification,
       identityUnchanged,
       downstreamIdentity,

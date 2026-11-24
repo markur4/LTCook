@@ -361,6 +361,11 @@ Pass `--recommended-sampling` to use Liquid AI's published sampling settings
 for each candidate. The report records the request configuration per model.
 Use `--output-cap=2048` or `--temperature=0.4` to override the response cap or
 sampling temperature for all selected candidates in an evaluation.
+Add `--reasoning-fallback` to try each extraction batch and native Pi
+handoff with reasoning off first. The runner retries failed batches and
+handoff checks once with the same model's thinking enabled. The output cap
+and temperature apply to both Pi handoff arms in this mode. The report keeps
+both request times and records whether the retry recovered the failed check.
 
 Save a JSON report from `--cadence` or `--include-cadence` and pass its path
 with `--luna-low-from=report.json` to retry failed cadence batches with

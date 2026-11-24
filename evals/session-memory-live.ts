@@ -58,6 +58,7 @@ try {
         recommendedSampling: args.includes('--recommended-sampling'),
         outputCap: numericOption('output-cap'),
         temperature: numericOption('temperature'),
+        reasoningFallback: args.includes('--reasoning-fallback'),
       },
     );
     console.log(JSON.stringify(report, null, 2));

@@ -25,13 +25,18 @@ type PiEvaluationSessionOptions = {
   instructions: string;
 } & Pick<CreateAgentSessionOptions, 'tools' | 'customTools'>;
 
+export type PiEvaluationSampling = { temperature: number; outputCap: number };
+
 export async function createLocalPiEvaluationSession(
   input: PiEvaluationSessionOptions & {
     endpoint: string;
     model: string;
+    sampling?: PiEvaluationSampling;
+    thinking?: boolean;
   },
 ) {
-  const { endpoint, model, directory } = input;
+  const { endpoint, model, directory, sampling } = input;
+  const maxTokens = sampling?.outputCap ?? DECISION_MAX_TOKENS;
   await mkdir(directory, { recursive: true });
   const modelsPath = path.join(directory, 'models.json');
   await writeFile(
@@ -47,9 +52,11 @@ export async function createLocalPiEvaluationSession(
               id: model,
               name: 'Local evaluation model',
               contextWindow: EVAL_CONTEXT_WINDOW,
-              maxTokens: DECISION_MAX_TOKENS,
-              compat: EVAL_MODEL_COMPAT,
-              samplingParams: { max_tokens: DECISION_MAX_TOKENS, temperature: 0 },
+              maxTokens,
+              compat: sampling
+                ? { ...EVAL_MODEL_COMPAT, supportsReasoningEffort: true }
+                : EVAL_MODEL_COMPAT,
+              samplingParams: { max_tokens: maxTokens, temperature: sampling?.temperature ?? 0 },
               reasoning: true,
               thinkingLevelMap: { off: 'none', low: 'low' },
             },
@@ -66,7 +73,12 @@ export async function createLocalPiEvaluationSession(
   });
   const selectedModel = modelRuntime.getModel('ollama', model);
   if (!selectedModel) throw new Error(`Pi could not resolve the local evaluation model ${model}.`);
-  return createPiEvaluationSession(input, modelRuntime, selectedModel, 'off');
+  return createPiEvaluationSession(
+    input,
+    modelRuntime,
+    selectedModel,
+    input.thinking ? 'low' : 'off',
+  );
 }
 
 export async function prepareLunaPiEvaluation(
