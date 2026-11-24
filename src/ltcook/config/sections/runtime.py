@@ -46,12 +46,6 @@ class RuntimeSettings(rc.Config):
         "LTCOOK_SESSION_MEMORY_THRESHOLD", default=3000
     )
     session_memory_model: str = rc.field("LTCOOK_SESSION_MEMORY_MODEL", default="")
-    session_memory_history_tokens: int = rc.field(
-        "LTCOOK_SESSION_MEMORY_HISTORY_TOKENS", default=4096
-    )
-    session_memory_retained_tokens: int = rc.field(
-        "LTCOOK_SESSION_MEMORY_RETAINED_TOKENS", default=2048
-    )
     session_memory_input_tokens: int = rc.field(
         "LTCOOK_SESSION_MEMORY_INPUT_TOKENS", default=8000
     )

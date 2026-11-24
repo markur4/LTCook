@@ -35,6 +35,7 @@ const summarySchema = z.object({
     z.object({
       text: z.string(),
       sources: z.array(z.number().int().nonnegative()),
+      noUsefulInformation: z.literal(true).optional(),
       fields: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
     }),
   ),
@@ -47,10 +48,28 @@ const summarySchema = z.object({
 export type StoredMemorySummary = z.infer<typeof summarySchema>;
 export type MemoryState = { epoch: string; seq: number };
 
+const taskContextSchema = z.object({
+  title: z.string(),
+  description: z.string(),
+  acceptance: z.array(z.string()).readonly(),
+  assignment: z.string().optional(),
+});
 const turnSchema = z.object({
   turnId: z.string(),
   outcome: z.enum(['running', 'completed', 'failed', 'canceled']),
   scope: scopeSchema.optional(),
+  task: taskContextSchema.optional(),
+  changes: z
+    .array(
+      z.object({
+        at: z.string(),
+        scope: scopeSchema.optional(),
+        task: taskContextSchema.optional(),
+      }),
+    )
+    .optional(),
+  epoch: z.string().optional(),
+  lastSeq: z.number().int().optional(),
 });
 export type MemoryTurn = z.infer<typeof turnSchema>;
 
@@ -154,6 +173,18 @@ export class MemoryStore {
         this.database
           .prepare('DELETE FROM memory_prompt WHERE agent = ? AND epoch = ? AND seq >= ?')
           .run(agentId, epoch, from);
+      }
+      for (const { turn, value } of this.database
+        .prepare('SELECT turn, value FROM memory_turn WHERE agent = ?')
+        .all(agentId) as { turn: string; value: string }[]) {
+        const receipt = turnSchema.parse(JSON.parse(value));
+        if (
+          receipt.epoch === epoch &&
+          (from === undefined || (receipt.lastSeq ?? Infinity) >= from)
+        )
+          this.database
+            .prepare('DELETE FROM memory_turn WHERE agent = ? AND turn = ?')
+            .run(agentId, turn);
       }
       this.database
         .prepare('DELETE FROM memory_cursor WHERE agent = ? AND epoch = ?')

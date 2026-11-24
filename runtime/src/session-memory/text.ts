@@ -140,10 +140,14 @@ export function memoryRelevance(text: string, query: string): number {
   return queryTerms(query).filter((term) => content.includes(term)).length;
 }
 
+export function memoryIdentifiers(query: string): string[] {
+  return [...new Set(Array.from(memoryIdentifierTokens(query), ({ term }) => term))].filter(
+    (term) => /[_./]|[a-z][A-Z]|[A-Z][0-9]/.test(term),
+  );
+}
+
 export function missingMemoryIdentifiers(query: string, context: string): string[] {
-  const identifiers = [
-    ...new Set(Array.from(memoryIdentifierTokens(query), ({ term }) => term)),
-  ].filter((term) => /[_./]|[a-z][A-Z]|[A-Z][0-9]/.test(term));
+  const identifiers = memoryIdentifiers(query);
   const matches = memoryIdentifierMatches(context, identifiers);
   return identifiers.filter((term) => !matches.has(term));
 }

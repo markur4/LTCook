@@ -198,6 +198,11 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🛠️ Changed
 
+- Session Memory uses Immediate Context with current Task instructions and one
+  relevant completed UAMP. The production rolling-window budget settings were
+  removed. Chronological summaries remain available for retrieval.
+
+
 - Repository Locate groups verified definitions, calls, tests, and references,
   and adds short source excerpts to exact matches where context helps.
 

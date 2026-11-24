@@ -106,15 +106,21 @@ function readMessages(
     .flatMap(({ seqEnd, turnId, timestamp, item }): MemorySourceMessage[] => {
       const origin = { seq: seqEnd, turnId, timestamp };
       switch (item.type) {
-        case 'user_message':
+        case 'user_message': {
+          const author = promptAuthor(item.clientMessageId, agentId, secret);
+          const runtimeAssignment =
+            author === 'runtime' &&
+            /^Assignment ID: .+\. Task ID: .+\. Attempt: \d+\.\n/.test(item.text);
           return [
             {
               ...origin,
               messageId: item.messageId ?? item.clientMessageId,
-              author: promptAuthor(item.clientMessageId, agentId, secret),
+              author,
+              ...(runtimeAssignment ? { runtimeAssignment: true as const } : {}),
               text: item.text,
             },
           ];
+        }
         case 'assistant_message':
           return [{ ...origin, messageId: item.messageId, author: 'agent', text: item.text }];
         case 'tool_call': {
@@ -144,7 +150,29 @@ function readMessages(
             ];
           const result = toolOutcome(item);
           return result
-            ? [{ ...origin, messageId: item.callId, author: 'tool', text: result }]
+            ? [
+                {
+                  ...origin,
+                  messageId: item.callId,
+                  author: 'tool',
+                  text: result,
+                  tool: {
+                    kind: item.detail.type,
+                    name: item.name,
+                    status: item.status,
+                    exitCode:
+                      item.detail.type === 'shell'
+                        ? (item.detail.exitCode ?? undefined)
+                        : undefined,
+                    filePath:
+                      item.detail.type === 'edit' ||
+                      item.detail.type === 'write' ||
+                      item.detail.type === 'read'
+                        ? item.detail.filePath
+                        : undefined,
+                  },
+                },
+              ]
             : [];
         }
         default:

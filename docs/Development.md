@@ -369,13 +369,18 @@ generated presentations of the same six excerpts with paired fresh Pi
 sessions and identical tasks. The first optional argument selects the
 downstream model.
 
-Run `bun evals/session-memory-live.ts --context-aware` for the matched
-Session Memory comparison. It measures historical extraction, token-based
-abstractive summarization, UAMP and AAB summaries with and without historical
-context, and deterministic original search. The inference arms use the
-same CPU-only Session Memory model and sampling settings. Use `--fixture=ID`
-or `--strategy=logical,rolling` for a focused repeat. Add `--cache` to measure
-historical prefix reuse, grouped eviction, agent switches and queue priority.
+Run `bun evals/session-memory-live.ts --context-aware` on the GPU host to
+compare no additional context, authoritative Task context, Immediate Context,
+and the former rolling window on the short and cadence cache-recovery fixtures.
+The runner keeps source portions, the model, and sampling settings matched.
+It defaults to seeds 17, 43, and 89. Use `--seeds=17,43`, `--fixture=ID`, or
+`--strategy=immediate,rolling` to focus a replay. Use `--held-out` for the
+held-out index fixture and `--full` for the original comparison corpus.
+The runner uses Ollama's configured hardware, with `--cpu-only` available for
+explicit CPU diagnostics. The report records source coverage, summary quality
+by portion, retrieval within budget, and production handoff size and timing.
+Add `--audit-output` to include generated fixture summaries for manual
+hallucination and attribution review. Keep those reports local until reviewed.
 
 Run `bun evals/session-memory-live.ts` to compare hybrid extraction on
 the fixed workflow corpus. The runner uses native Pi with relevant original
@@ -405,10 +410,14 @@ sign-in and sends only the numbered excerpts of the synthetic evaluation
 fixture to the provider. It grades each batch on its own evidence.
 
 Run `bun evals/session-memory-edit-live.ts --context-aware` to exercise the
-same comparison on pinned repository edits in Pi. It also runs conventional
-delegation. On this CPU-only evaluation route, the worker uses GPT-6 Luna at
-high reasoning through the current Codex authorization. A failed
-original-search control makes its matched downstream comparison inconclusive.
+same comparison on pinned repository edits in Pi. Use
+`--fixture=trace-pairing` for the summary omission and
+`--fixture=workspace-preparation` to re-establish the previously failed
+source control. Only the conventional worker receives the manual handoff.
+The source-only Pi control and conventional control run once per fixture.
+The default Pi worker is GPT-6 Luna at high reasoning through the existing
+Codex authorization. A failed original-search control makes its matched
+downstream comparison inconclusive.
 
 Run `bun evals/session-memory-edit-live.ts` with optional extractor and worker
 model tags to compare conventional delegation, deterministic conversation search,

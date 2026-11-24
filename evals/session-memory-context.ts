@@ -1,8 +1,8 @@
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { MemoryFixture } from '../runtime/src/evals/session-memory-fixtures.js';
-import {
-  extractMemory,
-  preservePromptMessages,
-} from '../runtime/src/evals/session-memory-extractive.js';
 import { peakRunnerRss, residency } from '../runtime/src/evals/session-memory.js';
 import {
   ollamaEndpoint,
@@ -10,21 +10,24 @@ import {
   type OllamaSettings,
   type OllamaUsage,
 } from '../runtime/src/integrations/ollama.js';
-import { SessionMemory } from '../runtime/src/session-memory/service.js';
 import {
-  memoryHistory,
-  type MemorySummaryResult,
+  memoryDispatchDeadlineMs,
+  SessionMemory,
+  type MemorySource,
+  type MemorySearchEntry,
+} from '../runtime/src/session-memory/service.js';
+import { MemoryStore, type StoredMemorySummary } from '../runtime/src/session-memory/store.js';
+import {
+  defaultMemoryBudgets,
+  type MemoryHistoryEntry,
   prepareMemorySummaries,
   sessionMemoryGeneration,
   sessionMemoryModel,
   summarizeMemory,
 } from '../runtime/src/session-memory/summarization.js';
 import {
-  budgetMemoryText,
   estimateMemoryTokens,
   memoryIdentifierMatches,
-  memoryRelevance,
-  missingMemoryIdentifiers,
 } from '../runtime/src/session-memory/text.js';
 import {
   identifyMemoryUnits,
@@ -34,21 +37,39 @@ import {
 } from '../runtime/src/session-memory/units.js';
 
 export const contextStrategies = [
-  'extractive',
-  'token-based',
-  'logical',
+  'no-context',
+  'task-context',
+  'immediate',
   'rolling',
   'original-search',
 ] as const;
+export const defaultContextSeeds = [17, 43, 89] as const;
+
+export function contextSeeds(raw?: string) {
+  if (raw === undefined) return [...defaultContextSeeds];
+  const seeds = raw.split(',').map((item) => item.trim());
+  if (
+    seeds.some((seed) => !/^\d+$/.test(seed) || !Number.isSafeInteger(Number(seed))) ||
+    new Set(seeds.map(Number)).size !== seeds.length
+  )
+    throw new Error('Supply distinct nonnegative integer seeds.');
+  return seeds.map(Number);
+}
 export type ContextStrategy = (typeof contextStrategies)[number];
 export const contextModel = sessionMemoryModel;
 
 type Request = {
   kind?: MemoryUnit['type'];
   first: number;
+  sources?: number[];
+  sourceHash?: string;
+  prefixHash?: string;
+  historyIds?: string[];
+  authoritativeEstimatedTokens?: number;
   last: number;
   elapsedMs: number;
   historyEstimatedTokens?: number;
+  originalEstimatedTokens?: number;
   usage?: OllamaUsage;
   metrics?: OllamaChatMetrics;
   complete: boolean;
@@ -57,24 +78,6 @@ type Request = {
   error?: string;
 };
 type Evidence = { sources: readonly number[]; text: string };
-
-function oldBatches(fixture: MemoryFixture): MemorySourceMessage[][] {
-  const pending: MemorySourceMessage[] = [];
-  const batches: MemorySourceMessage[][] = [];
-  for (const turn of fixture.turns.slice(0, -1)) {
-    pending.push(...turn.filter(({ author }) => author !== 'runtime'));
-    const end = turn.at(-1)?.seq;
-    if (
-      end !== undefined &&
-      (fixture.flushAfter.includes(end) ||
-        pending.reduce((tokens, { text }) => tokens + estimateMemoryTokens(text), 0) >= 3000)
-    ) {
-      batches.push(pending.splice(0));
-    }
-  }
-  if (pending.length) batches.push(pending);
-  return batches;
-}
 
 function logicalUnits(fixture: MemoryFixture) {
   const prompts = new Map<string, 'completed'>();
@@ -103,81 +106,158 @@ function logicalUnits(fixture: MemoryFixture) {
   return identifyMemoryUnits(messages, prompts, 3000, true);
 }
 
-function handoffFor(fixture: MemoryFixture, evidence: Evidence[], recoverSources: boolean) {
-  const context = fixture.turns.flat();
-  const last = fixture.turns.at(-1)!;
-  const queries = new Map(last.map((message) => [message.seq, message]));
-  const originals = context.filter(({ author }) => author === 'user');
-  const user = budgetMemoryText(
-    originals.sort(
-      (a, b) => Number(queries.has(b.seq)) - Number(queries.has(a.seq)) || b.seq - a.seq,
-    ),
-    650,
-    fixture.focus,
-    (item) => estimateMemoryTokens(JSON.stringify(item)),
-  );
-  const ranked = [...evidence].sort(
-    (a, b) =>
-      memoryRelevance(b.text, fixture.focus) - memoryRelevance(a.text, fixture.focus) ||
-      b.sources.at(-1)! - a.sources.at(-1)!,
-  );
-  const pack = (entries: Evidence[], identifiers: readonly string[] = []) =>
-    budgetMemoryText(
-      entries,
-      900,
-      fixture.focus,
-      (item) => estimateMemoryTokens(JSON.stringify(item) + '\n'),
-      identifiers,
-    );
-  let selected = pack(ranked).selected;
-  let recovered: Evidence[] = [];
-  if (recoverSources) {
-    const identifiers = missingMemoryIdentifiers(
-      fixture.focus,
-      [...user.selected, ...selected].map(({ text }) => text).join('\n'),
-    );
-    if (identifiers.length) {
-      recovered = context
-        .filter(({ author }) => author !== 'runtime')
-        .flatMap(({ seq, text, attachments }) =>
-          [text, ...(attachments ?? []).map((item) => item.text)]
-            .map((body) => ({
-              evidence: { sources: [seq], text: body },
-              score: memoryIdentifierMatches(body, identifiers).size,
-            }))
-            .filter(({ score }) => score > 0),
-        )
-        .sort((a, b) => b.score - a.score || b.evidence.sources[0]! - a.evidence.sources[0]!)
-        .map(({ evidence }) => evidence);
-      selected = pack([...recovered, ...ranked], identifiers).selected;
-    }
-  }
-  const chronological = selected.sort((a, b) => a.sources.at(-1)! - b.sources.at(-1)!);
-  const recoveredReferences = new Set(recovered.map(({ sources }) => sources));
-  const recent = last.filter(({ author }) => author !== 'runtime' && author !== 'user');
-  const supplied = [
-    ...user.selected.map(({ seq, text }) => ({ sources: [seq], text })),
-    ...chronological,
-    ...recent.map(({ seq, text }) => ({ sources: [seq], text })),
-  ];
+const evaluationAgent = 'leader';
+const evaluationEpoch = 'fixed-history';
+
+export function transcriptSource(
+  history: readonly MemorySourceMessage[] | ((id: string) => readonly MemorySourceMessage[]),
+): MemorySource {
   return {
-    supplied,
-    recoveredSources: [
-      ...new Set(
-        chronological
-          .filter(({ sources }) => recoveredReferences.has(sources))
-          .flatMap(({ sources }) => sources),
-      ),
-    ],
-    text: [
-      'Follow the current assignment and latest original user instructions. Resolve uncertain decisions against original user messages. Prefer original tool results for observed outcomes.',
-      'Original user messages',
-      ...user.selected.sort((a, b) => a.seq - b.seq).map((item) => JSON.stringify(item)),
-      'Historical evidence with original sequence references',
-      ...chronological.map((item) => JSON.stringify(item)),
-      'Recent original messages',
-      ...recent.map((item) => JSON.stringify(item)),
-    ].join('\n'),
+    async read(id, cursor, direction = 'after') {
+      const messages = typeof history === 'function' ? history(id) : history;
+      const latest = messages.at(-1)?.seq ?? -1;
+      const page =
+        direction === 'tail'
+          ? messages.slice(-16)
+          : direction === 'before'
+            ? messages.filter(({ seq }) => seq < cursor!.seq).slice(-16)
+            : messages.filter(({ seq }) => seq > (cursor?.seq ?? -1)).slice(0, 16);
+      const epoch = typeof history === 'function' ? id : evaluationEpoch;
+      return {
+        epoch,
+        earliest: messages[0]?.seq,
+        start: page[0]?.seq,
+        latest,
+        through: page.at(-1)?.seq ?? cursor?.seq ?? -1,
+        reset: cursor !== undefined && cursor.epoch !== epoch,
+        messages: page.map((item) => ({ ...item })),
+      };
+    },
+  };
+}
+
+async function withProductionMemory(
+  fixture: MemoryFixture,
+  records: StoredMemorySummary[],
+  signal: AbortSignal,
+) {
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-handoff-'));
+  const file = path.join(directory, 'memory.sqlite');
+  const messages = fixture.turns.flat();
+  const processed = fixture.turns.slice(0, -1).flat();
+  const elapsed = performance.now();
+  try {
+    const store = new MemoryStore(file);
+    try {
+      store.savePrompts(evaluationAgent, evaluationEpoch, processed);
+      store.saveState(evaluationAgent, {
+        epoch: evaluationEpoch,
+        seq: Math.min(
+          processed.at(-1)?.seq ?? -1,
+          ...records.filter(({ complete }) => !complete).map(({ sources }) => sources[0]!.seq - 1),
+        ),
+      });
+      for (const record of records) store.saveSummary(record);
+    } finally {
+      store.close();
+    }
+    const memory = new SessionMemory({
+      databasePath: file,
+      source: transcriptSource(messages),
+      summarize: async (type) => ({ type, text: '', complete: false, elapsedMs: 0 }),
+    });
+    try {
+      const assemble = async (recoverOriginals: boolean) => {
+        const start = performance.now();
+        const empty = {
+          text: '',
+          entries: [] as MemorySearchEntry[],
+          recoveredSources: [] as number[],
+        };
+        if (!records.length) return { ...empty, elapsedMs: undefined, timedOut: false };
+        const deadline = AbortSignal.timeout(memoryDispatchDeadlineMs);
+        const handoff = await memory
+          .handoffDetails(
+            evaluationAgent,
+            fixture.focus,
+            AbortSignal.any([signal, deadline]),
+            recoverOriginals,
+          )
+          .catch((error: unknown) => {
+            signal.throwIfAborted();
+            if (!deadline.aborted) throw error;
+            return empty;
+          });
+        return { ...handoff, elapsedMs: performance.now() - start, timedOut: deadline.aborted };
+      };
+      const handoff = await assemble(true);
+      const handoffWithoutRecovery = await assemble(false);
+      const searchStarted = performance.now();
+      const search = await memory.search(
+        evaluationAgent,
+        '',
+        fixture.focus,
+        evaluationAgent,
+        signal,
+        true,
+      );
+      return {
+        handoff,
+        handoffWithoutRecovery,
+        originalSearch: search.matches.flatMap(({ entries }) => entries),
+        originalSearchIncomplete: search.incomplete,
+        originalSearchMs: performance.now() - searchStarted,
+        assemblyMs: performance.now() - elapsed,
+      };
+    } finally {
+      await memory.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+export function gradesMemoryFact(
+  fact: MemoryFixture['facts'][number],
+  entry: Pick<MemorySearchEntry, 'seq' | 'sources' | 'text'>,
+) {
+  return (
+    (entry.sources ?? [entry.seq]).includes(fact.source) &&
+    fact.expected.test(entry.text) &&
+    (!fact.identifiers ||
+      memoryIdentifierMatches(entry.text, fact.identifiers).size === fact.identifiers.length)
+  );
+}
+
+/** Retain the former rolling window solely as a matched evaluation control. */
+function rollingControl(summaries: readonly MemoryHistoryEntry[]) {
+  const active: { line: string; cost: number }[] = [];
+  let used = 0;
+  const units = new Map<string, { type: MemoryUnit['type']; text: string[] }>();
+  for (const [index, summary] of summaries.entries()) {
+    if (summary.noUsefulInformation) continue;
+    const id = summary.unitId ?? String(index);
+    const unit = units.get(id) ?? { type: summary.type, text: [] };
+    unit.text.push(summary.text);
+    units.set(id, unit);
+  }
+  for (const unit of units.values()) {
+    const line = JSON.stringify({ type: unit.type, text: unit.text.join('\n') }) + '\n';
+    const cost = estimateMemoryTokens(line);
+    if (!line || cost > 4096) continue;
+    active.push({ line, cost });
+    used += cost;
+    if (used < 4096) continue;
+    while (used > 2048) used -= active.shift()!.cost;
+  }
+  return (available: number) => {
+    let first = 0;
+    let size = used;
+    while (size > available && first < active.length) size -= active[first++]!.cost;
+    return active
+      .slice(first)
+      .map(({ line }) => line)
+      .join('');
   };
 }
 
@@ -190,6 +270,8 @@ export async function compareContextMemory(
     signal: AbortSignal;
     progress?: (message: string) => void;
     strategies?: readonly ContextStrategy[];
+    auditOutput?: boolean;
+    seed?: number;
   },
 ) {
   const { signal, digest, weightsDigest, progress } = input;
@@ -197,15 +279,18 @@ export async function compareContextMemory(
     ...input.settings,
     model: contextModel,
     keepAlive: 900,
-    cpuOnly: true,
-    generation: JSON.stringify(sessionMemoryGeneration),
+    cpuOnly: input.settings.cpuOnly ?? false,
+    generation: JSON.stringify({
+      ...sessionMemoryGeneration,
+      options: { ...sessionMemoryGeneration.options, seed: input.seed },
+    }),
   };
   const endpoint = ollamaEndpoint(settings.endpoint);
   const units = logicalUnits(fixture);
-  const batches = oldBatches(fixture);
   const originals = fixture.turns.flat();
   const sourceBySequence = new Map(originals.map((message) => [message.seq, message]));
-  const lastSequences = new Set(fixture.turns.at(-1)!.map(({ seq }) => seq));
+  const primaryTask = originals.find(({ author, scope }) => author === 'user' && !!scope?.taskId)
+    ?.scope?.taskId;
   const arms = [];
   for (const strategy of input.strategies ?? contextStrategies) {
     signal.throwIfAborted();
@@ -213,60 +298,57 @@ export async function compareContextMemory(
     const started = performance.now();
     const requests: Request[] = [];
     const evidence: Evidence[] = [];
-    const observedChecks: Evidence[] = [];
-    const summaries: { type: MemoryUnit['type']; text: string }[] = [];
-    if (strategy === 'extractive') {
-      for (const batch of batches) {
-        const start = performance.now();
-        let usage: OllamaUsage | undefined;
-        let metrics: OllamaChatMetrics | undefined;
-        if (!batch.some(({ author }) => author === 'agent' || author === 'tool')) continue;
-        let complete = false;
-        let error: string | undefined;
-        try {
-          const extracted = await extractMemory(settings, batch, signal, {
-            onUsage: (value) => {
-              usage = value;
-            },
-            onMetrics: (value) => {
-              metrics = value;
-            },
+    const summaries: MemoryHistoryEntry[] = [];
+    const records: StoredMemorySummary[] = [];
+    const save = (
+      unit: MemoryUnit,
+      parts: StoredMemorySummary['parts'],
+      complete: boolean,
+      expectedParts = parts.length,
+    ) => {
+      const first = unit.messages[0]!.seq;
+      const position = unit.messages.at(-1)!.seq;
+      const id = [unit.type, first, position].join(':');
+      records.push({
+        id,
+        agentId: evaluationAgent,
+        sessionId: evaluationAgent,
+        epoch: evaluationEpoch,
+        position,
+        type: unit.type,
+        scope: unit.scope,
+        sources: [...unit.messages],
+        createdAt: new Date().toISOString(),
+        historyHash: '',
+        parts,
+        complete,
+        expectedParts,
+        observedChecks: unit.type === 'AAB' ? observedMemoryChecks(unit.messages) : undefined,
+      });
+      if (complete)
+        for (const [index, part] of parts.entries())
+          summaries.push({
+            ...part,
+            type: unit.type,
+            scope: unit.scope,
+            unitId: id,
+            id: `${id}/${index + 1}`,
           });
-          evidence.push(...extracted.map(({ seq, text }) => ({ sources: [seq], text })));
-          complete = true;
-        } catch (failure) {
-          signal.throwIfAborted();
-          error = failure instanceof Error ? failure.message : 'Extraction failed.';
-        }
-        requests.push({
-          first: batch[0]!.seq,
-          last: batch.at(-1)!.seq,
-          elapsedMs: Math.round(performance.now() - start),
-          complete,
-          error,
-          usage,
-          metrics,
+    };
+    if (strategy !== 'original-search') {
+      for (const unit of units) {
+        const current = {
+          ...unit,
+          task: unit.task ?? (unit.scope?.taskId === primaryTask ? fixture.taskContext : undefined),
+        };
+        const output: StoredMemorySummary['parts'] = [];
+        const parts = prepareMemorySummaries(current, summaries, defaultMemoryBudgets, {
+          mode: strategy === 'rolling' ? 'no-context' : strategy,
+          selectPriorContext: strategy === 'rolling' ? rollingControl(summaries) : undefined,
         });
-      }
-    } else if (strategy !== 'original-search') {
-      const selected: readonly MemoryUnit[] =
-        strategy === 'token-based'
-          ? batches.map((messages) => ({ type: 'UAMP', messages }))
-          : units;
-      for (const unit of selected) {
-        if (unit.type === 'AAB') {
-          observedChecks.push(
-            ...observedMemoryChecks(unit.messages).map(({ seq, text }) => ({
-              sources: [seq],
-              text,
-            })),
-          );
-        }
-        const history = strategy === 'rolling' ? memoryHistory(summaries) : '';
-        const output: string[] = [];
-        const parts = prepareMemorySummaries(unit, history);
         for (const part of parts) {
           const started = performance.now();
+          const sourceHash = createHash('sha256').update(part.text).digest('hex');
           const result = await summarizeMemory(
             settings,
             part.prompt,
@@ -281,7 +363,13 @@ export async function compareContextMemory(
               last: part.sources.at(-1)!,
               elapsedMs: Math.round(performance.now() - started),
               complete: false,
-              historyEstimatedTokens: estimateMemoryTokens(history),
+              historyEstimatedTokens: part.historyEstimatedTokens,
+              originalEstimatedTokens: part.sourceSize,
+              sources: part.sources,
+              sourceHash,
+              prefixHash: part.prefixHash,
+              historyIds: part.historyIds,
+              authoritativeEstimatedTokens: part.authoritativeEstimatedTokens,
               error: failure instanceof Error ? failure.message : 'Summarization failed.',
             });
             return undefined;
@@ -296,7 +384,13 @@ export async function compareContextMemory(
             kind: unit.type,
             first: part.sources[0]!,
             last: part.sources.at(-1)!,
-            historyEstimatedTokens: estimateMemoryTokens(history),
+            historyEstimatedTokens: part.historyEstimatedTokens,
+            originalEstimatedTokens: part.sourceSize,
+            sources: part.sources,
+            sourceHash,
+            prefixHash: part.prefixHash,
+            historyIds: part.historyIds,
+            authoritativeEstimatedTokens: part.authoritativeEstimatedTokens,
             elapsedMs: result.elapsedMs,
             usage: result.usage,
             metrics: result.metrics,
@@ -304,74 +398,103 @@ export async function compareContextMemory(
             json,
             fields: Object.keys(result.fields ?? {}),
           });
-          if (result.complete) output.push(result.text);
+          if (result.complete)
+            output.push({
+              text: result.text,
+              fields: result.fields,
+              sources: part.sources,
+              noUsefulInformation: result.noUsefulInformation,
+            });
         }
-        if (parts.length && output.length === parts.length) {
-          const text = output.join('\n');
-          summaries.push({ type: unit.type, text });
-          evidence.push({ sources: unit.messages.map(({ seq }) => seq), text });
-        }
+        const complete = parts.length > 0 && output.length === parts.length;
+        if (parts.length) save(unit, output, complete, parts.length);
+        if (complete) evidence.push(...output.filter((part) => !part.noUsefulInformation));
       }
-    } else {
-      evidence.push(
-        ...originals.flatMap(({ seq, attachments }) =>
-          (attachments ?? []).map(({ text }) => ({ sources: [seq], text })),
-        ),
-      );
-      evidence.push(
-        ...originals
-          .filter(
-            ({ author, seq }) =>
-              author !== 'user' && author !== 'runtime' && !lastSequences.has(seq),
-          )
-          .map(({ seq, text }) => ({ sources: [seq], text })),
-      );
     }
-    const handoff = handoffFor(
-      fixture,
-      [...evidence, ...observedChecks],
-      strategy === 'logical' || strategy === 'rolling',
-    );
+    const assembled = await withProductionMemory(fixture, records, signal);
     const grade = fixture.facts.map((fact) => {
-      const hasIdentifiers = (text: string) =>
-        !fact.identifiers ||
-        memoryIdentifierMatches(text, fact.identifiers).size === fact.identifiers.length;
-      const retainsFact = (text: string) => fact.expected.test(text) && hasIdentifiers(text);
-      const directUser = preservePromptMessages([sourceBySequence.get(fact.source)!]).map(
-        ({ text }) => text,
-      );
-      const relevant = [
-        ...directUser,
-        ...evidence.filter(({ sources }) => sources.includes(fact.source)).map(({ text }) => text),
-      ];
-      const contradicted =
-        !!fact.contradicts &&
-        evidence.some(({ text }) => fact.contradicts!.test(text) && hasIdentifiers(text));
-      const retained = relevant.some(retainsFact);
+      const source = sourceBySequence.get(fact.source);
+      const matches = (text: string) =>
+        fact.expected.test(text) &&
+        (!fact.identifiers ||
+          memoryIdentifierMatches(text, fact.identifiers).size === fact.identifiers.length);
       return {
         label: fact.label,
         critical: !!fact.critical,
-        retained,
-        retainedWithObservedChecks:
-          retained ||
-          observedChecks.some(
-            ({ sources, text }) => sources.includes(fact.source) && retainsFact(text),
-          ),
-        retainedInHandoff: handoff.supplied.some(
-          ({ sources, text }) => sources.includes(fact.source) && retainsFact(text),
+        sourceCovered:
+          !!source &&
+          [source.text, ...(source.attachments ?? []).map(({ text }) => text)].some(matches),
+        suppliedToSummarizer: requests.some(
+          (request) =>
+            request.sources?.includes(fact.source) ??
+            (request.first <= fact.source && request.last >= fact.source),
         ),
-        contradicted,
+        retained:
+          strategy === 'original-search'
+            ? undefined
+            : evidence.some(({ sources, text }) => sources.includes(fact.source) && matches(text)),
+        retainedInHandoff: assembled.handoff.entries.some((entry) => gradesMemoryFact(fact, entry)),
+        retainedWithoutOriginalRecovery: assembled.handoffWithoutRecovery.entries.some((entry) =>
+          gradesMemoryFact(fact, entry),
+        ),
+        matchingTextWithoutPortionReference: evidence.some(
+          ({ sources, text }) => !sources.includes(fact.source) && matches(text),
+        ),
+        wrongIdentifierSpelling:
+          !!fact.identifiers &&
+          evidence.some(
+            ({ sources, text }) =>
+              sources.includes(fact.source) && fact.expected.test(text) && !matches(text),
+          ),
+        retrievedByOriginalSearch: assembled.originalSearch.some((entry) =>
+          gradesMemoryFact(fact, entry),
+        ),
+        contradicted:
+          !!fact.contradicts &&
+          evidence.some(
+            ({ text }) =>
+              fact.contradicts!.test(text) &&
+              (!fact.identifiers ||
+                memoryIdentifierMatches(text, fact.identifiers).size === fact.identifiers.length),
+          ),
       };
     });
     const loaded = requests.length ? await residency(endpoint, digest, signal) : undefined;
     arms.push({
       strategy,
+      seed: input.seed,
       requests,
       grade,
-      handoff: handoff.text,
-      recoveredSources: handoff.recoveredSources,
+      handoff: assembled.handoff.text,
+      recoveredSources: assembled.handoff.recoveredSources,
+      dispatchMs: assembled.handoff.elapsedMs,
+      dispatchTimedOut: assembled.handoff.timedOut,
+      dispatchWithoutOriginalRecoveryMs: assembled.handoffWithoutRecovery.elapsedMs,
+      handoffWithoutOriginalRecoveryEstimatedTokens: estimateMemoryTokens(
+        assembled.handoffWithoutRecovery.text,
+      ),
+      ...(input.auditOutput
+        ? {
+            summaryAudit: records.map(({ id, type, parts, complete }) => ({
+              id,
+              type,
+              parts,
+              complete,
+            })),
+          }
+        : {}),
+      originalSearchMs: assembled.originalSearchMs,
+      originalSearchIncomplete: assembled.originalSearchIncomplete,
       elapsedMs: Math.round(performance.now() - started),
-      handoffEstimatedTokens: estimateMemoryTokens(handoff.text),
+      handoffEstimatedTokens: estimateMemoryTokens(assembled.handoff.text),
+      outputTokensByType: Object.fromEntries(
+        ['UAMP', 'AAB'].map((type) => [
+          type,
+          requests
+            .filter(({ kind }) => kind === type)
+            .map(({ usage }) => usage?.outputTokens ?? null),
+        ]),
+      ),
       historicalEvidenceEstimatedTokens: estimateMemoryTokens(
         evidence.map(({ text }) => text).join('\n'),
       ),
@@ -389,180 +512,4 @@ export async function compareContextMemory(
     ),
     arms,
   };
-}
-
-export async function measureContextCache(input: {
-  settings: OllamaSettings;
-  digest: string;
-  weightsDigest?: string;
-  signal: AbortSignal;
-  progress?: (message: string) => void;
-}) {
-  const settings = {
-    ...input.settings,
-    model: contextModel,
-    cpuOnly: true,
-    keepAlive: 900,
-    generation: JSON.stringify(sessionMemoryGeneration),
-  };
-  const endpoint = ollamaEndpoint(settings.endpoint);
-  const prior = Array.from({ length: 10 }, (_, index) => ({
-    type: 'AAB' as const,
-    text: Array.from(
-      { length: 18 },
-      (_, row) =>
-        `For LUT-${index}, the documentation work group verified guide section ${row} and retained its current link anchor. The native check passed with no edits.`,
-    ).join('\n'),
-  }));
-  const probeUnit: MemoryUnit = {
-    type: 'UAMP',
-    messages: [
-      {
-        seq: 100,
-        author: 'user',
-        text: 'Use the existing runtimeConfig API. The old summary that claimed we approved removing it is incorrect. Keep the current signature in runtime/src/main.ts.',
-      },
-      {
-        seq: 101,
-        author: 'agent',
-        text: 'Understood. I will preserve runtimeConfig and its signature.',
-      },
-    ],
-  };
-  const correctionHistory = memoryHistory([
-    {
-      type: 'UAMP',
-      text: 'Accepted decision from earlier Discussion: Remove the runtimeConfig symbol and add a replacement API.',
-    },
-  ]);
-  const samples: (Omit<MemorySummaryResult, 'text' | 'fields'> & {
-    label: string;
-    historicalEstimatedTokens: number;
-    fields: string[];
-    loadedBytes?: number;
-    gpuBytes?: number;
-    peakRunnerRssBytes?: number;
-    keepsRuntimeConfig: boolean;
-    preservesPath: boolean;
-    falseRemovalUnderDecisions: boolean;
-  })[] = [];
-  const sample = async (label: string, history: string, unit = probeUnit) => {
-    input.progress?.(label);
-    const prompt = prepareMemorySummaries(unit, history)[0]!.prompt;
-    const { text, ...stats } = await summarizeMemory(
-      settings,
-      prompt,
-      input.signal,
-      unit.type,
-      true,
-    );
-    const model = await residency(endpoint, input.digest, input.signal);
-    const sample = {
-      label,
-      historicalEstimatedTokens: estimateMemoryTokens(history),
-      ...stats,
-      fields: Object.keys(stats.fields ?? {}),
-      loadedBytes: model?.bytes,
-      gpuBytes: model?.gpuBytes,
-      peakRunnerRssBytes: await peakRunnerRss(input.weightsDigest),
-      keepsRuntimeConfig:
-        /\b(?:keep|preserve|retain|maintain|use)\b.{0,115}\bruntimeConfig\b/i.test(text),
-      preservesPath: text.includes('runtime/src/main.ts'),
-      falseRemovalUnderDecisions: /\b(?:approve|agreed|accepted)\b.{0,80}\bremov(?:e|ing)\b/i.test(
-        JSON.stringify(stats.fields?.decisions ?? ''),
-      ),
-    };
-    samples.push(sample);
-    return sample;
-  };
-  const before = prior.findIndex((_, index) => {
-    if (index === 0) return false;
-    const previous = memoryHistory(prior.slice(0, index));
-    return previous.length > 0 && !memoryHistory(prior.slice(0, index + 1)).startsWith(previous);
-  });
-  if (before < 0) throw new Error('The cache fixture does not exercise grouped eviction.');
-  const preEviction = memoryHistory(prior.slice(0, before));
-  const postEviction = memoryHistory(prior.slice(0, before + 1));
-  const grown = memoryHistory(prior.slice(0, before + 2));
-  await sample('prior-summary-contradicted-by-current-user', correctionHistory);
-  await sample('agent-A-uncached-history', preEviction);
-  await sample('agent-A-repeat-same-history', preEviction);
-  await sample(
-    'agent-B-with-different-history',
-    memoryHistory([{ ...prior.at(-1)!, text: prior.at(-1)!.text.replaceAll('LUT-', 'DOC-') }]),
-  );
-  await sample('agent-A-return-after-agent-switch', preEviction);
-  await sample('agent-A-grouped-eviction', postEviction);
-  await sample('agent-A-grow-after-eviction', grown);
-  await sample('agent-A-repeat-after-eviction', grown);
-  const foregroundUnit: MemoryUnit = {
-    type: 'UAMP',
-    messages: [
-      {
-        seq: 1,
-        author: 'user',
-        text: 'Keep TOOL_VERIFY in src/verify.ts and use the recorded check result.',
-      },
-      {
-        seq: 2,
-        author: 'agent',
-        text: 'TOOL_VERIFY passed in src/verify.ts after the scheduling check.',
-      },
-    ],
-  };
-  await sample('foreground-baseline', '', foregroundUnit);
-  const queue: {
-    kind: MemoryUnit['type'];
-    queueMs: number;
-    elapsedMs: number;
-    complete: boolean;
-  }[] = [];
-  const pending = Promise.withResolvers<void>();
-  const memory = new SessionMemory({
-    databasePath: ':memory:',
-    source: {
-      async read(agentId, cursor) {
-        const messages = foregroundUnit.messages
-          .map((message) => ({
-            ...message,
-            turnId: agentId,
-            text: message.text.replaceAll('TOOL_VERIFY', agentId === 'A' ? 'CHECK_A' : 'CHECK_B'),
-          }))
-          .filter(({ seq }) => seq > (cursor?.seq ?? 0));
-        return {
-          epoch: agentId,
-          earliest: 1,
-          start: 1,
-          latest: 2,
-          through: 2,
-          reset: false,
-          messages,
-        };
-      },
-    },
-    summarize: (type, prompt, signal) =>
-      summarizeMemory(settings, prompt, AbortSignal.any([signal, input.signal]), type, true),
-    onRequest({ type: kind, queueMs, result: { elapsedMs, complete } }) {
-      queue.push({ kind, queueMs, elapsedMs, complete });
-      if (queue.length === 2) pending.resolve();
-    },
-    onFailure: () => pending.reject(new Error('Queued Session Memory probe did not complete.')),
-  });
-  const release = memory.holdForeground();
-  const guard = AbortSignal.any([input.signal, AbortSignal.timeout(240_000)]);
-  const abort = () => pending.reject(guard.reason);
-  guard.addEventListener('abort', abort, { once: true });
-  try {
-    memory.turn('A', { turnId: 'A', outcome: 'completed' }, false);
-    memory.turn('B', { turnId: 'B', outcome: 'completed' }, false);
-    await sample('foreground-with-queued-memory', '', foregroundUnit);
-    if (queue.length)
-      throw new Error('The foreground priority probe started background inference early.');
-    release();
-    await pending.promise;
-  } finally {
-    guard.removeEventListener('abort', abort);
-    await memory.close();
-  }
-  return { samples, queue };
 }

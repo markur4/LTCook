@@ -41,6 +41,7 @@ const generationSchema = z.strictObject({
     num_predict: z.number().int().positive(),
     temperature: z.number().nonnegative(),
     top_k: z.number().int().nonnegative().optional(),
+    seed: z.number().int().nonnegative().optional(),
     repeat_penalty: z.number().positive().optional(),
   }),
 });
@@ -153,6 +154,7 @@ export async function ollamaChat(
   onUsage?: (usage: OllamaUsage) => void,
   format?: Record<string, unknown>,
   onMetrics?: (metrics: OllamaChatMetrics) => void,
+  tokenDiagnostics = Boolean(onMetrics),
 ) {
   const endpoint = ollamaEndpoint(settings.endpoint);
   const generation = summaryGeneration(settings);
@@ -179,7 +181,7 @@ export async function ollamaChat(
           ...generation,
           ...(settings.cpuOnly ? { options: { ...generation.options, num_gpu: 0 } } : {}),
           ...(format ? { format } : {}),
-          ...(onMetrics ? { logprobs: true } : {}),
+          ...(tokenDiagnostics ? { logprobs: true } : {}),
           think,
           stream: false,
           keep_alive: settings.keepAlive,

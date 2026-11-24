@@ -9,7 +9,7 @@ const seq = Type.Integer({ minimum: 0 });
 const reference = { agentId, epoch, seq };
 
 export const sessionMemoryDescription =
-  'Search original conversation messages and UAMP or AAB summaries from your Session Memory and authorized teammates. Use specific terms. Summary source sequences refer to the original evidence. Read a full source with its agent ID, epoch, and sequence number. Original user instructions remain authoritative.';
+  'Search original conversation messages and UAMP or AAB summaries from your Session Memory and authorized teammates. Use specific terms. Summary source sequences identify the original evidence supplied to the cited portion. Read a full source with its agent ID, epoch, and sequence number. Original user instructions remain authoritative.';
 
 export const sessionMemoryInput = Type.Object(
   {
@@ -34,6 +34,18 @@ const result = Type.Object({
           truncated: Type.Optional(Type.Literal(true)),
           seq,
           sources: Type.Optional(Type.Array(seq)),
+          summaryId: Type.Optional(Type.String()),
+          portion: Type.Optional(Type.Integer({ minimum: 1 })),
+          field: Type.Optional(Type.String()),
+          tool: Type.Optional(
+            Type.Object({
+              kind: Type.String(),
+              name: Type.String(),
+              status: Type.String(),
+              exitCode: Type.Optional(Type.Number()),
+              filePath: Type.Optional(Type.String()),
+            }),
+          ),
           userSources: Type.Optional(Type.Array(seq)),
         }),
       ),

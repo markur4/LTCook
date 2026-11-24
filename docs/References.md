@@ -224,8 +224,6 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
 | `LTCOOK_SESSION_MEMORY_THRESHOLD` | Global `runtime.session_memory_threshold`. Default 3,000 estimated Agent Action tokens per AAB. Use an integer from 1 to 6,500. Set 0 to disable capture and the tool. |
 | `LTCOOK_SESSION_MEMORY_MODEL` | Global `runtime.session_memory_model`. An empty value uses `lfm3:1.7b-qad-q4_0`. A configured value selects an installed Ollama model for Session Memory on CPU with reasoning disabled. |
-| `LTCOOK_SESSION_MEMORY_HISTORY_TOKENS` | Global `runtime.session_memory_history_tokens`. Historical summary budget, default 4,096 estimated tokens. |
-| `LTCOOK_SESSION_MEMORY_RETAINED_TOKENS` | Global `runtime.session_memory_retained_tokens`. Grouped eviction retains up to 2,048 estimated tokens by default. |
 | `LTCOOK_SESSION_MEMORY_INPUT_TOKENS` | Global `runtime.session_memory_input_tokens`. Total input target including history, instructions and source text. Defaults to 8,000 estimated tokens. |
 | `LTCOOK_SESSION_MEMORY_DELEGATION` | Global `runtime.session_memory_delegation`. Set to `true` to add automatic supplemental context on Core assignments. Default `false`. Search and source retrieval remain available when capture is enabled. |
 | `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |

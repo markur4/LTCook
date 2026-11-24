@@ -9,4 +9,6 @@
 - [x] Complete pass review.
 - [x] Integrate the reviewed implementation as requested.
 - [x] Preserve named tool outcomes and recover missing task identifiers from original messages.
-- [ ] Resume final verification and focused exact-retention replays when GPU access is available. Qualification remains open.
+- [x] Prepare Immediate Context and the matched evaluation with identical source portions.
+- [ ] Run focused exact-retention replays on the GPU host and audit unsupported claims.
+- [ ] Run held-out qualification once focused retention is reproducible.

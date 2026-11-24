@@ -190,12 +190,6 @@ def resolve_launch(
     environment["LTCOOK_SESSION_MEMORY_MODEL"] = (
         global_config.runtime.session_memory_model
     )
-    environment["LTCOOK_SESSION_MEMORY_HISTORY_TOKENS"] = str(
-        global_config.runtime.session_memory_history_tokens
-    )
-    environment["LTCOOK_SESSION_MEMORY_RETAINED_TOKENS"] = str(
-        global_config.runtime.session_memory_retained_tokens
-    )
     environment["LTCOOK_SESSION_MEMORY_INPUT_TOKENS"] = str(
         global_config.runtime.session_memory_input_tokens
     )

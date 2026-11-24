@@ -15,17 +15,34 @@ export type MemorySourceMessage = MemoryMessage & {
   messageId?: string;
   timestamp?: string;
   intermediate?: true;
+  runtimeAssignment?: true;
   scope?: MemoryScope;
+  task?: MemoryTaskContext;
+  tool?: {
+    kind: string;
+    name: string;
+    status: string;
+    exitCode?: number;
+    filePath?: string;
+  };
   attachments?: MemoryAttachment[];
 };
 
 export type MemoryTurnOutcome = 'completed' | 'failed' | 'canceled';
 
+export type MemoryTaskContext = {
+  title: string;
+  description: string;
+  acceptance: readonly string[];
+  assignment?: string;
+};
+
 export type MemoryUnit = {
   type: 'UAMP' | 'AAB';
   messages: readonly MemorySourceMessage[];
   scope?: MemoryScope;
-  partial?: true;
+  task?: MemoryTaskContext;
+  instructions?: readonly MemorySourceMessage[];
 };
 
 export function observedMemoryChecks(messages: readonly MemorySourceMessage[]) {
@@ -43,7 +60,7 @@ export function observedMemoryChecks(messages: readonly MemorySourceMessage[]) {
   return [...checks.values()];
 }
 
-function scopeKey(scope: MemoryScope | undefined): string {
+export function scopeKey(scope: MemoryScope | undefined): string {
   return JSON.stringify([
     scope?.sessionId,
     scope?.planId,
@@ -51,6 +68,10 @@ function scopeKey(scope: MemoryScope | undefined): string {
     scope?.taskId,
     scope?.stepId,
   ]);
+}
+
+export function isMemoryInstruction(source: MemorySourceMessage, task?: MemoryTaskContext) {
+  return source.author === 'user' || (source.runtimeAssignment === true && !task?.assignment);
 }
 
 /** Derive boundaries from native receipts and ordered canonical timeline entries. */
@@ -62,58 +83,107 @@ export function identifyMemoryUnits(
   recordedActions: ReadonlySet<number> = new Set(),
 ): MemoryUnit[] {
   const units: MemoryUnit[] = [];
-  const turns = new Map<string | undefined, MemorySourceMessage[]>();
+  const regions: MemorySourceMessage[][] = [];
   for (const message of messages) {
-    const turn = turns.get(message.turnId) ?? [];
-    turn.push(message);
-    turns.set(message.turnId, turn);
+    const previous = regions.at(-1);
+    const prompt =
+      message.author === 'user' || message.author === 'runtime' || message.author === 'unknown';
+    if (!previous || previous[0]?.turnId !== message.turnId || (!message.turnId && prompt))
+      regions.push([message]);
+    else previous.push(message);
   }
-  const latestTurn = messages.findLast(({ turnId }) => turnId !== undefined)?.turnId;
-  for (const [turnId, items] of turns) {
+
+  let actions: MemorySourceMessage[] = [];
+  let context: MemorySourceMessage[] = [];
+  let tokens = 0;
+  const finishActions = () => {
+    if (actions.length)
+      units.push({
+        type: 'AAB',
+        scope: actions[0]?.scope,
+        messages: actions,
+        task: actions[0]?.task,
+        instructions: context,
+      });
+    actions = [];
+    context = [];
+    tokens = 0;
+  };
+  for (const [index, items] of regions.entries()) {
+    const turnId = items[0]?.turnId;
     const outcome = turnId ? outcomes.get(turnId) : undefined;
-    const responses = items.filter(
-      ({ author, intermediate }) => author === 'agent' && !intermediate,
-    );
-    const prompts = items.filter(({ author }) => author === 'user');
-    const finalResponse = responses.at(-1);
     const initiatingPrompt = items.find(
       ({ author }) => author === 'user' || author === 'runtime' || author === 'unknown',
     );
+    const lastAction = items.findLastIndex(
+      ({ author, intermediate }) => author === 'tool' || !!intermediate,
+    );
+    const finalResponses = items
+      .slice(lastAction + 1)
+      .filter(
+        ({ author, intermediate, seq }) =>
+          author === 'agent' && !intermediate && seq > (initiatingPrompt?.seq ?? -1),
+      );
     const hasUamp =
-      outcome === 'completed' &&
-      initiatingPrompt?.author === 'user' &&
-      finalResponse &&
-      finalResponse.seq > initiatingPrompt.seq;
-    let actions: MemorySourceMessage[] = [];
-    let tokens = 0;
-    const finishActions = () => {
-      if (!actions.length) return;
-      units.push({ type: 'AAB', messages: actions, scope: actions[0]?.scope });
-      actions = [];
-      tokens = 0;
-    };
+      outcome === 'completed' && initiatingPrompt?.author === 'user' && finalResponses.length > 0;
+    const finalResponseSet = new Set(finalResponses);
+    if (index > 0 && (!turnId || !regions[index - 1]?.[0]?.turnId)) finishActions();
     for (const item of items) {
       if (recordedActions.has(item.seq)) continue;
       if (item.author !== 'agent' && item.author !== 'tool') continue;
       if (
         item.author === 'agent' &&
         !item.intermediate &&
-        (!outcome || (item === finalResponse && (hasUamp || outcome !== 'completed')))
+        (!outcome || (finalResponseSet.has(item) && (hasUamp || outcome !== 'completed')))
       )
         continue;
-      if (actions.length && scopeKey(actions[0]?.scope) !== scopeKey(item.scope)) finishActions();
+      const current = actions[0]?.scope;
+      if (
+        actions.length &&
+        ((!current?.taskId && actions.at(-1)?.turnId !== turnId) ||
+          scopeKey(current) !== scopeKey(item.scope))
+      )
+        finishActions();
+      const instructions = items.filter(
+        (source) => source.seq < item.seq && isMemoryInstruction(source, item.task),
+      );
+      context = [
+        ...new Map([...context, ...instructions].map((source) => [source.seq, source])).values(),
+      ];
       actions.push(item);
       tokens += estimateMemoryTokens(item.text);
       if (tokens >= actionThreshold) finishActions();
     }
-    if (outcome || flush || (turnId && turnId !== latestTurn)) finishActions();
     if (hasUamp) {
+      finishActions();
+      const last = finalResponses.at(-1)!.seq;
       units.push({
         type: 'UAMP',
-        messages: [...prompts.filter(({ seq }) => seq < finalResponse.seq), finalResponse],
+        messages: [
+          ...items.filter(({ author, seq }) => author === 'user' && seq < last),
+          ...finalResponses,
+        ].sort((a, b) => a.seq - b.seq),
         scope: initiatingPrompt.scope,
+        task: initiatingPrompt.task,
       });
+    } else if (
+      outcome === 'canceled' ||
+      outcome === 'failed' ||
+      (!actions[0]?.scope?.taskId && index < regions.length - 1)
+    ) {
+      finishActions();
     }
   }
+  if (
+    flush ||
+    (!actions[0]?.scope?.taskId &&
+      regions.some(
+        (items) =>
+          items[0]?.turnId === actions.at(-1)?.turnId &&
+          !!items[0]?.turnId &&
+          outcomes.has(items[0].turnId),
+      ))
+  )
+    finishActions();
   return units.sort((a, b) => a.messages.at(-1)!.seq - b.messages.at(-1)!.seq);
 }

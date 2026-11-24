@@ -24,7 +24,6 @@ import {
 import {
   estimateMemoryTokens,
   memoryGeneration,
-  type MemoryMessage,
 } from '../runtime/src/evals/session-memory-extractive.js';
 import { SessionMemory, type MemorySource } from '../runtime/src/session-memory/service.js';
 import {
@@ -34,7 +33,10 @@ import {
 } from '../runtime/src/tools/session-memory.js';
 import {
   compareContextMemory,
+  transcriptSource,
+  gradesMemoryFact,
   contextModel,
+  contextSeeds,
   contextStrategies,
   type ContextStrategy,
 } from './session-memory-context.js';
@@ -75,6 +77,9 @@ const strategies = contextStrategies.filter(
 if (selectedStrategies && strategies.length !== selectedStrategies.length)
   throw new Error('Unknown or duplicate Session Memory strategy.');
 
+const seeds = contextAware
+  ? contextSeeds(args.find((value) => value.startsWith('--seeds='))?.slice('--seeds='.length))
+  : [];
 const useLuna = workerName === LUNA_EVALUATION.model;
 const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-edit-'));
 const controller = new AbortController();
@@ -85,38 +90,17 @@ const { signal } = controller;
 const run = promisify(execFile);
 type EditCase = (typeof sessionMemoryEditCases)[number];
 
-function transcriptSource(messages: readonly MemoryMessage[]): MemorySource {
-  return {
-    async read(_id, cursor, direction = 'after') {
-      const page =
-        direction === 'tail'
-          ? messages.slice(-16)
-          : direction === 'before'
-            ? messages.filter(({ seq }) => seq < cursor!.seq).slice(-16)
-            : messages.filter(({ seq }) => seq > (cursor?.seq ?? 0)).slice(0, 16);
-      return {
-        epoch: 'fixed-history',
-        earliest: 1,
-        start: page[0]?.seq,
-        latest: messages.at(-1)!.seq,
-        through: page.at(-1)?.seq ?? 0,
-        reset: false,
-        messages: page,
-      };
-    },
-  };
-}
-
 async function editWithPi(input: {
   fixture: EditCase;
   mode: 'conventional' | 'search' | 'hybrid' | ContextStrategy;
   source: MemorySource;
   handoff: string;
+  seed?: number;
   model: string;
   hostedSession?: Awaited<ReturnType<typeof prepareLunaPiEvaluation>>;
 }) {
-  const { fixture, mode, source, handoff, model, hostedSession } = input;
-  const arm = path.join(directory, fixture.id, mode);
+  const { fixture, mode, source, handoff, model, hostedSession, seed } = input;
+  const arm = path.join(directory, fixture.id, mode, seed === undefined ? 'control' : String(seed));
   const workspace = path.join(arm, 'workspace');
   const files = [fixture.file, fixture.sibling];
   const original = await Promise.all(
@@ -134,6 +118,8 @@ async function editWithPi(input: {
     summarize: async (type) => ({ type, text: '', complete: false, elapsedMs: 0 }),
   });
   const tool = createSessionMemoryTool(memory);
+  const facts = editTranscript(fixture).facts;
+  const retrievedFacts = new Set<string>();
   const searches: Array<{
     query?: string;
     sourceSeq?: number;
@@ -156,6 +142,18 @@ async function editWithPi(input: {
           signal: toolSignal ? AbortSignal.any([signal, toolSignal]) : signal,
         },
       );
+      for (const fact of facts) {
+        if (
+          result.matches.some(({ entries }) =>
+            entries.some((entry) => gradesMemoryFact(fact, entry)),
+          ) ||
+          (result.source &&
+            [result.source.text, ...(result.source.attachments ?? []).map(({ text }) => text)].some(
+              (text) => gradesMemoryFact(fact, { seq: result.source!.seq, text }),
+            ))
+        )
+          retrievedFacts.add(fact.label);
+      }
       searches.push({
         query: request.query,
         sourceSeq: request.source?.seq,
@@ -189,7 +187,15 @@ async function editWithPi(input: {
     try {
       bounded.throwIfAborted();
       await session.prompt(
-        [fixture.assignment, fixture.manualHandoff, ...(handoff ? [handoff] : [])].join('\n\n'),
+        [
+          fixture.assignment,
+          ...(mode === 'conventional'
+            ? [fixture.manualHandoff]
+            : [
+                'Use Session Memory and authorized source search for context needed to complete this assignment.',
+              ]),
+          ...(handoff ? [handoff] : []),
+        ].join('\n\n'),
       );
       const answers = session.messages.filter((message) => message.role === 'assistant');
       const lastAnswer = answers.at(-1);
@@ -231,6 +237,7 @@ async function editWithPi(input: {
         ...usage,
         elapsedMs: Math.round(performance.now() - started),
         searches,
+        retrievedFacts: [...retrievedFacts],
         calls,
         targetChanged,
         scoped,
@@ -284,38 +291,48 @@ try {
       ] as const;
       let sourceEstimatedTokens = 0;
       for (const mode of ordered) {
-        const comparison = await compareContextMemory(transcript, {
-          settings: summarization,
-          digest: extractor.digest,
-          weightsDigest: extractor.weightsDigest,
-          signal,
-          progress: (event) => console.error(event),
-          strategies: [mode],
-        });
-        sourceEstimatedTokens = comparison.sourceEstimatedTokens;
-        const { handoff, ...summary } = comparison.arms[0]!;
-        console.error(`Running native Pi ${mode} edit for ${fixture.id}`);
-        const workerResult = await editWithPi({
-          fixture,
-          mode,
-          handoff: mode === 'original-search' ? '' : handoff,
-          source: transcriptSource(messages),
-          model: worker.name,
-          hostedSession,
-        });
-        arms.push({ ...summary, worker: workerResult });
-        console.error(
-          `${fixture.id} ${mode}: ${workerResult.passed ? 'passed' : 'failed'} in ${workerResult.elapsedMs} ms`,
-        );
+        for (const seed of mode === 'original-search' ? [undefined] : seeds) {
+          const comparison = await compareContextMemory(transcript, {
+            settings: { ...summarization, cpuOnly: args.includes('--cpu-only') },
+            digest: extractor.digest,
+            weightsDigest: extractor.weightsDigest,
+            signal,
+            progress: (event) => console.error(event),
+            strategies: [mode],
+            seed,
+            auditOutput: args.includes('--audit-output'),
+          });
+          sourceEstimatedTokens = comparison.sourceEstimatedTokens;
+          const { handoff, ...summary } = comparison.arms[0]!;
+          console.error(`Running native Pi ${mode} edit for ${fixture.id}`);
+          const workerResult = await editWithPi({
+            fixture,
+            mode,
+            handoff: mode === 'original-search' ? '' : handoff,
+            source: transcriptSource(messages),
+            model: worker.name,
+            hostedSession,
+            seed,
+          });
+          arms.push({ ...summary, worker: workerResult });
+          console.error(
+            `${fixture.id} ${mode}: ${workerResult.passed ? 'passed' : 'failed'} in ${workerResult.elapsedMs} ms`,
+          );
+        }
       }
+      const sourceControl = arms.find(({ strategy }) => strategy === 'original-search')?.worker;
       scenarios.push({
         fixture: fixture.id,
         sourceEstimatedTokens,
         transcriptHash: hash(JSON.stringify(messages)),
         arms,
         conventional,
-        originalControlPassed:
-          arms.find(({ strategy }) => strategy === 'original-search')?.worker.passed ?? false,
+        originalControlPassed: sourceControl?.passed ?? false,
+        originalControlRetrievedCriticalFacts:
+          sourceControl !== undefined &&
+          transcript.facts
+            .filter(({ critical }) => critical)
+            .every(({ label }) => sourceControl.retrievedFacts.includes(label)),
       });
       continue;
     }
