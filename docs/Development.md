@@ -334,20 +334,26 @@ the three agent cases still use their original attempts.
 
 ### Session Memory qualification
 
-Run `bun evals/session-memory-live.ts` to compare the four pinned Q8 candidates
-with 1,500, 3,000 and 6,000 estimated tokens per incremental update. The runner
-uses fixed fixture messages. It measures extraction on CPU, checks retained
-requirements and citations, and compares the resulting handoff with a
-relevant-source control in fresh native Pi sessions. The JSON report includes
-model digests, cold and warm residency, update latency, throughput and the
-model bytes reported by Ollama. An argument selects an installed downstream
-Pi model instead of the standard Bonsai model. Optional second and third
-arguments select one candidate tag and one cadence from the matrix. See the
-[qualification results](../evals/session-memory-results.md).
+Run `bun evals/session-memory-handoff-live.ts` to compare chronological and
+generated presentations of the same six excerpts with paired fresh Pi
+sessions and identical tasks. The first optional argument selects the
+downstream model.
 
-The runtime stores derived entries and their Paseo timeline checkpoint together
-in `session-memory.sqlite` under runtime state. A changed history epoch
-invalidates the previous citations. Existing TeamInstances and Core bindings
+Run `bun evals/session-memory-live.ts` to compare hybrid extraction on
+the fixed workflow corpus. The runner uses native Pi with relevant original
+source as the downstream control and grades extraction omissions,
+contradictions, attribution, categorization and invalid output separately.
+It records model digests, CPU residency, request latency, throughput and Pi
+input-token changes. The first argument selects the downstream Pi model.
+The second selects one candidate tag or `remaining` to compare the other
+models after Qwen. The third selects an estimated token threshold. Fixtures
+can also force updates at task boundaries. See the
+[initial qualification](../evals/session-memory-results.md).
+
+The runtime stores the user messages, derived additions and Paseo timeline
+checkpoint in `session-memory-v2.sqlite` under runtime state. It rebuilds
+from Paseo history with the new format. A changed history epoch invalidates
+the previous citations. Existing TeamInstances and Core bindings
 determine shared read access. The checkout's native Pi and Paseo system test
 checks provenance, authorized reads, restart and rewind. Codex-specific
 compatibility and permission behavior belongs in focused Traditional Tests.

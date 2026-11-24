@@ -188,6 +188,11 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🛠️ Changed
 
+- **Breaking:** 💥 Session Memory preserves original user messages and appends
+  categorized agent and tool findings. Each tool result entry now has one
+  `seq` and an `author`. The runtime rebuilds the derived cache from Paseo
+  history when it starts with the new format.
+
 <br>
 
 - Pi is the required harness for model-backed Agent Evals. Repository Behavior

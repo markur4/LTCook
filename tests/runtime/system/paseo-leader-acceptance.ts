@@ -232,26 +232,24 @@ try {
       },
     });
   const startMemory = () => {
+    const source = createPaseoMemorySource(host!.api, secret);
     const instance = new SessionMemory({
       databasePath: path.join(directory, 'session-memory.sqlite'),
-      source: createPaseoMemorySource(host!.api, secret),
+      source: {
+        async read(...args) {
+          const page = await source.read(...args);
+          for (const message of page.messages) {
+            if (message.text.includes(runtimeHandoff)) observedSources.set(runtimeHandoff, message);
+            if (message.text === userRequirement) observedSources.set(userRequirement, message);
+          }
+          return page;
+        },
+      },
       threshold: 1,
       peers: (agentId, workspaceRoot) => runtime?.memoryPeers(agentId, workspaceRoot) ?? [],
-      async extract(entries, messages) {
-        const next = [...entries];
-        for (const source of messages) {
-          if (source.text.includes(runtimeHandoff)) observedSources.set(runtimeHandoff, source);
-          if (source.text !== userRequirement) continue;
-          observedSources.set(userRequirement, source);
-          next.push({
-            id: 'preserve-cobalt',
-            kind: 'constraint',
-            status: 'confirmed',
-            text: userRequirement,
-            sources: [source.seq],
-          });
-        }
-        return next;
+      async extract(messages) {
+        assert(messages.every(({ author }) => author !== 'user' && author !== 'runtime'));
+        return [];
       },
     });
     api.setSessionMemory(instance);
@@ -479,7 +477,7 @@ try {
         entries: Array<{ text: string; sources: number[] }>;
       }>;
       const match = matches[0];
-      const citation = match?.entries.find(({ text }) => text === userRequirement)?.sources[0];
+      const citation = match?.entries.find(({ text }) => text === userRequirement)?.seq;
       return match && citation !== undefined
         ? { agentId: leaderId, epoch: match.epoch, seq: citation }
         : undefined;

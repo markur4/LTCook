@@ -226,17 +226,21 @@ to unload after a request or to a positive number of seconds for timed residency
 
 Ask the agent to call `session-memory` with a short `query` after resuming a
 conversation or starting work that depends on an earlier decision. The results
-show the owning agent, history epoch, entries and source sequence numbers.
+show the owning agent and history epoch. Each entry gives its author and source
+sequence number in `seq`.
 Supply `agentId` to limit the search to an authorized conversation. To inspect
 a citation, pass `source` with its `agentId`, `epoch` and `seq`.
 
 An ordinary Paseo chat can read its own Memory. Managed agents can also search
 conversations bound to their TeamInstance in the same workspace. Memory
-uses text from user, assistant and agent messages. It skips internal reasoning,
-attachments and general tool output. Keep secrets out of chat messages that
-collaborators may read.
+preserves original user messages in order and categorizes copied excerpts
+from agent messages and structured tool outcomes. Eligible outcomes include
+shell exit codes, changed file paths and workspace search counts. Internal
+reasoning, attachments, command arguments and raw tool output stay in
+Paseo. Keep secrets out of chat messages that collaborators may read.
 
-Session Memory updates in the background. An incomplete result can mean the
+User messages can appear while agent and tool evidence is still being
+processed in the background. An incomplete result can mean the
 model has yet to catch up, the output reached a result limit, or the source
 history is unavailable. On a delegated task, follow its approved scope and
 check a recent explicit correction against the cited messages. Automatic enrichment

@@ -3,6 +3,8 @@ import Database from 'libsql';
 import {
   estimateMemoryTokens,
   memoryEntriesSchema,
+  mergeMemoryEntries,
+  preserveUserMessages,
   memoryRelevance,
   renderMemoryHandoff,
   selectMemoryContext,
@@ -32,15 +34,15 @@ type MemoryState = { epoch: string; seq: number; entries: MemoryEntry[] };
 type MemoryOptions = {
   databasePath: string;
   source: MemorySource;
-  extract(
-    entries: readonly MemoryEntry[],
-    messages: readonly MemoryMessage[],
-    signal: AbortSignal,
-  ): Promise<MemoryEntry[]>;
+  extract(messages: readonly MemoryMessage[], signal: AbortSignal): Promise<MemoryEntry[]>;
   threshold?: number;
   peers?(agentId: string, workspaceRoot: string): readonly string[];
   onFailure?(): void;
 };
+
+function checkpoint(state: MemoryState | undefined): MemoryCursor | undefined {
+  return state && state.seq >= 0 ? { epoch: state.epoch, seq: state.seq } : undefined;
+}
 
 const maxBatchTokens = 6500;
 const maxBatchPages = 8;
@@ -109,7 +111,7 @@ export class SessionMemory {
 
   private async update(agentId: string, force: boolean): Promise<boolean> {
     const current = this.state(agentId);
-    let page = await this.options.source.read(agentId, current);
+    let page = await this.options.source.read(agentId, checkpoint(current));
     const replaced = current && (page.epoch !== current.epoch || page.reset);
     const prior = replaced ? undefined : current;
     if (replaced) {
@@ -126,16 +128,13 @@ export class SessionMemory {
       let overflow = false;
       for (const message of page.messages) {
         if (message.seq > head) break;
-        const text =
-          message.author === 'runtime'
-            ? message.text.split('\n\nSupplemental Session Memory.', 1)[0]!
-            : message.text;
-        const cost = estimateMemoryTokens(text);
+        if (message.author === 'runtime') continue;
+        const cost = estimateMemoryTokens(message.text);
         if (tokens + cost > maxBatchTokens && messages.length) {
           overflow = true;
           break;
         }
-        messages.push({ ...message, text });
+        messages.push(message);
         tokens += cost;
       }
       through = overflow ? messages.at(-1)!.seq : Math.min(page.through, head);
@@ -144,22 +143,50 @@ export class SessionMemory {
       if (next.through === page.through && next.epoch === page.epoch) break;
       page = next;
     }
-    if (through <= (prior?.seq ?? -1)) return false;
+    const previousSeq = prior?.seq ?? -1;
+    if (through <= previousSeq) return false;
+    const oldEntries = prior?.entries ?? [];
+    const oldUserSequences = new Set(
+      oldEntries.filter(({ kind }) => kind === 'user').map(({ seq }) => seq),
+    );
+    const newUserEntries = preserveUserMessages(messages).filter(
+      ({ seq }) => !oldUserSequences.has(seq),
+    );
+    const entries = mergeMemoryEntries(oldEntries, newUserEntries);
+
+    // > Persist user intent independently of the model. The evidence checkpoint stays
+    // > at its previous position until the corresponding inference has succeeded.
+    if (newUserEntries.length && !(await this.save(agentId, { epoch, seq: previousSeq, entries })))
+      return true;
     if (!force && messages.length && tokens < this.threshold && through >= head) return false;
-    const entries = messages.some((message) => message.author !== 'runtime')
-      ? await this.options.extract(prior?.entries ?? [], messages, this.abort.signal)
-      : (prior?.entries ?? []);
+
+    const evidence = messages.filter(({ author }) => author !== 'user');
+    const additions = evidence.length
+      ? await this.options.extract(evidence, this.abort.signal)
+      : [];
+    const saved = await this.save(agentId, {
+      epoch,
+      seq: through,
+      entries: mergeMemoryEntries(entries, additions),
+    });
+    return !saved || through < head;
+  }
+
+  private async save(agentId: string, state: MemoryState): Promise<boolean> {
     this.abort.signal.throwIfAborted();
-    // > Recheck the provider epoch before committing both the delta and checkpoint.
     const latest = await this.options.source.read(agentId, undefined, 'tail');
     this.abort.signal.throwIfAborted();
-    if (latest.epoch !== epoch || latest.latest < through) return true;
+    if (
+      latest.epoch !== state.epoch ||
+      latest.latest < Math.max(state.seq, state.entries.at(-1)?.seq ?? -1)
+    )
+      return false;
     this.database
       .prepare(
         'INSERT INTO memory VALUES (?, ?, ?, ?) ON CONFLICT(agent_id) DO UPDATE SET epoch = excluded.epoch, seq = excluded.seq, entries = excluded.entries',
       )
-      .run(agentId, epoch, through, JSON.stringify(entries));
-    return through < head;
+      .run(agentId, state.epoch, state.seq, JSON.stringify(state.entries));
+    return true;
   }
 
   private async current(agentId: string) {
@@ -179,12 +206,14 @@ export class SessionMemory {
 
   async handoff(agentId: string, query: string): Promise<string> {
     const { state, tail } = await this.current(agentId);
-    const checkpoint = state?.seq ?? -1;
+    const through = state?.seq ?? -1;
     let messages = tail.messages;
     const tailStart = tail.start;
-    if (tailStart !== undefined && tailStart > Math.max(0, checkpoint) + 1) {
+    if (tailStart !== undefined && tailStart > Math.max(0, through) + 1) {
       // > A tool-heavy turn can push a recent user correction out of the tail window.
-      const page = await this.options.source.read(agentId, state).catch(() => undefined);
+      const page = await this.options.source
+        .read(agentId, checkpoint(state))
+        .catch(() => undefined);
       if (page && (page.reset || page.epoch !== tail.epoch)) {
         this.observe(agentId, true);
         return renderMemoryHandoff({ entries: [], recent: [], incomplete: true });
@@ -194,7 +223,7 @@ export class SessionMemory {
       }
     }
     const recent = messages.filter(
-      (message) => message.seq > checkpoint && message.author !== 'runtime',
+      (message) => message.seq > through && message.author !== 'runtime',
     );
     const context = selectMemoryContext(
       state?.entries ?? [],
@@ -215,10 +244,7 @@ export class SessionMemory {
           const entries = (state?.entries ?? [])
             .map((entry) => ({ entry, score: memoryRelevance(entry.text, query) }))
             .filter(({ score }) => !query || score)
-            .sort(
-              (a, b) =>
-                b.score - a.score || Math.max(...b.entry.sources) - Math.max(...a.entry.sources),
-            );
+            .sort((a, b) => b.score - a.score || b.entry.seq - a.entry.seq);
           return {
             incomplete: !state || state.seq < tail.latest || entries.length > 12,
             match: entries.length

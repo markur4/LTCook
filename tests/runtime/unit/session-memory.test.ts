@@ -3,7 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  applyMemoryDelta,
+  mergeMemoryEntries,
+  parseMemorySelections,
+  preserveUserMessages,
   memoryEntriesSchema,
   type MemoryEntry,
   type MemoryMessage,
@@ -12,47 +14,44 @@ import { SessionMemory, type MemorySource } from '../../../runtime/src/session-m
 import { createSessionMemoryTool } from '../../../runtime/src/tools/session-memory.js';
 
 const first: MemoryMessage = { seq: 1, author: 'user', text: 'Keep the cobalt cursor.' };
+const finding: MemoryMessage = { seq: 2, author: 'agent', text: 'Cobalt test passed.' };
 const correction: MemoryMessage = {
-  seq: 2,
+  seq: 3,
   author: 'user',
   text: 'Correction for cobalt: advance the cursor.',
 };
-const entry: MemoryEntry = {
-  id: 'keep',
-  kind: 'constraint',
-  status: 'confirmed',
-  text: first.text,
-  sources: [first.seq],
-};
+const issue: MemoryMessage = { seq: 4, author: 'tool', text: 'Cobalt shell exited with code 1.' };
+const [original, revision] = preserveUserMessages([first, correction]);
 
-test('applies only sourced changes and retains the evidence for a superseded decision', () => {
-  const replacement = { ...entry, id: 'advance', text: correction.text, sources: [2] };
-  const delta = { upsert: [replacement], supersede: [{ id: entry.id, source: 2 }] };
-  expect(applyMemoryDelta([entry], [correction], delta)).toEqual([
-    { ...entry, status: 'superseded', sources: [1, 2] },
-    replacement,
+test('the runtime preserves exact user messages and derives the authors of ordered additions', () => {
+  const excerpts = [
+    { excerpt: 1, ...finding, author: 'agent' as const },
+    { excerpt: 2, ...issue, author: 'tool' as const },
+  ];
+  const payload = {
+    additions: [
+      { kind: 'issue', excerpt: 2 },
+      { kind: 'finding', excerpt: 1 },
+    ],
+  };
+  const additions = parseMemorySelections(excerpts, payload);
+  const stored = mergeMemoryEntries([original!, revision!], [...additions, ...additions]);
+  expect(memoryEntriesSchema.parse(JSON.parse(JSON.stringify(stored)))).toEqual([
+    { kind: 'user', ...first },
+    { kind: 'finding', ...finding },
+    { kind: 'user', ...correction },
+    { kind: 'issue', ...issue },
   ]);
-  expect(() => applyMemoryDelta([entry], [{ ...correction, author: 'runtime' }], delta)).toThrow(
-    'new user source',
-  );
   expect(() =>
-    applyMemoryDelta([entry], [correction], {
-      ...delta,
-      upsert: [{ ...replacement, sources: [3] }],
+    parseMemorySelections(excerpts, {
+      additions: [{ kind: 'finding', excerpt: 99 }],
     }),
-  ).toThrow('Invalid Memory source');
-  expect(applyMemoryDelta([entry], [correction], { upsert: [], supersede: [] })).toEqual([entry]);
-});
-
-test('a correction preserves the cited sources of a full entry on reload', () => {
-  const sources = Array.from({ length: 12 }, (_, index) => index + 1);
-  const saved = applyMemoryDelta([{ ...entry, sources }], [{ ...correction, seq: 13 }], {
-    upsert: [],
-    supersede: [{ id: entry.id, source: 13 }],
-  });
-  expect(memoryEntriesSchema.parse(JSON.parse(JSON.stringify(saved)))).toEqual([
-    { ...entry, status: 'superseded', sources: [...sources, 13] },
-  ]);
+  ).toThrow('invalid excerpt');
+  expect(() =>
+    parseMemorySelections(excerpts, {
+      additions: [{ kind: 'finding', excerpt: 1, text: 'Invented claim' }],
+    }),
+  ).toThrow('invalid shape');
 });
 
 test('a handoff retains a pending correction behind a tool-heavy timeline tail', async () => {
@@ -61,7 +60,7 @@ test('a handoff retains a pending correction behind a tool-heavy timeline tail',
     source: {
       async read(_agentId, _cursor, direction) {
         return direction === 'tail'
-          ? { epoch: 'fixture', latest: 50, start: 3, through: 50, reset: false, messages: [] }
+          ? { epoch: 'fixture', latest: 50, start: 4, through: 50, reset: false, messages: [] }
           : {
               epoch: 'fixture',
               latest: 50,
@@ -86,7 +85,7 @@ test('a handoff retains a pending correction behind a tool-heavy timeline tail',
 test('coalesces updates, shares only authorized context, and recovers from a failed checkpoint', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-test-'));
   let epoch = 'before';
-  let messages = [first];
+  let messages = [first, finding];
   const source: MemorySource = {
     async read(id, cursor, direction = 'after') {
       if (id !== 'leader') throw new Error('Absent conversation');
@@ -118,11 +117,13 @@ test('coalesces updates, shares only authorized context, and recovers from a fai
     threshold: 1,
     peers: (agentId: string, workspace: string) =>
       agentId === 'peer' && workspace === directory ? ['leader'] : [],
-    async extract(entries: readonly MemoryEntry[], pending: readonly MemoryMessage[]) {
+    async extract(pending: readonly MemoryMessage[]): Promise<MemoryEntry[]> {
       attempts.push(pending.map(({ seq }) => seq));
       if (attempts.length === 1) await slow;
       if (attempts.length === 2) throw new Error('Transient inference failure');
-      return entries.length ? [...entries] : [entry];
+      return pending.flatMap(({ author, seq, text }) =>
+        author !== 'user' && author !== 'runtime' ? [{ kind: 'finding', author, seq, text }] : [],
+      );
     },
     onFailure() {
       failures++;
@@ -146,22 +147,32 @@ test('coalesces updates, shares only authorized context, and recovers from a fai
     memory.observe('leader');
     memory.observe('leader');
     await eventually(() => attempts.length === 1);
-    messages = [first, correction];
+    expect((await memory.search('peer', directory, 'Keep', 'leader')).matches[0]?.entries).toEqual([
+      original,
+    ]);
+    messages = [first, finding, correction, issue];
     const pending = await memory.handoff('leader', 'cobalt cursor');
     expect(pending).toContain(correction.text);
+    expect(pending.indexOf(first.text)).toBeLessThan(pending.indexOf(correction.text));
     expect(pending).toContain('"potentiallyIncomplete":true');
     memory.observe('leader', true);
     memory.observe('leader');
     release();
     await eventually(() => failures === 1);
-    expect(attempts).toEqual([[1], [2]]);
+    expect(attempts).toEqual([[2], [4]]);
     const result = await createSessionMemoryTool(memory).invoke(
       { agentId: 'leader', query: 'cobalt' },
       context,
     );
     expect(result).toMatchObject({
       incomplete: true,
-      matches: [{ agentId: 'leader', epoch, entries: [entry] }],
+      matches: [
+        {
+          agentId: 'leader',
+          epoch,
+          entries: [revision, { kind: 'finding', ...finding }, original],
+        },
+      ],
     });
     const ref = { agentId: 'leader', epoch, seq: 1 };
     await expect(
@@ -180,7 +191,7 @@ test('coalesces updates, shares only authorized context, and recovers from a fai
     await eventually(
       async () => !(await memory.search('peer', directory, 'cobalt', 'leader')).incomplete,
     );
-    expect(attempts).toEqual([[1], [2], [2]]);
+    expect(attempts).toEqual([[2], [4], [4]]);
     expect(await memory.sourceMessage('peer', directory, ref)).toMatchObject(first);
 
     epoch = 'rewound';

@@ -23,7 +23,8 @@ try {
     { model: process.argv[3], threshold: process.argv[4] ? Number(process.argv[4]) : undefined },
   );
   console.log(JSON.stringify(report, null, 2));
-  if (!report.identityUnchanged || !report.baseline.passed) process.exitCode = 1;
+  if (!report.identityUnchanged || !report.baseline.every(({ passed }) => passed))
+    process.exitCode = 1;
 } finally {
   process.off('SIGINT', cancel);
   process.off('SIGTERM', cancel);
