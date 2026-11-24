@@ -49,7 +49,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 - A Paseo Explorer **Activity** panel shows direct subagents, running and recent
   tools, observed skill loads, model context usage, ColGREP index status, and
-  Session Memory summaries and delivery evidence.
+  Session Memory summaries and delivery evidence. On desktop, Activity opens on
+  the first agent chat in each workspace. The Explorer **+** menu offers
+  **Activity**, **Team**, and **Tasks** on demand.
 
 - `ltcook restart` stops the local runtime and reopens Paseo. On Linux and macOS,
   `--update` applies the registered AppRC update before starting.

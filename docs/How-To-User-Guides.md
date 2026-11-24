@@ -161,24 +161,23 @@ On narrow screens, open the composer controls and select a Team from the native
 sheet before sending. Use the Model control to [choose an alias](#choose-a-model-alias)
 for the Leader. For hosted models, [authenticate with Pi](#authenticate-with-pi).
 
-The contextual **Team** panel is secondary to the Leader chat:
+On desktop, **Activity** opens in the right Explorer the first time you open
+an agent conversation in a workspace. Paseo remembers your layout after that.
+Use the Explorer **+** menu to open **Activity**, **Team**, or **Tasks**
+whenever you need them.
 
-- The overview separates the **Leader**, **Persistent members**, running
-  **Temporary members**, and **Available temporary roles**. Connected members
-  have direct **Open conversation** actions. It also shows active Passes,
-  progress, and actionable blockers.
-- **Task Board** groups Tasks by their recorded state. Select a Task to inspect
-  its description, acceptance criteria, ordered Steps, blocker and report.
-- **Agent Focus** shows role settings, current assignments, recorded handoff and
-  report, plus native model/activity when available. **Open conversation** uses
-  Paseo's existing chat and is unavailable for disconnected members.
+- **Activity** follows the focused agent. Expand the agent or a direct subagent
+  to inspect running and recent tools, observed skill loads, and model context
+  usage when available. The conversation button opens a subagent's native chat.
+- **Team** shows the focused LTCook Session's Leader, persistent and temporary
+  members, available temporary roles, active Passes, progress, and blockers.
+  **Agent Focus** shows role settings, assignments, handoffs, and reports.
+  **Open conversation** opens the native chat for a connected member.
+- **Tasks** opens the Task Board for that Session. Select a Task to inspect its
+  description, acceptance criteria, ordered Steps, blocker, and report.
 
-Open **Open Activity panel** from Paseo's Command Center while viewing an
-agent conversation. Activity opens in the right Explorer. Expand the agent or a
-direct subagent to inspect running and recent tools, observed skill loads, and
-model context usage when available. The separate conversation button opens a
-subagent's native chat. Use the same command in a workspace whose Explorer has
-no Activity tab yet.
+The Command Center also offers **Open Activity panel**, **Open Team panel**,
+and **Open Tasks panel**.
 
 Expand **RAG Index** to see the worktree that the selected conversation is
 authorized to search. Index availability and indexing activity are independent.

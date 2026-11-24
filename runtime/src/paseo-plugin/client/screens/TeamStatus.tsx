@@ -1,9 +1,15 @@
-import { useAgent, useWorkspace, type PluginAgentPanelProps } from '@getpaseo/plugin/client';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useAgent,
+  useWorkspace,
+  type PluginClientContext,
+  type PluginWorkspacePanelProps,
+} from '@getpaseo/plugin/client';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import type { TeamDetailTarget } from '../../shared/panel-details';
 import { useTeamPanel } from '../use-team-panel';
 import { useTeamCatalog } from '../use-team-catalog';
+import { useFocusedAgent } from '../explorer-panels';
 import { Action, Card, Label } from '../components/PanelChrome';
 import { StatusBadge } from '../components/StatusBadge';
 import { TeamOverview } from './TeamOverview';
@@ -11,21 +17,45 @@ import { TaskBoard } from './TaskBoard';
 import { AgentFocus } from './AgentFocus';
 import { Diagnostics } from './Diagnostics';
 
-export function TeamStatus(props: PluginAgentPanelProps) {
-  const agent = useAgent(props.params.agentId, (value) => ({
+type TeamStatusProps = PluginWorkspacePanelProps & {
+  client: Pick<PluginClientContext, 'composers'>;
+  mode: 'team' | 'tasks';
+};
+
+export function TeamStatus(props: TeamStatusProps) {
+  const focused = useFocusedAgent(props.client, props.host.id);
+  const agent = useAgent(focused ?? '');
+  const parent = useAgent(agent?.parentAgent ?? '');
+  const leader =
+    agent?.workspaceId === props.workspaceId
+      ? [agent, parent].find(
+          (value) =>
+            value?.hostId === props.host.id &&
+            value.workspaceId === props.workspaceId &&
+            (value.provider === 'ltcook' || value.labels['ltcook.member'] === 'leader'),
+        )
+      : undefined;
+  return <TeamStatusContent {...props} key={leader?.id} leaderId={leader?.id} />;
+}
+
+function TeamStatusContent({
+  leaderId,
+  mode,
+  ...props
+}: PluginWorkspacePanelProps & { leaderId?: string; mode: TeamStatusProps['mode'] }) {
+  const agent = useAgent(leaderId ?? '', (value) => ({
     provider: value.provider,
     metadata: value.metadata,
     labels: value.labels,
-    workspace: value.workspace,
     title: value.title,
     status: value.status,
     lastActivityAt: value.lastActivityAt,
   }));
-  const root = useWorkspace(agent?.workspace ?? props.workspaceId, (value) => value.directory);
+  const root = useWorkspace(props.workspaceId, (value) => value.directory);
   const teamSelection = agent?.metadata['ltcook.team'] ?? agent?.labels['ltcook.team'];
   const sessionId =
     agent?.provider === 'ltcook'
-      ? props.params.agentId
+      ? leaderId
       : agent?.labels['ltcook.member'] === 'leader'
         ? agent.labels['ltcook.session']
         : undefined;
@@ -36,17 +66,12 @@ export function TeamStatus(props: PluginAgentPanelProps) {
         (entry) => entry.selection === teamSelection || entry.teamId === teamSelection,
       )
     : undefined;
-  const [view, setView] = useState<'overview' | 'tasks' | 'agent' | 'diagnostics'>('overview');
+  const [teamView, setView] = useState<'overview' | 'agent' | 'diagnostics'>('overview');
+  const view = mode === 'tasks' ? 'tasks' : teamView;
   const [memberKey, setMember] = useState<string | null>(null);
   const [taskId, setTask] = useState<string | null>(null);
   const [issuesOpen, setIssues] = useState(false);
   const [width, setWidth] = useState(0);
-  useLayoutEffect(() => {
-    setView('overview');
-    setMember(null);
-    setTask(null);
-    setIssues(false);
-  }, [sessionId]);
   const target = useMemo<TeamDetailTarget | null>(
     () =>
       view === 'agent' && memberKey
@@ -58,7 +83,7 @@ export function TeamStatus(props: PluginAgentPanelProps) {
             : null,
     [view, memberKey, taskId, issuesOpen],
   );
-  const panel = useTeamPanel(sessionId, target, props.params.agentId);
+  const panel = useTeamPanel(isLeader ? sessionId : undefined, target, leaderId);
   const previousLeaderActivity = useRef({
     sessionId,
     status: agent?.status,
@@ -92,19 +117,14 @@ export function TeamStatus(props: PluginAgentPanelProps) {
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
     >
       <Label theme={theme} heading>
-        {snapshot?.teamName ?? team?.name ?? 'Team'}
+        {snapshot?.teamName ?? team?.name ?? (mode === 'tasks' ? 'Tasks' : 'Team')}
       </Label>
-      {!agent && (
-        <Text accessibilityRole="progressbar" style={{ color: theme.colors.foreground }}>
-          Loading Leader conversation…
-        </Text>
-      )}
-      {agent && !isLeader && (
+      {!isLeader && (
         <Label theme={theme} muted>
-          Open this panel from an LTCook Leader conversation.
+          Select an LTCook Leader conversation.
         </Label>
       )}
-      {isLeader && (
+      {isLeader && mode === 'team' && (
         <Card theme={theme}>
           <Label theme={theme} heading>
             Leader
@@ -122,46 +142,45 @@ export function TeamStatus(props: PluginAgentPanelProps) {
         </Text>
       )}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        <Action
-          theme={theme}
-          title="Team Overview"
-          selected={view === 'overview'}
-          onPress={() => setView('overview')}
-        />
-        <Action
-          theme={theme}
-          title="Diagnostics"
-          selected={view === 'diagnostics'}
-          onPress={() => setView('diagnostics')}
-        />
-        <Action
-          theme={theme}
-          title="Task Board"
-          selected={view === 'tasks'}
-          onPress={() => setView('tasks')}
-        />
-        <Action
-          theme={theme}
-          title="Agent Focus"
-          selected={view === 'agent'}
-          onPress={() => setView('agent')}
-        />
-        <Action
-          theme={theme}
-          title="Refresh"
-          disabled={!sessionId}
-          onPress={() => {
-            catalog.refresh();
-            void panel.refresh();
-          }}
-        />
+        {mode === 'team' && (
+          <>
+            <Action
+              theme={theme}
+              title="Team Overview"
+              selected={view === 'overview'}
+              onPress={() => setView('overview')}
+            />
+            <Action
+              theme={theme}
+              title="Diagnostics"
+              selected={view === 'diagnostics'}
+              onPress={() => setView('diagnostics')}
+            />
+            <Action
+              theme={theme}
+              title="Agent Focus"
+              selected={view === 'agent'}
+              onPress={() => setView('agent')}
+            />
+          </>
+        )}
+        {isLeader && (
+          <Action
+            theme={theme}
+            title="Refresh"
+            onPress={() => {
+              catalog.refresh();
+              void panel.refresh();
+            }}
+          />
+        )}
       </View>
-      {sessionId && (!panel.state || panel.state.status === 'loading') && (
+      {isLeader && (!panel.state || panel.state.status === 'loading') && (
         <Text accessibilityRole="progressbar" style={{ color: theme.colors.foreground }}>
           Loading team status…
         </Text>
       )}
-      {sessionId && panel.state?.status === 'error' && (
+      {isLeader && panel.state?.status === 'error' && (
         <View style={{ gap: 8 }}>
           <Text accessibilityRole="alert" style={{ color: theme.colors.statusDanger }}>
             {panel.state.message}
@@ -169,7 +188,7 @@ export function TeamStatus(props: PluginAgentPanelProps) {
           <Action theme={theme} title="Retry" onPress={() => void panel.refresh()} />
         </View>
       )}
-      {sessionId && panel.state?.status === 'ready' && !snapshot && view !== 'diagnostics' && (
+      {isLeader && panel.state?.status === 'ready' && !snapshot && view !== 'diagnostics' && (
         <Label theme={theme} muted>
           No coordination snapshot is available for this Leader session.
         </Label>

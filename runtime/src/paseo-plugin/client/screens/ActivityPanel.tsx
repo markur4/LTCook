@@ -1,29 +1,22 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { AppState, View } from 'react-native';
 import {
   useAgent,
-  useAgents,
-  useComposers,
   useHosts,
   useSubscription,
-  type PluginAgentPanelProps,
+  type PluginWorkspacePanelProps,
   type PluginClientContext,
 } from '@getpaseo/plugin/client';
-import { ScrollView, useToast } from '@getpaseo/plugin/client/ui';
-import {
-  activitySubscription,
-  type ActivitySnapshot,
-  type AgentActivity,
-} from '../../shared/activity';
+import { ScrollView } from '@getpaseo/plugin/client/ui';
+import { activitySubscription, type ActivitySnapshot } from '../../shared/activity';
 import { ActivityStatus, ActivityText } from '../components/ActivityCard';
 import { ActivityAgentCard } from '../components/ActivityAgentCard';
 import { ActivityServices } from '../components/ActivityServices';
 import type { Theme } from '../components/PanelChrome';
+import { useFocusedAgent } from '../explorer-panels';
 
-export const ACTIVITY_PANEL_ID = 'activity-status';
-
-type ActivityPanelProps = PluginAgentPanelProps & {
-  client: Pick<PluginClientContext, 'composers' | 'openPanel'>;
+type ActivityPanelProps = PluginWorkspacePanelProps & {
+  client: Pick<PluginClientContext, 'composers'>;
 };
 
 type ViewportObserver = new (
@@ -61,39 +54,8 @@ function Section({
   );
 }
 
-function SubagentCard({
-  client,
-  agent,
-  host,
-  workspaceId,
-  navigation,
-  theme,
-}: Pick<ActivityPanelProps, 'client' | 'host' | 'workspaceId' | 'navigation' | 'theme'> & {
-  agent: AgentActivity;
-}) {
-  const childWorkspaceId = useAgent(agent.id, (value) => value.workspaceId);
-  const toast = useToast();
-  const openConversation = navigation
-    ? (agentId: string) => {
-        if (childWorkspaceId && childWorkspaceId !== workspaceId) {
-          try {
-            client.openPanel(ACTIVITY_PANEL_ID, {
-              location: 'explorer',
-              workspaceId: childWorkspaceId,
-              agentId,
-            });
-          } catch {
-            toast.error('Activity could not open in the destination Explorer.');
-          }
-        }
-        navigation.openAgent({ agentId, serverId: host.id });
-      }
-    : undefined;
-  return <ActivityAgentCard theme={theme} agent={agent} onOpenConversation={openConversation} />;
-}
-
 function ObservedActivity(props: ActivityPanelProps & { selectedAgentId: string }) {
-  const { selectedAgentId, theme } = props;
+  const { selectedAgentId, theme, navigation, host } = props;
   const [snapshot, setSnapshot] = useState<ActivitySnapshot>();
   const stream = useSubscription(activitySubscription, { agentId: selectedAgentId }, (next) => {
     if (next.selectedAgentId !== selectedAgentId || next.agent.id !== selectedAgentId) return;
@@ -109,6 +71,9 @@ function ObservedActivity(props: ActivityPanelProps & { selectedAgentId: string 
         a.id.localeCompare(b.id),
     );
   const runningCount = subagents?.filter((agent) => agent.status === 'running').length ?? 0;
+  const openConversation = navigation
+    ? (agentId: string) => navigation.openAgent({ agentId, serverId: host.id })
+    : undefined;
 
   return (
     <ScrollView
@@ -147,7 +112,12 @@ function ObservedActivity(props: ActivityPanelProps & { selectedAgentId: string 
             }
           />
           {subagents?.map((agent) => (
-            <SubagentCard {...props} key={agent.id} agent={agent} />
+            <ActivityAgentCard
+              key={agent.id}
+              theme={theme}
+              agent={agent}
+              onOpenConversation={openConversation}
+            />
           ))}
           {!subagents?.length && (
             <ActivityText theme={theme} tone="muted">
@@ -173,22 +143,18 @@ function ObservedActivity(props: ActivityPanelProps & { selectedAgentId: string 
 }
 
 function FocusedActivity(props: ActivityPanelProps) {
-  const { client, host, params } = props;
-  const focused = useComposers({ focused: true })[0];
-  const agents = useAgents({ hosts: [host.id] });
-  const focusedId = useMemo(
-    // Both selectors resolve the same installation-owned composer. Match only this host's refs.
-    () => focused && agents.find(({ id }) => client.composers({ agentId: id })[0] === focused)?.id,
-    [agents, client, focused],
-  );
-  const selectedAgentId = focusedId ?? params.agentId;
-  return (
-    <ObservedActivity
-      {...props}
-      key={JSON.stringify([host.id, props.workspaceId, selectedAgentId])}
-      selectedAgentId={selectedAgentId}
-    />
-  );
+  const focused = useFocusedAgent(props.client, props.host.id);
+  const workspaceId = useAgent(focused ?? '', (agent) => agent.workspaceId);
+  if (!focused || workspaceId !== props.workspaceId) {
+    return (
+      <View style={{ padding: 10 }}>
+        <ActivityText theme={props.theme} tone="muted">
+          Select an agent to view activity.
+        </ActivityText>
+      </View>
+    );
+  }
+  return <ObservedActivity {...props} key={focused.id} selectedAgentId={focused.id} />;
 }
 
 export function ActivityPanel(props: ActivityPanelProps) {

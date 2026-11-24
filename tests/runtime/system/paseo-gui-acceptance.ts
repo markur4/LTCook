@@ -135,6 +135,22 @@ async function inspectStage(name: string): Promise<void> {
 async function clickButton(name: string): Promise<void> {
   await browser('find', 'role', 'button', 'click', '--name', name, '--exact');
 }
+const explorer = '[data-testid="workspace-explorer-sidebar"]';
+async function openExplorerPanel(name: string): Promise<void> {
+  const addTab = `${explorer} [aria-label="New tab"]`;
+  await browser(
+    'wait',
+    '--fn',
+    `(() => {
+      const button = document.querySelector(${JSON.stringify(addTab)});
+      if (!button?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+      const rect = button.getBoundingClientRect();
+      return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+    })()`,
+  );
+  await browser('click', addTab);
+  await browser('find', 'role', 'menuitem', 'click', '--name', name, '--exact');
+}
 async function openActivityPanel(): Promise<void> {
   await browser('press', 'Control+k');
   await browser(
@@ -469,11 +485,34 @@ try {
   assert(!nativeChat.includes('Team Overview'), 'No intermediary Team Overview replaces the chat');
   await inspectStage('native-leader-chat');
 
+  stage = 'native-explorer-defaults';
+  await browser('wait', '--text', 'Recent conversation activity');
+  assert.equal(
+    (
+      await browser('get', 'count', `${explorer} :is([aria-label="Team"], [aria-label="Tasks"])`)
+    ).trim(),
+    '0',
+    'Only Activity opens automatically',
+  );
+  const activityTab = `${explorer} [aria-label="Activity"][data-testid^="workspace-tab-"]`;
+  await browser('hover', activityTab);
+  await browser('click', `${explorer} [data-testid^="workspace-plugin-close-"]`);
+  assert.equal((await browser('get', 'count', activityTab)).trim(), '0', 'Activity tab closes');
+
   await clickButton('Teams');
   await browser('wait', '--text', 'Default Minimal');
   await inspectStage('teams-browser');
   await clickTeamAction('Default Minimal', 'Open Leader chat');
   await browser('wait', '--text', 'GUI native Leader response.');
+  await browser('reload');
+  await waitForComposer(leader.agent.title ?? undefined);
+  assert.equal(
+    (await browser('get', 'count', activityTab)).trim(),
+    '0',
+    'Returning to the same workspace and reloading respects the closed Activity tab',
+  );
+  await openExplorerPanel('Activity');
+  await browser('wait', '--text', 'Recent conversation activity');
   assert.equal(
     runtime.listSessions(workspace, 'default-minimal').length,
     1,
@@ -732,22 +771,7 @@ try {
 
   const panelNavigation = telemetry.begin('panel.navigation');
   try {
-    await browser('press', 'Control+k');
-    await browser(
-      'find',
-      'placeholder',
-      'Search commands, files, workspaces, and agents...',
-      'fill',
-      'Open Team panel',
-    );
-    await browser('wait', '--text', 'Open Team panel');
-    await inspectStage('native-team-panel-command');
-    await browser(
-      'wait',
-      '--fn',
-      ` [...document.querySelectorAll('button,[role=button]')].some(node => (node.getAttribute('aria-label') === 'Open Team panel' || node.textContent?.trim() === 'Open Team panel') && node.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }))`,
-    );
-    await clickButton('Open Team panel');
+    await openExplorerPanel('Team');
     await browser('wait', '--text', 'Persistent members');
   } finally {
     panelNavigation.end();
@@ -763,8 +787,6 @@ try {
   }
   assert(panel.includes('Adjutant'), 'Contextual panel includes the connected persistent member');
   await inspectStage('contextual-team-panel');
-  await clickButton('Task Board');
-  await inspectStage('contextual-task-board');
   await clickButton('Diagnostics');
   await browser('wait', '--text', 'Agent Evals');
   await clickButton('Synthetic Setup');
@@ -777,6 +799,9 @@ try {
   await clickButton('Open conversation');
   await waitForComposer('Adjutant');
   await inspectStage('panel-direct-child-conversation');
+  await openExplorerPanel('Tasks');
+  await browser('wait', '--text', 'Task Board');
+  await inspectStage('contextual-task-board');
 
   await telemetry.exportTrace();
   const trace = JSON.parse(await readFile(tracePath, 'utf8')) as {
