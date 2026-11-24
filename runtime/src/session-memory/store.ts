@@ -38,6 +38,9 @@ const summarySchema = z.object({
       fields: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
     }),
   ),
+  observedChecks: z
+    .array(z.object({ seq: z.number().int().nonnegative(), text: z.string() }))
+    .optional(),
   expectedParts: z.number().int().positive(),
   complete: z.boolean(),
 });

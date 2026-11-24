@@ -1,9 +1,10 @@
 # Context-aware Session Memory qualification
 
-The runtime passed local verification and was approved for integration ahead
-of model qualification. Rolling history remains below the critical-retention
-target. The matched Pi edits are recorded below, and focused retention replays
-continue on the existing model profile. Delegation enrichment stays opt-in.
+The initial runtime passed local verification and was integrated ahead of
+model qualification. Rolling history remains below the critical-retention
+target. The retention follow-up received code review. The user requested
+merging the final corrections with verification paused until GPU access.
+Delegation enrichment stays opt-in.
 
 ## Method
 
@@ -226,6 +227,41 @@ comparison is inconclusive. The remaining workspace arms all passed their
 executable edit checks. The matched edit run took 20 minutes 24 seconds
 including all summarizer requests and native Pi turns. Ollama's model digest
 stayed fixed.
+
+## Retention follow-up
+
+After assigning native turn IDs to the separate documentation work, the
+long fixture still exposed all three missing critical facts with rolling
+history. The short rolling replay missed the cache version guard again.
+
+| Focused pre-fix replay | Strategy | Critical facts | Complete requests | Prefill | Generation | End-to-end |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Short cache recovery | Logical with rolling history | 2/3 | 6/6 | 25.48 s | 58.56 s | 84.14 s |
+| Long cache recovery, corrected native turns | Logical without history | 3/3 | 15/15 | 56.10 s | 267.04 s | 323.58 s |
+| Long cache recovery, corrected native turns | Logical with rolling history | 0/3 | 15/15 | 122.87 s | 304.68 s | 427.94 s |
+
+The follow-up preserves explicit named outcomes from original tool responses.
+It searches original conversation messages for technical identifiers absent
+from a delegation handoff, within the existing handoff token budget. It runs
+the same model with the same inference settings. Focused measurements score
+the model output and the selected handoff separately.
+
+| Follow-up replay | Model evidence | With observed checks | In selected handoff | Complete requests | Prefill | Generation | End-to-end |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Short cache recovery, rolling history | 3/3 | 3/3 | 3/3 | 6/6 | 46.15 s | 209.31 s | 255.63 s |
+
+The short replay recovered the missing test result in the model output itself.
+This replay required no original-source lookup. A Traditional Test separately
+verifies exact original-source recovery when a completed summary omits a
+requested implementation path. The short replay had higher latency than the
+pre-fix run under a shared CPU workload.
+
+The short result predates the final exact-match grader and selection logic.
+The follow-up long replay was stopped before it produced a complete report,
+and the queued trace-pairing replay did not start. Final exact retention,
+repository-edit behavior, and performance remain unverified for the
+reviewed follow-up. The merged initial runtime's local checks are recorded
+below.
 
 ## Local verification
 

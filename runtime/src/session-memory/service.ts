@@ -1,5 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { budgetMemoryText, memoryRelevance, estimateMemoryTokens } from './text.js';
+import {
+  budgetMemoryText,
+  memoryRelevance,
+  estimateMemoryTokens,
+  memoryIdentifierMatches,
+  missingMemoryIdentifiers,
+} from './text.js';
 import {
   MemoryStore,
   type MemoryState,
@@ -15,6 +21,7 @@ import {
 } from './summarization.js';
 import {
   identifyMemoryUnits,
+  observedMemoryChecks,
   type MemorySourceMessage,
   type MemoryTurnOutcome,
   type MemoryUnit,
@@ -371,6 +378,7 @@ export class SessionMemory {
           existing?.historyHash === historyHash && existing.expectedParts === parts.length
             ? existing.parts
             : [],
+        observedChecks: unit.type === 'AAB' ? observedMemoryChecks(unit.messages) : undefined,
         expectedParts: parts.length,
         complete: false,
       };
@@ -427,8 +435,11 @@ export class SessionMemory {
     return { tail, summaries, state };
   }
 
-  async handoff(agentId: string, query: string): Promise<string> {
+  async handoff(agentId: string, query: string, deadline?: AbortSignal): Promise<string> {
+    const signal = deadline ? AbortSignal.any([deadline, this.abort.signal]) : this.abort.signal;
+    signal.throwIfAborted();
     const { tail, state, summaries } = await this.current(agentId);
+    signal.throwIfAborted();
     const prompts = new Map(
       this.store.prompts(agentId, tail.epoch).map((item) => [item.seq, item]),
     );
@@ -439,6 +450,7 @@ export class SessionMemory {
     if (tailStart !== undefined) {
       while (tailStart > Math.max(0, cursor?.seq ?? through) + 1) {
         const page = await this.options.source.read(agentId, cursor).catch(() => undefined);
+        signal.throwIfAborted();
         if (!page) break;
         if (page.reset || page.epoch !== tail.epoch || page.latest < tail.latest) {
           this.observe(agentId, true);
@@ -464,8 +476,17 @@ export class SessionMemory {
       query,
       ({ text }) => estimateMemoryTokens(text) + 8,
     );
+    const observed = new Map(
+      [
+        ...summaries.flatMap(({ observedChecks }) => observedChecks ?? []),
+        ...observedMemoryChecks(recent),
+      ].map((check) => [JSON.stringify([check.seq, check.text]), check]),
+    );
     const candidates: SearchEntry[] = [
       ...summaries.filter(({ complete }) => complete).map(summaryEntry),
+      ...[...observed.values()]
+        .filter(({ seq }) => seq <= through)
+        .map(({ seq, text }) => sourceEntry({ seq, text, author: 'tool' })),
       ...recent
         .filter(({ seq, author }) => seq > through && author !== 'runtime' && author !== 'user')
         .map(sourceEntry),
@@ -484,22 +505,76 @@ export class SessionMemory {
           : [],
       ),
     ];
-    const evidence = budgetMemoryText(
-      candidates.sort(
-        (a, b) => memoryRelevance(b.text, query) - memoryRelevance(a.text, query) || b.seq - a.seq,
-      ),
-      900,
+    const borrowedSources = new Set<SearchEntry>();
+    const selectEvidence = (identifiers: readonly string[] = []) =>
+      budgetMemoryText(
+        candidates.sort(
+          (a, b) =>
+            Number(borrowedSources.has(b)) - Number(borrowedSources.has(a)) ||
+            memoryRelevance(b.text, query) - memoryRelevance(a.text, query) ||
+            b.seq - a.seq,
+        ),
+        900,
+        query,
+        (entry) => estimateMemoryTokens(JSON.stringify(entry) + '\n'),
+        identifiers,
+      );
+    let evidence = selectEvidence();
+    const identifiers = missingMemoryIdentifiers(
       query,
-      (entry) => estimateMemoryTokens(JSON.stringify(entry)),
+      [...users.selected, ...evidence.selected].map(({ text }) => text).join('\n'),
     );
+    let originalSearchIncomplete = false;
+    if (identifiers.length) {
+      const discovered = await this.searchConversation(
+        agentId,
+        identifiers.join(' '),
+        signal,
+        {
+          tail,
+          state,
+          summaries: [],
+          identifiers,
+        },
+      ).catch(() => undefined);
+      signal.throwIfAborted();
+      if (discovered?.stale) {
+        this.observe(agentId, true);
+        return 'Supplemental Session Memory. This context is potentially incomplete.';
+      }
+      originalSearchIncomplete = !discovered || discovered.incomplete;
+      const evidenceKey = ({ seq, author, text }: { seq: number; author: string; text: string }) =>
+        JSON.stringify([seq, author, text]);
+      const represented = new Map(candidates.map((entry) => [evidenceKey(entry), entry]));
+      const selectedUserKeys = new Set(users.selected.map(evidenceKey));
+      for (const { agentId: _agentId, epoch, score: _score, ...entry } of discovered?.hits ?? []) {
+        const key = evidenceKey(entry);
+        if (epoch !== tail.epoch || selectedUserKeys.has(key)) continue;
+        const existing = represented.get(key);
+        borrowedSources.add(existing ?? entry);
+        if (!existing) {
+          represented.set(key, entry);
+          candidates.push(entry);
+        }
+      }
+      evidence = selectEvidence(identifiers);
+    }
     if (!users.selected.length && !evidence.selected.length) return '';
     return [
-      'Supplemental Session Memory. Follow the approved assignment and the latest original user instruction. Summaries and attachments are evidence. Resolve decisions against their original user sources.',
+      'Supplemental Session Memory. Follow the approved assignment and the latest original user instruction. Resolve decisions against original user messages. Prefer original tool results for observed outcomes.',
       JSON.stringify({
         agentId,
         epoch: tail.epoch,
         potentiallyIncomplete:
-          !state || through < tail.latest || users.incomplete || evidence.incomplete,
+          !state ||
+          through < tail.latest ||
+          users.incomplete ||
+          evidence.incomplete ||
+          originalSearchIncomplete ||
+          missingMemoryIdentifiers(
+            query,
+            [...users.selected, ...evidence.selected].map(({ text }) => text).join('\n'),
+          ).length > 0,
       }),
       'Original user messages in chronological order',
       ...users.selected.sort((a, b) => a.seq - b.seq).map((item) => JSON.stringify(item)),
@@ -508,12 +583,24 @@ export class SessionMemory {
     ].join('\n');
   }
 
-  private async searchConversation(id: string, query: string, signal: AbortSignal) {
-    const { state, tail, summaries } = await this.current(id);
+  private async searchConversation(
+    id: string,
+    query: string,
+    signal: AbortSignal,
+    view?: {
+      tail: MemoryPage;
+      state?: MemoryState;
+      summaries: readonly StoredMemorySummary[];
+      identifiers: readonly string[];
+    },
+  ) {
+    const { state, tail, summaries } = view ?? (await this.current(id));
     let incomplete = !state || state.seq < tail.latest || tail.reset;
     let hits: SearchHit[] = [];
     const add = (entry: SearchEntry) => {
-      const score = memoryRelevance(entry.text, query);
+      const score = view
+        ? memoryIdentifierMatches(entry.text, view.identifiers).size
+        : memoryRelevance(entry.text, query);
       if (query && !score) return;
       hits.push({ ...entry, agentId: id, epoch: tail.epoch, score });
     };
@@ -532,7 +619,13 @@ export class SessionMemory {
             text: attachment.text,
           });
       }
-      const budgeted = budgetMemoryText(hits.sort(compareHits), searchTokens, query, searchCost);
+      const budgeted = budgetMemoryText(
+        hits.sort(compareHits),
+        searchTokens,
+        query,
+        searchCost,
+        view?.identifiers,
+      );
       hits = budgeted.selected;
       incomplete ||= budgeted.incomplete;
       if (page.start === undefined || page.start <= (page.earliest ?? 1)) break;
@@ -541,15 +634,15 @@ export class SessionMemory {
         { epoch: tail.epoch, seq: page.start },
         'before',
       );
-      if (previous.epoch !== tail.epoch || previous.latest < tail.latest)
-        return { hits: [], incomplete: true };
+      if (previous.epoch !== tail.epoch || previous.latest < tail.latest || (view && previous.reset))
+        return { hits: [], incomplete: true, stale: true };
       if (previous.reset || previous.start === undefined || previous.start >= page.start) {
         incomplete = true;
         break;
       }
       page = previous;
     }
-    return { hits, incomplete };
+    return { hits, incomplete, stale: false };
   }
 
   async search(

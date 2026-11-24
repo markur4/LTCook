@@ -143,6 +143,7 @@ export function editTranscript(fixture: EditCase): MemoryFixture {
         label: 'implementation location',
         source: evidence.seq,
         expected: new RegExp(fixture.file.replaceAll('.', '\\.')),
+        identifiers: [fixture.file],
         critical: true,
         kind: 'reference',
       },

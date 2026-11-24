@@ -456,6 +456,11 @@ summarization is pending, after compaction, and when agents resume work or share
 authorized context. Each summary cites its native source sequences, including
 which sequences are original user instructions.
 
+An opt-in delegation handoff can include explicit, named check outcomes
+from original tool results. When a requested path or technical identifier
+is absent from the selected context, LTCook searches the original
+conversation and includes the cited source within the same handoff budget.
+
 History is background for the new summary. Completed summaries are rendered in
 chronological order with stable text between common instructions and the
 current UAMP or AAB instructions. The blue blocks below show potential reuse.

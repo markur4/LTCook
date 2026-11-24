@@ -342,6 +342,110 @@ test('continues a newer turn when the older provider terminal event was missed',
   }
 });
 
+test('preserves checked tool evidence and uses originals for an omitted archived path', async () => {
+  const messages: MemorySourceMessage[] = [
+    {
+      ...first,
+      turnId: 'older',
+      attachments: [
+        { id: 'manifest', name: 'Manifest notes', text: 'The source is cache/manifest.json.' },
+      ],
+    },
+    { seq: 2, author: 'tool', text: 'VERIFIED_CACHE_GUARD passed.', turnId: 'older' },
+    {
+      seq: 3,
+      author: 'agent',
+      text:
+        'Scratch file runtime/src/old-cache.ts.bak. ' +
+        'Unrelated workspace log entry. '.repeat(100) +
+        'Observed implementation in runtime/src/old-cache.ts during the run. MADE_UP_CHECK PASS.',
+      turnId: 'older',
+    },
+    { ...correction, seq: 4, turnId: 'newer' },
+    { seq: 5, author: 'agent', text: 'The correction was noted.', turnId: 'newer' },
+  ];
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type) {
+      return {
+        type,
+        text: 'Keep runtime/src/old-cache.ts.bak and runtime/src/OLD-cache.ts.',
+        complete: true,
+        elapsedMs: 1,
+      };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'older', outcome: 'completed' }, false);
+    memory.turn('leader', { turnId: 'newer', outcome: 'completed' }, false);
+    await eventually(async () => !(await memory.search('leader', '', '')).incomplete);
+    const check = await memory.handoff('leader', 'verified cache guard');
+    expect(check).toContain('VERIFIED_CACHE_GUARD passed');
+    expect(check).not.toContain('MADE_UP_CHECK');
+    const entries = (handoff: string) =>
+      handoff
+        .split('\n')
+        .filter((line) => line.startsWith('{'))
+        .map((line) => JSON.parse(line));
+    for (const path of ['runtime/src/old-cache.ts', 'old-cache.ts']) {
+      const handoff = await memory.handoff('leader', `Check ${path}.`);
+      expect(entries(handoff)).toContainEqual(
+        expect.objectContaining({
+          seq: 3,
+          author: 'agent',
+          kind: 'original-message',
+          text: expect.stringContaining('runtime/src/old-cache.ts during the run'),
+        }),
+      );
+    }
+    const attachment = await memory.handoff('leader', 'Locate cache/manifest.json.');
+    expect(entries(attachment)).toContainEqual(
+      expect.objectContaining({
+        seq: 1,
+        author: 'attachment',
+        text: 'The source is cache/manifest.json.',
+      }),
+    );
+  } finally {
+    await memory.close();
+  }
+});
+
+test('stops fetching older originals when the delegation deadline expires', async () => {
+  const messages: MemorySourceMessage[] = [
+    first,
+    finding,
+    correction,
+    ...Array.from({ length: 5 }, (_, index) => ({ ...issue, seq: index + 4 })),
+  ];
+  const source = timeline(() => ({ epoch: 'one', messages }));
+  const deadline = new AbortController();
+  let pages = 0;
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: {
+      async read(...args) {
+        const page = await source.read(...args);
+        if (args[2] === 'before') {
+          pages++;
+          deadline.abort();
+        }
+        return page;
+      },
+    },
+    async summarize() {
+      throw new Error('A handoff must never invoke summarization directly');
+    },
+  });
+  try {
+    await expect(memory.handoff('leader', 'Locate absent.ts.', deadline.signal)).rejects.toThrow();
+    expect(pages).toBe(1);
+  } finally {
+    await memory.close();
+  }
+});
+
 test('gives foreground inference priority and exposes originals during a failed summary', async () => {
   const messages = [
     { ...first, turnId: '1' },
