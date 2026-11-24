@@ -79,6 +79,14 @@ function verifyRetryEvidence(content: string) {
   assert.doesNotMatch(content, /^2 \| .*return 48;|^3 \| .*return 12;/m);
 }
 
+function verifyLocateDefinition(content: string) {
+  assert.match(content, /"role"\s*:\s*"definition"/);
+  assert.match(content, /channel-retries\.ts/);
+  assert.match(content, /export const releaseRetryLimit/);
+  assert.match(content, /if \(channel === 'stable'\) return 12;/);
+  assert.match(content, /if \(channel === 'preview'\) return 48;/);
+}
+
 function verifyCodexRetryEvidence(content: string) {
   const result: unknown = JSON.parse(content.replace(/^Wall time:[^\n]*\nOutput:\n/, ''));
   const search = Value.Check(RepositoryLocateOutputSchema, result) ? result.searches[0] : result;
@@ -551,8 +559,8 @@ try {
     await exercise(
       ordinaryPi,
       'pi_locate_ripgrep',
-      { symbol: 'channel', paths: ['channel-retries.ts'] },
-      verifyRetryEvidence,
+      { symbol: 'releaseRetryLimit', paths: [retryPath] },
+      verifyLocateDefinition,
     );
     await exercise(
       ordinaryPi,
@@ -595,8 +603,8 @@ try {
     await exercise(
       ordinaryCodex,
       'codex_locate_ripgrep',
-      { symbol: 'channel', paths: [retryPath] },
-      verifyCodexRetryEvidence,
+      { symbol: 'releaseRetryLimit', paths: [retryPath] },
+      verifyLocateDefinition,
     );
     await exercise(
       ordinaryCodex,

@@ -19,7 +19,7 @@ export {
 } from '../paseo-plugin/shared/workspace-tools.js';
 
 export const repositoryEvidenceGuidance =
-  ' Cite the exact supporting numbered lines for each claim. Search again only to close a specific evidence gap. A ready empty response means this search found no matches. An unavailable or indexing response leaves the evidence unresolved.';
+  ' Cite the exact supporting numbered lines for each claim. Search again only to close a specific evidence gap. A ready, complete empty response means this search found no matches. Partial, unavailable, or indexing results can leave the evidence unresolved.';
 
 export const RepositorySearchPathsSchema = Type.Array(
   Type.String({ minLength: 1, maxLength: 1024 }),

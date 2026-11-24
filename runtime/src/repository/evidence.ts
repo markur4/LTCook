@@ -31,7 +31,7 @@ function missingFile(error: unknown): boolean {
 /** Verify the provider's text at a reported range before returning any source evidence. */
 export async function verifySourceEvidence(
   workspace: RepositoryWorkspace,
-  input: { path: string; excerpt: string; ranges: readonly SourceRange[] },
+  input: { path: string; excerpt: string; ranges: readonly SourceRange[]; contextAfter?: number },
   signal: AbortSignal,
 ): Promise<RepositoryHit | EvidenceFailure> {
   signal.throwIfAborted();
@@ -72,12 +72,15 @@ export async function verifySourceEvidence(
         if (startLine < 1 || endLine < startLine || endLine > lines.length) continue;
         const current = lines.slice(startLine - 1, endLine).join('\n');
         if (excerpt !== current && excerpt !== `${current}\n`) continue;
-        const excerptTruncated = current.length > MAX_SOURCE_EXCERPT;
+        const contextEnd = Math.min(lines.length, endLine + (input.contextAfter ?? 0));
+        const evidence =
+          contextEnd === endLine ? current : lines.slice(startLine - 1, contextEnd).join('\n');
+        const excerptTruncated = evidence.length > MAX_SOURCE_EXCERPT;
         return {
           path: target.relative,
           startLine,
-          endLine,
-          excerpt: current.slice(0, MAX_SOURCE_EXCERPT).replace(/[\uD800-\uDBFF]$/, ''),
+          endLine: contextEnd,
+          excerpt: evidence.slice(0, MAX_SOURCE_EXCERPT).replace(/[\uD800-\uDBFF]$/, ''),
           ...(excerptTruncated ? { excerptTruncated: true } : {}),
           ...(name ? { name: name.slice(0, 200) } : {}),
         };

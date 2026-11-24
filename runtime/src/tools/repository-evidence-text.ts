@@ -30,9 +30,23 @@ function formatHit({ excerpt, ...location }: RepositoryHit): string {
   ].join('\n');
 }
 
-function formatSearch({ results, ...metadata }: Static<typeof RepositorySearchOutputSchema>) {
+function formatSearch({
+  results,
+  ...metadata
+}:
+  | Static<typeof RepositorySearchOutputSchema>
+  | Static<typeof RepositoryLocateOutputSchema>['searches'][number]) {
   const header = results ? { ...metadata, hitCount: results.length } : metadata;
-  return [escapeControls(JSON.stringify(header)), ...(results ?? []).map(formatHit)].join('\n\n');
+  const sections = [escapeControls(JSON.stringify(header))];
+  let role: string | undefined;
+  for (const hit of results ?? []) {
+    if ('role' in hit && typeof hit.role === 'string' && hit.role !== role) {
+      role = hit.role;
+      sections.push(`${role.charAt(0).toUpperCase()}${role.slice(1)} candidates`);
+    }
+    sections.push(formatHit(hit));
+  }
+  return sections.join('\n\n');
 }
 
 /** Render numbered source lines for the agent while callers retain the structured output. */
