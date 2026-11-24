@@ -10,7 +10,7 @@ import { createSourceNavigation, type SourceConnection } from '../repository/sou
 import { RepositorySearchOutputSchema } from './repo-search.js';
 
 const MAX_LEADS = 4;
-const TRACE_TIMEOUT_MS = 15_000;
+export const REPOSITORY_TRACE_TIMEOUT_MS = 15_000;
 const MAX_EVIDENCE = 24;
 const MAX_EXCERPT_CHARACTERS = 12_000;
 const MAX_CONNECTIONS = 12;
@@ -171,57 +171,42 @@ function overlap(first: RepositoryHit, second: RepositoryHit): RepositoryHit | u
     return { path: first.path, startLine, endLine, excerpt };
 }
 
-async function readCandidates(
-  leads: TraceLead[],
-  search: (
-    lead: TraceLead,
-    signal: AbortSignal,
-  ) => Promise<SearchResult & { results?: TraceHit[] }>,
-  signal: AbortSignal,
-) {
-  async function lookup(lead: TraceLead): Promise<Candidates> {
-    const gaps = new Set<string>();
-    try {
-      const result = await search(lead, signal);
-      if (result.status !== 'ready') gaps.add(result.status);
-      if (result.partial) gaps.add('search-partial');
-      if (result.freshness === 'stale') gaps.add('search-stale');
-      if (result.truncated) gaps.add('search-truncated');
-      const hits = result.results ?? [];
-      if (result.status === 'ready' && !result.partial && !hits.length) gaps.add('no-matches');
-      return { hits, gaps };
-    } catch {
-      gaps.add(signal.aborted ? 'deadline' : 'search-failed');
-      return { hits: [], gaps };
-    }
-  }
+type TraceConnection =
+  | SourceConnection
+  | {
+      kind: 'shared-literal';
+      literal: string;
+      from: RepositoryHit;
+      to: RepositoryHit;
+      fromAnchorLine: number;
+      toAnchorLine: number;
+    };
 
-  const primary = await Promise.all(leads.map(lookup));
-  const anchors = leads.map((lead, index) =>
-    lead.mode === 'exact'
-      ? [lead.query]
-      : lead.mode === 'hybrid'
-        ? rankedAnchors(primary[index]!.hits)
-        : [],
-  );
-  const followups = new Map<string, Promise<Candidates>>();
-  for (const [index, lead] of leads.entries()) {
-    if (lead.mode === 'exact') followups.set(lead.query, Promise.resolve(primary[index]!));
-  }
-  for (const symbol of anchors.flat()) {
-    if (!followups.has(symbol)) followups.set(symbol, lookup({ mode: 'exact', query: symbol }));
-  }
-  return Promise.all(
-    primary.map(async (result, index) => ({
-      ...result,
-      anchors: await Promise.all(
-        anchors[index]!.map(async (symbol) => ({
-          symbol,
-          ...(await followups.get(symbol)!),
-        })),
-      ),
-    })),
-  );
+function sharedLiteral(query: string, evidence: RepositoryHit[]): TraceConnection | undefined {
+  const setting = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(query);
+  if (!setting && !/^\/[\w-]+(?:\/[\w-]+)+$/.test(query)) return;
+  const surrounding = setting ? '[\\p{L}\\p{M}\\p{N}_$]' : '[\\p{L}\\p{M}\\p{N}_/-]';
+  const match = new RegExp(`(?<!${surrounding})${query}(?!${surrounding})`, 'u');
+  const sources = evidence
+    .filter(
+      ({ path, excerptTruncated }) =>
+        !excerptTruncated && /\.(?:[cm]?[jt]sx?|pyi?)$/.test(path) && !isTestSource(path),
+    )
+    .flatMap((hit) => {
+      const index = hit.excerpt.split('\n').findIndex((line) => match.test(line));
+      return index < 0 ? [] : [{ hit, line: hit.startLine + index }];
+    });
+  const first = sources[0];
+  const second = first && sources.find(({ hit }) => hit.path !== first.hit.path);
+  if (first && second)
+    return {
+      kind: 'shared-literal',
+      literal: query,
+      from: first.hit,
+      to: second.hit,
+      fromAnchorLine: first.line,
+      toAnchorLine: second.line,
+    };
 }
 
 export async function traceRepository(
@@ -231,6 +216,7 @@ export async function traceRepository(
     allows,
     search,
     callerSignal,
+    deadline,
   }: {
     reader: RepositorySourceReader;
     allows: (path: string) => boolean;
@@ -239,14 +225,45 @@ export async function traceRepository(
       signal: AbortSignal,
     ) => Promise<SearchResult & { results?: TraceHit[] }>;
     callerSignal: AbortSignal;
+    deadline: AbortSignal;
   },
 ): Promise<TraceResult> {
   const leads = traceLeads(request);
-  const deadline = AbortSignal.timeout(TRACE_TIMEOUT_MS);
   const signal = AbortSignal.any([callerSignal, deadline]);
   const navigation = createSourceNavigation(reader, signal, allows);
-  const candidates = await readCandidates(leads, search, signal);
-  callerSignal.throwIfAborted();
+
+  async function lookup(lead: TraceLead): Promise<Candidates> {
+    const gaps = new Set<string>();
+    try {
+      signal.throwIfAborted();
+      const result = await search(lead, signal);
+      if (result.status !== 'ready') gaps.add(result.status);
+      if (result.partial) gaps.add('search-partial');
+      if (result.freshness === 'stale') gaps.add('search-stale');
+      if (result.truncated) gaps.add('search-truncated');
+      const hits = result.results ?? [];
+      if (result.status === 'ready' && !result.partial && !result.truncated && !hits.length)
+        gaps.add('no-matches');
+      return { hits, gaps };
+    } catch {
+      gaps.add(signal.aborted ? 'deadline' : 'search-failed');
+      return { hits: [], gaps };
+    }
+  }
+
+  const primary = leads.map(lookup);
+  const followups = new Map<string, Promise<Candidates>>();
+  leads.forEach(({ mode, query }, index) => {
+    if (mode === 'exact') followups.set(query, primary[index]!);
+  });
+
+  function exactCandidate(symbol: string) {
+    const existing = followups.get(symbol);
+    if (existing) return existing;
+    const candidate = lookup({ mode: 'exact', query: symbol });
+    followups.set(symbol, candidate);
+    return candidate;
+  }
 
   async function expand(hit: RepositoryHit): Promise<RepositoryHit | undefined> {
     if (!allows(hit.path)) return;
@@ -260,65 +277,61 @@ export async function traceRepository(
   }
 
   const found = await Promise.all(
-    candidates.map(async ({ hits, gaps, anchors }, index) => {
-      const lead = leads[index]!;
-      const anchorHits = anchors.flatMap((anchor) => anchor.hits);
-      for (const anchor of anchors) for (const gap of anchor.gaps) gaps.add(gap);
+    leads.map(async (lead, index) => {
+      const initial = await primary[index]!;
+      const { hits } = initial;
+      const gaps = new Set(initial.gaps);
       const limit = leads.length <= 2 ? 6 : 4;
-      const selected = selectHits(
-        [...hits.slice(0, 2), ...anchorHits, ...hits.slice(2)],
-        limit,
-        lead.mode !== 'hybrid',
-      );
-      const candidates = await Promise.all(
-        selected.map(async (hit) => {
+      const lexical = lead.mode !== 'hybrid';
+      const primaryHits = selectHits(hits, limit, lexical);
+      async function readEvidence(hit: RepositoryHit) {
+        try {
+          const evidence = await expand(hit);
+          if (!evidence) gaps.add('source-unavailable');
+          if (evidence?.excerptTruncated) gaps.add('source-clipped');
+          return evidence;
+        } catch {
+          gaps.add(signal.aborted ? 'deadline' : 'source-unavailable');
+        }
+      }
+      // > Verify the original hits while exact follow-ups and other leads are still running.
+      const primaryEvidence = new Map(primaryHits.map((hit) => [hit, readEvidence(hit)]));
+      const anchorNames = lead.mode === 'exact' ? [lead.query] : lexical ? [] : rankedAnchors(hits);
+      const anchors = await Promise.all(
+        anchorNames.map(async (symbol) => {
+          const candidate = await exactCandidate(symbol);
+          for (const gap of candidate.gaps) gaps.add(gap);
           try {
-            const evidence = await expand(hit);
-            if (!evidence) gaps.add('source-unavailable');
-            if (evidence?.excerptTruncated) gaps.add('source-clipped');
-            return evidence;
-          } catch {
-            gaps.add(signal.aborted ? 'deadline' : 'source-unavailable');
-          }
-        }),
-      );
-      const edges = await Promise.all(
-        anchors.map(async ({ symbol, hits }) => {
-          try {
-            const { connections, incomplete } = await navigation.trace(symbol, hits, 3, 4);
+            const { connections, incomplete } = await navigation.trace(
+              symbol,
+              candidate.hits,
+              3,
+              4,
+            );
             if (incomplete) gaps.add('connection-unresolved');
-            return connections;
+            return { hits: candidate.hits, connections };
           } catch {
             gaps.add(signal.aborted ? 'deadline' : 'connection-unresolved');
-            return [];
+            return { hits: candidate.hits, connections: [] };
           }
         }),
       );
+      const ordered = [
+        ...hits.slice(0, 2),
+        ...anchors.flatMap((anchor) => anchor.hits),
+        ...hits.slice(2),
+      ];
+      const combined = selectHits(ordered, limit, lexical);
+      const selected = deadline.aborted ? primaryHits : combined;
+      const candidates = await Promise.all(
+        selected.map((hit) => primaryEvidence.get(hit) ?? readEvidence(hit)),
+      );
+      // > Wait for any original hit reads that were superseded by a better follow-up match.
+      await Promise.all(primaryEvidence.values());
       const evidence = candidates.filter((hit): hit is RepositoryHit => hit !== undefined);
-      const connections: (
-        | SourceConnection
-        | { kind: 'shared-literal'; literal: string; from: RepositoryHit; to: RepositoryHit }
-      )[] = edges.flat();
-      if (
-        lead.mode === 'literal' &&
-        /^(?:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|\/[\w-]+(?:\/[\w-]+)+)$/.test(lead.query)
-      ) {
-        const sources = evidence.filter(
-          ({ path, excerpt }) =>
-            /\.(?:[cm]?[jt]sx?|pyi?)$/.test(path) &&
-            !isTestSource(path) &&
-            excerpt.includes(lead.query),
-        );
-        const first = sources[0];
-        const second = first && sources.find(({ path }) => path !== first.path);
-        if (first && second)
-          connections.push({
-            kind: 'shared-literal',
-            literal: lead.query,
-            from: first,
-            to: second,
-          });
-      }
+      const connections: TraceConnection[] = anchors.flatMap((anchor) => anchor.connections);
+      const literalConnection = lead.mode === 'literal' && sharedLiteral(lead.query, evidence);
+      if (literalConnection) connections.push(literalConnection);
       return { evidence, connections, gaps, ids: new Set<number>() };
     }),
   );
@@ -381,17 +394,18 @@ export async function traceRepository(
       }
       const from = add(edge.from, lead.gaps);
       const to = add(edge.to, lead.gaps);
+      if (from) lead.ids.add(from);
+      if (to) lead.ids.add(to);
       if (!from || !to) continue;
-      lead.ids.add(from);
-      lead.ids.add(to);
       const link = {
         kind: edge.kind,
         from,
         to,
-        fromLine: edge.from.startLine,
-        toLine: ('toAnchorLine' in edge ? edge.toAnchorLine : undefined) ?? edge.to.startLine,
+        fromLine: edge.kind === 'shared-literal' ? edge.fromAnchorLine : edge.from.startLine,
+        toLine: edge.toAnchorLine ?? edge.to.startLine,
         ...('literal' in edge && { literal: edge.literal }),
       };
+      if (link.from === link.to && link.fromLine === link.toLine) continue;
       if (
         !connections.some(
           (item) =>
@@ -406,13 +420,32 @@ export async function traceRepository(
         connections.push(link);
     }
   }
+  // > A slow lead can outlast files that faster leads had already verified.
+  const paths = [...new Set(evidence.map(({ path }) => path))];
+  const changed = new Set(
+    (
+      await Promise.all(
+        paths.map(async (path) =>
+          typeof (await reader.read(path, callerSignal, allows)) === 'string' ? path : undefined,
+        ),
+      )
+    ).filter((path) => path !== undefined),
+  );
+  const unavailableIds = new Set(
+    evidence.filter(({ path }) => changed.has(path)).map(({ id }) => id),
+  );
+  for (const { ids, gaps } of found) {
+    for (const id of unavailableIds) if (ids.delete(id)) gaps.add('source-unavailable');
+  }
   return {
     leads: leads.map((lead, index) => ({
       ...lead,
       evidenceIds: [...found[index]!.ids],
       gaps: [...found[index]!.gaps],
     })),
-    evidence,
-    connections,
+    evidence: evidence.filter(({ id }) => !unavailableIds.has(id)),
+    connections: connections.filter(
+      ({ from, to }) => !unavailableIds.has(from) && !unavailableIds.has(to),
+    ),
   };
 }

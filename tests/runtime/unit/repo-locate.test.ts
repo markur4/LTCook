@@ -6,6 +6,7 @@ import { RepositorySourceReader } from '../../../runtime/src/repository/evidence
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
 import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
+import { traceRepository } from '../../../runtime/src/tools/repo-trace.js';
 
 type Search = ReturnType<typeof createRepoSearchTool>['search'];
 const unavailable = {
@@ -181,6 +182,10 @@ test.skipIf(!Bun.which('rg'))(
       );
       await writeFile(path.join(root, 'launch.py'), 'environment["WORKER_DEADLINE_MS"] = "600"\n');
       await writeFile(
+        path.join(root, 'a-prefix.ts'),
+        'export const ignored = process.env.OTHER_WORKER_DEADLINE_MS;\n',
+      );
+      await writeFile(
         path.join(root, 'tests/dispatch.test.ts'),
         [
           "import { startDispatch } from '../source.js';",
@@ -224,6 +229,73 @@ test.skipIf(!Bun.which('rg'))(
       expect([literal?.from, literal?.to]).toEqual(
         expect.arrayContaining([launcher!.id, implementation[0]!.id]),
       );
+      expect(literal?.from === implementation[0]!.id ? literal.fromLine : literal?.toLine).toBe(2);
+      const caller = trace.evidence.find(({ path }) => path === 'tests/dispatch.test.ts')!;
+      expect(trace.connections).toContainEqual({
+        kind: 'call',
+        from: caller.id,
+        to: caller.id,
+        fromLine: 3,
+        toLine: 1,
+      });
+    }),
+);
+
+test.each([false, true])(
+  'Locate trace retains fast evidence across a sibling deadline (source changed: %s)',
+  (changed) =>
+    fixture(async (root) => {
+      const pathName = 'source.txt';
+      const excerpt = 'fast evidence';
+      await writeFile(path.join(root, pathName), excerpt);
+      const sourceRead = Promise.withResolvers<void>();
+      const deadline = new AbortController();
+      class ObservedReader extends RepositorySourceReader {
+        override async read(...args: Parameters<RepositorySourceReader['read']>) {
+          const result = await super.read(...args);
+          if (args[0] === pathName) sourceRead.resolve();
+          return result;
+        }
+      }
+      const trace = await traceRepository(
+        {
+          question: 'Find two behaviors.',
+          leads: [
+            { mode: 'literal', query: excerpt },
+            { mode: 'hybrid', query: 'slow source' },
+          ],
+        },
+        {
+          reader: new ObservedReader(await openRepositoryWorkspace(root)),
+          allows: () => true,
+          callerSignal: new AbortController().signal,
+          deadline: deadline.signal,
+          async search({ mode }, signal) {
+            if (mode === 'hybrid') {
+              await sourceRead.promise;
+              if (changed) await writeFile(path.join(root, pathName), 'a replacement source');
+              deadline.abort();
+              signal.throwIfAborted();
+            }
+            return {
+              ...unavailable,
+              status: 'ready',
+              freshness: 'current',
+              partial: false,
+              results: [{ path: pathName, startLine: 1, endLine: 1, excerpt }],
+            };
+          },
+        },
+      );
+      expect(trace.leads[1]?.gaps).toEqual(['deadline']);
+      if (changed) {
+        expect(trace.evidence).toEqual([]);
+        expect(trace.leads[0]?.gaps).toEqual(['source-unavailable']);
+      } else {
+        expect(trace.evidence).toHaveLength(1);
+        expect(trace.evidence[0]?.excerpt).toBe(excerpt);
+        expect(trace.leads[0]?.evidenceIds).toEqual([trace.evidence[0]?.id]);
+      }
     }),
 );
 

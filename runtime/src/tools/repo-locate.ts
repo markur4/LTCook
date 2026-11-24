@@ -21,6 +21,7 @@ import {
   RepositorySearchPathsSchema,
 } from './repo-search.js';
 import {
+  REPOSITORY_TRACE_TIMEOUT_MS,
   RepositoryTraceInputSchema,
   RepositoryTraceOutputSchema,
   traceRepository,
@@ -230,7 +231,9 @@ export function createRepoLocateTool(
         throw new Error(
           'Supply exactly one of symbol, symbols, query, location, or trace, with distinct nonempty single-line queries.',
         );
-      const deadline = AbortSignal.timeout(REPO_SEARCH_TIMEOUT_MS);
+      const deadline = AbortSignal.timeout(
+        input.trace ? REPOSITORY_TRACE_TIMEOUT_MS : REPO_SEARCH_TIMEOUT_MS,
+      );
       const signal = AbortSignal.any([context.signal, deadline]);
       const workspace = await openAuthorizedSearchWorkspace(context);
       const reader = new RepositorySourceReader(workspace);
@@ -269,13 +272,20 @@ export function createRepoLocateTool(
       const priority =
         input.base === undefined
           ? undefined
-          : await repositorySearchPriority(workspace, input.base, signal);
+          : await repositorySearchPriority(workspace, input.base, signal).catch(
+              (error: unknown) => {
+                context.signal.throwIfAborted();
+                if (!input.trace || !deadline.aborted) throw error;
+                return undefined;
+              },
+            );
       if (input.trace) {
         if (input.follow !== undefined) throw new Error('Trace follows connections automatically.');
         const trace = await traceRepository(input.trace, {
           reader,
           allows,
           callerSignal: context.signal,
+          deadline,
           async search({ mode, query }, traceSignal) {
             const classify = mode === 'exact' ? classifySymbol(query) : undefined;
             const group =

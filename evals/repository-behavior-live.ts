@@ -60,6 +60,7 @@ type RepositoryCall = {
   agentTextBytes?: number;
   error?: string;
   usedTrace?: boolean;
+  traceStatus?: SearchResult['status'];
 };
 type BehaviorGrade = ReturnType<typeof gradeRepositoryBehavior>;
 type NativeObservation = Pick<
@@ -628,6 +629,10 @@ try {
         if (name === REPO_LOCATE_TOOL_NAME && Value.Check(locate.outputSchema, result)) {
           call.followUp = result.followUp;
           call.usedTrace = result.trace !== undefined;
+          if (result.trace?.leads.every(({ gaps }) => gaps.includes('unavailable')))
+            call.traceStatus = 'unavailable';
+          else if (result.trace?.leads.every(({ gaps }) => gaps.includes('no-matches')))
+            call.traceStatus = 'ready';
           call.extraEvidence = [
             ...(result.source ? [result.source] : []),
             ...(result.trace?.evidence ?? []),
@@ -927,7 +932,7 @@ try {
         runId,
         startedAt,
         evaluation: 'Behavior Evaluation',
-        setup: traversal ? 'current' : 'synthetic',
+        setup: 'synthetic',
         model: piModel?.name ?? model ?? null,
         ...(comparison ? { comparison } : {}),
         ...(autonomous
@@ -979,6 +984,7 @@ async function autonomousProvenance(checkout: string, codex: string | undefined,
     'runtime/src/repository/source-navigation.ts',
     'runtime/src/tools/repo-locate.ts',
     'runtime/src/tools/repo-search.ts',
+    'runtime/src/tools/repo-trace.ts',
     'runtime/src/tools/repository-evidence-text.ts',
   ];
   const readCommandLine = (args: string[]) => {

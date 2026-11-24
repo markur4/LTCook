@@ -24,6 +24,7 @@ type SearchAttempt = {
   requestKey?: string;
   searches: readonly { result: SearchResult }[];
   extraEvidence?: readonly RepositoryHit[];
+  traceStatus?: SearchResult['status'];
 };
 type StopReason = 'repeated-search' | 'retrieval-unavailable' | 'tool-budget';
 
@@ -34,14 +35,17 @@ function evidenceKeys({ searches, extraEvidence = [] }: SearchAttempt): string[]
   );
 }
 
-function unavailable({ searches }: SearchAttempt): boolean {
-  return searches.length > 0 && searches.every(({ result }) => result.status === 'unavailable');
+function unavailable({ searches, traceStatus }: SearchAttempt): boolean {
+  return (
+    traceStatus === 'unavailable' ||
+    (searches.length > 0 && searches.every(({ result }) => result.status === 'unavailable'))
+  );
 }
 
-function ready({ searches, extraEvidence }: SearchAttempt): boolean {
+function ready({ searches, extraEvidence, traceStatus }: SearchAttempt): boolean {
   return searches.length
     ? searches.every(({ result }) => result.status === 'ready')
-    : Boolean(extraEvidence?.length);
+    : traceStatus === 'ready' || Boolean(extraEvidence?.length);
 }
 
 /** Decide at the end of a tool batch using only observed requests and results. */

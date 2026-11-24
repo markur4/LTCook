@@ -101,6 +101,12 @@ test('Pi stops repeat traversals only when they add no source evidence', () => {
   const repeat = { ...initial, finished: 2 };
   expect(repositorySearchStop([initial, repeat], 2, 1)).toBe('repeated-search');
   expect(repositorySearchStop([initial, { ...repeat, extraEvidence: hits }], 2, 1)).toBeUndefined();
+  const empty = { ...initial, extraEvidence: [], traceStatus: 'ready' as const };
+  expect(repositorySearchStop([empty, { ...empty, finished: 2 }], 2, 1)).toBe('repeated-search');
+  const unavailable = { ...empty, traceStatus: 'unavailable' as const };
+  expect(repositorySearchStop([unavailable, { ...unavailable, finished: 2 }], 2, 1)).toBe(
+    'retrieval-unavailable',
+  );
 });
 
 test('evidence completion requires verified source for every label', () => {
