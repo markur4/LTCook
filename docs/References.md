@@ -451,6 +451,11 @@ Results carry `path`, `startLine`, `endLine`, `excerpt`, and an optional symbol
 ranges are one-based and inclusive. `excerptTruncated: true` identifies a
 verified excerpt clipped to 2,000 characters.
 
+Search and Locate show a workspace-relative path and an explicit line number
+beside each displayed source line. A clipping notice identifies excerpts that
+omit source or end partway through a line. MCP `structuredContent` and Pi tool
+details still carry the original excerpt and range.
+
 The response identifies the provider and retrieval kind as `colgrep` and
 `ranked`, or `ripgrep` and `exhaustive`. It also includes `capturedAt`,
 `freshness`, `partial`, `truncated`, and structured `diagnostics`. `partial`

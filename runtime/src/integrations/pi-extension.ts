@@ -11,6 +11,7 @@ import { RiedService } from '../repository/discovery.js';
 import type { RiedRequest } from '../repository/requests.js';
 import { createRepoSearchTool } from '../tools/repo-search.js';
 import { createRepoLocateTool } from '../tools/repo-locate.js';
+import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
 import type { ToolDefinition } from '../tools/types.js';
 import {
   isRepositoryTool,
@@ -559,7 +560,10 @@ function registerRepositoryTool(
     parameters: tool.inputSchema,
     async execute(_id, input, signal) {
       const result = await search(input, signal);
-      return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
+      return {
+        content: [{ type: 'text', text: repositoryEvidenceText(tool.name, result) }],
+        details: result,
+      };
     },
   });
 }

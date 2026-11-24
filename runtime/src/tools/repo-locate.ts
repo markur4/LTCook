@@ -7,6 +7,7 @@ import type { RepositoryHit } from '../repository/results.js';
 import {
   createRepoSearchTool,
   openAuthorizedSearchWorkspace,
+  repositoryEvidenceGuidance,
   RepositorySearchOutputSchema,
   RepositorySearchPathsSchema,
 } from './repo-search.js';
@@ -20,7 +21,7 @@ const LocateSearch = Type.Object({
   mode: Type.Union([Type.Literal('exact'), Type.Literal('hybrid')]),
 });
 
-const LocateOutput = Type.Object({
+export const RepositoryLocateOutputSchema = Type.Object({
   searches: Type.Array(LocateSearch),
   followUp: Type.Union([
     Type.Literal('not-needed'),
@@ -49,7 +50,8 @@ export function createRepoLocateTool(
   return defineTool({
     name: REPO_LOCATE_TOOL_NAME,
     description:
-      'Locate verified source candidates for implementations, callers, and tests. Supply a known symbol or describe the behavior to find. Returns evidence for you to interpret.',
+      'Locate verified source candidates for implementations, callers, and tests. Supply a known symbol or describe the behavior to find.' +
+      repositoryEvidenceGuidance,
     inputSchema: Type.Object(
       {
         symbol: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
@@ -58,8 +60,8 @@ export function createRepoLocateTool(
       },
       { additionalProperties: false },
     ),
-    outputSchema: LocateOutput,
-    async execute(input, context): Promise<Static<typeof LocateOutput>> {
+    outputSchema: RepositoryLocateOutputSchema,
+    async execute(input, context): Promise<Static<typeof RepositoryLocateOutputSchema>> {
       const query = (input.symbol ?? input.query)?.trim();
       if (
         (input.symbol === undefined) === (input.query === undefined) ||

@@ -872,6 +872,7 @@ async function autonomousProvenance(checkout: string, codex: string | undefined,
     'runtime/src/repository/providers/ripgrep.ts',
     'runtime/src/tools/repo-locate.ts',
     'runtime/src/tools/repo-search.ts',
+    'runtime/src/tools/repository-evidence-text.ts',
   ];
   const readCommandLine = (args: string[]) => {
     const result = Bun.spawnSync(args, { cwd: checkout, stderr: 'ignore', timeout: 5000 });

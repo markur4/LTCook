@@ -297,6 +297,10 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- Repository Search and Locate show explicit line numbers in agent-facing
+  excerpts so adjacent source lines can be cited precisely. Structured results
+  retain their existing path, range, and excerpt fields.
+
 <br>
 - Summarization qualification accepts typographic hyphens for designated ticket
   IDs and retains the original quoted evidence.
