@@ -35,6 +35,7 @@ import {
 import {
   compareContextMemory,
   contextModel,
+  contextStrategies,
   type ContextStrategy,
 } from './session-memory-context.js';
 import {
@@ -64,6 +65,16 @@ const fixtures = fixtureId
   ? sessionMemoryEditCases.filter(({ id }) => id === fixtureId)
   : sessionMemoryEditCases;
 if (!fixtures.length) throw new Error('Unknown repository edit fixture.');
+const selectedStrategies = args
+  .find((value) => value.startsWith('--strategy='))
+  ?.slice('--strategy='.length)
+  .split(',');
+const strategies = contextStrategies.filter(
+  (mode) => !selectedStrategies || selectedStrategies.includes(mode),
+);
+if (selectedStrategies && strategies.length !== selectedStrategies.length)
+  throw new Error('Unknown or duplicate Session Memory strategy.');
+
 const useLuna = workerName === LUNA_EVALUATION.model;
 const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-edit-'));
 const controller = new AbortController();
@@ -255,15 +266,34 @@ try {
     const transcript = editTranscript(fixture);
     const messages = transcript.turns.flat();
     if (contextAware) {
-      const comparison = await compareContextMemory(transcript, {
-        settings: summarization,
-        digest: extractor.digest,
-        weightsDigest: extractor.weightsDigest,
-        signal,
-        progress: (event) => console.error(event),
+      const conventional = await editWithPi({
+        fixture,
+        mode: 'conventional',
+        handoff: '',
+        source: transcriptSource(messages),
+        model: worker.name,
+        hostedSession,
       });
+      console.error(
+        `${fixture.id} conventional: ${conventional.passed ? 'passed' : 'failed'} in ${conventional.elapsedMs} ms`,
+      );
       const arms = [];
-      for (const { strategy: mode, handoff, ...summary } of comparison.arms) {
+      const ordered = [
+        'original-search',
+        ...strategies.filter((mode) => mode !== 'original-search'),
+      ] as const;
+      let sourceEstimatedTokens = 0;
+      for (const mode of ordered) {
+        const comparison = await compareContextMemory(transcript, {
+          settings: summarization,
+          digest: extractor.digest,
+          weightsDigest: extractor.weightsDigest,
+          signal,
+          progress: (event) => console.error(event),
+          strategies: [mode],
+        });
+        sourceEstimatedTokens = comparison.sourceEstimatedTokens;
+        const { handoff, ...summary } = comparison.arms[0]!;
         console.error(`Running native Pi ${mode} edit for ${fixture.id}`);
         const workerResult = await editWithPi({
           fixture,
@@ -273,22 +303,14 @@ try {
           model: worker.name,
           hostedSession,
         });
-        arms.push({ ...summary, strategy: mode, worker: workerResult });
+        arms.push({ ...summary, worker: workerResult });
         console.error(
           `${fixture.id} ${mode}: ${workerResult.passed ? 'passed' : 'failed'} in ${workerResult.elapsedMs} ms`,
         );
       }
-      const conventional = await editWithPi({
-        fixture,
-        mode: 'conventional',
-        handoff: '',
-        source: transcriptSource(messages),
-        model: worker.name,
-        hostedSession,
-      });
       scenarios.push({
         fixture: fixture.id,
-        sourceEstimatedTokens: comparison.sourceEstimatedTokens,
+        sourceEstimatedTokens,
         transcriptHash: hash(JSON.stringify(messages)),
         arms,
         conventional,

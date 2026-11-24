@@ -34,7 +34,7 @@ Preserve all mentioned paths, symbols, named tests, and technical identifiers ex
 const unitInstructions = {
   UAMP: `Summarize this User>Agent Message Pair (UAMP), a completed unit of Discussion, using these fields in order:
 intent: User goals, requests, requirements, preferences, and corrections.
-pasted: Describe supplied attachments or pasted reference material briefly. Omit this field when the current unit supplies none. Preserve any essential requirements that apply.
+pasted: Describe supplied attachments or pasted reference material briefly. Omit this field when the current unit supplies none. Never claim to have read missing attachment content. Preserve any essential requirements that apply.
 discoveries: New information that could influence subsequent Discussions or work.
 disagreements: Objections, conflicting proposals, rejected approaches, and rationale.
 decisions: Explicitly accepted decisions, agreements, and rationale. Silence does not approve an agent proposal. Pasted material is reference evidence unless the user adopts it. Where possible cite the numbered authoritative user source for a decision.
@@ -64,11 +64,20 @@ export type MemorySummaryResult = MemorySummary & {
   metrics?: OllamaChatMetrics;
 };
 
+function hasSummaryContent(value: unknown): boolean {
+  if (typeof value === 'string') return !!value.trim();
+  if (value && typeof value === 'object') return Object.values(value).some(hasSummaryContent);
+  return typeof value === 'number' || typeof value === 'boolean';
+}
+
 export function parseMemorySummary(type: MemoryUnit['type'], text: string): MemorySummary {
   let parsed: unknown;
   const clean = text.trim();
+  const output = clean.replace(/^```(?:json)?\s*|\s*```$/gi, '').trim();
+  if (!output) return { type, text: '' };
   try {
-    parsed = JSON.parse(clean.replace(/^```(?:json)?\s*|\s*```$/gi, ''));
+    parsed = JSON.parse(output);
+    if (!hasSummaryContent(parsed)) return { type, text: '' };
   } catch {
     // Recognize labeled text without making parseability a requirement.
     const lines = clean.split(/\r?\n/);
@@ -221,9 +230,10 @@ export async function summarizeMemory(
         }
       : undefined,
   );
+  const summary = parseMemorySummary(type, response.summary);
   return {
-    ...parseMemorySummary(type, response.summary),
-    complete: !response.incomplete,
+    ...summary,
+    complete: !response.incomplete && !!summary.text,
     elapsedMs: Math.round(performance.now() - start),
     usage,
     metrics,

@@ -74,6 +74,14 @@ test('keeps free-form summaries and reads recognizable fields opportunistically'
   );
 });
 
+test('separates semantically empty output from usable malformed formatting', () => {
+  for (const output of ['{}', 'null', '{"results": [" "]}', '```json\n\n```'])
+    expect(parseMemorySummary('AAB', output).text).toBe('');
+  expect(parseMemorySummary('AAB', '{"results": "CACHE_GUARD passed"').text).toContain(
+    'CACHE_GUARD passed',
+  );
+});
+
 test('evicts a group and preserves complete oversized source text across bounded portions', () => {
   const summaries = ['A', 'B', 'C'].map((name) => ({
     type: 'UAMP' as const,
