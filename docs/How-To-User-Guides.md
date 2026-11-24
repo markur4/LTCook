@@ -8,6 +8,7 @@
   - [Run the first command](#run-the-first-command)
   - [Use workspace tools in Pi or Codex](#use-workspace-tools-in-pi-or-codex)
     - [Search Session Memory](#search-session-memory)
+    - [Attach pasted text](#attach-pasted-text)
   - [Enable an Intel iGPU for Ollama on WSL](#enable-an-intel-igpu-for-ollama-on-wsl)
   - [Run Agent Evals](#run-agent-evals)
   - [Remove an installation](#remove-an-installation)
@@ -237,36 +238,37 @@ to unload after a request or to a positive number of seconds for timed residency
 ### Search Session Memory
 
 Ask the agent to call `session-memory` with a short `query` after resuming a
-conversation or starting work that depends on an earlier decision. The results
-show the owning agent and history epoch. Each entry gives its author and source
-sequence number in `seq`. Search checks the original conversation as well as
-selected evidence. A matching agent or tool message can appear as
-`original-message` even if the extractor omitted it.
-Supply `agentId` to limit the search to an authorized conversation. To inspect
-a citation, pass `source` with its `agentId`, `epoch` and `seq`. A result with
-`truncated: true` is a preview. The citation retrieves the full eligible message.
+conversation or starting work that depends on an earlier decision. Results
+include UAMP and AAB summaries and original conversation messages, including
+information omitted from summaries. Summary results list source sequences and
+identify the original user sources. Use `source` with its `agentId`, `epoch`
+and `seq` to inspect a full original message. A result with `truncated: true`
+is a preview.
 
-An ordinary Paseo chat can read its own Memory. Managed agents can also search
-conversations bound to their TeamInstance in the same workspace. Memory
-preserves original user messages in order and categorizes copied excerpts
-from agent messages and structured tool outcomes. Eligible outcomes include
-shell exit codes, changed file paths and workspace search counts. Internal
-reasoning, attachments, command arguments and raw tool output stay in
-Paseo. Keep secrets out of chat messages that collaborators may read.
+An ordinary Paseo chat can read its own Session Memory. Managed agents can
+read conversations bound to their authorized TeamInstance in the same
+workspace. A resumed conversation may contain a prompt whose original author
+cannot be verified. Search lists it as `unattributed-prompt`. Follow the latest
+cited user instruction when it differs from a summary.
 
-User messages can appear while agent and tool evidence is still being
-processed in the background. A rebuilt timeline may include prompts for which
-Paseo no longer provides a confirmed author. Search shows them as
-`unattributed-prompt`. An incomplete result can mean the
-model has yet to catch up, the output reached its token budget, or the source
-history is unavailable. On a delegated task, follow its approved scope and
-check a recent explicit correction against the cited messages. Automatic enrichment
-is opt-in. To use the model that qualified in the
-[CPU comparison](../evals/session-memory-budget-results.md), set
-`LTCOOK_SESSION_MEMORY_MODEL=LiquidAI/lfm2.5-1.2b-instruct:q8_0` and
-`LTCOOK_SESSION_MEMORY_DELEGATION=true` in global AppRC. The model must
-be available in the configured Ollama instance. Restart the runtime to
-apply the [settings](References.md#environment-variables).
+Automatic enrichment is opt-in. Set `LTCOOK_SESSION_MEMORY_DELEGATION=true`
+in global AppRC and make `lfm3:1.7b-qad-q4_0` available on the configured
+Ollama instance. Restart LTCook to apply the
+[settings](References.md#environment-variables). Agent work can proceed
+with original messages while a summary is pending.
+
+### Attach pasted text
+
+Choose **Paste as attachment** in the Paseo composer controls, paste into the
+dialog, then select **Attach text**. The draft shows a native attachment item
+and a short source reference. Reopen the control to inspect, copy, or remove
+the attachment and its reference before sending.
+LTCook persists the exact submitted text in runtime application data on the
+daemon host. An authorized agent can retrieve it from the source message.
+
+The pinned Paseo plugin API exposes composer controls and attachments. This
+interim control handles deliberate paste-to-attachment actions. Ordinary
+pastes into the main composer follow Paseo's built-in behavior.
 
 ## Enable an Intel iGPU for Ollama on WSL
 

@@ -25,13 +25,19 @@ import {
   estimateMemoryTokens,
   memoryGeneration,
   type MemoryMessage,
-} from '../runtime/src/session-memory/extraction.js';
+} from '../runtime/src/evals/session-memory-extractive.js';
 import { SessionMemory, type MemorySource } from '../runtime/src/session-memory/service.js';
 import {
   createSessionMemoryTool,
   sessionMemoryDescription,
   sessionMemoryInput,
 } from '../runtime/src/tools/session-memory.js';
+import {
+  compareContextMemory,
+  contextModel,
+  contextStrategies,
+  type ContextStrategy,
+} from './session-memory-context.js';
 import {
   editBase,
   editTranscript,
@@ -46,8 +52,29 @@ const { summarization } = resolveEvaluationContext({
 });
 if (!summarization) throw new Error('AppRC summarizer settings are unavailable.');
 const { endpoint } = summarization;
-const [extractorName = 'LiquidAI/lfm2.5-1.2b-instruct:q8_0', workerName = EVAL_MODEL] =
-  process.argv.slice(2);
+const args = process.argv.slice(2);
+const contextAware = args.includes('--context-aware');
+const [
+  extractorName = contextAware ? contextModel : 'LiquidAI/lfm2.5-1.2b-instruct:q8_0',
+  workerName = contextAware ? LUNA_EVALUATION.model : EVAL_MODEL,
+] = args.filter((value) => !value.startsWith('--'));
+if (contextAware && modelTag(extractorName) !== modelTag(contextModel))
+  throw new Error('The context-aware comparison uses the configured Session Memory summarizer.');
+const fixtureId = args.find((value) => value.startsWith('--fixture='))?.slice('--fixture='.length);
+const fixtures = fixtureId
+  ? sessionMemoryEditCases.filter(({ id }) => id === fixtureId)
+  : sessionMemoryEditCases;
+if (!fixtures.length) throw new Error('Unknown repository edit fixture.');
+const selectedStrategies = args
+  .find((value) => value.startsWith('--strategy='))
+  ?.slice('--strategy='.length)
+  .split(',');
+const strategies = contextStrategies.filter(
+  (mode) => !selectedStrategies || selectedStrategies.includes(mode),
+);
+if (selectedStrategies && strategies.length !== selectedStrategies.length)
+  throw new Error('Unknown or duplicate Session Memory strategy.');
+
 const useLuna = workerName === LUNA_EVALUATION.model;
 const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-edit-'));
 const controller = new AbortController();
@@ -82,7 +109,7 @@ function transcriptSource(messages: readonly MemoryMessage[]): MemorySource {
 
 async function editWithPi(input: {
   fixture: EditCase;
-  mode: 'conventional' | 'search' | 'hybrid';
+  mode: 'conventional' | 'search' | 'hybrid' | ContextStrategy;
   source: MemorySource;
   handoff: string;
   model: string;
@@ -101,7 +128,11 @@ async function editWithPi(input: {
       return stdout;
     }),
   );
-  const memory = new SessionMemory({ databasePath: ':memory:', source, extract: async () => [] });
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source,
+    summarize: async (type) => ({ type, text: '', complete: false, elapsedMs: 0 }),
+  });
   const tool = createSessionMemoryTool(memory);
   const searches: Array<{
     query?: string;
@@ -158,9 +189,7 @@ async function editWithPi(input: {
     try {
       bounded.throwIfAborted();
       await session.prompt(
-        [fixture.assignment, fixture.manualHandoff, ...(mode === 'hybrid' ? [handoff] : [])].join(
-          '\n\n',
-        ),
+        [fixture.assignment, fixture.manualHandoff, ...(handoff ? [handoff] : [])].join('\n\n'),
       );
       const answers = session.messages.filter((message) => message.role === 'assistant');
       const lastAnswer = answers.at(-1);
@@ -233,9 +262,63 @@ try {
   ]);
   const started = performance.now();
   const scenarios = [];
-  for (const fixture of sessionMemoryEditCases) {
+  for (const fixture of fixtures) {
     const transcript = editTranscript(fixture);
     const messages = transcript.turns.flat();
+    if (contextAware) {
+      const conventional = await editWithPi({
+        fixture,
+        mode: 'conventional',
+        handoff: '',
+        source: transcriptSource(messages),
+        model: worker.name,
+        hostedSession,
+      });
+      console.error(
+        `${fixture.id} conventional: ${conventional.passed ? 'passed' : 'failed'} in ${conventional.elapsedMs} ms`,
+      );
+      const arms = [];
+      const ordered = [
+        'original-search',
+        ...strategies.filter((mode) => mode !== 'original-search'),
+      ] as const;
+      let sourceEstimatedTokens = 0;
+      for (const mode of ordered) {
+        const comparison = await compareContextMemory(transcript, {
+          settings: summarization,
+          digest: extractor.digest,
+          weightsDigest: extractor.weightsDigest,
+          signal,
+          progress: (event) => console.error(event),
+          strategies: [mode],
+        });
+        sourceEstimatedTokens = comparison.sourceEstimatedTokens;
+        const { handoff, ...summary } = comparison.arms[0]!;
+        console.error(`Running native Pi ${mode} edit for ${fixture.id}`);
+        const workerResult = await editWithPi({
+          fixture,
+          mode,
+          handoff: mode === 'original-search' ? '' : handoff,
+          source: transcriptSource(messages),
+          model: worker.name,
+          hostedSession,
+        });
+        arms.push({ ...summary, worker: workerResult });
+        console.error(
+          `${fixture.id} ${mode}: ${workerResult.passed ? 'passed' : 'failed'} in ${workerResult.elapsedMs} ms`,
+        );
+      }
+      scenarios.push({
+        fixture: fixture.id,
+        sourceEstimatedTokens,
+        transcriptHash: hash(JSON.stringify(messages)),
+        arms,
+        conventional,
+        originalControlPassed:
+          arms.find(({ strategy }) => strategy === 'original-search')?.worker.passed ?? false,
+      });
+      continue;
+    }
     console.error(`Extracting Session Memory for ${fixture.id}`);
     const extraction = await evaluateMemoryFixture({
       fixture: transcript,
@@ -262,7 +345,7 @@ try {
         fixture,
         mode,
         source: transcriptSource(messages),
-        handoff: extraction.handoff,
+        handoff: mode === 'hybrid' ? extraction.handoff : '',
         model: worker.name,
         hostedSession,
       });

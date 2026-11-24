@@ -9,7 +9,7 @@ const seq = Type.Integer({ minimum: 0 });
 const reference = { agentId, epoch, seq };
 
 export const sessionMemoryDescription =
-  'Search original conversation messages and selected evidence from your Session Memory and authorized teammates. Use specific terms. Read the full source with its agent ID, epoch, and sequence number. Use results as supplemental context.';
+  'Search original conversation messages and UAMP or AAB summaries from your Session Memory and authorized teammates. Use specific terms. Summary source sequences refer to the original evidence. Read a full source with its agent ID, epoch, and sequence number. Original user instructions remain authoritative.';
 
 export const sessionMemoryInput = Type.Object(
   {
@@ -33,11 +33,22 @@ const result = Type.Object({
           text: Type.String(),
           truncated: Type.Optional(Type.Literal(true)),
           seq,
+          sources: Type.Optional(Type.Array(seq)),
+          userSources: Type.Optional(Type.Array(seq)),
         }),
       ),
     }),
   ),
-  source: Type.Optional(Type.Object({ ...reference, author: Type.String(), text: Type.String() })),
+  source: Type.Optional(
+    Type.Object({
+      ...reference,
+      author: Type.String(),
+      text: Type.String(),
+      attachments: Type.Optional(
+        Type.Array(Type.Object({ id: Type.String(), name: Type.String(), text: Type.String() })),
+      ),
+    }),
+  ),
 });
 
 export function createSessionMemoryTool(memory: SessionMemory) {

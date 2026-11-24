@@ -13,6 +13,8 @@ import { canonicalWorkspace } from '../core/workspace.js';
 import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { SessionMemory } from '../session-memory/service.js';
+import type { MemoryScope } from '../session-memory/units.js';
+import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import type { WorkspaceMcp } from './mcp.js';
 import {
   isRepositoryTool,
@@ -74,6 +76,8 @@ export function agentBearer(secret: string, nativeAgentId: string): string {
 export class RuntimeApi {
   private server: Server | undefined;
   private memory?: SessionMemory;
+  private memoryScope?: (agentId: string) => MemoryScope | undefined;
+  private pastedDocuments?: PastedDocuments;
   private runtime: RuntimeController | undefined;
   private readonly sessions = new Map<string, string>();
   private readonly pendingSessions = new Map<
@@ -106,8 +110,15 @@ export class RuntimeApi {
   private shutdown: (() => Promise<void>) | undefined;
   private stopping = false;
   private workspaceMcp: WorkspaceMcp | undefined;
-  setSessionMemory(memory: SessionMemory): void {
+  setSessionMemory(
+    memory: SessionMemory,
+    scope?: (agentId: string) => MemoryScope | undefined,
+  ): void {
     this.memory = memory;
+    this.memoryScope = scope;
+  }
+  setPastedDocuments(documents: PastedDocuments): void {
+    this.pastedDocuments = documents;
   }
 
   setWorkspaceMcp(mcp: WorkspaceMcp): void {
@@ -236,6 +247,7 @@ export class RuntimeApi {
           '/v1/ried',
           '/v1/workspace-tool',
           '/v1/session-memory/observe',
+          '/v1/session-memory/paste',
           '/v1/mcp/grant',
           '/v1/mcp/revoke',
           '/v1/evaluation/observe',
@@ -271,8 +283,14 @@ export class RuntimeApi {
       return;
     }
     try {
-      const maxBodyLength = request.url === '/v1/session/open' ? 1_048_576 : 64_000;
+      const maxBodyLength =
+        request.url === '/v1/session-memory/paste'
+          ? 2_097_152
+          : request.url === '/v1/session/open'
+            ? 1_048_576
+            : 64_000;
       let body = '';
+      request.setEncoding('utf8');
       for await (const chunk of request) {
         body += chunk;
         if (body.length > maxBodyLength) throw new Error('request too large');
@@ -325,6 +343,10 @@ export class RuntimeApi {
         shellEnvironment?: unknown;
         toolName?: unknown;
         force?: unknown;
+        turnId?: unknown;
+        outcome?: unknown;
+        local?: unknown;
+        closed?: unknown;
         toolArgs?: unknown;
         input?: unknown;
       };
@@ -336,6 +358,29 @@ export class RuntimeApi {
           : undefined;
       if (!actor) {
         response.writeHead(401).end('{"error":"unauthorized"}');
+        return;
+      }
+      if (request.url === '/v1/session-memory/paste') {
+        if (!isUser) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        const input = z
+          .union([
+            z.object({ text: z.string().min(1).max(262_144) }),
+            z.object({ discard: z.uuid() }),
+          ])
+          .parse(parsed);
+        if (!this.pastedDocuments) {
+          response.writeHead(503).end('{}');
+          return;
+        }
+        if ('discard' in input) {
+          await this.pastedDocuments.discard(input.discard);
+          response.writeHead(200).end('{}');
+        } else {
+          response.writeHead(200).end(JSON.stringify(await this.pastedDocuments.draft(input.text)));
+        }
         return;
       }
       if (request.url === '/v1/session-memory/observe') {
@@ -355,7 +400,26 @@ export class RuntimeApi {
           response.writeHead(403).end('{}');
           return;
         }
-        this.memory?.observe(id, input.force === true);
+        const outcome = input.outcome;
+        if (actor.kind === 'user' && input.closed === true) {
+          this.memory?.agentClosed(id);
+        } else if (
+          actor.kind === 'user' &&
+          typeof input.turnId === 'string' &&
+          input.turnId &&
+          (outcome === 'running' ||
+            outcome === 'completed' ||
+            outcome === 'failed' ||
+            outcome === 'canceled')
+        ) {
+          this.memory?.turn(
+            id,
+            { turnId: input.turnId, outcome, scope: this.memoryScope?.(id) },
+            input.local === true,
+          );
+        } else {
+          this.memory?.observe(id, actor.kind === 'user' && input.force === true);
+        }
         response.writeHead(202).end('{}');
         return;
       }

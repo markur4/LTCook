@@ -1,4 +1,5 @@
-import type { MemoryEntry, MemoryMessage } from '../session-memory/extraction.js';
+import type { MemoryEntry, MemoryMessage } from './session-memory-extractive.js';
+import type { MemorySourceMessage } from '../session-memory/units.js';
 
 export type MemoryFact = {
   label: string;
@@ -11,7 +12,7 @@ export type MemoryFact = {
 
 export type MemoryFixture = {
   id: string;
-  turns: readonly (readonly MemoryMessage[])[];
+  turns: readonly (readonly MemorySourceMessage[])[];
   flushAfter: readonly number[];
   originalSources: readonly number[];
   correctionSources: readonly number[];
@@ -389,12 +390,18 @@ export function memoryCadenceFixture(): MemoryFixture {
   const turns = base.turns.flatMap((turn, index) => {
     const relevant = turn.map(({ seq: original, ...message }) => {
       sources.set(original, ++seq);
-      return { seq, ...message };
+      return { seq, ...message, turnId: `cache-${index}` };
     });
     const interleaved = reports.slice(index * 3, (index + 1) * 3);
     return [
       relevant,
-      ...interleaved.map((report) => report.map((message) => ({ seq: ++seq, ...message }))),
+      ...interleaved.map((report, reportIndex) =>
+        report.map((message) => ({
+          seq: ++seq,
+          ...message,
+          turnId: `documentation-${index}-${reportIndex}`,
+        })),
+      ),
     ];
   });
   return {
@@ -405,5 +412,42 @@ export function memoryCadenceFixture(): MemoryFixture {
     originalSources: base.originalSources.map((source) => sources.get(source)!),
     correctionSources: base.correctionSources.map((source) => sources.get(source)!),
     facts: base.facts.map((fact) => ({ ...fact, source: sources.get(fact.source)! })),
+  };
+}
+
+export function memoryAttachmentFixture(): MemoryFixture {
+  const base = memoryFixtures.find(({ id }) => id === 'paseo-rewind-triage')!;
+  const first = base.turns[0]![0]!;
+  const path = 'runtime/src/integrations/paseo-memory.ts';
+  const attachment =
+    Array.from(
+      { length: 18 },
+      (_, index) =>
+        `Draft documentation note ${index + 1}. The previous workspace review inspected user-visible copy and guide navigation. Record documentation observations separately from the verified Agent Actions.`,
+    ).join('\n') +
+    '\nVerification reference: PASEO_REWIND_SOURCE completed against ' +
+    path +
+    '.';
+  const initial: MemorySourceMessage = {
+    ...first,
+    text:
+      first.text +
+      ' The attached review contains the exact rewind verification name and source path. Keep both for the next Discussion.',
+    attachments: [{ id: 'fixture-reference', name: 'Rewind notes', text: attachment }],
+  };
+  return {
+    ...base,
+    id: 'paseo-rewind-with-pasted-reference',
+    turns: [[initial, ...base.turns[0]!.slice(1)], ...base.turns.slice(1)],
+    facts: [
+      ...base.facts,
+      {
+        label: 'attached rewind verification name and source path',
+        source: first.seq,
+        expected: /PASEO_REWIND_SOURCE[\s\S]{0,200}runtime\/src\/integrations\/paseo-memory\.ts/,
+        critical: true,
+        kind: 'reference',
+      },
+    ],
   };
 }

@@ -33,6 +33,8 @@ export const SUMMARY_GENERATION_OPTIONS = {
 } as const;
 const generationSchema = z.strictObject({
   think: z.boolean().optional(),
+  truncate: z.literal(false).optional(),
+  shift: z.literal(false).optional(),
   stream: z.literal(false).optional(),
   options: z.strictObject({
     num_ctx: z.number().int().positive(),

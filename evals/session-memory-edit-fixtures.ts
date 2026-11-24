@@ -2,7 +2,7 @@ import { rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { MemoryFixture } from '../runtime/src/evals/session-memory-fixtures.js';
-import type { MemoryMessage } from '../runtime/src/session-memory/extraction.js';
+import type { MemoryMessage } from '../runtime/src/session-memory/text.js';
 
 export const editBase = '53a615798b8ca04a63c70e2d3b9503b01a97ddf3';
 

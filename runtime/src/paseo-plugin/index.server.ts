@@ -1,9 +1,10 @@
 import path from 'node:path';
 import type { PaseoApi } from '@getpaseo/client';
 import { z } from 'zod';
-import { defineRpc } from '@getpaseo/plugin';
+import { defineRpc, PluginAttachmentItemSchema } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
+import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
 import {
   ModelCatalogRequestSchema,
   ModelCatalogResponseSchema,
@@ -211,16 +212,46 @@ async function listSessions(input: z.infer<typeof SessionListRequestSchema>, pas
 }
 
 export default function contribute(server: PluginServerContext) {
-  const observeMemory = (agent: { id: string; provider: string }, force = false) => {
+  server.handle(pastedTextSearchRpc, async () => ({ items: [] }));
+  server.handle(discardPastedTextRpc, async ({ id }) => {
+    await runtimeJson('/v1/session-memory/paste', { discard: id });
+    return {};
+  });
+  server.handle(pastedTextRpc, async ({ query }) => {
+    if (!query.trim()) return { items: [] };
+    const item = PluginAttachmentItemSchema.parse(
+      await runtimeJson('/v1/session-memory/paste', { text: query }),
+    );
+    return { items: [item] };
+  });
+  const observeMemory = (
+    agent: { id: string; provider: string },
+    event: Record<string, unknown> = {},
+  ) => {
     if (['ltcook', 'pi', 'codex'].includes(agent.provider)) {
-      void runtimeJson('/v1/session-memory/observe', { nativeAgentId: agent.id, force }).catch(
+      void runtimeJson('/v1/session-memory/observe', { nativeAgentId: agent.id, ...event }).catch(
         () => {},
       );
     }
   };
   const cleanup = [
-    server.addHook('agent.turn.after', async ({ agent }) => observeMemory(agent)),
-    server.addHook('agent.close.after', async ({ agent }) => observeMemory(agent, true)),
+    server.addHook('agent.turn.before', async ({ agent, turnId }, context) => {
+      const model = ResolvedModelSchema.safeParse(agent.metadata[RESOLVED_MODEL_METADATA_KEY]);
+      const reference = context.paseo.agents.ref(agent.id);
+      const current = model.success
+        ? reference.current()
+        : (reference.current() ?? (await reference.refresh().catch(() => undefined))?.agent);
+      const local =
+        (model.success && model.data.provider === 'ollama') ||
+        current?.model?.startsWith('ollama/') === true;
+      observeMemory(agent, { turnId, outcome: 'running', local });
+    }),
+    server.addHook('agent.turn.after', async ({ agent, turnId, outcome }) =>
+      observeMemory(agent, { turnId, outcome: outcome.kind }),
+    ),
+    server.addHook('agent.close.after', async ({ agent }) =>
+      observeMemory(agent, { closed: true }),
+    ),
     server.addHook('agent.create.before', async ({ request }) => {
       if (request.config.provider.split('/')[0] !== 'ltcook') return;
       const selection = request.metadata?.['ltcook.team'];
@@ -305,7 +336,7 @@ export default function contribute(server: PluginServerContext) {
     }),
     server.addHook('agent.archive.after', async ({ agent }) => {
       if (!['ltcook', 'pi', 'codex'].includes(agent.provider)) return;
-      observeMemory(agent, true);
+      observeMemory(agent, { force: true });
       await runtimeJson('/v1/mcp/revoke', { nativeAgentId: agent.id });
     }),
   ];

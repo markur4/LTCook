@@ -20,6 +20,7 @@
   - [Domain terminology](#domain-terminology)
   - [Interchangeable teams](#interchangeable-teams)
   - [Guidance and planning](#guidance-and-planning)
+  - [Context-aware Session Memory](#context-aware-session-memory)
   - [Coordination and recovery](#coordination-and-recovery)
   - [Web services and diagnostics](#web-services-and-diagnostics)
 
@@ -241,6 +242,10 @@ These terms describe work, not ten separate workflow engines or database tables:
 | --- | --- |
 | Project | A logical collection of declared roots, repositories, Sessions, and Goals. It is not a filesystem sandbox. |
 | Session | A user-facing chat with its own native conversation history and bindings. |
+| Discussion | A conversation between a user and an agent within a Session. |
+| User>Agent Message Pair (UAMP) | A user message and its corresponding completed agent response. Native steering messages are additional sources. |
+| Agent Action (AA) | An operation performed by an agent and recorded as an Action by native Pi or Paseo history. |
+| Agent Action Batch (AAB) | Related AAs grouped for summarization. Known Plan, Pass, Task, and Step identifiers apply to the AAB. |
 | Request | The native initiating message for work; a Task may reference its native message identifier. |
 | Plan | A document specifying intended work and integration strategy. LTCook references it rather than storing a second plan history. |
 | Pass | An explicitly created integration unit with a title and an optional Plan reference. |
@@ -249,6 +254,11 @@ These terms describe work, not ten separate workflow engines or database tables:
 | Action | A tool call, message, or other action recorded by native Pi/Paseo history, not a second LTCook transcript. |
 | Goal | A completion criterion spanning Passes and potentially multiple Sessions. |
 | Phase | A classification of a Task or commit, not an independent scheduling engine. |
+
+Chat, Design, and Plan are interaction activities. A Plan can also identify work
+in the Plan → Pass → Task → Step → Action execution hierarchy. A Session may
+start a Plan directly, and AAs can occur outside a Plan. Optional PPTSA
+identifiers remain absent when no corresponding work record exists.
 
 A TeamInstance is the persistent logical team for one selected team and canonical
 workspace root. Several Sessions can share that TeamInstance while retaining
@@ -436,6 +446,49 @@ databases before modifying them. Select a fresh `runtime.database` under AppRC
 state when starting a new store. No conversion, compatibility layer or
 chat-history import is performed. Native Pi/Paseo histories and authentication
 remain separate from coordination state.
+
+## Context-aware Session Memory
+
+The runtime summarizes completed UAMPs and groups observed AAs at execution
+boundaries and an estimated token threshold. Native user messages remain the
+authority for goals and decisions. Original user messages stay available while
+summarization is pending, after compaction, and when agents resume work or share
+authorized context. Each summary cites its native source sequences, including
+which sequences are original user instructions.
+
+History is background for the new summary. Completed summaries are rendered in
+chronological order with stable text between common instructions and the
+current UAMP or AAB instructions. The blue blocks below show potential reuse.
+Ollama processes a new summary once before it joins a reusable prefix.
+
+```mermaid
+flowchart LR
+  A1[Stable instructions] --> B1[Current type instructions and original unit 1]
+  A2[Stable instructions] --> S1[New summary 1] --> B2[Current type instructions and original unit 2]
+  A3[Stable instructions] --> S1R[Summary 1] --> S2[New summary 2] --> B3[Current type instructions and original unit 3]
+  classDef reuse fill:#dbeafe,color:#172554,stroke:#3b82f6
+  class A2,A3,S1R reuse
+```
+
+Previous original units leave the request after summarization. A cold prompt, a
+model reload, agent switches, or an Ollama cache miss can require full prefill.
+History eviction changes token positions. Removing several old summaries in
+one operation leaves a stable prefix for more subsequent requests.
+
+```mermaid
+flowchart TD
+  Full[History reaches 4096 tokens]
+  Full --> One[Remove one old summary]
+  One --> Repeat[Another arrival shifts the prefix again]
+  Full --> Group[Remove oldest summaries down to 2048 tokens]
+  Group --> Shift[Next request rebuilds the surviving prefix]
+  Shift --> Stable[Later requests can reuse the surviving prefix]
+```
+
+Stored summaries remain available to search after eviction. Rewind invalidates
+the affected history and dependent summaries. When the native epoch changes,
+the runtime rebuilds from authorized original messages. Summaries never replace
+the source authority for a decision.
 
 ## Web services and diagnostics
 

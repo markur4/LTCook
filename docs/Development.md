@@ -369,6 +369,14 @@ generated presentations of the same six excerpts with paired fresh Pi
 sessions and identical tasks. The first optional argument selects the
 downstream model.
 
+Run `bun evals/session-memory-live.ts --context-aware` for the matched
+Session Memory comparison. It measures historical extraction, token-based
+abstractive summarization, UAMP and AAB summaries with and without historical
+context, and deterministic original search. The inference arms use the
+same CPU-only Session Memory model and sampling settings. Use `--fixture=ID`
+or `--strategy=logical,rolling` for a focused repeat. Add `--cache` to measure
+historical prefix reuse, grouped eviction, agent switches and queue priority.
+
 Run `bun evals/session-memory-live.ts` to compare hybrid extraction on
 the fixed workflow corpus. The runner uses native Pi with relevant original
 source as the downstream control and grades extraction omissions,
@@ -396,6 +404,12 @@ GPT-6 Luna at low reasoning in native Pi. The replay uses the existing Codex
 sign-in and sends only the numbered excerpts of the synthetic evaluation
 fixture to the provider. It grades each batch on its own evidence.
 
+Run `bun evals/session-memory-edit-live.ts --context-aware` to exercise the
+same comparison on pinned repository edits in Pi. It also runs conventional
+delegation. On this CPU-only evaluation route, the worker uses GPT-6 Luna at
+high reasoning through the current Codex authorization. A failed
+original-search control makes its matched downstream comparison inconclusive.
+
 Run `bun evals/session-memory-edit-live.ts` with optional extractor and worker
 model tags to compare conventional delegation, deterministic conversation search,
 and hybrid context on repository edits. Pass `gpt-6-luna` as the worker to use
@@ -407,19 +421,20 @@ against the latest confirmed decisions and records tool calls and usage. See the
 [hybrid qualification](../evals/session-memory-hybrid-results.md), and the
 [initial qualification](../evals/session-memory-results.md).
 
-The runtime stores original prompts, derived additions and the Paseo timeline
-checkpoint in `session-memory-v2.sqlite` under runtime state. It rebuilds
-from Paseo history. Search reads original conversation pages from Paseo on
-demand. The search response and automatic handoff use estimated token budgets,
-and citations retain the agent, epoch and sequence of the full source. A changed
-history epoch invalidates the previous citations. A reconstructed prompt with no
-submission identifier remains searchable as `unattributed-prompt` with
-`author: unknown`. It stays
-outside the confirmed user section of delegation context and outside model
-extraction. Existing TeamInstances and Core bindings
-determine shared read access. The checkout's native Pi and Paseo system test
-checks provenance, authorized reads, restart and rewind. Codex-specific
-compatibility and permission behavior belongs in focused Traditional Tests.
+The production runtime stores chronological UAMP and AAB summaries, native turn
+outcomes, original user prompts, and the Paseo checkpoint in
+`session-memory-v3.sqlite` under runtime state. Original conversation search
+reads authorized canonical pages from Paseo. The memory provider accepts
+complete useful responses with imperfect JSON and leaves failed portions
+pending. The backend rejects input truncation. Rewind invalidates the affected
+summary suffix, including history-dependent responses. A new epoch rebuilds
+from original history where native receipts establish the boundaries.
+
+The previous extractive summarizer is limited to the Agent Evals baseline.
+The production default is local LFM3 QAD Q4 at temperature 0.4 with reasoning
+disabled. The historical window evicts in groups from 4,096 to 2,048 estimated
+tokens. Memory work is asynchronous and waits to start while foreground
+local inference is active. See the [architecture diagrams](Explanations.md#context-aware-session-memory).
 
 ### Opt-in summarization utility comparison
 

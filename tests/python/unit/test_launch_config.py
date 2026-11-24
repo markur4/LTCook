@@ -272,6 +272,9 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
             summarizer_generation="",
             session_memory_threshold=3000,
             session_memory_model="",
+            session_memory_history_tokens=4096,
+            session_memory_retained_tokens=2048,
+            session_memory_input_tokens=8000,
             session_memory_delegation=False,
         ),
         web=Section({"LTCOOK_CRAWL4AI_URL": ""}),
@@ -297,6 +300,9 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
     assert seen["workspace"] == tmp_path
     assert seen["environment"] == original
     assert result.environment["LTCOOK_TEAM"] == "workspace-team"
+    assert result.environment["LTCOOK_SESSION_MEMORY_HISTORY_TOKENS"] == "4096"
+    assert result.environment["LTCOOK_SESSION_MEMORY_RETAINED_TOKENS"] == "2048"
+    assert result.environment["LTCOOK_SESSION_MEMORY_INPUT_TOKENS"] == "8000"
     assert result.environment["LTCOOK_WORKSPACE"] == str(tmp_path.resolve())
     assert result.environment["LTCOOK_JS_ROOT"] == str(tmp_path / "source-root")
     assert result.environment["PATH"].split(os.pathsep)[1] == str(
@@ -342,6 +348,9 @@ def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_p
             summarizer_generation="",
             session_memory_threshold=3000,
             session_memory_model="",
+            session_memory_history_tokens=4096,
+            session_memory_retained_tokens=2048,
+            session_memory_input_tokens=8000,
             session_memory_delegation=False,
         ),
         web=Section({}),
