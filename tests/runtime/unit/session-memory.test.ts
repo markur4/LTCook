@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   applyMemoryDelta,
+  memoryEntriesSchema,
   type MemoryEntry,
   type MemoryMessage,
 } from '../../../runtime/src/session-memory/extraction.js';
@@ -41,6 +42,45 @@ test('applies only sourced changes and retains the evidence for a superseded dec
     }),
   ).toThrow('Invalid Memory source');
   expect(applyMemoryDelta([entry], [correction], { upsert: [], supersede: [] })).toEqual([entry]);
+});
+
+test('a correction preserves the cited sources of a full entry on reload', () => {
+  const sources = Array.from({ length: 12 }, (_, index) => index + 1);
+  const saved = applyMemoryDelta([{ ...entry, sources }], [{ ...correction, seq: 13 }], {
+    upsert: [],
+    supersede: [{ id: entry.id, source: 13 }],
+  });
+  expect(memoryEntriesSchema.parse(JSON.parse(JSON.stringify(saved)))).toEqual([
+    { ...entry, status: 'superseded', sources: [...sources, 13] },
+  ]);
+});
+
+test('a handoff retains a pending correction behind a tool-heavy timeline tail', async () => {
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: {
+      async read(_agentId, _cursor, direction) {
+        return direction === 'tail'
+          ? { epoch: 'fixture', latest: 50, start: 3, through: 50, reset: false, messages: [] }
+          : {
+              epoch: 'fixture',
+              latest: 50,
+              start: 1,
+              through: 48,
+              reset: false,
+              messages: [correction],
+            };
+      },
+    },
+    async extract() {
+      throw new Error('A handoff must never invoke extraction directly');
+    },
+  });
+  try {
+    expect(await memory.handoff('leader', 'cobalt')).toContain(correction.text);
+  } finally {
+    await memory.close();
+  }
 });
 
 test('coalesces updates, shares only authorized context, and recovers from a failed checkpoint', async () => {

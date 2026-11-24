@@ -96,7 +96,7 @@ export async function ollamaChat(
   messages: { role: 'system' | 'user'; content: string }[],
   signal: AbortSignal,
   onUsage?: (usage: OllamaUsage) => void,
-  format?: 'json',
+  format?: Record<string, unknown>,
 ) {
   const endpoint = ollamaEndpoint(settings.endpoint);
   const generation = summaryGeneration(settings);

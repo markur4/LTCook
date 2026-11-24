@@ -47,7 +47,7 @@ class RuntimeSettings(rc.Config):
     )
     session_memory_model: str = rc.field("LTCOOK_SESSION_MEMORY_MODEL", default="")
     session_memory_delegation: bool = rc.field(
-        "LTCOOK_SESSION_MEMORY_DELEGATION", default=True
+        "LTCOOK_SESSION_MEMORY_DELEGATION", default=False
     )
     api_listen: str = rc.field("LTCOOK_API_LISTEN", default="127.0.0.1:48731")
     api_token: str = rc.field("LTCOOK_API_TOKEN", default="", secret=True)

@@ -14,6 +14,7 @@ export type MemoryCursor = { epoch: string; seq: number };
 export type MemoryPage = {
   epoch: string;
   latest: number;
+  start?: number;
   through: number;
   reset: boolean;
   messages: MemoryMessage[];
@@ -82,6 +83,7 @@ export class SessionMemory {
   }
 
   recover(agentIds: readonly string[]): void {
+    if (this.abort.signal.aborted) return;
     for (const id of agentIds) this.observe(id, this.state(id) !== undefined);
   }
 
@@ -177,8 +179,22 @@ export class SessionMemory {
 
   async handoff(agentId: string, query: string): Promise<string> {
     const { state, tail } = await this.current(agentId);
-    const recent = tail.messages.filter(
-      (message) => message.seq > (state?.seq ?? -1) && message.author !== 'runtime',
+    const checkpoint = state?.seq ?? -1;
+    let messages = tail.messages;
+    const tailStart = tail.start;
+    if (tailStart !== undefined && tailStart > Math.max(0, checkpoint) + 1) {
+      // > A tool-heavy turn can push a recent user correction out of the tail window.
+      const page = await this.options.source.read(agentId, state).catch(() => undefined);
+      if (page && (page.reset || page.epoch !== tail.epoch)) {
+        this.observe(agentId, true);
+        return renderMemoryHandoff({ entries: [], recent: [], incomplete: true });
+      }
+      if (page) {
+        messages = [...page.messages.filter(({ seq }) => seq < tailStart), ...messages];
+      }
+    }
+    const recent = messages.filter(
+      (message) => message.seq > checkpoint && message.author !== 'runtime',
     );
     const context = selectMemoryContext(
       state?.entries ?? [],

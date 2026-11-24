@@ -159,6 +159,14 @@ Task to register: ${input.description}`,
     );
   }
 
+  private activeExecutionPass(sessionId: string, passId: string | undefined): boolean {
+    return (
+      passId !== undefined &&
+      this.store.getPass(sessionId, passId).status === 'running' &&
+      this.executionAllowed(sessionId, passId)
+    );
+  }
+
   async openSession(input: {
     id?: string;
     workspaceRoot: string;
@@ -424,11 +432,7 @@ Task to register: ${input.description}`,
       return this.planning.execute(session, actor, command);
 
     const executionPass = (passId: string | undefined) => {
-      if (
-        passId === undefined ||
-        this.store.getPass(sessionId, passId).status !== 'running' ||
-        !this.executionAllowed(sessionId, passId)
-      )
+      if (!this.activeExecutionPass(sessionId, passId))
         throw new Error('Execution work requires an active approved Pass');
     };
     if (command.type === 'assignment.create') {
@@ -894,6 +898,7 @@ Task to register: ${input.description}`,
           dispatchState = readDispatchState();
         }
       }
+      if (!this.activeExecutionPass(session.id, pass.id)) continue;
       const current = this.store.listTasks(session.id).filter((task) => task.passId === pass.id);
       const work = current.filter((task) => task.phase !== 'review');
       if (
@@ -940,7 +945,7 @@ Task to register: ${input.description}`,
   private async dispatchScheduled(session: Session, task: Task): Promise<void> {
     if (
       !task.passId ||
-      !this.executionAllowed(session.id, task.passId) ||
+      !this.activeExecutionPass(session.id, task.passId) ||
       this.taskGates(session.id, task).length
     )
       return;
@@ -988,7 +993,7 @@ Task to register: ${input.description}`,
     }
     // > A routing hook may yield while a new blocking decision is recorded.
     if (
-      !this.executionAllowed(session.id, task.passId) ||
+      !this.activeExecutionPass(session.id, task.passId) ||
       this.taskGates(session.id, this.store.getTask(session.id, task.id)).length
     )
       return;
@@ -1230,12 +1235,21 @@ Task to register: ${input.description}`,
       } finally {
         clearTimeout(timer);
       }
-      if (this.store.getAssignment(session.id, assignment.id).status !== 'pending') return;
+      if (this.closed || this.store.getAssignment(session.id, assignment.id).status !== 'pending')
+        return;
+      const current = this.store.getTask(session.id, assignment.taskId);
+      const recipient = this.store
+        .listBindings(session.id)
+        .find(({ memberKey }) => memberKey === assignment.memberKey);
       if (
-        task.scheduled &&
-        task.passId &&
-        (!this.executionAllowed(session.id, task.passId) ||
-          this.taskGates(session.id, this.store.getTask(session.id, task.id)).length)
+        recipient?.state !== 'bound' ||
+        recipient.nativeAgentId !== assignment.nativeAgentId ||
+        ['cancelled', 'completed', 'failed'].includes(current.status) ||
+        (current.workType === 'task.execute' &&
+          !this.activeExecutionPass(session.id, current.passId)) ||
+        (current.scheduled &&
+          ((current.attempt ?? 1) !== (assignment.attempt ?? 1) ||
+            this.taskGates(session.id, current).length))
       )
         return;
     }

@@ -239,7 +239,8 @@ collaborators may read.
 Session Memory updates in the background. An incomplete result can mean the
 model has yet to catch up, the output reached a result limit, or the source
 history is unavailable. On a delegated task, follow its approved scope and
-check a recent explicit correction against the cited messages. Configure the
+check a recent explicit correction against the cited messages. Automatic enrichment
+is opt-in while the extraction models are being qualified. Configure the
 [Session Memory settings](References.md#environment-variables) in global AppRC
 and restart the runtime to apply them.
 

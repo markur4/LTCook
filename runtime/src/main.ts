@@ -380,7 +380,7 @@ async function run(): Promise<void> {
       teams,
       agents: backend,
       memory,
-      memoryDelegation: process.env.LTCOOK_SESSION_MEMORY_DELEGATION !== 'false',
+      memoryDelegation: process.env.LTCOOK_SESSION_MEMORY_DELEGATION === 'true',
       onEvent(event) {
         void telemetry.log('info', 'runtime.event', event);
       },

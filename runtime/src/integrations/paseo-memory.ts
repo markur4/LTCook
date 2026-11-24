@@ -55,6 +55,7 @@ export function createPaseoMemorySource(api: PaseoApi, secret?: string): MemoryS
       return {
         epoch: page.epoch,
         latest: page.window.minSeq === 0 ? -1 : page.window.maxSeq,
+        start: page.startCursor?.seq,
         through: page.endCursor?.seq ?? cursor?.seq ?? -1,
         reset: page.reset || page.staleCursor || page.gap,
         messages: readMessages(agentId, secret, page.entries),

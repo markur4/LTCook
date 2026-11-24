@@ -187,9 +187,11 @@ async function evaluatePi(input: {
       .trim();
     const payload = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, '')) as unknown;
     const parsed = expectedAnswer.safeParse(payload);
+    const target = z.object({ target: z.string().max(80) }).safeParse(payload);
     return {
       passed: parsed.success,
       failedFields: parsed.success ? [] : parsed.error.issues.map(({ path }) => path.join('.')),
+      ...(target.success ? { reportedTarget: target.data.target } : {}),
       elapsedMs: Math.round(performance.now() - started),
       inputTokens: answer.usage.input + answer.usage.cacheRead + answer.usage.cacheWrite,
       outputTokens: answer.usage.output,
@@ -300,7 +302,16 @@ export async function runSessionMemoryEvaluation(
   signal: AbortSignal,
   downstreamModel = EVAL_MODEL,
   onProgress?: (event: string) => void,
+  selection?: { model?: string; threshold?: number },
 ) {
+  const selectedModels = models.filter(
+    (model) => !selection?.model || modelTag(model) === modelTag(selection.model),
+  );
+  const selectedThresholds = thresholds.filter(
+    (threshold) => selection?.threshold === undefined || threshold === selection.threshold,
+  );
+  if (!selectedModels.length || !selectedThresholds.length)
+    throw new Error('Choose an existing candidate and cadence.');
   const started = performance.now();
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-session-memory-eval-'));
   try {
@@ -331,14 +342,14 @@ export async function runSessionMemoryEvaluation(
     });
 
     const candidates = [];
-    for (const requestedModel of models) {
+    for (const requestedModel of selectedModels) {
       const identity = await inspect(requestedModel);
       if (!identity) {
         candidates.push({ requestedModel, error: 'Ollama model is unavailable.' });
         continue;
       }
       const cadences = [];
-      for (const threshold of thresholds) {
+      for (const threshold of selectedThresholds) {
         onProgress?.(`Evaluating ${requestedModel} at ${threshold} estimated tokens`);
         try {
           cadences.push(

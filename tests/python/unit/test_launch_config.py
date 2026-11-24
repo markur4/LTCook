@@ -127,7 +127,10 @@ def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
     user_config.mkdir(parents=True)
     global_auth = tmp_path / "global-auth"
     (user_config / APP_RC.schema.user_dotenv_filename).write_text(
-        f"LTCOOK_TEAM=global-team\nLTCOOK_PI_AUTH_DIR={global_auth}\n",
+        f"LTCOOK_TEAM=global-team\nLTCOOK_PI_AUTH_DIR={global_auth}\n"
+        "LTCOOK_SESSION_MEMORY_THRESHOLD=1500\n"
+        "LTCOOK_SESSION_MEMORY_MODEL=fixture-memory-model\n"
+        "LTCOOK_SESSION_MEMORY_DELEGATION=false\n",
         encoding="utf-8",
     )
     registry_file = APP_RC.workspaces(environment=environment).registry_path()
@@ -136,6 +139,12 @@ def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
     global_launch = launch.resolve_launch(project, original_environment=environment)
 
     assert global_launch.environment["LTCOOK_TEAM"] == "global-team"
+    assert global_launch.environment["LTCOOK_SESSION_MEMORY_THRESHOLD"] == "1500"
+    assert (
+        global_launch.environment["LTCOOK_SESSION_MEMORY_MODEL"]
+        == "fixture-memory-model"
+    )
+    assert global_launch.environment["LTCOOK_SESSION_MEMORY_DELEGATION"] == "false"
     assert global_launch.environment["LTCOOK_SHARED_SKILLS_DIR"] == str(
         (user_home / ".agents" / "skills").resolve()
     )
@@ -261,6 +270,9 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
             tiny_local_model="fixture-model",
             summarizer_keep_alive=-1,
             summarizer_generation="",
+            session_memory_threshold=3000,
+            session_memory_model="",
+            session_memory_delegation=False,
         ),
         web=Section({"LTCOOK_CRAWL4AI_URL": ""}),
         pi=Section({}),
@@ -328,6 +340,9 @@ def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_p
             tiny_local_model="fixture-model",
             summarizer_keep_alive=-1,
             summarizer_generation="",
+            session_memory_threshold=3000,
+            session_memory_model="",
+            session_memory_delegation=False,
         ),
         web=Section({}),
         pi=Section({}),
