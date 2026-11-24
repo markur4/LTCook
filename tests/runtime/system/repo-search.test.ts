@@ -20,6 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import {
@@ -208,7 +209,16 @@ test.skipIf(!deploymentDirectory)(
       await writeFile(outside, code('outsideOnlyChecksum'));
       await symlink(outside, path.join(nested, 'escape.ts'), 'file');
 
-      const tool = searchTool(path.join(root, 'cache'));
+      const cacheDirectory = path.join(root, 'cache');
+      const observer = createColgrepProvider({ deploymentDirectory, cacheDirectory });
+      const parentWorkspace = await openRepositoryWorkspace(workspace);
+      const siblingWorkspace = await openRepositoryWorkspace(sibling);
+      expect(await observer.readStatus(parentWorkspace)).toMatchObject({
+        availability: 'not-ready',
+        activity: 'idle',
+      });
+      await expect(stat(cacheDirectory)).rejects.toHaveProperty('code', 'ENOENT');
+      const tool = searchTool(cacheDirectory);
       const byName = (directory: string, pattern: string, paths?: string[]) =>
         search(tool, directory, { query: 'calculate checksum using bytes', pattern, paths });
       const cold = await byName(workspace, 'mainOnlyChecksum');
@@ -225,6 +235,14 @@ test.skipIf(!deploymentDirectory)(
       expect(await byName(workspace, 'mainOnlyChecksum')).toMatchObject({
         status: 'ready',
         results: cold.results,
+      });
+      expect(await observer.readStatus(parentWorkspace)).toMatchObject({
+        availability: 'ready',
+        activity: 'idle',
+      });
+      expect(await observer.readStatus(siblingWorkspace)).toMatchObject({
+        availability: 'not-ready',
+        activity: 'idle',
       });
       expect(await byName(workspace, 'Checksum', ['nested'])).toMatchObject({
         status: 'ready',
@@ -304,6 +322,45 @@ test.skipIf(!deploymentDirectory)(
       const newIndex = await workspaceIndexDirectory(cacheDirectory, workspace);
       expect(await readdir(newIndex)).not.toHaveLength(0);
       expect(newIndex).not.toBe(priorIndex);
+    }),
+  timeoutMs,
+);
+
+test.skipIf(!deploymentDirectory || process.platform !== 'linux')(
+  'Activity observes an actual managed index build and clears activity on cancellation',
+  async () =>
+    withTemporaryDirectory(async (root) => {
+      const workspacePath = path.join(root, 'workspace');
+      await mkdir(workspacePath);
+      await Promise.all(
+        Array.from({ length: 140 }, (_, file) =>
+          writeFile(
+            path.join(workspacePath, `source-${file}.ts`),
+            Array.from({ length: 24 }, (_, unit) => code(`checksum${file}_${unit}`)).join('\n'),
+          ),
+        ),
+      );
+      const workspace = await openRepositoryWorkspace(workspacePath);
+      const options = { deploymentDirectory, cacheDirectory: path.join(root, 'cache') };
+      const writer = createColgrepProvider(options);
+      const observer = createColgrepProvider(options);
+      const abort = new AbortController();
+      const running = writer.buildIndex(workspace, abort.signal).then(
+        () => 'completed',
+        () => 'interrupted',
+      );
+      try {
+        let status = await observer.readStatus(workspace);
+        for (let attempt = 0; attempt < 160 && status.activity !== 'indexing'; attempt++) {
+          await Bun.sleep(50);
+          status = await observer.readStatus(workspace);
+        }
+        expect(status).toMatchObject({ availability: 'not-ready', activity: 'indexing' });
+      } finally {
+        abort.abort();
+        expect(await running).toBe('interrupted');
+      }
+      expect((await observer.readStatus(workspace)).activity).toBe('interrupted');
     }),
   timeoutMs,
 );

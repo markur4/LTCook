@@ -209,7 +209,9 @@ export function ActivityAgentCard({
   const toolCount = agent.tools
     ? [`${running.length} running`, `${recent.length} recent`]
     : ['Tools unavailable'];
-  const skillCount = agent.skills ? `${skills.length} skills` : 'Skills unavailable';
+  const skillCount = agent.skills
+    ? `${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`
+    : 'Skills unavailable';
 
   return (
     <ActivityCard

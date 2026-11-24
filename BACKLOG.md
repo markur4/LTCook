@@ -88,6 +88,17 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 <br>
 
+# 2026-11-24
+
+## P2 / E2 [Tooling] - *Release Activity observation when native mobile hides a retained tab*
+- **Area:** `runtime/src/paseo-plugin/client/screens/ActivityPanel.tsx` and Paseo's Explorer panel contract.
+- **Observed while:** Checking the Activity panel's subscription lifetime against the pinned Paseo SDK.
+- **Why not fixed now:** The native panel contract has no visibility event for a retained Explorer tab hidden in the foreground.
+- **Evidence:** The browser panel can observe its own rendered bounds. Native clients currently release Activity observation when the app backgrounds or the panel unmounts.
+- **Suggested next step:** Consume a supported host visibility signal when available. Verify that hiding Activity releases its observation and leaves background work running on native mobile.
+
+<br>
+
 # 2026-11-22
 
 ## P2 / E2 [Tools] - *Improve local summarizer fidelity on operational notes*
