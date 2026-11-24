@@ -109,7 +109,7 @@ const provider = createServer(async (request, response) => {
       return;
     }
     const servedTool = `mcp__ltcook_workspace__${tool}`;
-    const codex = request.url?.endsWith('/responses');
+    const codex = request.url?.endsWith('/responses') ?? false;
     const messages = codex ? input.input : input.messages;
     const result = messages?.findLast((item: Record<string, unknown>) =>
       codex
