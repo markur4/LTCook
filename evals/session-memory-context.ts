@@ -23,9 +23,11 @@ import {
   budgetMemoryText,
   estimateMemoryTokens,
   memoryRelevance,
+  missingMemoryIdentifiers,
 } from '../runtime/src/session-memory/text.js';
 import {
   identifyMemoryUnits,
+  observedMemoryChecks,
   type MemorySourceMessage,
   type MemoryUnit,
 } from '../runtime/src/session-memory/units.js';
@@ -100,7 +102,7 @@ function logicalUnits(fixture: MemoryFixture) {
   return identifyMemoryUnits(messages, prompts, 3000, true);
 }
 
-function handoffFor(fixture: MemoryFixture, evidence: Evidence[]) {
+function handoffFor(fixture: MemoryFixture, evidence: Evidence[], recoverSources: boolean) {
   const context = fixture.turns.flat();
   const last = fixture.turns.at(-1)!;
   const queries = new Map(last.map((message) => [message.seq, message]));
@@ -113,29 +115,59 @@ function handoffFor(fixture: MemoryFixture, evidence: Evidence[]) {
     fixture.focus,
     (item) => estimateMemoryTokens(JSON.stringify(item)),
   );
-  const selected = budgetMemoryText(
-    [...evidence].sort(
-      (a, b) =>
-        memoryRelevance(b.text, fixture.focus) - memoryRelevance(a.text, fixture.focus) ||
-        b.sources.at(-1)! - a.sources.at(-1)!,
-    ),
-    900,
-    fixture.focus,
-    (item) => estimateMemoryTokens(JSON.stringify(item)),
+  const ranked = [...evidence].sort(
+    (a, b) =>
+      memoryRelevance(b.text, fixture.focus) - memoryRelevance(a.text, fixture.focus) ||
+      b.sources.at(-1)! - a.sources.at(-1)!,
   );
-  return [
-    'Follow the current assignment and latest original user instructions. Supplemental evidence may include tentative proposals. Retrieve original sources for uncertain decisions.',
-    'Original user messages',
-    ...user.selected.sort((a, b) => a.seq - b.seq).map((item) => JSON.stringify(item)),
-    'Historical evidence with original sequence references',
-    ...selected.selected
-      .sort((a, b) => a.sources.at(-1)! - b.sources.at(-1)!)
-      .map((item) => JSON.stringify(item)),
-    'Recent original messages',
-    ...last
-      .filter(({ author }) => author !== 'runtime' && author !== 'user')
-      .map((item) => JSON.stringify(item)),
-  ].join('\n');
+  const pack = (entries: Evidence[]) =>
+    budgetMemoryText(entries, 900, fixture.focus, (item) =>
+      estimateMemoryTokens(JSON.stringify(item)),
+    );
+  let selected = pack(ranked).selected;
+  let recovered: Evidence[] = [];
+  if (recoverSources) {
+    const identifiers = missingMemoryIdentifiers(
+      fixture.focus,
+      [...user.selected, ...selected].map(({ text }) => text).join('\n'),
+    );
+    const query = identifiers.join(' ');
+    if (query) {
+      recovered = context
+        .filter(({ author }) => author !== 'user' && author !== 'runtime')
+        .flatMap(({ seq, text, attachments }) =>
+          [text, ...(attachments ?? []).map((item) => item.text)]
+            .filter((body) => memoryRelevance(body, query) > 0)
+            .map((body) => ({ sources: [seq], text: body })),
+        )
+        .sort(
+          (a, b) =>
+            memoryRelevance(b.text, query) - memoryRelevance(a.text, query) ||
+            b.sources[0]! - a.sources[0]!,
+        );
+      selected = pack([...recovered, ...ranked]).selected;
+    }
+  }
+  const chronological = selected.sort((a, b) => a.sources.at(-1)! - b.sources.at(-1)!);
+  const recent = last.filter(({ author }) => author !== 'runtime' && author !== 'user');
+  const supplied = [
+    ...user.selected.map(({ seq, text }) => ({ sources: [seq], text })),
+    ...chronological,
+    ...recent.map(({ seq, text }) => ({ sources: [seq], text })),
+  ];
+  return {
+    supplied,
+    recoveredSources: [...new Set(recovered.flatMap(({ sources }) => sources))],
+    text: [
+      'Follow the current assignment and latest original user instructions. Resolve uncertain decisions against original user messages. Prefer original tool results for observed outcomes.',
+      'Original user messages',
+      ...user.selected.sort((a, b) => a.seq - b.seq).map((item) => JSON.stringify(item)),
+      'Historical evidence with original sequence references',
+      ...chronological.map((item) => JSON.stringify(item)),
+      'Recent original messages',
+      ...recent.map((item) => JSON.stringify(item)),
+    ].join('\n'),
+  };
 }
 
 export async function compareContextMemory(
@@ -170,6 +202,7 @@ export async function compareContextMemory(
     const started = performance.now();
     const requests: Request[] = [];
     const evidence: Evidence[] = [];
+    const observedChecks: Evidence[] = [];
     const summaries: { type: MemoryUnit['type']; text: string }[] = [];
     if (strategy === 'extractive') {
       for (const batch of batches) {
@@ -210,6 +243,14 @@ export async function compareContextMemory(
           ? batches.map((messages) => ({ type: 'UAMP', messages }))
           : units;
       for (const unit of selected) {
+        if (unit.type === 'AAB') {
+          observedChecks.push(
+            ...observedMemoryChecks(unit.messages).map(({ seq, text }) => ({
+              sources: [seq],
+              text,
+            })),
+          );
+        }
         const history = strategy === 'rolling' ? memoryHistory(summaries) : '';
         const output: string[] = [];
         const parts = prepareMemorySummaries(unit, history);
@@ -275,6 +316,11 @@ export async function compareContextMemory(
           .map(({ seq, text }) => ({ sources: [seq], text })),
       );
     }
+    const handoff = handoffFor(
+      fixture,
+      [...evidence, ...observedChecks],
+      strategy === 'logical' || strategy === 'rolling',
+    );
     const grade = fixture.facts.map((fact) => {
       const directUser = preservePromptMessages([sourceBySequence.get(fact.source)!]).map(
         ({ text }) => text,
@@ -285,22 +331,31 @@ export async function compareContextMemory(
       ];
       const contradicted =
         !!fact.contradicts && evidence.some(({ text }) => fact.contradicts!.test(text));
+      const retained = relevant.some((text) => fact.expected.test(text));
       return {
         label: fact.label,
         critical: !!fact.critical,
-        retained: relevant.some((text) => fact.expected.test(text)),
+        retained,
+        retainedWithObservedChecks:
+          retained ||
+          observedChecks.some(
+            ({ sources, text }) => sources.includes(fact.source) && fact.expected.test(text),
+          ),
+        retainedInHandoff: handoff.supplied.some(
+          ({ sources, text }) => sources.includes(fact.source) && fact.expected.test(text),
+        ),
         contradicted,
       };
     });
     const loaded = requests.length ? await residency(endpoint, digest, signal) : undefined;
-    const handoff = handoffFor(fixture, evidence);
     arms.push({
       strategy,
       requests,
       grade,
-      handoff,
+      handoff: handoff.text,
+      recoveredSources: handoff.recoveredSources,
       elapsedMs: Math.round(performance.now() - started),
-      handoffEstimatedTokens: estimateMemoryTokens(handoff),
+      handoffEstimatedTokens: estimateMemoryTokens(handoff.text),
       historicalEvidenceEstimatedTokens: estimateMemoryTokens(
         evidence.map(({ text }) => text).join('\n'),
       ),

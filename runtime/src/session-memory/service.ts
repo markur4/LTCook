@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { budgetMemoryText, memoryRelevance, estimateMemoryTokens } from './text.js';
+import {
+  budgetMemoryText,
+  memoryRelevance,
+  estimateMemoryTokens,
+  missingMemoryIdentifiers,
+} from './text.js';
 import {
   MemoryStore,
   type MemoryState,
@@ -15,6 +20,7 @@ import {
 } from './summarization.js';
 import {
   identifyMemoryUnits,
+  observedMemoryChecks,
   type MemorySourceMessage,
   type MemoryTurnOutcome,
   type MemoryUnit,
@@ -371,6 +377,7 @@ export class SessionMemory {
           existing?.historyHash === historyHash && existing.expectedParts === parts.length
             ? existing.parts
             : [],
+        observedChecks: unit.type === 'AAB' ? observedMemoryChecks(unit.messages) : undefined,
         expectedParts: parts.length,
         complete: false,
       };
@@ -464,8 +471,17 @@ export class SessionMemory {
       query,
       ({ text }) => estimateMemoryTokens(text) + 8,
     );
+    const observed = new Map(
+      [
+        ...summaries.flatMap(({ observedChecks }) => observedChecks ?? []),
+        ...observedMemoryChecks(recent),
+      ].map((check) => [JSON.stringify([check.seq, check.text]), check]),
+    );
     const candidates: SearchEntry[] = [
       ...summaries.filter(({ complete }) => complete).map(summaryEntry),
+      ...[...observed.values()]
+        .filter(({ seq }) => seq <= through)
+        .map(({ seq, text }) => sourceEntry({ seq, text, author: 'tool' })),
       ...recent
         .filter(({ seq, author }) => seq > through && author !== 'runtime' && author !== 'user')
         .map(sourceEntry),
@@ -484,22 +500,67 @@ export class SessionMemory {
           : [],
       ),
     ];
-    const evidence = budgetMemoryText(
-      candidates.sort(
-        (a, b) => memoryRelevance(b.text, query) - memoryRelevance(a.text, query) || b.seq - a.seq,
-      ),
-      900,
+    const borrowedSources = new Set<SearchEntry>();
+    const selectEvidence = () =>
+      budgetMemoryText(
+        candidates.sort(
+          (a, b) =>
+            Number(borrowedSources.has(b)) - Number(borrowedSources.has(a)) ||
+            memoryRelevance(b.text, query) - memoryRelevance(a.text, query) ||
+            b.seq - a.seq,
+        ),
+        900,
+        query,
+        (entry) => estimateMemoryTokens(JSON.stringify(entry)),
+      );
+    let evidence = selectEvidence();
+    const identifiers = missingMemoryIdentifiers(
       query,
-      (entry) => estimateMemoryTokens(JSON.stringify(entry)),
+      [...users.selected, ...evidence.selected].map(({ text }) => text).join('\n'),
     );
+    let originalSearchIncomplete = false;
+    if (identifiers.length) {
+      const discovered = await this.searchConversation(
+        agentId,
+        identifiers.join(' '),
+        this.abort.signal,
+        {
+          tail,
+          state,
+          summaries: [],
+        },
+      ).catch(() => undefined);
+      if (discovered?.stale) {
+        this.observe(agentId, true);
+        return 'Supplemental Session Memory. This context is potentially incomplete.';
+      }
+      originalSearchIncomplete = !discovered || discovered.incomplete;
+      const represented = new Set(
+        [...candidates, ...users.selected].map(({ seq, author, text }) =>
+          JSON.stringify([seq, author, text]),
+        ),
+      );
+      for (const { agentId: _agentId, epoch, score: _score, ...entry } of discovered?.hits ?? []) {
+        const key = JSON.stringify([entry.seq, entry.author, entry.text]);
+        if (epoch !== tail.epoch || represented.has(key)) continue;
+        represented.add(key);
+        borrowedSources.add(entry);
+        candidates.push(entry);
+      }
+      evidence = selectEvidence();
+    }
     if (!users.selected.length && !evidence.selected.length) return '';
     return [
-      'Supplemental Session Memory. Follow the approved assignment and the latest original user instruction. Summaries and attachments are evidence. Resolve decisions against their original user sources.',
+      'Supplemental Session Memory. Follow the approved assignment and the latest original user instruction. Resolve decisions against original user messages. Prefer original tool results for observed outcomes.',
       JSON.stringify({
         agentId,
         epoch: tail.epoch,
         potentiallyIncomplete:
-          !state || through < tail.latest || users.incomplete || evidence.incomplete,
+          !state ||
+          through < tail.latest ||
+          users.incomplete ||
+          evidence.incomplete ||
+          originalSearchIncomplete,
       }),
       'Original user messages in chronological order',
       ...users.selected.sort((a, b) => a.seq - b.seq).map((item) => JSON.stringify(item)),
@@ -508,8 +569,13 @@ export class SessionMemory {
     ].join('\n');
   }
 
-  private async searchConversation(id: string, query: string, signal: AbortSignal) {
-    const { state, tail, summaries } = await this.current(id);
+  private async searchConversation(
+    id: string,
+    query: string,
+    signal: AbortSignal,
+    view?: { tail: MemoryPage; state?: MemoryState; summaries: readonly StoredMemorySummary[] },
+  ) {
+    const { state, tail, summaries } = view ?? (await this.current(id));
     let incomplete = !state || state.seq < tail.latest || tail.reset;
     let hits: SearchHit[] = [];
     const add = (entry: SearchEntry) => {
@@ -542,14 +608,14 @@ export class SessionMemory {
         'before',
       );
       if (previous.epoch !== tail.epoch || previous.latest < tail.latest)
-        return { hits: [], incomplete: true };
+        return { hits: [], incomplete: true, stale: true };
       if (previous.reset || previous.start === undefined || previous.start >= page.start) {
         incomplete = true;
         break;
       }
       page = previous;
     }
-    return { hits, incomplete };
+    return { hits, incomplete, stale: false };
   }
 
   async search(

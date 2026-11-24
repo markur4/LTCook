@@ -227,6 +227,24 @@ executable edit checks. The matched edit run took 20 minutes 24 seconds
 including all summarizer requests and native Pi turns. Ollama's model digest
 stayed fixed.
 
+## Retention follow-up
+
+After assigning native turn IDs to the separate documentation work, the
+long fixture still exposed all three missing critical facts with rolling
+history. The short rolling replay missed the cache version guard again.
+
+| Focused pre-fix replay | Strategy | Critical facts | Complete requests | Prefill | Generation | End-to-end |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Short cache recovery | Logical with rolling history | 2/3 | 6/6 | 25.48 s | 58.56 s | 84.14 s |
+| Long cache recovery, corrected native turns | Logical without history | 3/3 | 15/15 | 56.10 s | 267.04 s | 323.58 s |
+| Long cache recovery, corrected native turns | Logical with rolling history | 0/3 | 15/15 | 122.87 s | 304.68 s | 427.94 s |
+
+The follow-up preserves explicit named outcomes from original tool responses.
+It searches original conversation messages for technical identifiers absent
+from a delegation handoff, within the existing handoff token budget. It runs
+the same model with the same inference settings. Focused measurements score
+the model output and the selected handoff separately.
+
 ## Local verification
 
 | Check | Result | Time |

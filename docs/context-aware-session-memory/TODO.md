@@ -7,5 +7,6 @@
 - [x] Update the glossary, architecture documentation, and cache diagrams.
 - [x] Run Traditional Tests and matched native Pi Agent Evals. Record cache behavior and the initial qualification verdict.
 - [x] Complete pass review.
-- [ ] Integrate the reviewed implementation as requested.
-- [ ] Complete focused retention replays and fix the qualification gaps.
+- [x] Integrate the reviewed implementation as requested.
+- [x] Preserve named tool outcomes and recover missing task identifiers from original messages.
+- [ ] Complete focused retention replays and decide qualification from the measured results.

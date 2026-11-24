@@ -321,6 +321,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- Session Memory delegation preserves explicit named tool outcomes and cites
+  original messages for relevant identifiers omitted by summaries.
+
 - Pi and Codex chats on the LTCook Paseo host receive repository tool guidance
   at launch so they can choose Search or Locate before tool discovery.
 

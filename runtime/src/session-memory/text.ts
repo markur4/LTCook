@@ -91,3 +91,11 @@ export function memoryRelevance(text: string, query: string): number {
   const content = text.toLowerCase();
   return queryTerms(query).filter((term) => content.includes(term)).length;
 }
+
+export function missingMemoryIdentifiers(query: string, context: string): string[] {
+  const identifiers = query.match(/[\p{L}\p{N}_./-]{3,}/gu) ?? [];
+  const evidence = context.toLowerCase();
+  return [...new Set(identifiers.map((term) => term.replace(/[./-]+$/, '')))]
+    .filter((term) => /[_./]|[a-z][A-Z]|[A-Z][0-9]/.test(term))
+    .filter((term) => !evidence.includes(term.toLowerCase()));
+}

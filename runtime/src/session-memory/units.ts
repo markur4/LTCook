@@ -28,6 +28,21 @@ export type MemoryUnit = {
   partial?: true;
 };
 
+export function observedMemoryChecks(messages: readonly MemorySourceMessage[]) {
+  const checks = new Map<string, { seq: number; text: string }>();
+  for (const { author, seq, text } of messages) {
+    if (author !== 'tool') continue;
+    // > Keep explicit named check outcomes from the original tool result.
+    for (const [outcome, name, status] of text.matchAll(
+      /\b([A-Z][A-Z0-9]*(?:[_-][A-Z0-9]+)+)[\t ]+([A-Za-z]+)\b/g,
+    )) {
+      if (!/^(?:PASS(?:ED)?|FAIL(?:ED)?|SKIP(?:PED)?)$/i.test(status!)) continue;
+      checks.set(JSON.stringify([seq, name, status]), { seq, text: outcome.replace(/\s+/g, ' ') });
+    }
+  }
+  return [...checks.values()];
+}
+
 function scopeKey(scope: MemoryScope | undefined): string {
   return JSON.stringify([
     scope?.sessionId,

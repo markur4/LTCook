@@ -342,6 +342,48 @@ test('continues a newer turn when the older provider terminal event was missed',
   }
 });
 
+test('preserves checked tool evidence and uses originals for an omitted archived path', async () => {
+  const messages: MemorySourceMessage[] = [
+    { ...first, turnId: 'older' },
+    { seq: 2, author: 'tool', text: 'VERIFIED_CACHE_GUARD passed.', turnId: 'older' },
+    {
+      seq: 3,
+      author: 'agent',
+      text: 'Observed implementation in runtime/src/old-cache.ts. MADE_UP_CHECK PASS.',
+      turnId: 'older',
+    },
+    { ...correction, seq: 4, turnId: 'newer' },
+    { seq: 5, author: 'agent', text: 'The correction was noted.', turnId: 'newer' },
+  ];
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type) {
+      return { type, text: 'Keep the cache correction.', complete: true, elapsedMs: 1 };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'older', outcome: 'completed' }, false);
+    memory.turn('leader', { turnId: 'newer', outcome: 'completed' }, false);
+    await eventually(async () => !(await memory.search('leader', '', '')).incomplete);
+    const check = await memory.handoff('leader', 'verified cache guard');
+    expect(check).toContain('VERIFIED_CACHE_GUARD passed');
+    expect(check).not.toContain('MADE_UP_CHECK');
+    const path = await memory.handoff('leader', 'Check runtime/src/old-cache.ts.');
+    expect(
+      path
+        .split('\n')
+        .filter((line) => line.startsWith('{'))
+        .map((line) => JSON.parse(line)),
+    ).toContainEqual(
+      expect.objectContaining({ seq: 3, author: 'agent', kind: 'original-message' }),
+    );
+    expect(path).toContain('runtime/src/old-cache.ts');
+  } finally {
+    await memory.close();
+  }
+});
+
 test('gives foreground inference priority and exposes originals during a failed summary', async () => {
   const messages = [
     { ...first, turnId: '1' },
