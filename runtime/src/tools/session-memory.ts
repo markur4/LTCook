@@ -28,11 +28,10 @@ const result = Type.Object({
       epoch,
       entries: Type.Array(
         Type.Object({
-          id: Type.String(),
           kind: Type.String(),
-          status: Type.String(),
+          author: Type.String(),
           text: Type.String(),
-          sources: Type.Array(seq),
+          seq,
         }),
       ),
     }),

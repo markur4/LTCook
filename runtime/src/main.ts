@@ -313,15 +313,14 @@ async function run(): Promise<void> {
           model: process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || summarization.model,
           generation: JSON.stringify({
             think: false,
-            options: { num_ctx: 16384, num_predict: 2048, temperature: 0 },
+            options: { num_ctx: 16384, num_predict: 768, temperature: 0 },
           }),
         };
         memory = new SessionMemory({
-          databasePath: path.join(stateDirectory, 'session-memory.sqlite'),
+          databasePath: path.join(stateDirectory, 'session-memory-v2.sqlite'),
           source: createPaseoMemorySource(host.api, apiToken),
           threshold,
-          extract: (entries, messages, signal) =>
-            extractMemory(memorySettings, entries, messages, signal),
+          extract: (messages, signal) => extractMemory(memorySettings, messages, signal),
           peers: (agentId, workspace) => runtime?.memoryPeers(agentId, workspace) ?? [],
           onFailure: () => {
             void telemetry.log('warn', 'session-memory.update_failed', {});

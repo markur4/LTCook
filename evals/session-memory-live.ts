@@ -20,10 +20,15 @@ try {
     controller.signal,
     process.argv[2],
     (event) => console.error(event),
-    { model: process.argv[3], threshold: process.argv[4] ? Number(process.argv[4]) : undefined },
+    {
+      model: process.argv[3],
+      threshold: process.argv[4] ? Number(process.argv[4]) : undefined,
+      cadence: process.argv.includes('--cadence'),
+    },
   );
   console.log(JSON.stringify(report, null, 2));
-  if (!report.identityUnchanged || !report.baseline.passed) process.exitCode = 1;
+  if (!report.identityUnchanged || !report.baseline.every(({ passed }) => passed))
+    process.exitCode = 1;
 } finally {
   process.off('SIGINT', cancel);
   process.off('SIGTERM', cancel);

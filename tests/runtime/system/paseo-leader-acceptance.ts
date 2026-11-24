@@ -232,26 +232,24 @@ try {
       },
     });
   const startMemory = () => {
+    const source = createPaseoMemorySource(host!.api, secret);
     const instance = new SessionMemory({
       databasePath: path.join(directory, 'session-memory.sqlite'),
-      source: createPaseoMemorySource(host!.api, secret),
+      source: {
+        async read(...args) {
+          const page = await source.read(...args);
+          for (const message of page.messages) {
+            if (message.text.includes(runtimeHandoff)) observedSources.set(runtimeHandoff, message);
+            if (message.text === userRequirement) observedSources.set(userRequirement, message);
+          }
+          return page;
+        },
+      },
       threshold: 1,
       peers: (agentId, workspaceRoot) => runtime?.memoryPeers(agentId, workspaceRoot) ?? [],
-      async extract(entries, messages) {
-        const next = [...entries];
-        for (const source of messages) {
-          if (source.text.includes(runtimeHandoff)) observedSources.set(runtimeHandoff, source);
-          if (source.text !== userRequirement) continue;
-          observedSources.set(userRequirement, source);
-          next.push({
-            id: 'preserve-cobalt',
-            kind: 'constraint',
-            status: 'confirmed',
-            text: userRequirement,
-            sources: [source.seq],
-          });
-        }
-        return next;
+      async extract(messages) {
+        assert(messages.every(({ author }) => author === 'agent' || author === 'tool'));
+        return [];
       },
     });
     api.setSessionMemory(instance);
@@ -449,6 +447,28 @@ try {
     (await host.api.agents.list()).entries.filter(({ agent }) => ids.includes(agent.id)).length,
     2,
   );
+  await waitFor('the Pi prompt recovered without confirmed authorship', async () => {
+    const result = await reopenedTool.invoke(
+      { agentId: leaderId, query: 'cobalt fixture' },
+      { ...toolContext, signal: AbortSignal.timeout(5000) },
+    );
+    const matches = result.matches as Array<{
+      epoch: string;
+      entries: Array<{ kind: string; author: string; seq: number; text: string }>;
+    }>;
+    const match = matches[0];
+    const entry = match?.entries.find(({ text }) => text === userRequirement);
+    if (!entry || !match || match.epoch === memoryReference.epoch) return undefined;
+    assert.equal(entry.author, 'unknown');
+    assert.equal(entry.kind, 'unattributed-prompt');
+    const citation = { agentId: leaderId, epoch: match.epoch, seq: entry.seq };
+    const source = await reopenedTool.invoke(
+      { source: citation },
+      { ...toolContext, signal: AbortSignal.timeout(5000) },
+    );
+    assert.deepEqual(source.source, { ...citation, author: 'unknown', text: userRequirement });
+    return true;
+  });
   const peerTurn = await host.api.agents.ref(childId).run(memoryPrompt, { timeoutMs: 30_000 });
   if (providerError) throw providerError;
   assert.equal(peerTurn.status, 'idle', peerTurn.error);
@@ -476,10 +496,10 @@ try {
       );
       const matches = result.matches as Array<{
         epoch: string;
-        entries: Array<{ text: string; sources: number[] }>;
+        entries: Array<{ text: string; seq: number }>;
       }>;
       const match = matches[0];
-      const citation = match?.entries.find(({ text }) => text === userRequirement)?.sources[0];
+      const citation = match?.entries.find(({ text }) => text === userRequirement)?.seq;
       return match && citation !== undefined
         ? { agentId: leaderId, epoch: match.epoch, seq: citation }
         : undefined;

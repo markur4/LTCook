@@ -84,13 +84,38 @@ function readMessages(
           ];
         case 'assistant_message':
           return [{ seq: seqEnd, author: 'agent', text: item.text.slice(0, 12000) }];
-        case 'tool_call':
-          return item.agentMessage?.event === 'message'
-            ? [{ seq: seqEnd, author: 'agent', text: item.agentMessage.text.slice(0, 12000) }]
-            : [];
+        case 'tool_call': {
+          if (item.agentMessage?.event === 'message')
+            return [{ seq: seqEnd, author: 'agent', text: item.agentMessage.text.slice(0, 12000) }];
+          const result = toolOutcome(item);
+          return result ? [{ seq: seqEnd, author: 'tool', text: result }] : [];
+        }
         default:
           return [];
       }
     })
     .filter(({ text }) => text.trim().length > 0);
+}
+
+/** Use structured outcomes instead of commands, tool arguments, or raw tool output. */
+function toolOutcome(
+  item: Extract<Timeline['entries'][number]['item'], { type: 'tool_call' }>,
+): string | undefined {
+  if (item.status === 'running') return undefined;
+  const { detail, status } = item;
+  switch (detail.type) {
+    case 'shell':
+      return typeof detail.exitCode === 'number'
+        ? `Shell command ${status} with exit code ${detail.exitCode}.`
+        : undefined;
+    case 'edit':
+    case 'write':
+      return `File ${detail.type} ${status} for ${JSON.stringify(detail.filePath.slice(0, 320))}.`;
+    case 'search':
+      return detail.toolName !== 'web_search' && typeof detail.numMatches === 'number'
+        ? `Workspace search ${status} with ${detail.numMatches} matches.`
+        : undefined;
+    default:
+      return undefined;
+  }
 }
