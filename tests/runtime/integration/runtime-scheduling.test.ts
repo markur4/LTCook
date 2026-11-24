@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import defaultTeam from '@ltcook/team-default';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
+import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
 import { CoordinationStore } from '../../../runtime/src/storage/coordination.js';
 import team from '@ltcook/team-default-minimal';
 import {
@@ -19,7 +20,7 @@ afterEach(() => {
 });
 
 describe('approved Pass scheduling', () => {
-  async function fixture(selected = defaultTeam) {
+  async function fixture(selected = defaultTeam, memory?: SessionMemory) {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-scheduler-'));
     temporaryDirectories.push(directory);
     const agents = new FakeAgents();
@@ -29,6 +30,7 @@ describe('approved Pass scheduling', () => {
       stateDirectory: directory,
       team: selected,
       agents,
+      memory,
     });
     const opened = await runtime.openSession({ workspaceRoot: '/workspace' });
     const id = opened.session.id;
@@ -96,6 +98,50 @@ describe('approved Pass scheduling', () => {
     };
     return { runtime, id, pass, agents, create, release, report, databasePath, directory };
   }
+
+  test('canceling a Pass during the Memory lookup prevents its pending dispatch', async () => {
+    const memory = new SessionMemory({
+      databasePath: ':memory:',
+      source: {
+        async read() {
+          return { epoch: 'fixture', latest: -1, through: -1, reset: false, messages: [] };
+        },
+      },
+      async extract() {
+        return [];
+      },
+    });
+    const f = await fixture(defaultTeam, memory);
+    const reading = new Gate();
+    const loaded = new Gate();
+    try {
+      const task = await f.create('canceled-during-memory', { assigneeKey: 'junior' });
+      await f.create('also-canceled', { assigneeKey: 'leader' });
+      const sendsBefore = f.agents.sends.length;
+      spyOn(memory, 'handoff').mockImplementation(async () => {
+        reading.resolve();
+        await loaded.wait();
+        return 'Supplemental context';
+      });
+      const releasing = f.release();
+      await reading.wait();
+      const canceling = f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        { type: 'pass.update', passId: f.pass.id, status: 'cancelled' },
+      );
+      loaded.resolve();
+      await Promise.all([releasing, canceling]);
+      const snapshot = f.runtime.snapshot(f.id);
+      expect(snapshot.passes.find(({ id }) => id === f.pass.id)?.status).toBe('cancelled');
+      expect(snapshot.assignments.find(({ taskId }) => taskId === task.id)?.status).toBe('pending');
+      expect(f.agents.sends).toHaveLength(sendsBefore);
+    } finally {
+      loaded.resolve();
+      await f.runtime.close();
+      await memory.close();
+    }
+  });
 
   test('snapshots reuse task and approval reads while preserving dependency blockers', async () => {
     const f = await fixture(team);

@@ -47,6 +47,11 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- Session Memory extracts sourced context from Paseo conversations in the
+  background. Agents in the same authorized Team and workspace can search it
+  and retrieve cited messages. Core can include focused Memory and recent
+  messages in a delegation handoff.
+
 - RIED provides bounded directory maps, targeted source outlines, richer
   repository metadata, and live Git details with optional local base comparison.
   RIED responses include provider provenance, freshness, and structured diagnostics.

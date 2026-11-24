@@ -42,6 +42,13 @@ class RuntimeSettings(rc.Config):
     )
     summarizer_keep_alive: int = rc.field("LTCOOK_SUMMARIZER_KEEP_ALIVE", default=-1)
     summarizer_generation: str = rc.field("LTCOOK_SUMMARIZER_GENERATION", default="")
+    session_memory_threshold: int = rc.field(
+        "LTCOOK_SESSION_MEMORY_THRESHOLD", default=3000
+    )
+    session_memory_model: str = rc.field("LTCOOK_SESSION_MEMORY_MODEL", default="")
+    session_memory_delegation: bool = rc.field(
+        "LTCOOK_SESSION_MEMORY_DELEGATION", default=False
+    )
     api_listen: str = rc.field("LTCOOK_API_LISTEN", default="127.0.0.1:48731")
     api_token: str = rc.field("LTCOOK_API_TOKEN", default="", secret=True)
     runtime_api_url: str = rc.field("LTCOOK_RUNTIME_API_URL", default="")

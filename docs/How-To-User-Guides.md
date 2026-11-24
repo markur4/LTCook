@@ -7,6 +7,7 @@
   - [Install from a checkout](#install-from-a-checkout)
   - [Run the first command](#run-the-first-command)
   - [Use workspace tools in Pi or Codex](#use-workspace-tools-in-pi-or-codex)
+    - [Search Session Memory](#search-session-memory)
   - [Enable an Intel iGPU for Ollama on WSL](#enable-an-intel-igpu-for-ollama-on-wsl)
   - [Run Agent Evals](#run-agent-evals)
   - [Remove an installation](#remove-an-installation)
@@ -220,6 +221,28 @@ hosted chats work without Spark. AppRC's global
 [summarizer settings](References.md#environment-variables) apply when the runtime
 starts. A keep-alive of `-1` keeps the model resident after use. Set it to `0`
 to unload after a request or to a positive number of seconds for timed residency.
+
+### Search Session Memory
+
+Ask the agent to call `session-memory` with a short `query` after resuming a
+conversation or starting work that depends on an earlier decision. The results
+show the owning agent, history epoch, entries and source sequence numbers.
+Supply `agentId` to limit the search to an authorized conversation. To inspect
+a citation, pass `source` with its `agentId`, `epoch` and `seq`.
+
+An ordinary Paseo chat can read its own Memory. Managed agents can also search
+conversations bound to their TeamInstance in the same workspace. Memory
+uses text from user, assistant and agent messages. It skips internal reasoning,
+attachments and general tool output. Keep secrets out of chat messages that
+collaborators may read.
+
+Session Memory updates in the background. An incomplete result can mean the
+model has yet to catch up, the output reached a result limit, or the source
+history is unavailable. On a delegated task, follow its approved scope and
+check a recent explicit correction against the cited messages. Automatic enrichment
+is opt-in while the extraction models are being qualified. Configure the
+[Session Memory settings](References.md#environment-variables) in global AppRC
+and restart the runtime to apply them.
 
 ## Enable an Intel iGPU for Ollama on WSL
 

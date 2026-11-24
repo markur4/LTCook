@@ -184,6 +184,15 @@ def resolve_launch(
     environment["LTCOOK_SUMMARIZER_GENERATION"] = (
         global_config.runtime.summarizer_generation
     )
+    environment["LTCOOK_SESSION_MEMORY_THRESHOLD"] = str(
+        global_config.runtime.session_memory_threshold
+    )
+    environment["LTCOOK_SESSION_MEMORY_MODEL"] = (
+        global_config.runtime.session_memory_model
+    )
+    environment["LTCOOK_SESSION_MEMORY_DELEGATION"] = str(
+        global_config.runtime.session_memory_delegation
+    ).lower()
     runtime_state = (
         _user_path(global_config.runtime.state_dir, home)
         if global_config.runtime.state_dir

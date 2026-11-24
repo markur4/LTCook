@@ -5,6 +5,7 @@ export interface OllamaSettings {
   model: string;
   keepAlive: number;
   generation?: string;
+  cpuOnly?: boolean;
 }
 
 export const LFM3_SUMMARIZER_MODEL = 'lfm3:1.7b-q8_0';
@@ -95,6 +96,7 @@ export async function ollamaChat(
   messages: { role: 'system' | 'user'; content: string }[],
   signal: AbortSignal,
   onUsage?: (usage: OllamaUsage) => void,
+  format?: Record<string, unknown>,
 ) {
   const endpoint = ollamaEndpoint(settings.endpoint);
   const generation = summaryGeneration(settings);
@@ -119,6 +121,8 @@ export async function ollamaChat(
           model: modelName,
           messages,
           ...generation,
+          ...(settings.cpuOnly ? { options: { ...generation.options, num_gpu: 0 } } : {}),
+          ...(format ? { format } : {}),
           think,
           stream: false,
           keep_alive: settings.keepAlive,

@@ -700,6 +700,10 @@ test('one runtime isolates multiple Teams and Sessions while adopting native Lea
     expect(agents.creates).toBe(0);
     expect(runtime.listSessions('/workspace')).toHaveLength(3);
     expect(runtime.listSessions('/workspace', team.definition.id)).toHaveLength(2);
+    expect(runtime.memoryPeers('first', '/workspace').sort()).toEqual(['first', 'third']);
+    expect(runtime.memoryPeers('second', '/workspace')).toEqual(['second']);
+    expect(runtime.memoryPeers('first', '/elsewhere')).toEqual([]);
+    expect(runtime.memoryPeers('unbound', '/workspace')).toEqual([]);
     await runtime.openSession({
       id: 'first',
       workspaceRoot: '/workspace',

@@ -6,6 +6,8 @@ import { createServer as createHttpServer } from 'node:http';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
+import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import {
   createPaseoAgentBackend,
@@ -13,6 +15,9 @@ import {
 } from '../../../runtime/src/integrations/paseo.js';
 import { catalogModelAliases } from '../../../runtime/src/models/aliases.js';
 import { TeamRegistry } from '../../../runtime/src/integrations/team-loader.js';
+import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
+import type { MemoryMessage } from '../../../runtime/src/session-memory/extraction.js';
+import { createSessionMemoryTool } from '../../../runtime/src/tools/session-memory.js';
 
 const root = path.resolve(import.meta.dir, '../../..');
 const directory = process.argv[2];
@@ -39,6 +44,11 @@ const node = process.env.LTCOOK_TEST_NODE ?? 'node';
 const teams = await TeamRegistry.load(root);
 const team = teams.resolve('default-minimal');
 const leaderId = randomUUID();
+const requirementMessageId = randomUUID();
+const userRequirement = 'Keep the cobalt fixture unchanged.';
+const runtimeHandoff = 'Inspect the cobalt fixture for the acceptance case.';
+const memoryPrompt = 'Read the shared cobalt fixture requirement.';
+let peerMemoryRead = false;
 let modelCalls = 0;
 let expectedModel = 'test';
 let providerError: unknown;
@@ -56,8 +66,15 @@ const provider = createHttpServer(async (request, response) => {
       runtime!.snapshot(leaderId).members.every(({ binding }) => binding?.state === 'bound'),
       'First inference began before persistent member reconciliation',
     );
-    const toolResult = input.messages.findLast((message) => message.role === 'tool');
-    if (toolResult) {
+    const userIndex = input.messages.findLastIndex((message) => message.role === 'user');
+    const readsMemory = JSON.stringify(input.messages[userIndex]?.content ?? '').includes(
+      memoryPrompt,
+    );
+    const toolResult = input.messages.slice(userIndex + 1).findLast(({ role }) => role === 'tool');
+    if (readsMemory && toolResult) {
+      assert.match(toolResult.content, /Keep the cobalt fixture unchanged/);
+      peerMemoryRead = true;
+    } else if (toolResult) {
       const value = JSON.parse(toolResult.content) as { value: Array<{ id: string }> };
       assert(Array.isArray(value.value));
       assert(
@@ -80,8 +97,12 @@ const provider = createHttpServer(async (request, response) => {
             id,
             type: 'function',
             function: {
-              name: 'ltcook_team',
-              arguments: JSON.stringify({ command: { type: 'guidance.inspect' } }),
+              name: readsMemory ? 'session-memory' : 'ltcook_team',
+              arguments: JSON.stringify(
+                readsMemory
+                  ? { agentId: leaderId, query: 'cobalt fixture' }
+                  : { command: { type: 'guidance.inspect' } },
+              ),
             },
           },
         ],
@@ -150,7 +171,18 @@ const api = new RuntimeApi(undefined, secret, listen, environment);
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 let runtime: ReturnType<typeof createRuntime> | undefined;
+let memory: SessionMemory | undefined;
 let nativeUnavailable = false;
+const observedSources = new Map<string, MemoryMessage>();
+async function waitFor<T>(label: string, read: () => T | undefined | Promise<T | undefined>) {
+  const deadline = Date.now() + 10_000;
+  do {
+    const result = await read();
+    if (result !== undefined) return result;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } while (Date.now() < deadline);
+  throw new Error(`Timed out waiting for ${label}`);
+}
 try {
   host = await startPaseoHost({
     node,
@@ -173,6 +205,7 @@ try {
     deploymentNode: node,
     browserAvailable: false,
     preparedEnvironment: environment,
+    memoryProvenanceSecret: secret,
     identity(id) {
       return { agentId: id, token: agentBearer(secret, id) };
     },
@@ -184,6 +217,7 @@ try {
       stateDirectory: path.join(directory, 'state'),
       team,
       teams,
+      memory,
       agents: {
         ...backend,
         async list() {
@@ -197,8 +231,37 @@ try {
         },
       },
     });
+  const startMemory = () => {
+    const instance = new SessionMemory({
+      databasePath: path.join(directory, 'session-memory.sqlite'),
+      source: createPaseoMemorySource(host!.api, secret),
+      threshold: 1,
+      peers: (agentId, workspaceRoot) => runtime?.memoryPeers(agentId, workspaceRoot) ?? [],
+      async extract(entries, messages) {
+        const next = [...entries];
+        for (const source of messages) {
+          if (source.text.includes(runtimeHandoff)) observedSources.set(runtimeHandoff, source);
+          if (source.text !== userRequirement) continue;
+          observedSources.set(userRequirement, source);
+          next.push({
+            id: 'preserve-cobalt',
+            kind: 'constraint',
+            status: 'confirmed',
+            text: userRequirement,
+            sources: [source.seq],
+          });
+        }
+        return next;
+      },
+    });
+    api.setSessionMemory(instance);
+    return instance;
+  };
+  memory = startMemory();
   runtime = createController();
   api.setRuntime(runtime);
+  const memoryTool = createSessionMemoryTool(memory);
+  api.setWorkspaceMcp(new WorkspaceMcp([memoryTool], listen));
   api.setOpenWorkspaceHandler(async (request) =>
     runtime!.openSession({
       id: request.sessionId,
@@ -250,7 +313,7 @@ try {
     runtime.snapshot(leaderId).members.some(({ binding }) => binding?.state !== 'bound'),
     'Fixture failed to preserve the startup race',
   );
-  await leader.run('Inspect this Team immediately.', { timeoutMs: 30_000 });
+  await leader.run(userRequirement, { timeoutMs: 30_000, messageId: requirementMessageId });
   if (providerError) throw providerError;
   assert.equal(modelCalls, 2);
   const deadline = Date.now() + 30_000;
@@ -277,16 +340,81 @@ try {
     (await host.api.agents.list()).entries.filter(({ agent }) => ids.includes(agent.id)).length,
     2,
   );
+  const source = await waitFor('the native user message to reach Session Memory', () =>
+    observedSources.get(userRequirement),
+  );
+  assert.equal(source.author, 'user');
+  const toolContext = {
+    agentId: childId,
+    workspaceRoot: workspace,
+    sessionId: leaderId,
+    workspaceFileAccess: false,
+    signal: AbortSignal.timeout(30_000),
+  };
+  const memoryReference = await waitFor('the saved cobalt fixture requirement', async () => {
+    const result = await memoryTool.invoke(
+      { agentId: leaderId, query: 'cobalt fixture' },
+      toolContext,
+    );
+    const matches = result.matches as Array<{ epoch: string; entries: Array<{ text: string }> }>;
+    const match = matches.find(({ entries }) =>
+      entries.some(({ text }) => text === userRequirement),
+    );
+    return match ? { agentId: leaderId, epoch: match.epoch, seq: source.seq } : undefined;
+  });
+  const task = (await runtime.execute(
+    leaderId,
+    { kind: 'user' },
+    {
+      type: 'task.create',
+      title: 'Inspect cobalt fixture',
+      workType: 'task.investigate',
+      description: runtimeHandoff,
+      acceptance: 'Report the observed fixture state.',
+    },
+  )) as { id: string };
+  await runtime.execute(
+    leaderId,
+    { kind: 'user' },
+    {
+      type: 'assignment.create',
+      taskId: task.id,
+      memberKey: 'adjutant',
+      message: runtimeHandoff,
+    },
+  );
+  await host.api.agents.ref(childId).waitForFinish(30_000);
+  if (providerError) throw providerError;
+  const assignmentSource = await waitFor('the runtime assignment to reach Session Memory', () =>
+    observedSources.get(runtimeHandoff),
+  );
+  assert.equal(assignmentSource.author, 'runtime');
   // > The previous physical model remains registered, as it does in an AppRC workspace.
   environment.LTCOOK_MODEL_SMART = 'fixture/replacement';
+  await memory.close();
   await runtime.close();
+  memory = startMemory();
   runtime = createController();
   api.setRuntime(runtime);
+  const reopenedTool = createSessionMemoryTool(memory);
+  api.setWorkspaceMcp(new WorkspaceMcp([reopenedTool], listen));
   await runtime.openSession({
     id: leaderId,
     workspaceRoot: workspace,
     teamSelection: 'default-minimal',
     leaderAgentId: leaderId,
+  });
+  const savedSource = await reopenedTool.invoke(
+    { source: memoryReference },
+    {
+      ...toolContext,
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+  assert.deepEqual(savedSource.source, {
+    ...memoryReference,
+    author: 'user',
+    text: userRequirement,
   });
   nativeUnavailable = true;
   await leader.reload();
@@ -321,6 +449,10 @@ try {
     (await host.api.agents.list()).entries.filter(({ agent }) => ids.includes(agent.id)).length,
     2,
   );
+  const peerTurn = await host.api.agents.ref(childId).run(memoryPrompt, { timeoutMs: 30_000 });
+  if (providerError) throw providerError;
+  assert.equal(peerTurn.status, 'idle', peerTurn.error);
+  assert(peerMemoryRead, 'The adjutant did not read the leader memory through its native Pi tool');
   const nativeControls = createHostClient(host.listen, { clientId: 'ltcook-override-acceptance' });
   try {
     await nativeControls.connect();
@@ -337,6 +469,38 @@ try {
       timeoutMs: 30_000,
     });
     if (providerError) throw providerError;
+    const activeReference = await waitFor('the citation rebuilt after Pi reload', async () => {
+      const result = await reopenedTool.invoke(
+        { agentId: leaderId, query: 'cobalt fixture' },
+        { ...toolContext, signal: AbortSignal.timeout(5000) },
+      );
+      const matches = result.matches as Array<{
+        epoch: string;
+        entries: Array<{ text: string; sources: number[] }>;
+      }>;
+      const match = matches[0];
+      const citation = match?.entries.find(({ text }) => text === userRequirement)?.sources[0];
+      return match && citation !== undefined
+        ? { agentId: leaderId, epoch: match.epoch, seq: citation }
+        : undefined;
+    });
+    const history = await leader.timeline.refetch({ projection: 'canonical', limit: 0 });
+    const cited = history.entries.find(({ seqEnd }) => seqEnd === activeReference.seq)?.item;
+    assert(cited?.type === 'user_message' && cited.messageId, 'Paseo must expose Pi’s rewind ID');
+    const rewound = await nativeControls.rewindAgent(leaderId, cited.messageId, 'conversation');
+    assert.equal(rewound.ok, true, rewound.error ?? 'Pi rewind failed');
+    assert.notEqual(
+      (await leader.timeline.refetch({ projection: 'canonical', limit: 1 })).epoch,
+      activeReference.epoch,
+    );
+    const staleSource = await reopenedTool.invoke(
+      { source: activeReference },
+      {
+        ...toolContext,
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    assert.equal(staleSource.source, undefined, 'Pi rewind must invalidate the old citation');
   } finally {
     await nativeControls.close();
   }
@@ -349,10 +513,13 @@ try {
       modelCalls,
       firstTurn: 'native coordination succeeded during delayed child startup',
       unavailableRuntime: 'prompt handled without inference; explicit retry succeeded',
+      sessionMemory:
+        'native provenance, restart, shared Pi read, and citation invalidation on rewind',
     }),
   );
 } finally {
   await host?.close();
+  await memory?.close();
   await runtime?.close();
   await api.close();
   await new Promise<void>((resolve) => provider.close(() => resolve()));

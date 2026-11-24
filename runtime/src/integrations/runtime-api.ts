@@ -12,9 +12,11 @@ import type {
 import { canonicalWorkspace } from '../core/workspace.js';
 import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
+import type { SessionMemory } from '../session-memory/service.js';
 import type { WorkspaceMcp } from './mcp.js';
 import {
   isRepositoryTool,
+  SESSION_MEMORY_TOOL_NAME,
   REPO_SEARCH_TIMEOUT_MS,
 } from '../paseo-plugin/shared/workspace-tools.js';
 import { isWebTool } from '../tools/web.js';
@@ -71,6 +73,7 @@ export function agentBearer(secret: string, nativeAgentId: string): string {
 
 export class RuntimeApi {
   private server: Server | undefined;
+  private memory?: SessionMemory;
   private runtime: RuntimeController | undefined;
   private readonly sessions = new Map<string, string>();
   private readonly pendingSessions = new Map<
@@ -103,6 +106,10 @@ export class RuntimeApi {
   private shutdown: (() => Promise<void>) | undefined;
   private stopping = false;
   private workspaceMcp: WorkspaceMcp | undefined;
+  setSessionMemory(memory: SessionMemory): void {
+    this.memory = memory;
+  }
+
   setWorkspaceMcp(mcp: WorkspaceMcp): void {
     this.workspaceMcp = mcp;
   }
@@ -228,6 +235,7 @@ export class RuntimeApi {
           '/v1/tool/authorize',
           '/v1/ried',
           '/v1/workspace-tool',
+          '/v1/session-memory/observe',
           '/v1/mcp/grant',
           '/v1/mcp/revoke',
           '/v1/evaluation/observe',
@@ -316,6 +324,7 @@ export class RuntimeApi {
         leaderAgentId?: string;
         shellEnvironment?: unknown;
         toolName?: unknown;
+        force?: unknown;
         toolArgs?: unknown;
         input?: unknown;
       };
@@ -327,6 +336,27 @@ export class RuntimeApi {
           : undefined;
       if (!actor) {
         response.writeHead(401).end('{"error":"unauthorized"}');
+        return;
+      }
+      if (request.url === '/v1/session-memory/observe') {
+        const id = input.nativeAgentId;
+        const session = input.sessionId;
+        if (
+          typeof id !== 'string' ||
+          !id ||
+          (actor.kind !== 'user' &&
+            (!session ||
+              !this.runtime
+                ?.snapshot(session)
+                .members.some(
+                  ({ binding }) => binding?.nativeAgentId === id && binding.state === 'bound',
+                )))
+        ) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        this.memory?.observe(id, input.force === true);
+        response.writeHead(202).end('{}');
         return;
       }
       if (request.url === '/v1/mcp/grant' || request.url === '/v1/mcp/revoke') {
@@ -535,7 +565,7 @@ export class RuntimeApi {
           actor.kind !== 'agent' ||
           !input.sessionId ||
           !this.workspaceMcp ||
-          !(repositorySearch || isWebTool(toolName)) ||
+          !(repositorySearch || isWebTool(toolName) || toolName === SESSION_MEMORY_TOOL_NAME) ||
           !input.toolArgs ||
           typeof input.toolArgs !== 'object' ||
           Array.isArray(input.toolArgs)
@@ -568,7 +598,12 @@ export class RuntimeApi {
         const cancel = () => controller.abort();
         response.once('close', cancel);
         try {
-          const timeoutMs = repositorySearch ? REPO_SEARCH_TIMEOUT_MS + 5_000 : 120_000;
+          const timeoutMs =
+            toolName === SESSION_MEMORY_TOOL_NAME
+              ? 5_000
+              : repositorySearch
+                ? REPO_SEARCH_TIMEOUT_MS + 5_000
+                : 120_000;
           const result = await this.workspaceMcp.invokeTool(toolName, input.toolArgs, {
             agentId: actor.nativeAgentId,
             workspaceRoot: session.session.workspaceRoot,

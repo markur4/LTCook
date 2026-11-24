@@ -211,7 +211,16 @@ async function listSessions(input: z.infer<typeof SessionListRequestSchema>, pas
 }
 
 export default function contribute(server: PluginServerContext) {
+  const observeMemory = (agent: { id: string; provider: string }, force = false) => {
+    if (['ltcook', 'pi', 'codex'].includes(agent.provider)) {
+      void runtimeJson('/v1/session-memory/observe', { nativeAgentId: agent.id, force }).catch(
+        () => {},
+      );
+    }
+  };
   const cleanup = [
+    server.addHook('agent.turn.after', async ({ agent }) => observeMemory(agent)),
+    server.addHook('agent.close.after', async ({ agent }) => observeMemory(agent, true)),
     server.addHook('agent.create.before', async ({ request }) => {
       if (request.config.provider.split('/')[0] !== 'ltcook') return;
       const selection = request.metadata?.['ltcook.team'];
@@ -296,6 +305,7 @@ export default function contribute(server: PluginServerContext) {
     }),
     server.addHook('agent.archive.after', async ({ agent }) => {
       if (!['ltcook', 'pi', 'codex'].includes(agent.provider)) return;
+      observeMemory(agent, true);
       await runtimeJson('/v1/mcp/revoke', { nativeAgentId: agent.id });
     }),
   ];
