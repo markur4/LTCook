@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import apprc as rc
 import pytest
@@ -91,7 +92,7 @@ def test_root_help_orders_panels_and_lists_host_commands(
     ]
     positions = [result.output.index(title) for title in panel_titles]
     assert positions == sorted(positions)
-    for command_name in ("stop", "launch", "auth", "services", "app"):
+    for command_name in ("stop", "restart", "launch", "auth", "services", "app"):
         assert command_name in result.output
     assert "--version" in result.output
     assert "-V" in result.output
@@ -110,6 +111,96 @@ def test_app_help_lists_its_immediate_commands(
     assert result.exit_code == 0, result.output
     for command_name in ("install", "doctor", "paths"):
         assert command_name in result.output
+
+
+@pytest.mark.parametrize(
+    ("options", "stop_status", "update_status", "expected_calls", "exit_code"),
+    [
+        ([], 0, 0, ["stop", "serve"], 19),
+        (["-u"], 0, 0, ["stop", "update", "serve"], 19),
+        (["--update"], 0, 0, ["stop", "update", "serve"], 19),
+        (["--update"], 7, 0, ["stop"], 7),
+        (["--update"], 0, 8, ["stop", "update"], 8),
+    ],
+)
+def test_restart_orders_lifecycle_and_propagates_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    options: list[str],
+    stop_status: int,
+    update_status: int,
+    expected_calls: list[str],
+    exit_code: int,
+) -> None:
+    """Restart reuses the registered updater and starts only after success."""
+    cli = importlib.import_module("ltcook.cli.app")
+    launcher = tmp_path / "ltcook"
+    launcher.touch()
+    record = SimpleNamespace(
+        command_name="ltcook",
+        owned_outputs=[rc.OwnedOutput("command", str(launcher), None)],
+    )
+    calls: list[str] = []
+
+    def stop(environment: dict[str, str]) -> int:
+        assert environment == {"installation": "fixture"}
+        calls.append("stop")
+        return stop_status
+
+    def serve() -> int:
+        calls.append("serve")
+        return 19
+
+    def run(arguments: list[object], *, check: bool) -> SimpleNamespace:
+        assert arguments == [launcher, "app", "update"]
+        assert check is False
+        calls.append("update")
+        return SimpleNamespace(returncode=update_status)
+
+    def execv(command: Path, arguments: list[str]) -> None:
+        assert command == launcher
+        assert arguments == [str(launcher), "serve"]
+        raise SystemExit(serve())
+
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    monkeypatch.setattr(cli, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(cli, "os", SimpleNamespace(execv=execv))
+    monkeypatch.setattr(cli, "subprocess", SimpleNamespace(run=run))
+    monkeypatch.setattr(cli, "stop_runtime", stop)
+    monkeypatch.setattr(cli, "desktop_command", serve)
+    monkeypatch.setattr(
+        cli,
+        "resolve_launch",
+        lambda _: SimpleNamespace(environment={"installation": "fixture"}),
+    )
+    installation = SimpleNamespace(
+        inspect=lambda: SimpleNamespace(require_usable=lambda: record)
+    )
+    monkeypatch.setattr(
+        cli, "APP_RC", SimpleNamespace(installation=lambda: installation)
+    )
+
+    result = RUNNER.invoke(app, ["restart", *options], color=False)
+
+    assert result.exit_code == exit_code, result.output
+    assert calls == expected_calls
+
+
+def test_restart_update_on_windows_exits_before_stopping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A background update cannot be followed by immediate startup."""
+    cli = importlib.import_module("ltcook.cli.app")
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    monkeypatch.setattr(cli, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(
+        cli, "stop_runtime", lambda _: pytest.fail("Unexpected runtime stop")
+    )
+
+    result = RUNNER.invoke(app, ["restart", "--update"], color=False)
+
+    assert result.exit_code == 2
+    assert "AppRC updates finish in the background" in result.output
 
 
 def test_legacy_version_subcommand_is_absent(

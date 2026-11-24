@@ -29,6 +29,7 @@ const model = 'gpt-5.4';
 const material = 'Release R-17 passed 42 checks but did not deploy. The cause is uncertain.';
 const summary = 'R-17 passed 42 checks and did not deploy. The cause is uncertain.';
 const summaryModel = 'fixture-summary';
+const agentPrompt = 'Preserve the fixture workspace instructions.';
 const liveModel = process.env.LTCOOK_NATIVE_PI_MODEL;
 const verifyColgrep = Boolean(process.env.LTCOOK_COLGREP_DEPLOYMENT);
 if (verifyColgrep) {
@@ -131,6 +132,18 @@ const provider = createServer(async (request, response) => {
     const servedTool = `mcp__ltcook_workspace__${tool}`;
     const codex = request.url?.endsWith('/responses') ?? false;
     const messages = codex ? input.input : input.messages;
+    const instructions = JSON.stringify([
+      input.instructions,
+      ...messages.filter(
+        ({ role }: { role?: string }) => role === 'system' || role === 'developer',
+      ),
+    ]);
+    assert(
+      instructions.includes(agentPrompt),
+      `${marker} needs the agent's existing instructions.`,
+    );
+    assert.match(instructions, /ltcook_repo_locate[^.]*known symbol/);
+    assert.match(instructions, /ltcook_repo_search[^.]*hybrid/);
     const result = messages?.findLast((item: Record<string, unknown>) =>
       codex
         ? item.type === 'function_call_output' && item.call_id === marker
@@ -531,7 +544,7 @@ try {
   let active = await start();
   const ordinaryPi = await active.api.agents.create({
     cwd: workspace,
-    config: { provider: `pi/fixture/${model}` },
+    config: { provider: `pi/fixture/${model}`, systemPrompt: agentPrompt },
   });
   await exercise(ordinaryPi, 'pi_fresh');
   if (Bun.which('rg')) {
@@ -573,7 +586,7 @@ try {
   await exerciseLive(active, 'empty');
   const ordinaryCodex = await active.api.agents.create({
     cwd: workspace,
-    config: { provider: `codex/${model}` },
+    config: { provider: `codex/${model}`, systemPrompt: agentPrompt },
   });
   await exercise(ordinaryCodex, 'codex_fresh');
   await ordinaryCodex.reload();

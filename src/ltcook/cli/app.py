@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import sys
 from importlib import metadata
 from pathlib import Path
@@ -179,6 +180,7 @@ runtime = rc.cli.CliRuntime(
         runtime_independent_commands={
             "serve": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "stop": rc.cli.RuntimeIndependentCommand(skip_empty=True),
+            "restart": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "planning": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "guidance": rc.cli.RuntimeIndependentCommand(skip_empty=True),
             "auth": rc.cli.RuntimeIndependentCommand(
@@ -263,19 +265,84 @@ def app_callback(
     runtime.prepare(ctx, options)
 
 
+def _stop_desktop_runtime() -> int:
+    """Stop the authenticated runtime using the same placement as desktop startup."""
+    try:
+        return stop_runtime(resolve_launch(None).environment)
+    except RuntimeClientError as error:
+        raise typer.BadParameter(str(error)) from error
+
+
 @app.command("stop")
 def stop_cmd() -> None:
     """Stop only the authenticated runtime instance for this installation."""
-    try:
-        raise typer.Exit(stop_runtime(resolve_launch(None).environment))
-    except RuntimeClientError as error:
-        raise typer.BadParameter(str(error)) from error
+    raise typer.Exit(_stop_desktop_runtime())
 
 
 @app.command("serve")
 def serve_cmd() -> None:
     """Start or reuse the desktop runtime, matching bare ``ltcook``."""
     raise typer.Exit(desktop_command())
+
+
+def _registered_launcher() -> Path:
+    """Find the recorded public command so it can select the refreshed runtime."""
+    record = APP_RC.installation().inspect().require_usable()
+    if record is not None:
+        commands = (
+            Path(item.path) for item in record.owned_outputs if item.kind == "command"
+        )
+        launcher = next(
+            (path for path in commands if path.name == record.command_name), None
+        )
+        if launcher is not None and launcher.is_file():
+            return launcher
+    raise ValueError("An installed LTCook command is required for restart --update.")
+
+
+@app.command("restart")
+def restart_cmd(
+    update: Annotated[
+        bool,
+        typer.Option(
+            "--update",
+            "-u",
+            help="Apply the AppRC update before starting on Linux or macOS.",
+        ),
+    ] = False,
+) -> None:
+    """Stop the local runtime and reopen Paseo.
+
+    :param update: Apply the registered installation's update before starting.
+    """
+    launcher = None
+    if update:
+        if sys.platform == "win32":
+            raise typer.BadParameter(
+                "AppRC updates finish in the background on Windows. Stop LTCook, "
+                "run ltcook app update, then run ltcook serve after the update finishes.",
+                param_hint="--update",
+            )
+        try:
+            launcher = _registered_launcher()
+        except (OSError, ValueError) as error:
+            raise typer.BadParameter(str(error), param_hint="--update") from error
+
+    stopped = _stop_desktop_runtime()
+    if stopped:
+        raise typer.Exit(stopped)
+    if launcher is None:
+        raise typer.Exit(desktop_command())
+
+    try:
+        result = subprocess.run([launcher, "app", "update"], check=False)
+        if result.returncode:
+            raise typer.Exit(result.returncode)
+        os.execv(launcher, [str(launcher), "serve"])
+    except OSError as error:
+        raise typer.BadParameter(
+            f"Could not run the registered LTCook command: {error}"
+        ) from error
 
 
 def main(argv: list[str] | None = None) -> None:

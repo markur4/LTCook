@@ -16,6 +16,10 @@ import type {
 import { resolveModel, type ResolvedModel } from '../models/aliases.js';
 import { piThinking } from '../models/adapters.js';
 import { RESOLVED_MODEL_METADATA_KEY } from '../paseo-plugin/shared/models.js';
+import {
+  REPO_LOCATE_TOOL_NAME,
+  REPO_SEARCH_TOOL_NAME,
+} from '../paseo-plugin/shared/workspace-tools.js';
 import { agentEnvironment } from './native-policy.js';
 import { configurePiExtensions } from './pi-settings.js';
 import { isWithin } from '../path-containment.js';
@@ -136,6 +140,10 @@ export async function startPaseoHost(input: {
   const configuration = {
     daemon: {
       listen: input.listen,
+      appendSystemPrompt:
+        `When LTCook workspace tools are available, prefer ${REPO_LOCATE_TOOL_NAME} with a known symbol to find its definition, callers, or tests. ` +
+        `Use ${REPO_SEARCH_TOOL_NAME} in hybrid mode when you know the behavior but lack the symbol. Discover these tools through tool search if needed. ` +
+        'Use native search for quick literal checks and read surrounding source to trace control flow. If repository retrieval is unavailable or indexing, use native search and file reads.',
       mcp: { enabled: false, injectIntoAgents: false },
       ...(input.password ? { auth: { password: hashDaemonPassword(input.password) } } : {}),
     },
