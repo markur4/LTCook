@@ -131,10 +131,11 @@ tools on demand, put the tool name and its use case in the instructions the
 agent sees before discovery.
 
 For repository work, prefer `ltcook_repo_locate` when looking for the definition,
-callers, or tests of a known symbol. Use ranked `ltcook_repo_search` when the
+callers, or tests of a known symbol. Batch independent symbols with `symbols`.
+Open the surrounding block from a hit with `location`, or use `follow: true`
+to check one local connection. Use ranked `ltcook_repo_search` when the
 question describes behavior but the relevant symbol is unknown. Use native
-search for quick literal checks and read the surrounding source to follow
-control flow. If ranked retrieval is unavailable or still indexing, use native
+search for quick literal checks. If ranked retrieval is unavailable or still indexing, use native
 search or direct file reads for immediate evidence.
 
 Check that a normal launch exposes the tool and delivers its guidance. Use the

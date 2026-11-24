@@ -30,12 +30,15 @@ function formatHit({ excerpt, ...location }: RepositoryHit): string {
   ].join('\n');
 }
 
+type LocateSearch = Static<typeof RepositoryLocateOutputSchema>['searches'][number];
+
 function formatSearch({
   results,
+  connections,
   ...metadata
-}:
-  | Static<typeof RepositorySearchOutputSchema>
-  | Static<typeof RepositoryLocateOutputSchema>['searches'][number]) {
+}: Static<typeof RepositorySearchOutputSchema> & {
+  connections?: LocateSearch['connections'];
+}) {
   const header = results ? { ...metadata, hitCount: results.length } : metadata;
   const sections = [escapeControls(JSON.stringify(header))];
   let role: string | undefined;
@@ -45,6 +48,9 @@ function formatSearch({
       sections.push(`${role.charAt(0).toUpperCase()}${role.slice(1)} candidates`);
     }
     sections.push(formatHit(hit));
+  }
+  for (const { kind, from, to } of connections ?? []) {
+    sections.push(`Verified ${kind} connection`, formatHit(from), formatHit(to));
   }
   return sections.join('\n\n');
 }
@@ -56,6 +62,7 @@ export function repositoryEvidenceText(name: string, output: unknown): string {
   if (name === REPO_LOCATE_TOOL_NAME && Value.Check(RepositoryLocateOutputSchema, output))
     return [
       JSON.stringify({ followUp: output.followUp }),
+      ...(output.source ? [formatHit(output.source)] : []),
       ...output.searches.map(formatSearch),
     ].join('\n\n');
   return JSON.stringify(output);

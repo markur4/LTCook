@@ -2,13 +2,13 @@ import path from 'node:path';
 import { Type, type Static } from 'typebox';
 import { Value } from 'typebox/value';
 import { isWithin } from '../../path-containment.js';
-import { verifySourceEvidence } from '../evidence.js';
+import { RepositorySourceReader } from '../evidence.js';
 import {
   findRepositoryExecutable,
   RepositoryCommandError,
   runRepositoryCommand,
 } from '../process.js';
-import type { RepositoryRetrieval } from '../results.js';
+import type { RepositoryHit, RepositoryRetrieval } from '../results.js';
 import type { RepositoryWorkspace } from '../workspace.js';
 
 const MAX_RESULTS = 100;
@@ -28,6 +28,12 @@ interface RipgrepRequest {
   limit?: number;
 }
 
+export interface RipgrepCollection {
+  group?: (hit: Pick<RepositoryHit, 'path' | 'excerpt'>) => string;
+  prioritize?: (path: string) => boolean;
+  perGroup?: number;
+}
+
 /** Scan the authorized workspace for matching lines in deterministic path order. */
 export function createRipgrepProvider({
   pathValue = process.env.PATH ?? '',
@@ -38,6 +44,8 @@ export function createRipgrepProvider({
       workspace: RepositoryWorkspace,
       { query, mode = 'literal', paths = ['.'], limit = 20 }: RipgrepRequest,
       signal: AbortSignal,
+      source = new RepositorySourceReader(workspace),
+      collection?: RipgrepCollection,
     ): Promise<RepositoryRetrieval> {
       signal.throwIfAborted();
       if (!query || query.length > 1024 || /[\0\r\n]/.test(query))
@@ -90,6 +98,7 @@ export function createRipgrepProvider({
       }
 
       const candidates: Static<typeof MATCH>[] = [];
+      const buckets = new Map<string, number>();
       let matchedLines = 0;
       try {
         await workspace.assertUnchanged();
@@ -125,18 +134,39 @@ export function createRipgrepProvider({
                 event.type !== 'match'
               )
                 return false;
-              if (++matchedLines > limit) return true;
-              if (Value.Check(MATCH, event)) candidates.push(event);
-              else
+              matchedLines++;
+              if (!collection && matchedLines > limit) return true;
+              if (!Value.Check(MATCH, event)) {
                 report(
                   'unsupported-match',
                   'ripgrep returned a match without readable UTF-8 text or a source location.',
                 );
+                return false;
+              }
+              if (collection) {
+                const relative = path.relative(
+                  workspace.root,
+                  path.resolve(workspace.root, event.data.path.text),
+                );
+                const normalized = relative.split(path.sep).join('/');
+                const group = collection.group?.({
+                  path: normalized,
+                  excerpt: event.data.lines.text,
+                });
+                const bucket = JSON.stringify([group, collection.prioritize?.(normalized)]);
+                const used = buckets.get(bucket) ?? 0;
+                if (used >= (collection.perGroup ?? limit)) {
+                  result.truncated = true;
+                  return false;
+                }
+                buckets.set(bucket, used + 1);
+              }
+              candidates.push(event);
               return false;
             },
           },
         );
-        result.truncated = stopped;
+        result.truncated ||= stopped;
         if (!stopped && code !== 0 && code !== 1)
           report(
             'search-failed',
@@ -144,12 +174,14 @@ export function createRipgrepProvider({
           );
       } catch (error) {
         signal.throwIfAborted();
-        result.truncated = error instanceof RepositoryCommandError && error.code === 'output-limit';
+        const outputLimited =
+          error instanceof RepositoryCommandError && error.code === 'output-limit';
+        result.truncated ||= outputLimited;
         report(
           error instanceof RepositoryCommandError ? error.code : 'search-failed',
           error instanceof RepositoryCommandError && error.code === 'timeout'
             ? 'ripgrep reached its time limit.'
-            : result.truncated
+            : outputLimited
               ? 'ripgrep reached its output limit.'
               : 'ripgrep could not finish the scan.',
         );
@@ -167,8 +199,7 @@ export function createRipgrepProvider({
           report('outside-scope', 'ripgrep returned a path outside the authorized search scope.');
           continue;
         }
-        const hit = await verifySourceEvidence(
-          workspace,
+        const hit = await source.verify(
           {
             path: path.relative(workspace.root, file),
             excerpt: data.lines.text,

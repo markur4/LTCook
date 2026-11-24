@@ -58,16 +58,19 @@ export function gradeRepositoryBehavior({
   expected,
   searches,
   files,
+  extraEvidence = [],
 }: {
   answer: Static<typeof RepositoryBehaviorAnswer> | undefined;
   expected: readonly ExpectedRepositoryFact[];
   searches: readonly ObservedSearch[];
   files: ReadonlyMap<string, string>;
+  extraEvidence?: readonly RepositoryHit[];
 }) {
-  const hits = searches.flatMap((search) => search.results ?? []);
-  const readyHits = searches.flatMap((search) =>
-    search.status === 'ready' ? (search.results ?? []) : [],
-  );
+  const hits = [...searches.flatMap((search) => search.results ?? []), ...extraEvidence];
+  const readyHits = [
+    ...searches.flatMap((search) => (search.status === 'ready' ? (search.results ?? []) : [])),
+    ...extraEvidence,
+  ];
   const factGrades = expected.map(({ id, value, evidence }) => {
     const claims = answer?.facts.filter((fact) => fact.id === id) ?? [];
     const citations = gradeRepositoryCitations(

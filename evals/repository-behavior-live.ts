@@ -11,7 +11,7 @@ import { WorkspaceMcp } from '../runtime/src/integrations/mcp.js';
 import { RuntimeApi } from '../runtime/src/integrations/runtime-api.js';
 import { WORKSPACE_MCP_SERVER } from '../runtime/src/paseo-plugin/shared/workspace-tools.js';
 import { createColgrepProvider } from '../runtime/src/repository/providers/colgrep.js';
-import type { RepositoryRetrieval } from '../runtime/src/repository/results.js';
+import type { RepositoryHit, RepositoryRetrieval } from '../runtime/src/repository/results.js';
 import { openRepositoryWorkspace } from '../runtime/src/repository/workspace.js';
 import { createRepoLocateTool, REPO_LOCATE_TOOL_NAME } from '../runtime/src/tools/repo-locate.js';
 import { createRepoSearchTool, REPO_SEARCH_TOOL_NAME } from '../runtime/src/tools/repo-search.js';
@@ -42,6 +42,7 @@ type RepositoryCall = {
   tool: RepositoryToolName;
   mode?: SearchMode;
   searches: { mode: SearchMode; result: SearchResult; relevantToNegative?: boolean }[];
+  extraEvidence?: RepositoryHit[];
   followUp?: Static<LocateTool['outputSchema']>['followUp'];
   started: number;
   finished?: number;
@@ -93,6 +94,7 @@ function describeRequest(
         input.pattern,
         paths,
         input.limit ?? 8,
+        input.base,
       ]),
       workspaceWide: paths.every((scope) => scope === '.' || scope === 'fixture'),
       query: [input.query, input.pattern].filter(Boolean).join(' '),
@@ -101,11 +103,27 @@ function describeRequest(
   if (tool === REPO_LOCATE_TOOL_NAME && Value.Check(locate.inputSchema, input)) {
     const paths = (input.paths ?? []).toSorted();
     return {
-      key: JSON.stringify([tool, input.symbol, input.query, paths]),
+      key: JSON.stringify([
+        tool,
+        input.symbol,
+        input.symbols,
+        input.query,
+        input.location,
+        paths,
+        input.follow ?? false,
+        input.base,
+      ]),
       workspaceWide: paths.every((scope) => scope === '.' || scope === 'fixture'),
-      query: input.symbol ?? input.query ?? '',
+      query: input.symbol ?? input.symbols?.join(' ') ?? input.query ?? '',
     };
   }
+}
+
+function availableHits({ searches, extraEvidence = [] }: RepositoryCall) {
+  return [
+    ...searches.flatMap(({ result }) => (result.status === 'ready' ? (result.results ?? []) : [])),
+    ...extraEvidence,
+  ];
 }
 
 function summarizeAutonomousCalls(
@@ -119,10 +137,7 @@ function summarizeAutonomousCalls(
   for (const call of observations.toSorted(
     (a, b) => (a.finished ?? Infinity) - (b.finished ?? Infinity),
   )) {
-    const hits = call.searches.flatMap(({ result }) =>
-      result.status === 'ready' ? (result.results ?? []) : [],
-    );
-    uniqueSourceLines.set(call, addVerifiedSourceLines(seenLines, hits, files));
+    uniqueSourceLines.set(call, addVerifiedSourceLines(seenLines, availableHits(call), files));
   }
   return observations.map((call) => {
     const repeated = call.requestKey !== undefined && seenRequests.has(call.requestKey);
@@ -541,6 +556,12 @@ try {
         if (autonomous) call.resultBytes = Buffer.byteLength(JSON.stringify(result));
         if (name === REPO_LOCATE_TOOL_NAME && Value.Check(locate.outputSchema, result)) {
           call.followUp = result.followUp;
+          call.extraEvidence = [
+            ...(result.source ? [result.source] : []),
+            ...result.searches.flatMap(
+              ({ connections }) => connections?.flatMap(({ from, to }) => [from, to]) ?? [],
+            ),
+          ];
           call.searches = result.searches.map((entry) => ({
             mode: entry.mode,
             result: entry,
@@ -655,17 +676,10 @@ try {
       firstSearch !== undefined &&
       isReadyInExpectedMode(firstSearch);
     const { answer: rawAnswer, started: turnStarted, ...execution } = run;
-    const replies = observations.flatMap(({ finished, searches }) =>
-      finished === undefined
+    const replies = observations.flatMap((call) =>
+      call.finished === undefined
         ? []
-        : [
-            {
-              elapsedMs: finished - turnStarted,
-              hits: searches.flatMap(({ result }) =>
-                result.status === 'ready' ? (result.results ?? []) : [],
-              ),
-            },
-          ],
+        : [{ elapsedMs: call.finished - turnStarted, hits: availableHits(call) }],
     );
     if (autonomous) {
       const answer = Value.Check(RepositoryBehaviorAnswer, rawAnswer) ? rawAnswer : undefined;
@@ -677,6 +691,7 @@ try {
           relevantToNegative,
         })),
         files: corpus.files,
+        extraEvidence: observations.flatMap(({ extraEvidence }) => extraEvidence ?? []),
       });
       const toolCalls = summarizeAutonomousCalls(observations, turnStarted, corpus.files);
       const firstSupport = scenario.expectedFacts.flatMap(({ id, value, evidence }) => {
@@ -743,7 +758,7 @@ try {
       continue;
     }
     const answer = Value.Check(Answer, rawAnswer) ? rawAnswer : undefined;
-    const hits = searches.flatMap(({ result }) => result.results ?? []);
+    const hits = observations.flatMap(availableHits);
     const citations = answer?.citations ?? [];
     const { supported, unsupported, missing } = gradeRepositoryCitations(
       citations,

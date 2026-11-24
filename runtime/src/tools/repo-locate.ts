@@ -3,13 +3,20 @@ import {
   REPO_LOCATE_TOOL_NAME,
   REPO_SEARCH_TIMEOUT_MS,
 } from '../paseo-plugin/shared/workspace-tools.js';
-import { verifySourceEvidence } from '../repository/evidence.js';
-import { RepositoryHitSchema, type RepositoryHit } from '../repository/results.js';
-import type { RepositoryWorkspace } from '../repository/workspace.js';
+import { RepositorySourceReader } from '../repository/evidence.js';
+import { assertRepositoryPathVisible, isRepositoryPathVisible } from '../repository/filesystem.js';
+import {
+  MAX_SOURCE_EXCERPT,
+  RepositoryHitSchema,
+  type RepositoryHit,
+} from '../repository/results.js';
+import { isTestSource, repositorySearchPriority } from '../repository/search-priority.js';
+import { createSourceNavigation } from '../repository/source-navigation.js';
 import {
   createRepoSearchTool,
   openAuthorizedSearchWorkspace,
   repositoryEvidenceGuidance,
+  RepositorySearchBaseSchema,
   RepositorySearchOutputSchema,
   RepositorySearchPathsSchema,
 } from './repo-search.js';
@@ -30,17 +37,32 @@ type LocatedHit = Static<typeof LocateHit>;
 const LocateSearch = Type.Object({
   ...RepositorySearchOutputSchema.properties,
   results: Type.Optional(Type.Array(LocateHit)),
+  connections: Type.Optional(
+    Type.Array(
+      Type.Object({
+        kind: Type.Union([
+          Type.Literal('import'),
+          Type.Literal('re-export'),
+          Type.Literal('wrapper'),
+        ]),
+        from: RepositoryHitSchema,
+        to: RepositoryHitSchema,
+      }),
+    ),
+  ),
   query: Type.String(),
   mode: Type.Union([Type.Literal('exact'), Type.Literal('hybrid')]),
 });
 
-const EXACT_CANDIDATES = 48;
 const HITS_PER_ROLE = 3;
 const CONTEXT_LINES = 2;
 
-function evidenceRole(hit: RepositoryHit, symbol: string | undefined): LocatedHit['role'] {
-  if (!symbol || !/^[\w$]+$/.test(symbol) || hit.excerptTruncated) return 'reference';
-  if (!/\.(?:[cm]?[jt]sx?|pyi?)$/.test(hit.path)) return 'reference';
+type ClassifyHit = (
+  hit: Pick<RepositoryHit, 'path' | 'excerpt' | 'excerptTruncated'>,
+) => LocatedHit['role'];
+
+function classifySymbol(symbol: string | undefined): ClassifyHit {
+  if (!symbol || !/^[\w$]+$/.test(symbol)) return () => 'reference';
   const identifier = symbol.replaceAll('$', '\\$');
   const declaration = new RegExp(
     `^\\s*(?:(?:export|default|declare|abstract|async)\\s+)*(?:function\\b\\s*\\*?\\s*|(?:class|interface|type|enum|const|let|var|def)\\s+)${identifier}(?![\\w$])`,
@@ -48,28 +70,28 @@ function evidenceRole(hit: RepositoryHit, symbol: string | undefined): LocatedHi
   const call = new RegExp(
     `(?:^|[=(:,>]|\\b(?:return|await|yield)\\s+)\\s*(?:[\\w$]+\\.)*${identifier}\\s*\\(`,
   );
-  const line = hit.excerpt.split('\n', 1)[0]!;
-  if (declaration.test(line)) return 'definition';
-  const code = line.replace(
-    /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\*.*|\/\/.*|#.*$/,
-    '',
-  );
   const method = new RegExp(
     `^\\s*(?:(?:public|private|protected|static|override|async|get|set)\\s+)*${identifier}\\s*\\([^)]*\\)\\s*(?::[^{}]+)?\\{`,
   );
-  if (method.test(code)) return 'definition';
-  if (!call.test(code)) return 'reference';
-  return /(?:^|\/)(?:tests?|__tests__|specs?)\/|(?:^|\/)test_[^/]+$|[._-](?:test|spec)\.[^/]+$/.test(
-    hit.path,
-  )
-    ? 'test'
-    : 'caller';
+  return (hit) => {
+    if (hit.excerptTruncated || !/\.(?:[cm]?[jt]sx?|pyi?)$/.test(hit.path)) return 'reference';
+    const line = hit.excerpt.split('\n', 1)[0]!;
+    if (line.length > MAX_SOURCE_EXCERPT) return 'reference';
+    if (declaration.test(line)) return 'definition';
+    const code = line.replace(
+      /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\*.*|\/\/.*|#.*$/,
+      '',
+    );
+    if (method.test(code)) return 'definition';
+    if (!call.test(code)) return 'reference';
+    return isTestSource(hit.path) ? 'test' : 'caller';
+  };
 }
 
 async function groupEvidence(
-  workspace: RepositoryWorkspace,
+  reader: RepositorySourceReader,
   result: Static<typeof RepositorySearchOutputSchema>,
-  symbol: string | undefined,
+  classify: ClassifyHit | undefined,
   signal: AbortSignal,
 ): Promise<Static<typeof RepositorySearchOutputSchema> & { results?: LocatedHit[] }> {
   const { results, ...metadata } = result;
@@ -81,14 +103,14 @@ async function groupEvidence(
     reference: [],
   };
   for (const hit of results) {
-    const role = evidenceRole(hit, symbol ?? verifiedIdentifier([hit]));
+    const role = (classify ?? classifySymbol(verifiedIdentifier([hit])))(hit);
     const group = groups[role];
     if (group.length >= HITS_PER_ROLE) {
       metadata.truncated = true;
       continue;
     }
     const contextAfter =
-      symbol && role !== 'reference' && hit.startLine === hit.endLine
+      classify && role !== 'reference' && hit.startLine === hit.endLine
         ? results.reduce(
             (remaining, next) =>
               next.path === hit.path && next.startLine > hit.endLine
@@ -99,8 +121,7 @@ async function groupEvidence(
         : 0;
     const evidence =
       contextAfter > 0
-        ? await verifySourceEvidence(
-            workspace,
+        ? await reader.verify(
             { path: hit.path, excerpt: hit.excerpt, ranges: [hit], contextAfter },
             signal,
           )
@@ -125,7 +146,31 @@ async function groupEvidence(
   return { ...metadata, results: Object.values(groups).flat() };
 }
 
+const LineNumber = Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
+const SourceLocation = Type.Object(
+  {
+    path: Type.String({ minLength: 1, maxLength: 1024 }),
+    line: LineNumber,
+    maxLines: Type.Optional(Type.Integer({ minimum: 1, maximum: 60 })),
+  },
+  { additionalProperties: false },
+);
+
 export const RepositoryLocateOutputSchema = Type.Object({
+  source: Type.Optional(
+    Type.Object({
+      ...RepositoryHitSchema.properties,
+      anchorLine: LineNumber,
+      complete: Type.Boolean(),
+      block: Type.Optional(
+        Type.Object({
+          kind: Type.Union([Type.Literal('function'), Type.Literal('class'), Type.Literal('test')]),
+          startLine: LineNumber,
+          endLine: LineNumber,
+        }),
+      ),
+    }),
+  ),
   searches: Type.Array(LocateSearch),
   followUp: Type.Union([
     Type.Literal('not-needed'),
@@ -154,11 +199,17 @@ export function createRepoLocateTool(
   return defineTool({
     name: REPO_LOCATE_TOOL_NAME,
     description:
-      'Locate verified source candidates grouped by definition, caller, test, and reference, with short numbered source excerpts. Supply a known symbol or describe the behavior to find.' +
+      'Locate verified definitions, callers, and tests. Supply symbol for one identifier, symbols for up to four independent identifiers, query for behavior, or location {path, line, maxLines} to open an enclosing block. Set follow to true to show one verified import, re-export, or wrapper hop per symbol. Optionally supply base (a local Git ref) to prioritize changed code and related tests.' +
       repositoryEvidenceGuidance,
     inputSchema: Type.Object(
       {
         symbol: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
+        symbols: Type.Optional(
+          Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { minItems: 1, maxItems: 4 }),
+        ),
+        location: Type.Optional(SourceLocation),
+        follow: Type.Optional(Type.Boolean()),
+        base: Type.Optional(RepositorySearchBaseSchema),
         query: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
         paths: Type.Optional(RepositorySearchPathsSchema),
       },
@@ -166,55 +217,106 @@ export function createRepoLocateTool(
     ),
     outputSchema: RepositoryLocateOutputSchema,
     async execute(input, context): Promise<Static<typeof RepositoryLocateOutputSchema>> {
-      const query = (input.symbol ?? input.query)?.trim();
+      const queries = (input.symbols ?? [input.symbol ?? input.query ?? '']).map((query) =>
+        query.trim(),
+      );
       if (
-        (input.symbol === undefined) === (input.query === undefined) ||
-        !query ||
-        /[\0\r\n]/.test(query)
+        [input.symbol, input.symbols, input.query, input.location].filter(
+          (value) => value !== undefined,
+        ).length !== 1 ||
+        (!input.location &&
+          (queries.some((query) => !query || /[\0\r\n]/.test(query)) ||
+            new Set(queries).size !== queries.length))
       )
-        throw new Error('Supply exactly one nonempty, single-line symbol or query.');
+        throw new Error(
+          'Supply exactly one of symbol, symbols, query, or location, with distinct nonempty single-line queries.',
+        );
       const deadline = AbortSignal.timeout(REPO_SEARCH_TIMEOUT_MS);
       const signal = AbortSignal.any([context.signal, deadline]);
       const workspace = await openAuthorizedSearchWorkspace(context);
-      const searches: Static<typeof LocateSearch>[] = [];
-      const mode = input.symbol === undefined ? 'hybrid' : 'exact';
-      const run = async (mode: 'hybrid' | 'exact', query: string) => {
-        const result = await search(
-          workspace,
-          {
-            query,
-            mode,
-            paths: input.paths,
-            ...(mode === 'exact' ? { limit: EXACT_CANDIDATES } : {}),
-          },
-          signal,
-        );
-        const grouped = await groupEvidence(
-          workspace,
-          result,
-          mode === 'exact' ? query : undefined,
-          signal,
-        );
+      const reader = new RepositorySourceReader(workspace);
+      const scopes = await Promise.all(
+        (input.paths ?? []).map(async (path) => {
+          const target = await workspace.resolvePath(path, { allowRoot: true });
+          assertRepositoryPathVisible(target.relative);
+          return target;
+        }),
+      );
+      const allows = (path: string) =>
+        isRepositoryPathVisible(path) &&
+        (!scopes.length ||
+          scopes.some(
+            ({ relative, kind }) =>
+              relative === '.' ||
+              path === relative ||
+              (kind === 'directory' && path.startsWith(relative + '/')),
+          ));
+      const navigation = createSourceNavigation(reader, signal, allows);
+      if (input.location) {
+        const { path, line, maxLines = 24 } = input.location;
+        if (input.base !== undefined || input.follow !== undefined)
+          throw new Error('Supply base and follow for search lookups.');
+        const target = await workspace.resolvePath(path, { kind: 'file' });
+        if (!allows(target.relative))
+          throw new Error('The source file is outside the search scope.');
+        const source = await reader.read(target.relative, signal);
+        if (typeof source === 'string') throw new Error(`Cannot open verified source (${source}).`);
+        const opened = navigation.open(source, line, maxLines);
         await workspace.assertUnchanged();
         signal.throwIfAborted();
-        searches.push({ mode, query, ...grouped });
-        return result;
+        return { source: opened, searches: [], followUp: 'not-needed' };
+      }
+      const searches: Static<typeof LocateSearch>[] = [];
+      const priority =
+        input.base === undefined
+          ? undefined
+          : await repositorySearchPriority(workspace, input.base, signal);
+      const run = async (mode: 'hybrid' | 'exact', query: string) => {
+        const symbol = mode === 'exact' ? query : undefined;
+        const classify = symbol ? classifySymbol(symbol) : undefined;
+        const result = await search(workspace, { query, mode, paths: input.paths }, signal, {
+          source: reader,
+          priority,
+          ...(classify ? { collection: { group: classify, perGroup: HITS_PER_ROLE } } : {}),
+        });
+        const grouped = await groupEvidence(reader, result, classify, signal);
+        const connections =
+          input.follow && symbol ? await navigation.connections(symbol, grouped.results ?? []) : [];
+        await workspace.assertUnchanged();
+        signal.throwIfAborted();
+        return {
+          result,
+          stage: { mode, query, ...grouped, ...(connections.length ? { connections } : {}) },
+        };
       };
-      let initial;
+      const mode = input.query === undefined ? 'exact' : 'hybrid';
+      let initial: Static<typeof RepositorySearchOutputSchema>;
       try {
-        initial = await run(mode, query);
+        const stages = await Promise.allSettled(queries.map((query) => run(mode, query)));
+        let failure: PromiseRejectedResult | undefined;
+        let first: Awaited<ReturnType<typeof run>> | undefined;
+        for (const stage of stages) {
+          if (stage.status === 'rejected') {
+            failure ??= stage;
+            continue;
+          }
+          first ??= stage.value;
+          searches.push(stage.value.stage);
+        }
+        if (failure) throw failure.reason;
+        if (mode === 'exact') return { searches, followUp: 'not-needed' };
+        initial = first!.result;
       } catch (error) {
         context.signal.throwIfAborted();
         if (!deadline.aborted) throw error;
         await workspace.assertUnchanged();
         return { searches, followUp: 'deadline' };
       }
-      if (mode === 'exact') return { searches, followUp: 'not-needed' };
       if (initial.status !== 'ready') return { searches, followUp: 'initial-unavailable' };
       const identifier = verifiedIdentifier(initial.results ?? []);
       if (!identifier) return { searches, followUp: 'no-verified-symbol' };
       try {
-        await run('exact', identifier);
+        searches.push((await run('exact', identifier)).stage);
         return { searches, followUp: 'attempted' };
       } catch {
         context.signal.throwIfAborted();

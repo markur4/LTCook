@@ -1,8 +1,9 @@
 import { Type, type Static } from 'typebox';
 import { REPO_SEARCH_TOOL_NAME } from '../paseo-plugin/shared/workspace-tools.js';
+import { RepositorySourceReader } from '../repository/evidence.js';
 import { assertRepositoryPathVisible, isRepositoryPathVisible } from '../repository/filesystem.js';
 import { COLGREP_MAX_RESULTS, createColgrepProvider } from '../repository/providers/colgrep.js';
-import { createRipgrepProvider } from '../repository/providers/ripgrep.js';
+import { createRipgrepProvider, type RipgrepCollection } from '../repository/providers/ripgrep.js';
 import {
   RepositoryDiagnosticSchema,
   RepositoryFreshnessSchema,
@@ -10,6 +11,10 @@ import {
   RepositoryRetrievalKindSchema,
   RepositoryRetrievalStatusSchema,
 } from '../repository/results.js';
+import {
+  repositorySearchPriority,
+  type RepositorySearchPriority,
+} from '../repository/search-priority.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from '../repository/workspace.js';
 import { defineTool, type ToolContext } from './types.js';
 
@@ -26,6 +31,8 @@ export const RepositorySearchPathsSchema = Type.Array(
   { maxItems: 12 },
 );
 
+export const RepositorySearchBaseSchema = Type.String({ minLength: 1, maxLength: 512 });
+
 const RepositorySearchInputSchema = Type.Object(
   {
     query: Type.String({ minLength: 1, maxLength: 1024 }),
@@ -40,6 +47,7 @@ const RepositorySearchInputSchema = Type.Object(
     ),
     pattern: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
     paths: Type.Optional(RepositorySearchPathsSchema),
+    base: Type.Optional(RepositorySearchBaseSchema),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: COLGREP_MAX_RESULTS })),
   },
   { additionalProperties: false },
@@ -47,6 +55,7 @@ const RepositorySearchInputSchema = Type.Object(
 
 export const RepositorySearchOutputSchema = Type.Object({
   status: RepositoryRetrievalStatusSchema,
+  base: Type.Optional(Type.Object({ reference: Type.String(), commit: Type.String() })),
   results: Type.Optional(Type.Array(RepositoryHitSchema)),
   hint: Type.Optional(Type.String()),
   provider: Type.String(),
@@ -77,6 +86,11 @@ export function createRepoSearchTool(
     workspace: RepositoryWorkspace,
     input: Static<typeof RepositorySearchInputSchema>,
     signal: AbortSignal,
+    options: {
+      source?: RepositorySourceReader;
+      collection?: RipgrepCollection;
+      priority?: RepositorySearchPriority;
+    } = {},
   ): Promise<Static<typeof RepositorySearchOutputSchema>> {
     signal.throwIfAborted();
     await workspace.assertUnchanged();
@@ -88,9 +102,22 @@ export function createRepoSearchTool(
       const { relative } = await workspace.resolvePath(requested, { allowRoot: true });
       assertRepositoryPathVisible(relative);
     }
+    const source = options.source ?? new RepositorySourceReader(workspace);
+    const priority =
+      options.priority ??
+      (input.base === undefined
+        ? undefined
+        : await repositorySearchPriority(workspace, input.base, signal));
+    const prioritize = priority?.prioritize;
+    const collection = prioritize ? { ...options.collection, prioritize } : options.collection;
     const { value, ...metadata } = await (lexical
-      ? ripgrep.search(workspace, { query, mode, paths, limit }, signal)
-      : colgrep.search(workspace, { query, mode, pattern, paths, limit }, signal));
+      ? ripgrep.search(workspace, { query, mode, paths, limit }, signal, source, collection)
+      : colgrep.search(
+          workspace,
+          { query, mode, pattern, paths, limit: prioritize ? COLGREP_MAX_RESULTS : limit },
+          signal,
+          source,
+        ));
     const { status, kind, hits } = value;
     const results = hits.filter(({ path }) => isRepositoryPathVisible(path));
     if (results.length < hits.length) {
@@ -104,8 +131,22 @@ export function createRepoSearchTool(
         },
       ];
     }
+    if (prioritize) {
+      results.sort(
+        (first, second) => Number(prioritize(second.path)) - Number(prioritize(first.path)),
+      );
+    }
+    if (!options.collection && results.length > limit) {
+      results.length = limit;
+      metadata.truncated = true;
+    }
+    if (priority) {
+      metadata.partial ||= priority.partial;
+      metadata.diagnostics = [...metadata.diagnostics, ...priority.diagnostics];
+    }
     return {
       ...metadata,
+      ...(priority?.base ? { base: priority.base } : {}),
       kind,
       status,
       ...(status === 'ready' ? { results } : { hint: metadata.diagnostics[0]?.message }),
@@ -116,7 +157,7 @@ export function createRepoSearchTool(
     ...defineTool({
       name: REPO_SEARCH_TOOL_NAME,
       description:
-        'Search the authorized local workspace. Use exact for whole identifiers, literal for substrings, regex for patterns, and hybrid or semantic for ranked conceptual matches.' +
+        'Search the authorized local workspace. Use exact for whole identifiers, literal for substrings, regex for patterns, and hybrid or semantic for ranked conceptual matches. Optionally supply base (a local Git ref) to prioritize changed paths and matching test names within the results.' +
         repositoryEvidenceGuidance,
       inputSchema: RepositorySearchInputSchema,
       outputSchema: RepositorySearchOutputSchema,

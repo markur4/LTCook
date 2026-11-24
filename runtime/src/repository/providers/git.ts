@@ -276,7 +276,17 @@ async function compareBase(
 export async function readGit(
   workspace: RepositoryWorkspace,
   pathValue: string,
-  { detailed = false, base }: { detailed?: boolean; base?: string } = {},
+  {
+    detailed = false,
+    includeWorktreePaths = false,
+    base,
+    signal,
+  }: {
+    detailed?: boolean;
+    includeWorktreePaths?: boolean;
+    base?: string;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<RepositoryResult<GitDiscovery>> {
   const capturedAt = new Date().toISOString();
   const value: GitDiscovery = {
@@ -329,6 +339,7 @@ export async function readGit(
         pathValue,
         {
           timeoutMs: 3000,
+          signal,
           maxBytes: options.maxBytes ?? 1024 * 1024,
           env: {
             GIT_ATTR_NOSYSTEM: '1',
@@ -345,6 +356,7 @@ export async function readGit(
       if ((options.acceptedExitCodes ?? [0]).includes(output.code)) return output.stdout;
       report(`${operation}-unavailable`, `Git ${operation} is unavailable`);
     } catch (error) {
+      signal?.throwIfAborted();
       if (error instanceof RepositoryCommandError && error.code === 'output-limit') {
         result.truncated = true;
         report(`${operation}-limited`, `Git ${operation} exceeded its output limit`);
@@ -384,7 +396,7 @@ export async function readGit(
       acceptedExitCodes: [0, 1],
       maxBytes: 8192,
     }),
-    readStatus(query, detailed, prefix ?? '', report),
+    readStatus(query, detailed || includeWorktreePaths, prefix ?? '', report),
     query('worktrees', ['worktree', 'list', '--porcelain', '-z']),
   ]);
   const objectId = line(head);
@@ -399,9 +411,11 @@ export async function readGit(
   const worktreeEntries = parseWorktrees(worktrees ?? '');
   value.worktrees = worktreeEntries.length;
 
-  if (detailed) {
+  if (detailed || includeWorktreePaths) {
     value.changedFiles = bounded(status?.changedFiles ?? [], 'changed-files');
     value.untrackedFiles = bounded(status?.untrackedFiles ?? [], 'untracked-files');
+  }
+  if (detailed) {
     value.worktreeEntries = nested ? [] : bounded(worktreeEntries, 'worktree-entries');
     if (nested && worktreeEntries.length) {
       report('worktree-paths-outside-workspace', 'The workspace excludes worktree root paths');

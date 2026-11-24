@@ -209,9 +209,11 @@ and shells use their harness permissions for operations in other checkouts.
   for a definition, caller, or test. For example, ask “Locate the implementation
   and callers of `resolveLaunch`.” For an unfamiliar symbol, describe the behavior
   instead. Locate groups verified definition, caller, test, and reference
-  candidates and includes short numbered excerpts. A conceptual search may be
-  followed by exact search for a verified identifier. Reopen the chat through
-  Paseo after launching the updated runtime to discover Locate. See the
+  candidates and includes short numbered excerpts. Ask for several independent
+  symbols in one lookup, open a hit's enclosing block by file and line, or ask
+  Locate to follow a local import, re-export, or wrapper. For Search and Locate,
+  name a local Git base to prioritize changed files and related tests. Reopen the
+  chat through Paseo after launching the updated runtime. See the
   [Locate contract](References.md#repository-locate).
 - Ask for a summary using `ltcook_summarize`. Supply text or ask to summarize
   one regular UTF-8 file from the selected workspace, up to 24 KiB. An optional
