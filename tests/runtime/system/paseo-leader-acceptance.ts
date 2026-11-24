@@ -248,7 +248,7 @@ try {
       threshold: 1,
       peers: (agentId, workspaceRoot) => runtime?.memoryPeers(agentId, workspaceRoot) ?? [],
       async extract(messages) {
-        assert(messages.every(({ author }) => author !== 'user' && author !== 'runtime'));
+        assert(messages.every(({ author }) => author === 'agent' || author === 'tool'));
         return [];
       },
     });
@@ -447,6 +447,28 @@ try {
     (await host.api.agents.list()).entries.filter(({ agent }) => ids.includes(agent.id)).length,
     2,
   );
+  await waitFor('the Pi prompt recovered without confirmed authorship', async () => {
+    const result = await reopenedTool.invoke(
+      { agentId: leaderId, query: 'cobalt fixture' },
+      { ...toolContext, signal: AbortSignal.timeout(5000) },
+    );
+    const matches = result.matches as Array<{
+      epoch: string;
+      entries: Array<{ kind: string; author: string; seq: number; text: string }>;
+    }>;
+    const match = matches[0];
+    const entry = match?.entries.find(({ text }) => text === userRequirement);
+    if (!entry || !match || match.epoch === memoryReference.epoch) return undefined;
+    assert.equal(entry.author, 'unknown');
+    assert.equal(entry.kind, 'unattributed-prompt');
+    const citation = { agentId: leaderId, epoch: match.epoch, seq: entry.seq };
+    const source = await reopenedTool.invoke(
+      { source: citation },
+      { ...toolContext, signal: AbortSignal.timeout(5000) },
+    );
+    assert.deepEqual(source.source, { ...citation, author: 'unknown', text: userRequirement });
+    return true;
+  });
   const peerTurn = await host.api.agents.ref(childId).run(memoryPrompt, { timeoutMs: 30_000 });
   if (providerError) throw providerError;
   assert.equal(peerTurn.status, 'idle', peerTurn.error);

@@ -240,13 +240,18 @@ reasoning, attachments, command arguments and raw tool output stay in
 Paseo. Keep secrets out of chat messages that collaborators may read.
 
 User messages can appear while agent and tool evidence is still being
-processed in the background. An incomplete result can mean the
+processed in the background. A rebuilt timeline may include prompts for which
+Paseo no longer provides a confirmed author. Search shows them as
+`unattributed-prompt`. An incomplete result can mean the
 model has yet to catch up, the output reached a result limit, or the source
 history is unavailable. On a delegated task, follow its approved scope and
 check a recent explicit correction against the cited messages. Automatic enrichment
-is opt-in while the extraction models are being qualified. Configure the
-[Session Memory settings](References.md#environment-variables) in global AppRC
-and restart the runtime to apply them.
+is opt-in. To use the model that qualified in the
+[hybrid comparison](../evals/session-memory-hybrid-results.md), set
+`LTCOOK_SESSION_MEMORY_MODEL=LiquidAI/lfm2.5-1.2b-instruct:q8_0` and
+`LTCOOK_SESSION_MEMORY_DELEGATION=true` in global AppRC. The model must
+be available in the configured Ollama instance. Restart the runtime to
+apply the [settings](References.md#environment-variables).
 
 ## Enable an Intel iGPU for Ollama on WSL
 

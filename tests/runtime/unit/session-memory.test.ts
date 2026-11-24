@@ -5,7 +5,7 @@ import path from 'node:path';
 import {
   mergeMemoryEntries,
   parseMemorySelections,
-  preserveUserMessages,
+  preservePromptMessages,
   memoryEntriesSchema,
   type MemoryEntry,
   type MemoryMessage,
@@ -21,7 +21,7 @@ const correction: MemoryMessage = {
   text: 'Correction for cobalt: advance the cursor.',
 };
 const issue: MemoryMessage = { seq: 4, author: 'tool', text: 'Cobalt shell exited with code 1.' };
-const [original, revision] = preserveUserMessages([first, correction]);
+const [original, revision] = preservePromptMessages([first, correction]);
 
 test('the runtime preserves exact user messages and derives the authors of ordered additions', () => {
   const excerpts = [
@@ -107,6 +107,44 @@ test('invalidates preserved user messages beyond a shortened timeline in the sam
     messages = [first, finding];
     expect((await memory.search('leader', '', 'advance')).matches).toEqual([]);
     expect(await memory.handoff('leader', 'cobalt')).not.toContain(correction.text);
+  } finally {
+    await memory.close();
+  }
+});
+
+test('preserves reconstructed prompts with unverified authorship without extracting them', async () => {
+  const prompt = { ...first, author: 'unknown' as const };
+  const assigned = { ...issue, author: 'runtime' as const };
+  const updated = Promise.withResolvers<readonly MemoryMessage[]>();
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: {
+      async read() {
+        return {
+          epoch: 'rebuilt',
+          latest: 4,
+          through: 4,
+          reset: false,
+          messages: [prompt, finding, correction, assigned],
+        };
+      },
+    },
+    async extract(messages) {
+      updated.resolve(messages);
+      return [];
+    },
+  });
+  try {
+    memory.observe('leader', true);
+    expect(await updated.promise).toEqual([finding]);
+    expect((await memory.search('leader', '', 'Keep')).matches[0]?.entries).toEqual([
+      { kind: 'unattributed-prompt', ...prompt },
+    ]);
+    const handoff = await memory.handoff('leader', 'cobalt');
+    expect(handoff).toContain('Prompts marked unknown have no confirmed author');
+    expect(handoff).not.toContain(`[1] ${JSON.stringify(prompt.text)}`);
+    expect(handoff).toContain(correction.text);
+    expect(handoff).not.toContain(assigned.text);
   } finally {
     await memory.close();
   }

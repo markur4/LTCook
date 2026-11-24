@@ -8,7 +8,7 @@ import {
   extractMemory,
   MemoryOutputError,
   mergeMemoryEntries,
-  preserveUserMessages,
+  preservePromptMessages,
   renderMemoryHandoff,
   selectMemoryContext,
   type MemoryEntry,
@@ -16,7 +16,11 @@ import {
 } from '../session-memory/extraction.js';
 import { EVAL_MODEL, hash } from './setup.js';
 import { evaluateMemoryHandoff } from './session-memory-handoff.js';
-import { memoryFixtures, type MemoryFixture } from './session-memory-fixtures.js';
+import {
+  memoryCadenceFixture,
+  memoryFixtures,
+  type MemoryFixture,
+} from './session-memory-fixtures.js';
 import { inspectEvaluationModel, listEvaluationModels, modelTag } from './summarization-grader.js';
 
 const models = [
@@ -71,7 +75,7 @@ function gradeMemory(
 ) {
   const actualSources = new Map(seen.map((message) => [message.seq, message]));
   const eligible = fixture.facts.filter(({ source }) => actualSources.has(source));
-  const derived = entries.filter(({ author }) => author !== 'user');
+  const derived = entries.filter(({ author }) => author === 'agent' || author === 'tool');
   const evaluateFact = (fact: MemoryFixture['facts'][number]) => {
     const matching = derived.filter(({ text }) => fact.expected.test(text));
     const source = actualSources.get(fact.source);
@@ -135,15 +139,19 @@ async function runFixture(input: {
   let processed = 0;
   const attempts = [];
   const estimatedTokens = (messages: readonly MemoryMessage[]) =>
-    messages.reduce((total, message) => total + estimateMemoryTokens(message.text), 0);
+    messages.reduce(
+      (total, message) =>
+        total + (message.author === 'runtime' ? 0 : estimateMemoryTokens(message.text)),
+      0,
+    );
 
   async function update() {
     const pending = seen.slice(processed);
-    entries = mergeMemoryEntries(entries, preserveUserMessages(pending));
+    entries = mergeMemoryEntries(entries, preservePromptMessages(pending));
     let usage: OllamaUsage | undefined;
     let error: string | undefined;
     let output: 'valid' | 'invalid' | 'unavailable' | 'skipped' = 'skipped';
-    const attempted = pending.some(({ author }) => author !== 'user' && author !== 'runtime');
+    const attempted = pending.some(({ author }) => author === 'agent' || author === 'tool');
     const before = attempted ? await residency(endpoint, digest, signal) : null;
     const start = performance.now();
     try {
@@ -243,13 +251,14 @@ export async function runSessionMemoryEvaluation(
   signal: AbortSignal,
   downstreamModel = EVAL_MODEL,
   onProgress?: (event: string) => void,
-  selection?: { model?: string; threshold?: number },
+  selection?: { model?: string; threshold?: number; cadence?: boolean },
 ) {
   const selectedModels = models.filter((model) => {
     if (selection?.model === 'remaining') return model !== models[0];
     return !selection?.model || modelTag(model) === modelTag(selection.model);
   });
   const threshold = selection?.threshold ?? 3000;
+  const fixtures = selection?.cadence ? [memoryCadenceFixture()] : memoryFixtures;
   if (!selectedModels.length || !Number.isInteger(threshold) || threshold < 1 || threshold > 6500)
     throw new Error(
       'Choose a Session Memory candidate or remaining, and optional cadence from 1 to 6500.',
@@ -266,7 +275,7 @@ export async function runSessionMemoryEvaluation(
     if (!downstreamIdentity) throw new Error('The downstream Pi evaluation model is unavailable.');
 
     const baseline = [];
-    for (const fixture of memoryFixtures) {
+    for (const fixture of fixtures) {
       const sources = fixture.turns
         .flat()
         .filter(({ seq }) => fixture.originalSources.includes(seq));
@@ -289,7 +298,7 @@ export async function runSessionMemoryEvaluation(
         continue;
       }
       const scenarios = [];
-      for (const fixture of memoryFixtures) {
+      for (const fixture of fixtures) {
         onProgress?.(`Evaluating ${requestedModel} on ${fixture.id}`);
         try {
           const result = await runFixture({
@@ -344,7 +353,7 @@ export async function runSessionMemoryEvaluation(
     return {
       threshold,
       corpusHash: hash(
-        JSON.stringify(memoryFixtures, (_key, value: unknown) =>
+        JSON.stringify(fixtures, (_key, value: unknown) =>
           value instanceof RegExp ? value.toString() : value,
         ),
       ),

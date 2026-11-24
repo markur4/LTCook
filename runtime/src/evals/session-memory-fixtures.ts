@@ -351,3 +351,59 @@ export const memoryFixtures: readonly MemoryFixture[] = [
     ],
   },
 ];
+
+// > A longer companion workflow with interleaved reports from an unrelated docs pass.
+// > Use the same cache task, critical facts and matched control as the short version.
+export function memoryCadenceFixture(): MemoryFixture {
+  const base = memoryFixtures.find(({ id }) => id === 'runtime-rebuild-and-cache-recovery')!;
+  const areas = [
+    ['workspace navigation', 'team selector', 'session picker'],
+    ['quick-start links', 'command reference', 'shortcut table'],
+    ['status screen', 'error messages', 'confirmation dialog'],
+    ['contributor overview', 'component index', 'glossary'],
+    ['accessibility copy', 'keyboard navigation', 'focus outline'],
+    ['Ubuntu screenshots', 'macOS screenshots', 'terminal examples'],
+    ['sidebar labels', 'search filters', 'results headings'],
+    ['settings labels', 'language selector', 'help links'],
+    ['example captions', 'table alignment', 'section titles'],
+  ];
+  type Report = Omit<MemoryMessage, 'seq'>;
+  const reports = areas.map((sections): Report[] =>
+    sections.flatMap((section) => [
+      {
+        author: 'agent',
+        text: `Parallel documentation pass for ${section}. I checked the visible UI labels against the maintained examples and located differences in title case, singular wording and how the surrounding paragraph refers to the action. The guide uses those labels as literal directions, so the running interface is the correct reference. I recorded the link destinations and checked that the first actionable verb survives the shortening.`,
+      },
+      {
+        author: 'agent',
+        text: `Follow-up on ${section}. The copy reviewer compared the proposed wording with the printed example and found two duplicated phrases. The screenshot captions can refer to the action once and keep enough text to distinguish the collapsed and expanded states. I left the installed UI and its translations alone. The remaining check is whether the heading can be shortened without breaking the existing anchor.`,
+      },
+      {
+        author: 'tool',
+        text: `Documentation review for ${section}: link check passed. The generated heading anchor matched the incoming table of contents, the label appeared on the expected page and the prose linter found no duplicate word.`,
+      },
+    ]),
+  );
+  let seq = 0;
+  const sources = new Map<number, number>();
+  const turns = base.turns.flatMap((turn, index) => {
+    const relevant = turn.map(({ seq: original, ...message }) => {
+      sources.set(original, ++seq);
+      return { seq, ...message };
+    });
+    const interleaved = reports.slice(index * 3, (index + 1) * 3);
+    return [
+      relevant,
+      ...interleaved.map((report) => report.map((message) => ({ seq: ++seq, ...message }))),
+    ];
+  });
+  return {
+    ...base,
+    id: `${base.id}-cadence`,
+    turns,
+    flushAfter: [],
+    originalSources: base.originalSources.map((source) => sources.get(source)!),
+    correctionSources: base.correctionSources.map((source) => sources.get(source)!),
+    facts: base.facts.map((fact) => ({ ...fact, source: sources.get(fact.source)! })),
+  };
+}

@@ -4,7 +4,7 @@ import {
   estimateMemoryTokens,
   memoryEntriesSchema,
   mergeMemoryEntries,
-  preserveUserMessages,
+  preservePromptMessages,
   memoryRelevance,
   renderMemoryHandoff,
   selectMemoryContext,
@@ -157,29 +157,31 @@ export class SessionMemory {
     const previousSeq = prior?.seq ?? -1;
     if (through <= previousSeq) return false;
     const oldEntries = prior?.entries ?? [];
-    const oldUserSequences = new Set(
-      oldEntries.filter(({ kind }) => kind === 'user').map(({ seq }) => seq),
+    const oldPromptSequences = new Set(
+      oldEntries
+        .filter(({ author }) => author === 'user' || author === 'unknown')
+        .map(({ seq }) => seq),
     );
-    // > Capture recent user messages while an older evidence batch is pending.
+    // > Capture recent prompts while an older evidence batch is pending.
     const tail =
       through < head ? await this.options.source.read(agentId, undefined, 'tail') : undefined;
     if (tail && (tail.epoch !== epoch || tail.latest < head)) return true;
     const recent = tail?.messages.filter(({ seq }) => seq > through) ?? [];
-    const newUserEntries = preserveUserMessages([...messages, ...recent]).filter(
-      ({ seq }) => !oldUserSequences.has(seq),
+    const newPrompts = preservePromptMessages([...messages, ...recent]).filter(
+      ({ seq }) => !oldPromptSequences.has(seq),
     );
-    const entries = mergeMemoryEntries(oldEntries, newUserEntries);
+    const entries = mergeMemoryEntries(oldEntries, newPrompts);
 
-    // > Persist user intent independently of the model. The evidence checkpoint stays
+    // > Persist prompts independently of the model. The evidence checkpoint stays
     // > at its previous position until the corresponding inference has succeeded.
     if (
-      newUserEntries.length &&
+      newPrompts.length &&
       !(await this.save(agentId, { epoch, seq: previousSeq, entries }, tail))
     )
       return true;
     if (!force && messages.length && tokens < this.threshold && through >= head) return false;
 
-    const evidence = messages.filter(({ author }) => author !== 'user');
+    const evidence = messages.filter(({ author }) => author === 'agent' || author === 'tool');
     const additions = evidence.length
       ? await this.options.extract(evidence, this.abort.signal)
       : [];

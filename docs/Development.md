@@ -346,14 +346,19 @@ contradictions, attribution, categorization and invalid output separately.
 It records model digests, CPU residency, request latency, throughput and Pi
 input-token changes. The first argument selects the downstream Pi model.
 The second selects one candidate tag or `remaining` to compare the other
-models after Qwen. The third selects an estimated token threshold. Fixtures
-can also force updates at task boundaries. See the
+models after Qwen. The third selects an estimated token threshold. An optional
+`--cadence` as the final argument selects the longer workflow without forced
+task-boundary updates. See the
+[hybrid qualification](../evals/session-memory-hybrid-results.md) and the
 [initial qualification](../evals/session-memory-results.md).
 
-The runtime stores the user messages, derived additions and Paseo timeline
+The runtime stores original prompts, derived additions and the Paseo timeline
 checkpoint in `session-memory-v2.sqlite` under runtime state. It rebuilds
 from Paseo history with the new format. A changed history epoch invalidates
-the previous citations. Existing TeamInstances and Core bindings
+the previous citations. A reconstructed prompt with no submission identifier
+remains searchable as `unattributed-prompt` with `author: unknown`. It stays
+outside the confirmed user section of delegation context and outside model
+extraction. Existing TeamInstances and Core bindings
 determine shared read access. The checkout's native Pi and Paseo system test
 checks provenance, authorized reads, restart and rewind. Codex-specific
 compatibility and permission behavior belongs in focused Traditional Tests.
