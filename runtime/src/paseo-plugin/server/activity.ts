@@ -4,7 +4,11 @@ import type { ActivitySnapshot, AgentActivity, SkillLoad, ToolCall } from '../sh
 
 type Timeline = Awaited<ReturnType<PaseoAgentHandle['timeline']['refetch']>>;
 type TimelineItem = Timeline['entries'][number]['item'];
-type AgentEvents = Pick<AgentActivity, 'tools' | 'skills'>;
+type AgentEvents = Pick<AgentActivity, 'tools' | 'skills'> & {
+  epoch?: string;
+  generation: number;
+  toolsPartial: boolean;
+};
 type Services = Pick<ActivitySnapshot, 'rag' | 'memory'> & {
   providerSubagents: AgentActivity[];
   task?: string;
@@ -16,6 +20,8 @@ export function observedTimestamp(value: string): number {
 }
 
 const recentLimit = 32;
+const timelinePageSize = 160;
+const activeTurnPageLimit = 8;
 const parentLabel = 'paseo.parent-agent-id';
 let revision = 0;
 
@@ -66,7 +72,9 @@ export function nativeActivity(agent: PaseoAgent, events?: AgentEvents): AgentAc
 
 class AgentTimeline {
   private epoch?: string;
+  private timelineGeneration = 0;
   private loaded = false;
+  private toolsPartial = false;
   private readonly calls = new Map<string, { seq: number; call: ToolCall }>();
   private readonly loadedSkills = new Map<string, SkillLoad>();
   private readonly skills = new Map<string, string>();
@@ -76,6 +84,7 @@ class AgentTimeline {
   private pending?: Promise<void>;
   private refetchRequired = true;
   private readonly stop: ReturnType<PaseoAgentHandle['timeline']['subscribe']>;
+  subscriptionFailed = false;
 
   constructor(
     private readonly agent: PaseoAgentHandle,
@@ -86,22 +95,23 @@ class AgentTimeline {
       switch (event.type) {
         case 'timeline':
           if ('seq' in update && typeof update.seq === 'number') {
-            if (update.epoch && this.epoch && update.epoch !== this.epoch) {
-              this.reset(update.epoch);
-              this.refetchRequired = true;
+            if (update.epoch) {
+              if (this.epoch && update.epoch !== this.epoch) this.reset(update.epoch);
+              this.epoch = update.epoch;
             }
             this.accept(event.item, update.seq, time(update.timestamp));
+            this.prune();
           }
           break;
         case 'replacement':
           this.reset(event.epoch);
-          this.refetchRequired = true;
           break;
         case 'subscription_restored':
-          this.calls.clear();
-          this.loadedSkills.clear();
-          this.loaded = false;
-          this.refetchRequired = true;
+          this.reset(undefined);
+          break;
+        case 'error':
+          this.subscriptionFailed = true;
+          this.reset(this.epoch);
           break;
         case 'turn_completed':
         case 'turn_canceled':
@@ -117,62 +127,131 @@ class AgentTimeline {
     this.stop();
   }
 
-  read(): Promise<AgentEvents> {
+  get generation(): number {
+    return this.timelineGeneration;
+  }
+
+  read(activeTurn: PaseoAgent['activeTurn']): Promise<AgentEvents> {
     if (this.refetchRequired && !this.signal.aborted) {
-      this.pending ??= this.refetch().finally(() => {
+      this.pending ??= this.refetch(activeTurn).finally(() => {
         this.pending = undefined;
       });
     }
     return (this.pending ?? Promise.resolve()).then(() => ({
       tools: this.loaded ? [...this.calls.values()].map(({ call }) => call) : null,
       skills: this.skillsKnown || this.skillFilesKnown ? [...this.loadedSkills.values()] : null,
+      epoch: this.epoch,
+      generation: this.timelineGeneration,
+      toolsPartial: this.toolsPartial,
     }));
   }
 
-  private reset(epoch: string): void {
+  private reset(epoch: string | undefined): void {
+    if (this.epoch && this.epoch !== epoch) {
+      this.skills.clear();
+      this.skillFiles.clear();
+      this.skillsKnown = false;
+      this.skillFilesKnown = false;
+    }
     this.epoch = epoch;
+    this.timelineGeneration++;
     this.calls.clear();
     this.loadedSkills.clear();
     this.loaded = false;
+    this.toolsPartial = false;
+    this.refetchRequired = true;
   }
 
-  private async refetch(): Promise<void> {
+  private async refetch(activeTurn: PaseoAgent['activeTurn']): Promise<void> {
     this.refetchRequired = false;
     try {
       await this.stop.ready.catch(() => {});
-      if (this.signal.aborted) return;
-      const page = await this.agent.timeline.refetch({
+      if (this.signal.aborted || this.subscriptionFailed) return;
+      const generation = this.timelineGeneration;
+      const tail = await this.agent.timeline.refetch({
         direction: 'tail',
         projection: 'canonical',
-        limit: 160,
+        limit: timelinePageSize,
       });
-      if (this.signal.aborted) return;
-      if (page.error) throw new Error('Timeline unavailable.');
-      if (this.epoch && this.epoch !== page.epoch) this.reset(page.epoch);
-      this.epoch = page.epoch;
-      for (const entry of page.entries)
-        this.accept(entry.item, entry.seqEnd, time(entry.timestamp));
+      if (this.signal.aborted || generation !== this.timelineGeneration) return;
+      if (tail.error) throw new Error('Timeline unavailable.');
+      const turn = tail.agent ? tail.agent.activeTurn : activeTurn;
+      const startedAt = turn?.startedAt ? time(turn.startedAt) : 0;
+      const olderTools: Timeline['entries'][] = [];
+      let page = tail;
+      let toolsPartial = tail.gap;
+      while (turn && page.hasOlder) {
+        const earliest = page.entries[0];
+        if (
+          earliest &&
+          startedAt &&
+          earliest.turnId !== turn.turnId &&
+          time(earliest.timestamp) < startedAt
+        ) {
+          break;
+        }
+        const cursor = page.startCursor;
+        if (!cursor || olderTools.length >= activeTurnPageLimit) {
+          toolsPartial = true;
+          break;
+        }
+        const older = await this.agent.timeline
+          .refetch({
+            direction: 'before',
+            cursor,
+            projection: 'canonical',
+            limit: timelinePageSize,
+          })
+          .catch(() => undefined);
+        if (this.signal.aborted || generation !== this.timelineGeneration) return;
+        if (
+          !older ||
+          older.error ||
+          older.epoch !== tail.epoch ||
+          older.reset ||
+          older.staleCursor ||
+          older.gap ||
+          (older.startCursor && older.startCursor.seq >= cursor.seq)
+        ) {
+          toolsPartial = true;
+          break;
+        }
+        // > Keep tool lifecycle events from the active-turn lookback, without copying its transcript.
+        olderTools.push(older.entries.filter(({ item }) => item.type === 'tool_call'));
+        page = older;
+      }
+      if (this.epoch && this.epoch !== tail.epoch) this.reset(tail.epoch);
+      this.epoch = tail.epoch;
+      for (const entries of [...olderTools.reverse(), tail.entries]) {
+        for (const entry of entries) this.accept(entry.item, entry.seqEnd, time(entry.timestamp));
+      }
       this.loaded = true;
+      this.toolsPartial = toolsPartial;
       this.prune();
     } catch {
       this.refetchRequired = true;
     }
   }
 
-  async registerSkills(files: () => Promise<RegisteredSkill[] | undefined>): Promise<void> {
+  async registerSkills(
+    agent: PaseoAgent,
+    files: () => Promise<RegisteredSkill[] | undefined>,
+  ): Promise<void> {
     if (this.signal.aborted) return;
+    const generation = this.timelineGeneration;
     if (!this.skillFilesKnown) {
       const resolved = await files().catch(() => undefined);
+      if (this.signal.aborted || generation !== this.timelineGeneration) return;
       if (resolved) {
         for (const skill of resolved) this.skillFiles.set(path.normalize(skill.path), skill.name);
         this.skillFilesKnown = true;
         this.refetchRequired = true;
       }
     }
-    if (this.skillsKnown || this.signal.aborted || !this.agent.activeTurn) return;
+    if (this.skillsKnown || !agent.activeTurn) return;
     try {
       const commands = await this.agent.commands();
-      if (commands.error || this.signal.aborted) return;
+      if (commands.error || this.signal.aborted || generation !== this.timelineGeneration) return;
       for (const command of commands.commands) {
         if (command.kind === 'skill')
           this.skills.set(command.name.replace(/^\/?skill:/, ''), command.description);
@@ -186,8 +265,16 @@ class AgentTimeline {
 
   private accept(item: TimelineItem, seq: number, timestamp: number): void {
     if (item.type === 'user_message') {
-      const name = /^<skill name="([^"]+)" location="[^"]+">\n/.exec(item.text)?.[1];
-      if (name !== undefined && this.skills.has(name)) this.loadSkill(name, timestamp);
+      const skill = /^<skill name="([^"]+)" location="([^"]+)">\n/.exec(item.text);
+      if (skill) {
+        const [, name, location] = skill;
+        if (
+          name &&
+          location &&
+          (this.skillFiles.get(path.normalize(location)) === name || this.skills.has(name))
+        )
+          this.loadSkill(name, timestamp);
+      }
       return;
     }
     if (item.type !== 'tool_call') return;
@@ -203,7 +290,14 @@ class AgentTimeline {
       if (name) this.loadSkill(name, timestamp);
     }
     const prior = this.calls.get(item.callId);
-    if (prior && prior.seq > seq) return;
+    if (prior && prior.seq >= seq) {
+      if (seq < prior.seq && item.status === 'running' && timestamp < prior.call.startedAt) {
+        prior.call.startedAt = timestamp;
+        if (prior.call.finishedAt !== undefined)
+          prior.call.durationMs = Math.max(0, prior.call.finishedAt - timestamp);
+      }
+      return;
+    }
     const startedAt = prior?.call.startedAt ?? timestamp;
     const state =
       item.status === 'completed'
@@ -211,6 +305,10 @@ class AgentTimeline {
         : item.status === 'canceled'
           ? 'cancelled'
           : item.status;
+    const durationMs =
+      prior?.call.status === 'running'
+        ? Math.max(0, timestamp - startedAt)
+        : prior?.call.durationMs;
     this.calls.set(item.callId, {
       seq,
       call: {
@@ -221,14 +319,11 @@ class AgentTimeline {
         ...(state !== 'running'
           ? {
               finishedAt: timestamp,
-              ...(prior?.call.status === 'running'
-                ? { durationMs: Math.max(0, timestamp - startedAt) }
-                : {}),
+              ...(durationMs === undefined ? {} : { durationMs }),
             }
           : {}),
       },
     });
-    this.prune();
   }
 
   private loadSkill(name: string, timestamp: number): void {
@@ -254,8 +349,11 @@ export async function observeActivity(
   agentId: string,
   signal: AbortSignal,
   push: (value: ActivitySnapshot) => Promise<void>,
-  services: (agent: PaseoAgent, signal: AbortSignal) => Promise<Services>,
-  registeredSkills: (agent: PaseoAgent) => Promise<RegisteredSkill[] | undefined>,
+  services: (agent: PaseoAgent, signal: AbortSignal, epoch?: string) => Promise<Services>,
+  registeredSkills: (
+    agent: PaseoAgent,
+    signal: AbortSignal,
+  ) => Promise<RegisteredSkill[] | undefined>,
 ): Promise<void> {
   const observations = new Map<string, AgentTimeline>();
   const close = () => {
@@ -285,36 +383,48 @@ export async function observeActivity(
       observations.delete(id);
     }
     if (signal.aborted) return;
+    const snapshots = visible.map(async (agent) => {
+      let observation = observations.get(agent.id);
+      if (!observation || observation.subscriptionFailed) {
+        observation?.close();
+        observation = new AgentTimeline(paseo.agents.ref(agent), signal);
+        observations.set(agent.id, observation);
+      }
+      if (agent.provider === 'pi' || agent.provider === 'ltcook')
+        await observation.registerSkills(agent, () => registeredSkills(agent, signal));
+      const events = await observation.read(agent.activeTurn);
+      return { activity: nativeActivity(agent, events), events };
+    });
+    const [selectedSnapshot, ...children] = snapshots;
     const [items, state] = await Promise.all([
-      Promise.all(
-        visible.map(async (agent) => {
-          let observation = observations.get(agent.id);
-          if (!observation) {
-            observation = new AgentTimeline(paseo.agents.ref(agent), signal);
-            observations.set(agent.id, observation);
-          }
-          if (agent.provider === 'pi' || agent.provider === 'ltcook')
-            await observation.registerSkills(() => registeredSkills(agent));
-          return nativeActivity(agent, await observation.read());
-        }),
+      Promise.all(children),
+      selectedSnapshot!.then(({ events }) =>
+        signal.aborted ? undefined : services(entry.agent, signal, events.epoch),
       ),
-      services(entry.agent, signal),
     ]);
-    const { providerSubagents, task, ...servicesState } = state;
-    if (!signal.aborted) {
-      await push({
-        selectedAgentId: agentId,
-        revision: ++revision,
-        capturedAt: Date.now(),
-        agent: { ...items[0]!, ...(task ? { task } : {}) },
-        subagents: [
-          ...items.slice(1),
-          ...providerSubagents.filter((child) => !visible.some((agent) => agent.id === child.id)),
-        ],
-        ...servicesState,
-        activityScopeLabel: 'Recent conversation activity',
-      });
+    const selectedActivity = await selectedSnapshot!;
+    if (
+      signal.aborted ||
+      !state ||
+      observations.get(agentId)?.generation !== selectedActivity.events.generation
+    ) {
+      return;
     }
+    const { providerSubagents, task, ...servicesState } = state;
+    await push({
+      selectedAgentId: agentId,
+      revision: ++revision,
+      capturedAt: Date.now(),
+      agent: { ...selectedActivity.activity, ...(task ? { task } : {}) },
+      subagents: [
+        ...items.map(({ activity }) => activity),
+        ...providerSubagents.filter((child) => !visible.some((agent) => agent.id === child.id)),
+      ],
+      ...servicesState,
+      activityScopeLabel: [selectedActivity, ...items].some(({ events }) => events.toolsPartial)
+        ? 'Recent conversation activity · Some running tools may be missing'
+        : 'Recent conversation activity',
+    });
   };
 
   try {

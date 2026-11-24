@@ -102,7 +102,8 @@ export function ActivityServices({
   theme,
   rag,
   memory,
-}: Pick<ActivitySnapshot, 'rag' | 'memory'> & { theme: Theme }) {
+  agentWorktree,
+}: Pick<ActivitySnapshot, 'rag' | 'memory'> & { theme: Theme; agentWorktree?: string }) {
   const [ragOpen, setRagOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const ragActivity = statusLabel(rag.activity);
@@ -131,9 +132,14 @@ export function ActivityServices({
           </Text>
         }
       >
-        <ActivityField theme={theme} label="Worktree">
+        <ActivityField theme={theme} label="Index worktree">
           {rag.worktree?.path ?? 'Unavailable'}
         </ActivityField>
+        {rag.worktree && agentWorktree && agentWorktree !== rag.worktree.path && (
+          <ActivityField theme={theme} label="Agent worktree">
+            {agentWorktree}
+          </ActivityField>
+        )}
         <ActivityField theme={theme} label="Availability">
           {ragAvailability}
         </ActivityField>

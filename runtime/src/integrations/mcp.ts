@@ -105,9 +105,20 @@ export class WorkspaceMcp {
     const grant = this.grants.get(agentId);
     if (!grant?.repositorySearchAccess) return undefined;
     const workspace = await openRepositoryWorkspace(grant.workspaceRoot).catch(() => undefined);
-    if (this.grants.get(agentId) !== grant || workspace?.identity !== grant.workspaceIdentity)
+    if (
+      this.grants.get(agentId) !== grant ||
+      workspace?.root !== grant.workspaceRoot ||
+      workspace.identity !== grant.workspaceIdentity
+    )
       return undefined;
-    return workspace;
+    return {
+      ...workspace,
+      assertUnchanged: async () => {
+        await workspace.assertUnchanged();
+        if (this.grants.get(agentId) !== grant)
+          throw new Error('The repository search grant is no longer active.');
+      },
+    };
   }
 
   async invokeTool(

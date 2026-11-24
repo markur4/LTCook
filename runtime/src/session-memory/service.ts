@@ -179,8 +179,6 @@ export class SessionMemory {
       order: number;
     }
   >();
-  private readonly statusListeners = new Set<() => void>();
-  private statusNotification?: ReturnType<typeof setImmediate>;
   private inferenceAgentId?: string;
   private sendOrder = 0;
   private drain?: Promise<void>;
@@ -202,8 +200,11 @@ export class SessionMemory {
     this.store = new MemoryStore(options.databasePath);
   }
 
-  status(sessionId: string | undefined, agentId: string): SessionMemoryStatus {
-    const activity = this.activity.get(agentId);
+  status(sessionId: string | undefined, agentId: string, epoch?: string): SessionMemoryStatus {
+    const recorded = this.activity.get(agentId);
+    const mismatched =
+      epoch !== undefined && recorded?.epoch !== undefined && recorded.epoch !== epoch;
+    const activity = mismatched ? undefined : recorded;
     const delivery = sessionId
       ? this.deliveries.get(JSON.stringify([sessionId, agentId]))
       : undefined;
@@ -214,8 +215,9 @@ export class SessionMemory {
         ? { ...delivery.value }
         : null;
     return {
-      summarization:
-        this.inferenceAgentId === agentId
+      summarization: mismatched
+        ? 'unknown'
+        : this.inferenceAgentId === agentId
           ? 'summarizing'
           : this.pending.has(agentId)
             ? 'queued'
@@ -228,26 +230,6 @@ export class SessionMemory {
       pendingUamp: activity?.pending?.uamp ?? null,
       pendingAab: activity?.pending?.aab ?? null,
     };
-  }
-
-  subscribeStatus(listener: () => void): () => void {
-    if (this.abort.signal.aborted) return () => {};
-    this.statusListeners.add(listener);
-    return () => this.statusListeners.delete(listener);
-  }
-
-  private notifyStatus(): void {
-    if (this.statusNotification || !this.statusListeners.size) return;
-    this.statusNotification = setImmediate(() => {
-      this.statusNotification = undefined;
-      for (const listener of this.statusListeners) {
-        try {
-          listener();
-        } catch {
-          // > Status observers run independently of memory work and assignment delivery.
-        }
-      }
-    });
   }
 
   private agentActivity(agentId: string): AgentMemoryActivity {
@@ -268,7 +250,6 @@ export class SessionMemory {
     activity.pending = undefined;
     activity.lastSuccessfulSummaryAt = undefined;
     activity.lastError = undefined;
-    this.notifyStatus();
   }
 
   private noteTimeline(agentId: string, page: MemoryPage): void {
@@ -283,7 +264,6 @@ export class SessionMemory {
       activity.pending = undefined;
       if (activity.outcome === 'up-to-date' || activity.outcome === 'below-threshold')
         activity.outcome = 'unknown';
-      this.notifyStatus();
     }
     activity.epoch = page.epoch;
     activity.latest = page.latest;
@@ -304,14 +284,12 @@ export class SessionMemory {
       coveredThrough: seq < 0 ? null : seq,
       ...countUnits(types.values()),
     };
-    this.notifyStatus();
   }
 
   private noteFailure(agentId: string, message: string): void {
     const activity = this.agentActivity(agentId);
     activity.outcome = 'failed';
     activity.lastError = { at: new Date().toISOString(), message };
-    this.notifyStatus();
   }
 
   prepareDelivery(
@@ -349,7 +327,6 @@ export class SessionMemory {
         recipientGeneration,
         order,
       });
-      this.notifyStatus();
     };
   }
 
@@ -416,7 +393,6 @@ export class SessionMemory {
     const activity = this.agentActivity(agentId);
     activity.pending = undefined;
     this.startDrain();
-    this.notifyStatus();
   }
 
   private startDrain(): void {
@@ -446,7 +422,6 @@ export class SessionMemory {
       const activity = this.agentActivity(agentId);
       activity.outcome = 'unknown';
       activity.pending = undefined;
-      this.notifyStatus();
       try {
         if (await this.update(agentId, pending.force, pending.queuedAt)) {
           const next = this.pending.get(agentId);
@@ -454,7 +429,6 @@ export class SessionMemory {
             force: pending.force || !!next?.force,
             queuedAt: pending.queuedAt,
           });
-          this.notifyStatus();
         }
       } catch {
         if (!this.abort.signal.aborted) {
@@ -529,7 +503,6 @@ export class SessionMemory {
         activity.lastError = undefined;
         activity.pending = { uamp: 0, aab: 0 };
       }
-      this.notifyStatus();
       return false;
     }
     if (!(await this.currentHistory(agentId, epoch, latest))) return true;
@@ -573,7 +546,6 @@ export class SessionMemory {
     const notePending = () => {
       if (through === latest && activity.latest === latest && !this.pending.has(agentId))
         activity.pending = { ...pendingCounts };
-      this.notifyStatus();
     };
     notePending();
 
@@ -647,12 +619,10 @@ export class SessionMemory {
         const queueMs = Math.round(performance.now() - queuedAt);
         try {
           this.inferenceAgentId = agentId;
-          this.notifyStatus();
           const result = await this.options
             .summarize(unit.type, part.prompt, this.abort.signal)
             .finally(() => {
               this.inferenceAgentId = undefined;
-              this.notifyStatus();
             });
           this.options.onRequest?.({ type: unit.type, queueMs, result });
           if (!result.complete || !result.text.trim()) {
@@ -959,9 +929,6 @@ export class SessionMemory {
 
   async close(): Promise<void> {
     this.abort.abort();
-    clearImmediate(this.statusNotification);
-    this.statusNotification = undefined;
-    this.statusListeners.clear();
     this.pending.clear();
     for (const unsubscribe of this.watchers.values()) unsubscribe();
     this.watchers.clear();

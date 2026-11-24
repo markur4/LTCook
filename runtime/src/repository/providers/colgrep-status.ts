@@ -87,11 +87,10 @@ async function inspectFile<T>(
 ): Promise<T | undefined> {
   const info = await managedEntry(file, 'file');
   if (!info) return undefined;
-  const handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch(
-    (error: unknown) => {
-      if (!missing(error)) throw error;
-    },
-  );
+  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+  const handle = await open(file, flags).catch((error: unknown) => {
+    if (!missing(error)) throw error;
+  });
   if (!handle) return undefined;
   try {
     const opened = await handle.stat({ bigint: true });
@@ -220,7 +219,7 @@ async function findIndex(
     const owned = pid !== undefined && ownsLock(scope, pid);
     const observed = scope?.observedIndex;
     if (bound || owned || (observed?.directory === directory && observed.identity === identity)) {
-      matches.push({ directory, identity, bound, pid, lock });
+      matches.push({ directory, identity, bound, lock });
     } else {
       unresolved = true;
     }
@@ -302,14 +301,13 @@ export async function inspectColgrepIndex(
     readState(path.join(index.directory, 'state.json')),
     index.bound ? inspectVectorStore(index.directory) : undefined,
   ]);
-  const openLock =
-    index.pid === undefined
-      ? undefined
-      : await managedEntry(path.join(index.directory, '.lock'), 'file');
-  const currentPid =
+  const openLock = await managedEntry(path.join(index.directory, '.lock'), 'file');
+  const locks =
     openLock && index.lock && openLock.dev === index.lock.dev && openLock.ino === index.lock.ino
-      ? (await heldIndexLocks())?.get(indexLockKey(openLock))
+      ? await heldIndexLocks()
       : undefined;
+  const currentPid = openLock && locks?.get(indexLockKey(openLock));
+  const knownUnlocked = !openLock || (locks !== undefined && currentPid === undefined);
   const current = await managedEntry(index.directory, 'directory');
   if (!current || `${current.dev}:${current.ino}` !== index.identity) {
     return {
@@ -324,7 +322,7 @@ export async function inspectColgrepIndex(
   if (marker) {
     let { activity, diagnostic } = operation;
     if (locked) activity = 'indexing';
-    else if (activity === 'idle') activity = index.lock ? 'unknown' : 'interrupted';
+    else if (activity === 'idle') activity = knownUnlocked ? 'interrupted' : 'unknown';
     if (activity === 'indexing' || !diagnostic) {
       diagnostic = 'ColGREP has an incomplete index build.';
     }
@@ -351,7 +349,7 @@ export async function inspectColgrepIndex(
   if (state?.dirty && operation.activity === 'idle') {
     return {
       availability: 'unknown',
-      activity: index.lock ? 'unknown' : 'interrupted',
+      activity: knownUnlocked ? 'interrupted' : 'unknown',
       diagnostic: 'ColGREP did not confirm a complete index update.',
     };
   }

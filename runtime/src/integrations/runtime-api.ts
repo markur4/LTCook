@@ -79,6 +79,7 @@ export function agentBearer(secret: string, nativeAgentId: string): string {
 export class RuntimeApi {
   private server: Server | undefined;
   private memory?: SessionMemory;
+  private readonly memoryDisabled: boolean;
   private memoryScope?: (agentId: string) => MemoryScope | undefined;
   private pastedDocuments?: PastedDocuments;
   private readonly activityColgrep = createColgrepProvider();
@@ -151,6 +152,8 @@ export class RuntimeApi {
     private readonly telemetry?: Telemetry,
   ) {
     this.runtime = runtime;
+    this.memoryDisabled =
+      Number(startupEnvironment.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000') === 0;
     this.startupShellEnvironment = captureShellEnvironment(startupEnvironment);
   }
   setRuntime(runtime: RuntimeController): void {
@@ -404,6 +407,10 @@ export class RuntimeApi {
           response.writeHead(400).end('{}');
           return;
         }
+        const timelineEpoch =
+          'timelineEpoch' in parsed && typeof parsed.timelineEpoch === 'string'
+            ? parsed.timelineEpoch
+            : undefined;
         const session = input.sessionId ? this.runtime?.snapshot(input.sessionId) : undefined;
         if (
           session &&
@@ -414,8 +421,13 @@ export class RuntimeApi {
           response.writeHead(403).end('{}');
           return;
         }
+        const registeredWorkspace = session && this.sessions.get(session.session.id);
         const workspace = session
-          ? await openRepositoryWorkspace(session.session.workspaceRoot).catch(() => undefined)
+          ? registeredWorkspace === session.session.workspaceRoot
+            ? await openRepositoryWorkspace(registeredWorkspace)
+                .then((opened) => (opened.root === registeredWorkspace ? opened : undefined))
+                .catch(() => undefined)
+            : undefined
           : await this.workspaceMcp?.repositorySearchWorkspace(agentId);
         const [rag, subagents] = await Promise.all([
           workspace
@@ -427,7 +439,7 @@ export class RuntimeApi {
               },
           this.providerSubagents?.(agentId).catch(() => undefined),
         ]);
-        const memory = this.memory?.status(session?.session.id, agentId);
+        const memory = this.memory?.status(session?.session.id, agentId, timelineEpoch);
         const assignment = session?.assignments.find(
           (value) =>
             value.nativeAgentId === agentId &&
@@ -441,7 +453,7 @@ export class RuntimeApi {
             subagents,
             workspace: workspace && { root: workspace.root, identity: workspace.identity },
             memory,
-            memoryDisabled: this.startupShellEnvironment.LTCOOK_SESSION_MEMORY_THRESHOLD === '0',
+            memoryDisabled: this.memoryDisabled,
           }),
         );
         return;

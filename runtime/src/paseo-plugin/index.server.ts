@@ -89,10 +89,14 @@ async function runtimeRequest(
   headers: Record<string, string>,
   path: string,
   body: unknown,
+  signal?: AbortSignal,
 ) {
+  const timeout = AbortSignal.timeout(5000);
   const response = await fetch(`${endpoint}${path}`, {
     method: 'POST',
-    signal: AbortSignal.timeout(5000) as NonNullable<Parameters<typeof fetch>[1]>['signal'],
+    signal: (signal ? AbortSignal.any([signal, timeout]) : timeout) as NonNullable<
+      Parameters<typeof fetch>[1]
+    >['signal'],
     headers,
     body: JSON.stringify(body),
   });
@@ -130,9 +134,9 @@ const preparedSession = z.object({
     .optional(),
 });
 
-async function runtimeJson(path: string, body: unknown) {
+async function runtimeJson(path: string, body: unknown, signal?: AbortSignal) {
   const { endpoint, headers } = runtimeConfig();
-  const { response, detail } = await runtimeRequest(endpoint, headers, path, body);
+  const { response, detail } = await runtimeRequest(endpoint, headers, path, body, signal);
   if (!response.ok) throw new Error(`LTCook request failed (${response.status})${detail}`);
   return response.json();
 }
@@ -282,13 +286,13 @@ export default function contribute(server: PluginServerContext) {
       agentId,
       signal,
       push,
-      async (agent, observerSignal) => {
+      async (agent, observerSignal, timelineEpoch) => {
         const sessionId = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
         const { endpoint, headers } = runtimeConfig();
         const response = await fetch(`${endpoint}/v1/activity/services`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ nativeAgentId: agent.id, sessionId }),
+          body: JSON.stringify({ nativeAgentId: agent.id, sessionId, timelineEpoch }),
           signal: AbortSignal.any([observerSignal, AbortSignal.timeout(5000)]) as NonNullable<
             Parameters<typeof fetch>[1]
           >['signal'],
@@ -371,34 +375,38 @@ export default function contribute(server: PluginServerContext) {
           },
         };
       },
-      async (agent) => {
+      async (agent, observerSignal) => {
         const sessionId = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
         if (!sessionId) return undefined;
-        const reports = z
-          .array(
-            z.object({
-              id: z.string(),
-              inspection: z.object({
-                resources: z.array(
-                  z.object({
-                    name: z.string(),
-                    path: z.string(),
-                    kind: z.enum(['skill', 'rule']),
-                    applicable: z.boolean(),
-                    loaded: z.boolean(),
-                  }),
-                ),
+        const { value: reports } = z
+          .object({
+            value: z.array(
+              z.object({
+                id: z.string(),
+                inspection: z.object({
+                  diagnostics: z.array(z.unknown()),
+                  resources: z.array(
+                    z.object({
+                      name: z.string(),
+                      path: z.string(),
+                      kind: z.enum(['skill', 'rule']),
+                      applicable: z.boolean(),
+                      loaded: z.boolean(),
+                    }),
+                  ),
+                }),
               }),
-            }),
-          )
+            ),
+          })
           .parse(
-            await runtimeJson('/v1/command', {
-              sessionId,
-              command: { type: 'guidance.inspect', nativeAgentId: agent.id },
-            }),
+            await runtimeJson(
+              '/v1/command',
+              { sessionId, command: { type: 'guidance.inspect', nativeAgentId: agent.id } },
+              observerSignal,
+            ),
           );
         return reports
-          .find((report) => report.id === agent.id)
+          .find((report) => report.id === agent.id && !report.inspection.diagnostics.length)
           ?.inspection.resources.filter(
             (resource) => resource.kind === 'skill' && resource.applicable && resource.loaded,
           );

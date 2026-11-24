@@ -125,7 +125,12 @@ function ObservedActivity(props: ActivityPanelProps & { selectedAgentId: string 
             <ActivityStatus theme={theme} label="Activity snapshot is stale" tone="warning" />
           )}
           <Section theme={theme} title="Services" />
-          <ActivityServices theme={theme} rag={snapshot.rag} memory={snapshot.memory} />
+          <ActivityServices
+            theme={theme}
+            rag={snapshot.rag}
+            memory={snapshot.memory}
+            agentWorktree={snapshot.agent.worktree?.path}
+          />
           <Section theme={theme} title="Agent" />
           <ActivityAgentCard theme={theme} agent={snapshot.agent} selected />
           <Section

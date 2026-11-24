@@ -346,8 +346,12 @@ Task to register: ${input.description}`,
   async execute(sessionId: string, actor: RuntimeActor, command: RuntimeCommand): Promise<unknown> {
     const result = await this.executeCommand(sessionId, actor, command);
     // > Native input publishes guidance while a scheduler-owned send awaits its acknowledgement.
-    // > Guidance records do not change dispatch eligibility; initialization owns its own scheduling.
-    if (command.type !== 'guidance.loaded' && this.initializedSessions.has(sessionId))
+    // > Guidance reads and records do not change dispatch eligibility.
+    if (
+      command.type !== 'guidance.loaded' &&
+      command.type !== 'guidance.inspect' &&
+      this.initializedSessions.has(sessionId)
+    )
       await this.schedule(this.session(sessionId));
     return result;
   }
