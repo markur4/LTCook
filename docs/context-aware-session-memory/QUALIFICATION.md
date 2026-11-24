@@ -480,3 +480,76 @@ opt-in skips with host Pi skills isolated. Python Traditional Tests recorded
 passed. The Traditional Tests and native acceptance took 109.00 s in
 aggregate. Together with the GPU runs, the measured command times totaled
 244.38 s.
+
+## Automatic delegation investigation
+
+This investigation covers the trace-pairing and workspace-preparation Pi
+edits. It uses the pinned two-file workspaces, the same local Bonsai worker
+and tools for both arms, and seed 17 for the summaries included in the
+Immediate Context handoffs. Both models ran on the RTX 5090.
+
+### What Pi received
+
+The assignment, configured worker instructions, tool descriptions, and
+available files matched within each comparison. Both arms received the
+full final user decision at sequence 31. The worker could read and edit
+the two pinned files and search the conversation. The named checks in the
+history refer to verification evidence. The evaluator runs the behavioral
+checks outside the Pi session.
+
+| Handoff | Instructions and ordering | Evidence and references |
+| --- | --- | --- |
+| Original source | Use the latest explicit decision. Search results appear in relevance order in one JSON array, followed by the full correction. | Original messages contain a sequence, author, and text. Both fixtures include the raw implementation finding at sequence 2, the test note at 4, and the supporting review at 10. |
+| Immediate Context | Follow the assignment and latest original instruction. A potentially-incomplete flag precedes chronological user messages, including the final correction. A second chronological block of older evidence follows it. | The raw implementation finding at sequence 2 sits alongside AAB and UAMP text with source arrays and portion IDs. The test note at 4 appears in summary text. The summary citing 9 and 10 gives the implementation intent. The full review at 10 is available through original search. |
+
+The audited Immediate Context handoffs were longer than the original-source
+handoffs, at 1,404 vs. 999 estimated tokens for trace pairing and 1,342 vs.
+1,164 for workspace preparation. Both include earlier proposals and unrelated
+documentation work. Immediate Context also carries repeated test references
+and an inferred patch failure in the trace summary. The implementation
+location was the only labeled critical fact in each edit fixture. Inspecting
+the full correction was necessary to check coverage of the actual edit.
+
+### Normal edit outcomes
+
+| Fixture and handoff | Implementation | Turn completed | Tool loop |
+| --- | --- | --- | --- |
+| Trace pairing, original source | Passed all four checks | Yes | No |
+| Trace pairing, Immediate Context | Passed all four checks | No | Yes, 10 calls |
+| Workspace preparation, original source | Passed all four checks | Yes | No |
+| Workspace preparation, Immediate Context | No edit. Identical replacement failed. | No | Yes, 11 calls |
+
+Trace pairing edited and reread the file before searching six times around
+`TRACE_OLD_END`. Exact queries returned the same historical note at sequence
+4. Implementation succeeded and Pi failed to finish the turn.
+
+Workspace preparation read the target once. Its first search returned the
+full final correction and owner review, including the exception for regular
+dependency files and the metadata and identity checks to retain. Pi then
+searched for `PREP_REPLACE_IDENTICAL` and `PREP_CONFIG_CONTENT` without
+calling `edit`. Exact queries returned the historical note at sequence 4.
+The failed check ran against the unchanged target. Search returned an
+incomplete indicator in both handoff arms, including the passing controls.
+
+### Controlled replays
+
+| Replay | Trace pairing | Workspace preparation |
+| --- | --- | --- |
+| Clarify that the evaluator runs the checks. Keep the handoff byte-for-byte. | All four edit checks passed. Pi looped after the edit. | Pi looped before editing. Identical replacement failed. |
+| Move the final original decision to the end. Preserve every evidence row and citation. | All four edit checks passed. Pi looped after the edit. | All four edit checks passed. Pi looped after the edit. |
+
+The three runs regenerated identical normal Immediate Context handoffs.
+Both original-source controls passed in every run. The workspace result
+changed when the placement of the decision changed. This isolates a
+presentation effect on implementation for this fixture. The model could
+make the correct edit using the evidence that was already present.
+
+Turn termination is a separate downstream behavior. Both workers kept
+searching for historical check labels even after a passing edit in the
+decision-last replay. Explaining who runs the checks and moving the decision
+each left both loops intact. The runs establish what the worker searched for
+and when. They leave the exact trigger among the remaining presentation
+differences unresolved.
+
+The audited run and the two focused comparisons took 69.36 s, 75.64 s, and
+78.51 s. The diagnostic replays leave the normal qualification verdict open.

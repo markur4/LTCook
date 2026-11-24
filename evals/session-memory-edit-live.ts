@@ -57,6 +57,11 @@ if (!summarization) throw new Error('AppRC summarizer settings are unavailable.'
 const { endpoint } = summarization;
 const args = process.argv.slice(2);
 const contextAware = args.includes('--context-aware');
+const auditOutput = args.includes('--audit-output');
+const compareCheckInstructions = args.includes('--compare-check-instructions');
+const compareDecisionOrder = args.includes('--compare-decision-order');
+if ((compareCheckInstructions || compareDecisionOrder) && !contextAware)
+  throw new Error('Handoff comparisons require --context-aware.');
 const [
   extractorName = contextAware ? contextModel : 'LiquidAI/lfm2.5-1.2b-instruct:q8_0',
   workerName = EVAL_MODEL,
@@ -90,6 +95,23 @@ process.once('SIGTERM', cancel);
 const { signal } = controller;
 const run = promisify(execFile);
 type EditCase = (typeof sessionMemoryEditCases)[number];
+type EditDiagnostic = 'check-instructions' | 'decision-last';
+type ContextComparison = Awaited<ReturnType<typeof compareContextMemory>>;
+
+function decisionLast(handoff: string, decisionSeq?: number) {
+  const lines = handoff.split('\n');
+  const start = lines.indexOf('Original user messages in chronological order');
+  const end = lines.indexOf('Summaries and recent evidence in chronological order');
+  if (decisionSeq === undefined || start < 0 || end <= start) return;
+  const originals = lines.slice(start + 1, end);
+  const index = originals.findIndex((line) => {
+    const entry = JSON.parse(line) as { author: string; seq: number };
+    return entry.author === 'user' && entry.seq === decisionSeq;
+  });
+  if (index < 0) return;
+  const [decision] = lines.splice(start + 1 + index, 1);
+  return [...lines, 'Latest original user decision', decision].join('\n');
+}
 
 async function editWithPi(input: {
   fixture: EditCase;
@@ -97,11 +119,18 @@ async function editWithPi(input: {
   source: MemorySource;
   handoff: string;
   seed?: number;
+  diagnostic?: EditDiagnostic;
   model: string;
   hostedSession?: Awaited<ReturnType<typeof prepareLunaPiEvaluation>>;
 }) {
-  const { fixture, mode, source, handoff, model, hostedSession, seed } = input;
-  const arm = path.join(directory, fixture.id, mode, seed === undefined ? 'control' : String(seed));
+  const { fixture, mode, source, handoff, model, hostedSession, seed, diagnostic } = input;
+  const arm = path.join(
+    directory,
+    fixture.id,
+    mode,
+    seed === undefined ? 'control' : String(seed),
+    ...(diagnostic ? [diagnostic] : []),
+  );
   const workspace = path.join(arm, 'workspace');
   const files = [fixture.file, fixture.sibling];
   const original = await Promise.all(
@@ -166,6 +195,17 @@ async function editWithPi(input: {
   });
   const started = performance.now();
   try {
+    const prompt = [
+      fixture.assignment,
+      mode === 'conventional'
+        ? fixture.manualHandoff
+        : 'Use the supplied evidence first. If a required decision is missing, search Session Memory for specific terms, then read the matching original source.',
+      handoff,
+      diagnostic === 'check-instructions' &&
+        'The evaluator runs the named verification checks after your turn. The check names in the conversation are labels for that evidence. Use the latest approved decision to make the scoped edit, inspect the resulting code, and finish with a brief report. Search Session Memory only if the approved edit still lacks necessary information.',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     const options = {
       endpoint,
       model,
@@ -177,20 +217,30 @@ async function editWithPi(input: {
       customTools: mode === 'conventional' ? [] : [search],
     };
     const { session } = await (hostedSession ?? createLocalPiEvaluationSession)(options);
+    const systemPrompt = auditOutput ? session.systemPrompt : undefined;
     const loop = new AbortController();
-    const bounded = AbortSignal.any([signal, loop.signal, AbortSignal.timeout(120_000)]);
+    const deadline = AbortSignal.timeout(120_000);
+    const bounded = AbortSignal.any([signal, loop.signal, deadline]);
     const abort = () => void session.abort();
     bounded.addEventListener('abort', abort, { once: true });
     const calls: Array<{ tool: string; failed: boolean }> = [];
+    const toolAudit: Array<{ tool: string; args: unknown; result?: unknown }> = [];
     const argumentsByCall = new Map<string, unknown>();
     const progress = new MemoryEditProgress();
     const unsubscribe = session.agent.subscribe((event) => {
       if (event.type === 'tool_execution_start') argumentsByCall.set(event.toolCallId, event.args);
       if (event.type === 'tool_execution_end') {
         calls.push({ tool: event.toolName, failed: event.isError });
+        const args = argumentsByCall.get(event.toolCallId);
+        if (auditOutput)
+          toolAudit.push({
+            tool: event.toolName,
+            args,
+            ...(event.toolName !== 'read' ? { result: event.result } : {}),
+          });
         if (
           argumentsByCall.has(event.toolCallId) &&
-          progress.record(event.toolName, argumentsByCall.get(event.toolCallId), event.result)
+          progress.record(event.toolName, args, event.result)
         )
           loop.abort();
         argumentsByCall.delete(event.toolCallId);
@@ -198,31 +248,21 @@ async function editWithPi(input: {
     });
     try {
       bounded.throwIfAborted();
-      await session
-        .prompt(
-          [
-            fixture.assignment,
-            ...(mode === 'conventional'
-              ? [fixture.manualHandoff]
-              : [
-                  'Use the supplied evidence first. If a required decision is missing, search Session Memory for specific terms, then read the matching original source.',
-                ]),
-            ...(handoff ? [handoff] : []),
-          ].join('\n\n'),
-        )
-        .catch((error: unknown) => {
-          if (!bounded.aborted || signal.aborted) throw error;
-        });
+      await session.prompt(prompt).catch((error: unknown) => {
+        if (!bounded.aborted || signal.aborted) throw error;
+      });
       const answers = session.messages.filter((message) => message.role === 'assistant');
       const lastAnswer = answers.at(-1);
       const stopReason = lastAnswer?.stopReason;
-      const error = answers.some(
+      const wrongModel = answers.some(
         ({ responseModel }) => responseModel && modelTag(responseModel) !== modelTag(model),
-      )
+      );
+      const turnCompleted = !wrongModel && !bounded.aborted && stopReason === 'stop';
+      const error = wrongModel
         ? 'The Pi provider returned a different worker model.'
         : loop.signal.aborted
           ? 'Repeated tool calls returned unchanged results.'
-          : bounded.aborted || !stopReason || ['error', 'aborted', 'length'].includes(stopReason)
+          : !turnCompleted
             ? sanitizeEvaluationText(lastAnswer?.errorMessage || 'Pi did not finish the edit turn.')
             : undefined;
       const usage = answers.reduce(
@@ -243,6 +283,7 @@ async function editWithPi(input: {
       const checks: Record<string, boolean> = await fixture
         .grade(workspace)
         .catch(() => ({ executable: false }));
+      const implementationPassed = targetChanged && scoped && Object.values(checks).every(Boolean);
       return {
         mode,
         provider: session.model?.provider,
@@ -260,8 +301,26 @@ async function editWithPi(input: {
         targetChanged,
         scoped,
         checks,
+        implementationPassed,
+        turnCompleted,
+        stopReason,
+        toolLoopDetected: loop.signal.aborted,
+        timedOut: deadline.aborted && bounded.reason === deadline.reason,
         error,
-        passed: !error && targetChanged && scoped && Object.values(checks).every(Boolean),
+        passed: implementationPassed && turnCompleted,
+        ...(auditOutput
+          ? {
+              audit: {
+                instructions: options.instructions,
+                systemPrompt,
+                prompt,
+                handoff,
+                tools: options.tools,
+                files,
+                toolCalls: toolAudit,
+              },
+            }
+          : {}),
       };
     } finally {
       bounded.removeEventListener('abort', abort);
@@ -291,7 +350,7 @@ try {
     const transcript = editTranscript(fixture);
     const messages = transcript.turns.flat();
     if (contextAware) {
-      const compare = (strategy: ContextStrategy, seed?: number) =>
+      const compare = (strategy: ContextStrategy, seed?: number): Promise<ContextComparison> =>
         compareContextMemory(transcript, {
           settings: summarization,
           digest: extractor.digest,
@@ -300,10 +359,16 @@ try {
           progress: (event) => console.error(event),
           strategies: [strategy],
           seed,
-          auditOutput: args.includes('--audit-output'),
+          auditOutput,
         });
-      const edit = async (mode: ContextStrategy, handoff: string, seed?: number) => {
-        console.error(`Running native Pi ${mode} edit for ${fixture.id}`);
+      const edit = async (
+        mode: ContextStrategy,
+        handoff: string,
+        seed?: number,
+        diagnostic?: EditDiagnostic,
+      ) => {
+        const label = diagnostic ? `${mode} (${diagnostic})` : mode;
+        console.error(`Running native Pi ${label} edit for ${fixture.id}`);
         const result = await editWithPi({
           fixture,
           mode,
@@ -312,9 +377,10 @@ try {
           model: worker.name,
           hostedSession,
           seed,
+          diagnostic,
         });
         console.error(
-          `${fixture.id} ${mode}: ${result.passed ? 'passed' : (result.error ?? 'failed edit checks')} in ${result.elapsedMs} ms`,
+          `${fixture.id} ${label}: ${result.passed ? 'passed' : (result.error ?? 'failed edit checks')} in ${result.elapsedMs} ms`,
         );
         return result;
       };
@@ -327,13 +393,31 @@ try {
         originalEvidence && originalControlRetrievedCriticalFacts
           ? await edit('original-search', originalEvidence)
           : undefined;
-      const arms = [{ ...original, worker: baseline }];
+      type EditOutcome = Awaited<ReturnType<typeof editWithPi>>;
+      const arms: (Omit<ContextComparison['arms'][number], 'handoff'> & {
+        worker?: EditOutcome;
+        checkInstructionControl?: EditOutcome;
+        decisionOrderControl?: EditOutcome;
+      })[] = [{ ...original, worker: baseline }];
       if (baseline?.passed) {
         for (const mode of strategies.filter((item) => item !== 'original-search')) {
           for (const seed of seeds) {
             const comparison = await compare(mode, seed);
             const { handoff, ...summary } = comparison.arms[0]!;
-            arms.push({ ...summary, worker: await edit(mode, handoff, seed) });
+            const worker = await edit(mode, handoff, seed);
+            const comparePresentation = mode === 'immediate' && worker.toolLoopDetected;
+            const checkInstructionControl =
+              compareCheckInstructions && comparePresentation
+                ? await edit(mode, handoff, seed, 'check-instructions')
+                : undefined;
+            const reordered =
+              compareDecisionOrder && comparePresentation
+                ? decisionLast(handoff, transcript.correctionSources.at(-1))
+                : undefined;
+            const decisionOrderControl = reordered
+              ? await edit(mode, reordered, seed, 'decision-last')
+              : undefined;
+            arms.push({ ...summary, worker, checkInstructionControl, decisionOrderControl });
           }
         }
       } else

@@ -435,6 +435,19 @@ stops after three consecutive tool calls repeat known requests with unchanged
 results. Use `--fixture=trace-pairing` or `--fixture=workspace-preparation` for
 the affected edit, and `--strategy=original-search` to verify only its control.
 
+The edit report records implementation checks, normal Pi turn completion,
+and tool-loop stops independently. Qualification requires a scoped edit that
+passes the executable checks and a normally completed turn. Use
+`--audit-output` to inspect the exact fixture prompt, handoff, available files
+and tools, and tool arguments and results. Keep the raw audit local.
+Use `--compare-check-instructions` to replay a looping Immediate Context edit
+with the same evidence and a clarification that the evaluator runs the named
+checks. The report records the diagnostic result independently of the normal
+qualification result.
+Use `--compare-decision-order` to replay a looping edit with the final
+original user decision placed after the other evidence. The experiment
+preserves the evidence rows and their citations.
+
 To replay the historical extraction comparison on repository edits, run
 `bun evals/session-memory-edit-live.ts` with optional extractor and worker model
 tags. It compares conventional delegation, deterministic conversation search,
