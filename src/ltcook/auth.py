@@ -1,8 +1,13 @@
-"""LTCook entry points for Pi-managed provider authentication."""
+"""LTCook entry points for provider authentication."""
 
 from __future__ import annotations
 
+import getpass
+import json
 import os
+import shutil
+import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated
@@ -12,6 +17,51 @@ import typer
 from ltcook.launch import resolve_launch
 
 auth_cli = typer.Typer(no_args_is_help=True)
+OPENAI_PROVIDERS = frozenset({"openai", "openai-codex"})
+
+
+def _codex_cli() -> tuple[str, dict[str, str]]:
+    """Resolve the user's Codex CLI in the global launch environment."""
+    environment = dict(resolve_launch(original_environment=os.environ).environment)
+    environment.pop("OPENAI_API_KEY", None)
+    codex = shutil.which("codex", path=environment.get("PATH"))
+    if codex is None:
+        raise typer.BadParameter("Install Codex CLI to use OpenAI models in LTCook.")
+    return codex, environment
+
+
+def _check_codex(provider: str, json_output: bool) -> None:
+    """Report Codex login readiness without forwarding credential output."""
+    codex, environment = _codex_cli()
+    try:
+        result = subprocess.run(
+            [codex, "login", "status"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        message = (result.stdout + result.stderr).lower()
+        kind = (
+            "oauth"
+            if "chatgpt" in message
+            else "api_key"
+            if "api key" in message
+            else None
+        )
+        expected = "oauth" if provider == "openai-codex" else "api_key"
+        status = "ready" if result.returncode == 0 and kind == expected else "not_ready"
+    except (OSError, subprocess.TimeoutExpired):
+        kind = None
+        status = "invalid"
+    if json_output:
+        typer.echo(
+            json.dumps({"status": status, "provider": provider, "authType": kind})
+        )
+    else:
+        typer.echo(status)
+    raise typer.Exit({"ready": 0, "not_ready": 1, "invalid": 2}[status])
 
 
 def _native_pi_cli() -> tuple[str, Path, dict[str, str]]:
@@ -56,9 +106,32 @@ def login(
     api_key: Annotated[bool, typer.Option("--api-key")] = False,
     no_browser: Annotated[bool, typer.Option("--no-browser")] = False,
 ) -> None:
-    """Sign in to a provider using Pi's native credential flow."""
+    """Sign in through the provider's LTCook authentication owner."""
     if api_key and no_browser:
         raise typer.BadParameter("--no-browser cannot be used with --api-key.")
+    if provider in OPENAI_PROVIDERS:
+        codex, environment = _codex_cli()
+        if api_key:
+            key = (
+                getpass.getpass("OpenAI API key: ")
+                if sys.stdin.isatty()
+                else sys.stdin.readline()
+            ).strip()
+            if not key:
+                raise typer.BadParameter("Enter an OpenAI API key to sign in.")
+            result = subprocess.run(
+                [codex, "login", "--with-api-key"],
+                input=key + "\n",
+                text=True,
+                env=environment,
+                check=False,
+            )
+            raise typer.Exit(result.returncode)
+        os.execve(
+            codex,
+            [codex, "login", *(["--device-auth"] if no_browser else [])],
+            environment,
+        )
     arguments = ["login", provider]
     if api_key:
         arguments.append("--api-key")
@@ -69,7 +142,10 @@ def login(
 
 @auth_cli.command("logout")
 def logout(provider: str) -> None:
-    """Sign out of a provider using Pi's native credential store."""
+    """Sign out from the provider's LTCook authentication owner."""
+    if provider in OPENAI_PROVIDERS:
+        codex, environment = _codex_cli()
+        os.execve(codex, [codex, "logout"], environment)
     _invoke_native_pi(["logout", provider])
 
 
@@ -80,7 +156,10 @@ def check(
     json_output: Annotated[bool, typer.Option("--json")] = False,
     no_refresh: Annotated[bool, typer.Option("--no-refresh")] = False,
 ) -> None:
-    """Check Pi provider authentication without exposing credential values."""
+    """Check provider authentication without exposing credential values."""
+    selected_provider = provider or (model.split("/", 1)[0] if model else None)
+    if selected_provider in OPENAI_PROVIDERS and selected_provider is not None:
+        _check_codex(selected_provider, json_output)
     arguments = ["check"]
     if provider:
         arguments.extend(["--provider", provider])

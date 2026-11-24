@@ -227,9 +227,12 @@ to unload after a request or to a positive number of seconds for timed residency
 Ask the agent to call `session-memory` with a short `query` after resuming a
 conversation or starting work that depends on an earlier decision. The results
 show the owning agent and history epoch. Each entry gives its author and source
-sequence number in `seq`.
+sequence number in `seq`. Search checks the original conversation as well as
+selected evidence. A matching agent or tool message can appear as
+`original-message` even if the extractor omitted it.
 Supply `agentId` to limit the search to an authorized conversation. To inspect
-a citation, pass `source` with its `agentId`, `epoch` and `seq`.
+a citation, pass `source` with its `agentId`, `epoch` and `seq`. A result with
+`truncated: true` is a preview. The citation retrieves the full eligible message.
 
 An ordinary Paseo chat can read its own Memory. Managed agents can also search
 conversations bound to their TeamInstance in the same workspace. Memory
@@ -243,11 +246,11 @@ User messages can appear while agent and tool evidence is still being
 processed in the background. A rebuilt timeline may include prompts for which
 Paseo no longer provides a confirmed author. Search shows them as
 `unattributed-prompt`. An incomplete result can mean the
-model has yet to catch up, the output reached a result limit, or the source
+model has yet to catch up, the output reached its token budget, or the source
 history is unavailable. On a delegated task, follow its approved scope and
 check a recent explicit correction against the cited messages. Automatic enrichment
 is opt-in. To use the model that qualified in the
-[hybrid comparison](../evals/session-memory-hybrid-results.md), set
+[CPU comparison](../evals/session-memory-budget-results.md), set
 `LTCOOK_SESSION_MEMORY_MODEL=LiquidAI/lfm2.5-1.2b-instruct:q8_0` and
 `LTCOOK_SESSION_MEMORY_DELEGATION=true` in global AppRC. The model must
 be available in the configured Ollama instance. Restart the runtime to
@@ -465,9 +468,10 @@ ltcook config show --json
 
 `app.team` uses `LTCOOK_TEAM` and defaults to `default-minimal`.
 [Model aliases](#choose-a-model-alias) have defaults. Use AppRC to replace a
-physical model when needed. Provider credentials come from native login or a
-provider secret field such as `OPENAI_API_KEY`. `config show --json` reports
-application settings without exposing OAuth credentials.
+physical model when needed. Managed OpenAI models use the Codex sign-in.
+Configure other provider credentials using their native login or AppRC secret
+settings. `config show --json` reports application settings without exposing
+OAuth credentials.
 
 Explicit runtime and service starts create only missing runtime, Crawl4AI and
 SearXNG secrets after installation is Ready, preserving existing values. They do
@@ -530,39 +534,30 @@ Ollama model tag, including its quantization suffix.
 
 ## Authenticate with Pi
 
-LTCook exposes the installed Pi authentication CLI without implementing another
-login flow:
+LTCook uses the installed Codex CLI as the authentication owner for OpenAI in
+managed Pi sessions, terminal launches, and hosted evaluations. If
+`codex login status` shows an existing ChatGPT sign-in, check it from LTCook:
 
 ```shell
-ltcook auth login openai-codex
-ltcook auth check --provider openai-codex --json --no-refresh
-ltcook auth logout openai-codex
+ltcook auth check --provider openai-codex --json
 ```
 
-`login` requires an interactive terminal. For a headless machine, use
-`ltcook auth login openai-codex --no-browser` and follow Pi's instructions. To store an
-OpenAI API key rather than sign in with an account, use
-`ltcook auth login openai --api-key`. Account OAuth and API billing credentials
-are different methods; configuring `OPENAI_API_KEY` is not a ChatGPT login.
-The wrapper preserves Pi's exit status; `auth check` reports ready/not-ready/invalid
-without printing the credential. `--no-refresh` avoids refreshing an expired
-OAuth token during inspection.
+Use `ltcook auth login openai-codex` to sign in through Codex when needed.
+`--no-browser` selects Codex's device authorization. A ChatGPT sign-in uses
+`openai-codex/MODEL` in LTCook. For separate OpenAI Platform billing, use
+`ltcook auth login openai --api-key` and select `openai/MODEL`. Check the
+matching provider. LTCook gets request authorization from Codex and leaves
+credential storage and renewal with Codex.
 
-All LTCook projects use `<LTCOOK_PI_AUTH_DIR>/auth.json`, defaulting to
-`~/.pi/agent/auth.json`. Existing Pi credentials there are reused. Set the
-user-scoped `runtime.pi_auth_dir` (`LTCOOK_PI_AUTH_DIR`) to use another native Pi home.
-Workspace-local Pi settings, models, extensions, web configuration, and session
-histories remain separate; credentials are not copied or linked into those homes.
-Earlier logins stored only in a workspace Pi home are not imported: run the
-shared login once, or select an existing user-level auth home.
-
-Logout removes stored credentials; it does not unset API keys in AppRC or the
-environment, or revoke credentials at the provider.
+For other providers, `ltcook auth` uses Pi's standard login and the shared
+`<LTCOOK_PI_AUTH_DIR>/auth.json`, defaulting to `~/.pi/agent/auth.json`.
+`--no-refresh` applies to Pi's credential checks. Workspace settings and
+conversations stay in their respective Pi homes.
 
 > [!CAUTION]
-> Login and logout affect other Pi instances using the same credential home.
-> Keep `auth.json` private. LTCook does not remove an external shared Pi auth home
-> when uninstalling its own application resources.
+> `ltcook auth logout openai-codex` signs Codex out for all its consumers.
+> Other provider logout commands affect the Pi instances sharing that provider's
+> credential home.
 
 
 ## Choose application paths
@@ -826,7 +821,7 @@ Use `ltcook app paths` and `ltcook app doctor --json` for passive inspection.
 | Saved team is ignored | Compare `LTCOOK_TEAM` shell exports and registered workspace overrides. |
 | Runtime deployment is missing | Run `just sync`, then repeat editable registration to initialize the staged payload. |
 | Model alias is empty | Configure the matching `runtime.*_model` or smart fallback and provider credentials. |
-| Provider authentication is not ready | Run `ltcook auth check --provider openai --json --no-refresh`, then use Pi login for the selected provider. |
+| OpenAI account authentication is unavailable | Check `codex login status` and `ltcook auth check --provider openai-codex --json` on the host running LTCook. |
 | Ollama uses the CPU on an Intel iGPU under WSL | Check the Ollama service's Vulkan configuration and verify offload while a model is loaded. See [Enable an Intel iGPU for Ollama on WSL](#enable-an-intel-igpu-for-ollama-on-wsl). |
 | Session reports a different team/workspace | Restore the original selection or choose a new session identifier. |
 | Database already has an owner | Stop that runtime; do not delete its lock or run another recovery owner. |

@@ -188,6 +188,15 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🛠️ Changed
 
+- **Breaking:** 💥 Managed OpenAI models reuse the existing Codex CLI sign-in
+  in Pi launches, Paseo sessions, and hosted evaluations. If needed, sign in
+  through `ltcook auth login openai-codex` for ChatGPT or
+  `ltcook auth login openai --api-key` for Platform API key mode.
+
+- Session Memory searches original conversation messages alongside extracted
+  evidence. Search and delegation fit context to token budgets and preserve
+  citations for the full source.
+
 - **Breaking:** 💥 Session Memory preserves original user messages and appends
   categorized agent and tool findings. Each tool result entry now has one
   `seq` and an `author`. The runtime rebuilds the derived cache from Paseo

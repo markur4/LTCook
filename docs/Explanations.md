@@ -119,11 +119,10 @@ replaceable `<LTCOOK_DEPLOYMENT_DIR>/app` bundle. Pi homes default to
 redacted in diagnostics; raw component environment mappings are launch inputs,
 not material to print in logs or the status panel.
 
-Provider credentials are separate from those project homes. `runtime.pi_auth_dir`
-(`LTCOOK_PI_AUTH_DIR`) is resolved from global user settings and defaults to
-native Pi's `~/.pi/agent`. Every project runtime uses that directory's
-`auth.json` through Pi's supported SDK; models and other Pi configuration remain
-project-local. No credential file is copied or linked into a project home.
+OpenAI authorization comes from the existing Codex sign-in. For other providers,
+`runtime.pi_auth_dir` (`LTCOOK_PI_AUTH_DIR`) defaults to native Pi's
+`~/.pi/agent`. Project runtimes share that directory's `auth.json` through
+Pi's SDK. Workspace models, settings, and conversations stay project-local.
 
 ## Filesystem capabilities
 
@@ -216,18 +215,18 @@ a directory or viewing the Team panel alone does not create agents.
 
 ## Pi authentication
 
-`ltcook auth login`, `logout`, and `check` run the installed Pi authentication CLI
-with its agent directory set to the shared user auth home. The commands retain
-Pi's interactive terminal, credential storage, and exit behavior. ChatGPT account
-sign-in uses Pi's OAuth flow; an OpenAI API key is a different method and can also
-be supplied through the declared `OPENAI_API_KEY` secret.
+`ltcook auth login`, `logout`, and `check` delegate OpenAI account management
+to Codex. Managed Pi reads request authorization over the Codex app-server's
+local stdio protocol and sends it only to the official provider endpoint.
+Codex owns credential storage and refresh. The ChatGPT sign-in is used by
+`openai-codex` models, and a Codex-managed Platform API key is used by
+`openai` models. The credential stays in memory for each request.
 
-Paseo's agent command instead constructs Pi's public `ModelRuntime` with an
-explicit shared `authPath` and a project-local `modelsPath`. Pi owns credential
-refresh and cross-process storage locking. Its project services still use the
-workspace `PI_CODING_AGENT_DIR`, so web configuration and extension settings do
-not overwrite another project's configuration. The shared auth home is not an
-AppRC-managed application resource and is not purged with LTCook's appdata.
+For other providers, these commands run Pi's native authentication CLI.
+Paseo creates Pi's `ModelRuntime` with a shared `authPath` and a workspace-local
+`modelsPath`. Pi owns credential refresh and cross-process locking for those
+providers. Project services use the workspace `PI_CODING_AGENT_DIR`, while the
+shared auth home stays outside LTCook's removable application resources.
 
 The [authentication guide](How-To-User-Guides.md#authenticate-with-pi) covers
 headless login, API keys, and existing user-level Pi credentials. Provider login

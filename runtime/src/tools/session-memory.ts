@@ -9,7 +9,7 @@ const seq = Type.Integer({ minimum: 0 });
 const reference = { agentId, epoch, seq };
 
 export const sessionMemoryDescription =
-  'Search your Session Memory and authorized teammates by focus, or read the eligible source message for a cited agent, epoch, and sequence number. Use findings as supplemental context.';
+  'Search original conversation messages and selected evidence from your Session Memory and authorized teammates. Use specific terms. Read the full source with its agent ID, epoch, and sequence number. Use results as supplemental context.';
 
 export const sessionMemoryInput = Type.Object(
   {
@@ -31,6 +31,7 @@ const result = Type.Object({
           kind: Type.String(),
           author: Type.String(),
           text: Type.String(),
+          truncated: Type.Optional(Type.Literal(true)),
           seq,
         }),
       ),
@@ -47,7 +48,13 @@ export function createSessionMemoryTool(memory: SessionMemory) {
     outputSchema: result,
     async execute(input, context) {
       if (!input.source)
-        return memory.search(context.agentId, context.workspaceRoot, input.query, input.agentId);
+        return memory.search(
+          context.agentId,
+          context.workspaceRoot,
+          input.query,
+          input.agentId,
+          context.signal,
+        );
       const source = await memory.sourceMessage(
         context.agentId,
         context.workspaceRoot,

@@ -134,7 +134,7 @@ def test_auth_check_and_logout_use_shared_native_auth_file(tmp_path):
     auth_file = Path(environment["LTCOOK_PI_AUTH_DIR"]) / "auth.json"
 
     missing = _run_cli(
-        ["auth", "check", "--provider", "openai", "--json", "--no-refresh"],
+        ["auth", "check", "--provider", "anthropic", "--json", "--no-refresh"],
         environment,
         cwd=project,
     )
@@ -145,13 +145,13 @@ def test_auth_check_and_logout_use_shared_native_auth_file(tmp_path):
     fixture_key = "ltcook-test-only-dummy-key"
     auth_file.write_text(
         json.dumps(
-            {"openai": {"type": "api_key", "key": fixture_key}},
+            {"anthropic": {"type": "api_key", "key": fixture_key}},
             indent=2,
         ),
         encoding="utf-8",
     )
     ready = _run_cli(
-        ["auth", "check", "--provider", "openai", "--json", "--no-refresh"],
+        ["auth", "check", "--provider", "anthropic", "--json", "--no-refresh"],
         environment,
         cwd=project,
     )
@@ -160,10 +160,10 @@ def test_auth_check_and_logout_use_shared_native_auth_file(tmp_path):
     assert fixture_key not in ready.stdout
     assert fixture_key not in ready.stderr
 
-    logout = _run_cli(["auth", "logout", "openai"], environment, cwd=project)
+    logout = _run_cli(["auth", "logout", "anthropic"], environment, cwd=project)
     assert logout.returncode == 0
     missing_again = _run_cli(
-        ["auth", "check", "--provider", "openai", "--json", "--no-refresh"],
+        ["auth", "check", "--provider", "anthropic", "--json", "--no-refresh"],
         environment,
         cwd=project,
     )
@@ -174,9 +174,49 @@ def test_auth_check_and_logout_use_shared_native_auth_file(tmp_path):
 def test_auth_login_preserves_native_exit_status(tmp_path):
     environment = _native_cli_environment(tmp_path, exit_code=23)
 
-    result = _run_cli(["auth", "login", "openai", "--api-key"], environment)
+    result = _run_cli(["auth", "login", "anthropic", "--api-key"], environment)
 
     assert result.returncode == 23
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Fixture uses a POSIX executable")
+def test_openai_auth_commands_use_the_shared_codex_login(tmp_path):
+    environment = _native_cli_environment(tmp_path)
+    codex = tmp_path / "codex"
+    codex.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "assert 'OPENAI_API_KEY' not in os.environ\n"
+        "args = sys.argv[1:]\n"
+        "if args == ['login', 'status']:\n"
+        "    print('Logged in using ChatGPT, fixture-output')\n"
+        "else:\n"
+        "    print(' '.join(args))\n",
+        encoding="utf-8",
+    )
+    codex.chmod(codex.stat().st_mode | 0o100)
+    environment["PATH"] = os.pathsep.join((str(tmp_path), environment["PATH"]))
+    environment["OPENAI_API_KEY"] = "obsolete-fixture-key"
+
+    ready = _run_cli(
+        ["auth", "check", "--provider", "openai-codex", "--json"], environment
+    )
+    assert ready.returncode == 0
+    assert json.loads(ready.stdout) == {
+        "status": "ready",
+        "provider": "openai-codex",
+        "authType": "oauth",
+    }
+    assert (
+        _run_cli(["auth", "check", "--provider", "openai"], environment).returncode == 1
+    )
+    login = _run_cli(["auth", "login", "openai-codex", "--no-browser"], environment)
+    assert login.returncode == 0
+    assert login.stdout.strip() == "login --device-auth"
+    logout = _run_cli(["auth", "logout", "openai-codex"], environment)
+    assert logout.returncode == 0
+    assert logout.stdout.strip() == "logout"
+    assert not (Path(environment["LTCOOK_PI_AUTH_DIR"]) / "auth.json").exists()
 
 
 def test_auth_rejects_credential_printing_option(tmp_path):

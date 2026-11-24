@@ -279,18 +279,17 @@ separate from application data. See the
 
 ## Authenticate with Pi
 
-Use Pi's native provider login through LTCook:
+LTCook reuses your Codex CLI sign-in for OpenAI in Pi, Paseo, and hosted
+evaluations. Check the existing sign-in before starting another login:
 
 ```shell
-ltcook auth login openai-codex
-ltcook auth check --provider openai-codex --json --no-refresh
+ltcook auth check --provider openai-codex --json
 ```
 
-For OpenAI, account sign-in and an API key are different authentication methods.
-Use `ltcook auth login openai --api-key` for an API key instead. Pi stores
-credentials in the shared user home, normally `~/.pi/agent/auth.json`; project
-settings and conversations remain separate. Existing credentials in that home
-are reused without copying them into projects. See the
+If needed, `ltcook auth login openai-codex` opens Codex's account sign-in.
+`ltcook auth login openai --api-key` uses Codex's OpenAI API key mode.
+Pi manages credentials for other providers in its shared user home,
+normally `~/.pi/agent/auth.json`. See the
 [authentication guide](docs/How-To-User-Guides.md#authenticate-with-pi) for
 logout, headless login, and a custom `runtime.pi_auth_dir`.
 

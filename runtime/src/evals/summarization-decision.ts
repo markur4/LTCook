@@ -9,7 +9,8 @@ import {
   type CreateAgentSessionOptions,
 } from '@earendil-works/pi-coding-agent';
 import { ollamaEndpoint } from '../integrations/ollama.js';
-import { EVAL_CONTEXT_WINDOW, EVAL_MODEL_COMPAT } from './setup.js';
+import { codexAuthorization, useCodexOpenAiAuth } from '../integrations/codex-auth.js';
+import { EVAL_CONTEXT_WINDOW, EVAL_MODEL_COMPAT, LUNA_EVALUATION } from './setup.js';
 import { modelTag } from './summarization-grader.js';
 
 export const DECISION_INSTRUCTIONS =
@@ -18,15 +19,19 @@ export const DECISION_INSTRUCTIONS =
   'Reply with PROCEED only if that approval is established. Reply with one word.';
 export const DECISION_MAX_TOKENS = 512;
 
+type PiEvaluationSessionOptions = {
+  directory: string;
+  cwd?: string;
+  instructions: string;
+} & Pick<CreateAgentSessionOptions, 'tools' | 'customTools'>;
+
 export async function createLocalPiEvaluationSession(
-  input: {
+  input: PiEvaluationSessionOptions & {
     endpoint: string;
     model: string;
-    directory: string;
-    instructions: string;
-  } & Pick<CreateAgentSessionOptions, 'tools' | 'customTools'>,
+  },
 ) {
-  const { endpoint, model, directory, instructions, tools, customTools } = input;
+  const { endpoint, model, directory } = input;
   await mkdir(directory, { recursive: true });
   const modelsPath = path.join(directory, 'models.json');
   await writeFile(
@@ -60,10 +65,37 @@ export async function createLocalPiEvaluationSession(
     refreshOnCreate: false,
   });
   const selectedModel = modelRuntime.getModel('ollama', model);
-  if (!selectedModel) throw new Error('The local Pi evaluation model is unavailable.');
+  if (!selectedModel) throw new Error(`Pi could not resolve the local evaluation model ${model}.`);
+  return createPiEvaluationSession(input, modelRuntime, selectedModel, 'off');
+}
+
+export async function prepareLunaPiEvaluation(directory: string, signal: AbortSignal) {
+  const { authMethod } = await codexAuthorization(signal);
+  const provider = authMethod === 'apikey' ? 'openai' : 'openai-codex';
+  const modelRuntime = useCodexOpenAiAuth(
+    await ModelRuntime.create({
+      authPath: path.join(directory, 'auth.json'),
+      modelsPath: null,
+      modelsStorePath: path.join(directory, 'model-store.json'),
+      refreshOnCreate: false,
+    }),
+  );
+  const model = modelRuntime.getModel(provider, LUNA_EVALUATION.model);
+  if (!model) throw new Error('The Codex-authenticated Pi catalog cannot resolve GPT-6 Luna.');
+  return (input: PiEvaluationSessionOptions) =>
+    createPiEvaluationSession(input, modelRuntime, model, LUNA_EVALUATION.reasoning);
+}
+
+async function createPiEvaluationSession(
+  { directory, cwd = directory, instructions, tools, customTools }: PiEvaluationSessionOptions,
+  modelRuntime: ModelRuntime,
+  model: NonNullable<CreateAgentSessionOptions['model']>,
+  thinkingLevel: 'off' | 'high',
+) {
+  await mkdir(directory, { recursive: true });
   const settings = SettingsManager.inMemory({ retry: { enabled: false } });
   const resources = new DefaultResourceLoader({
-    cwd: directory,
+    cwd,
     agentDir: directory,
     settingsManager: settings,
     noExtensions: true,
@@ -75,15 +107,15 @@ export async function createLocalPiEvaluationSession(
   });
   await resources.reload();
   return createAgentSession({
-    cwd: directory,
+    cwd,
     agentDir: directory,
     modelRuntime,
-    model: selectedModel,
-    thinkingLevel: 'off',
+    model,
+    thinkingLevel,
     ...(tools ? { tools, customTools } : { noTools: 'all' }),
     resourceLoader: resources,
     settingsManager: settings,
-    sessionManager: SessionManager.inMemory(directory),
+    sessionManager: SessionManager.inMemory(cwd),
   });
 }
 

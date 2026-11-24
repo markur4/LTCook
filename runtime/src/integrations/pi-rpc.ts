@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EVAL_MODEL } from '../evals/setup.js';
 import { ReasoningEffortSchema, ResolvedModelSchema } from '../models/aliases.js';
 import { piThinking } from '../models/adapters.js';
+import { useCodexOpenAiAuth } from './codex-auth.js';
 import {
   REPO_SEARCH_TIMEOUT_MS,
   WORKSPACE_MCP_SERVER,
@@ -228,6 +229,7 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
     });
     if (process.env.LTCOOK_EVAL_ARM)
       guardEvaluationModelRuntime(modelRuntime, process.env.LTCOOK_EVAL_ENDPOINT);
+    else useCodexOpenAiAuth(modelRuntime);
     const paseoMcpExtension: ExtensionFactory = (pi) => {
       // > Pi validates raw configs at registration; its public type describes
       // > validated input. Keep file values unknown until that native boundary.

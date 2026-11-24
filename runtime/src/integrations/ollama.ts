@@ -12,11 +12,17 @@ export const LFM3_SUMMARIZER_MODEL = 'lfm3:1.7b-q8_0';
 
 const result = z.object({
   model: z.string().min(1),
-  message: z.object({ content: z.string() }),
+  message: z.object({ content: z.string(), thinking: z.string().optional() }),
   done: z.boolean(),
   done_reason: z.string().optional(),
   eval_count: z.number().int().nonnegative().optional().catch(undefined),
   prompt_eval_count: z.number().int().nonnegative().optional().catch(undefined),
+  prompt_eval_cached_count: z.number().int().nonnegative().optional(),
+  prompt_eval_duration: z.number().nonnegative().optional(),
+  eval_duration: z.number().nonnegative().optional(),
+  total_duration: z.number().nonnegative().optional(),
+  load_duration: z.number().nonnegative().optional(),
+  logprobs: z.array(z.object({ token: z.string() })).optional(),
 });
 export const SUMMARY_GENERATION_OPTIONS = {
   num_ctx: 32768,
@@ -61,6 +67,53 @@ const CHAT_TIMEOUT_MS = 120_000;
 type TokenUsage = { inputTokens?: number; outputTokens?: number };
 export type OllamaUsage = TokenUsage & { initialReasoningAttempt?: TokenUsage };
 
+export type OllamaChatMetrics = {
+  prefillMs?: number;
+  generationMs?: number;
+  serverTotalMs?: number;
+  loadMs?: number;
+  cachedInputTokens?: number;
+  reasoningTokens?: number;
+  thinkingPresent: boolean;
+};
+
+function chatMetrics(payload: z.infer<typeof result>): OllamaChatMetrics {
+  const { message, logprobs, eval_count } = payload;
+  const { content, thinking } = message;
+  const ms = (duration?: number) => (duration === undefined ? undefined : duration / 1e6);
+  const tokens = logprobs?.map(({ token }) => token);
+  let reasoningTokens: number | undefined;
+  if (
+    tokens &&
+    eval_count !== undefined &&
+    eval_count >= tokens.length &&
+    eval_count - tokens.length <= 1
+  ) {
+    const generated = tokens.join('');
+    if (!thinking && generated === content) reasoningTokens = 0;
+    else if (thinking) {
+      const start = generated.indexOf(thinking);
+      if (start >= 0) {
+        let position = 0;
+        reasoningTokens = tokens.filter((token) => {
+          const previous = position;
+          position += token.length;
+          return position > start && previous < start + thinking.length;
+        }).length;
+      }
+    }
+  }
+  return {
+    prefillMs: ms(payload.prompt_eval_duration),
+    generationMs: ms(payload.eval_duration),
+    serverTotalMs: ms(payload.total_duration),
+    loadMs: ms(payload.load_duration),
+    cachedInputTokens: payload.prompt_eval_cached_count,
+    reasoningTokens,
+    thinkingPresent: Boolean(thinking),
+  };
+}
+
 function tokenUsage(inputTokens?: number, outputTokens?: number): TokenUsage {
   return {
     ...(inputTokens === undefined ? {} : { inputTokens }),
@@ -97,6 +150,7 @@ export async function ollamaChat(
   signal: AbortSignal,
   onUsage?: (usage: OllamaUsage) => void,
   format?: Record<string, unknown>,
+  onMetrics?: (metrics: OllamaChatMetrics) => void,
 ) {
   const endpoint = ollamaEndpoint(settings.endpoint);
   const generation = summaryGeneration(settings);
@@ -123,6 +177,7 @@ export async function ollamaChat(
           ...generation,
           ...(settings.cpuOnly ? { options: { ...generation.options, num_gpu: 0 } } : {}),
           ...(format ? { format } : {}),
+          ...(onMetrics ? { logprobs: true } : {}),
           think,
           stream: false,
           keep_alive: settings.keepAlive,
@@ -145,6 +200,7 @@ export async function ollamaChat(
     signal.throwIfAborted();
     if (timeout.aborted) throw new Error('Ollama summarization timed out.');
     if (!payload.success) throw new Error('Ollama returned an invalid summarization response.');
+    if (onMetrics) onMetrics(chatMetrics(payload.data));
     const { model, message, done, done_reason, eval_count, prompt_eval_count } = payload.data;
     const incomplete =
       !done ||

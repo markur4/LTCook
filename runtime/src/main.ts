@@ -13,7 +13,7 @@ import { EvalRunService } from './evals/service.js';
 import { createEvalEngine } from './evals/engine.js';
 import { createPaseoMemorySource } from './integrations/paseo-memory.js';
 import { SessionMemory } from './session-memory/service.js';
-import { extractMemory } from './session-memory/extraction.js';
+import { extractMemory, memoryGeneration } from './session-memory/extraction.js';
 import { catalogModelAliases, resolveModel } from './models/aliases.js';
 const EX_TEMPFAIL = 75;
 function isListenAddressInUse(error: unknown): boolean {
@@ -311,10 +311,8 @@ async function run(): Promise<void> {
         const memorySettings = {
           ...summarization,
           model: process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || summarization.model,
-          generation: JSON.stringify({
-            think: false,
-            options: { num_ctx: 16384, num_predict: 768, temperature: 0 },
-          }),
+          cpuOnly: true,
+          generation: JSON.stringify(memoryGeneration),
         };
         memory = new SessionMemory({
           databasePath: path.join(stateDirectory, 'session-memory-v2.sqlite'),

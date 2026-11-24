@@ -68,9 +68,9 @@ commands provide launch operations and diagnostics:
 | `ltcook workspace add NAME ROOT --yes` | Optionally register a project and initialize its AppRC settings marker. |
 | `ltcook launch runtime [--workspace ROOT]` | Browser-free foreground server, or explicit project activation; reuse does not take over the owner. |
 | `ltcook launch model HARNESS @ALIAS [--reasoning EFFORT] [--workspace ROOT] [-- NATIVE_ARGS]` | Start a native Pi or Codex conversation with the resolved model alias. |
-| `ltcook auth login PROVIDER [--api-key \| --no-browser]` | Delegate interactive authentication to the installed Pi CLI and shared user credential home. |
-| `ltcook auth logout PROVIDER` | Remove that provider's credential through Pi; affects other Pi instances using the same home. |
-| `ltcook auth check [--provider PROVIDER] [--model MODEL] [--json] [--no-refresh]` | Report native Pi credential readiness without printing credentials; exit statuses are 0 ready, 1 not ready, and 2 invalid. |
+| `ltcook auth login PROVIDER [--api-key \| --no-browser]` | Use the installed Codex CLI for OpenAI sign-in and the installed Pi CLI for other providers. |
+| `ltcook auth logout PROVIDER` | Sign out the shared Codex account for OpenAI, or the shared Pi credential for another provider. |
+| `ltcook auth check [--provider PROVIDER] [--model MODEL] [--json] [--no-refresh]` | Report credential readiness without printing credentials. Exit statuses are 0 ready, 1 not ready, and 2 invalid. `--no-refresh` applies to Pi credential checks. |
 | `ltcook launch write-native-config --workspace ROOT` | Write the private Pi settings and model registration under `PI_CODING_AGENT_DIR`; the Paseo config is not written by this command. |
 | `ltcook planning start --session SESSION --design PATH --title TITLE` | Request Plan prefill/finalization for a Design. |
 | `ltcook planning show --session SESSION --plan PLAN_ID [--json]` | Read current Plan Markdown and workflow state, or raw state with `--json`. |
@@ -222,8 +222,8 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_SUMMARIZER_GENERATION` | Global `runtime.summarizer_generation`. Optional JSON object with `options` containing `num_ctx`, `num_predict`, and `temperature`. Supports optional `think`, `top_k`, and `repeat_penalty` (the latter two inside `options`). Streaming is disabled. The default Spark profile uses reasoning off, a 32,768-token context, a 512-token generation limit, and temperature 0.1. An explicit generation profile is used as supplied. A smaller context reduces the supported source byte limit. |
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
 | `LTCOOK_SESSION_MEMORY_THRESHOLD` | Global `runtime.session_memory_threshold`. Default 3,000 estimated new text tokens. Use an integer from 1 to 6,500. Set 0 to disable capture and the tool. |
-| `LTCOOK_SESSION_MEMORY_MODEL` | Global `runtime.session_memory_model`. An empty value uses `@tiny-local`. A configured value selects an already installed Ollama model for structured extraction. |
-| `LTCOOK_SESSION_MEMORY_DELEGATION` | Global `runtime.session_memory_delegation`. Set to `true` to add automatic supplemental context on Core assignments. Default `false`. The [hybrid evaluation](../evals/session-memory-hybrid-results.md) identifies the recommended opt-in model. Search and source retrieval remain available when capture is enabled. |
+| `LTCOOK_SESSION_MEMORY_MODEL` | Global `runtime.session_memory_model`. An empty value uses `@tiny-local`. A configured value selects an installed Ollama model for structured extraction on CPU with reasoning disabled. |
+| `LTCOOK_SESSION_MEMORY_DELEGATION` | Global `runtime.session_memory_delegation`. Set to `true` to add automatic supplemental context on Core assignments. Default `false`. The [CPU comparison](../evals/session-memory-budget-results.md) identifies the recommended opt-in model. Search and source retrieval remain available when capture is enabled. |
 | `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |
 | `LTCOOK_TEAM_INSTANCE_ID` | Runtime-derived identifier for the persistent TeamInstance shared by Sessions on the same selected team and canonical workspace. |
@@ -233,13 +233,14 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_MODEL_SMART` | `runtime.smart_model` sets `@smart` and `@plan`. Defaults to `openai-codex/gpt-6.2-sol`. |
 | `LTCOOK_MODEL_SMOL` | `runtime.smol_model` sets `@smol` and `@tiny`. Defaults to `openai-codex/gpt-6-luna`. |
 | `LTCOOK_MODEL_EXPENSIVE` | `runtime.expensive_model` sets `@expensive` and `@review-art`. Defaults to `openai-codex/gpt-6-astra`. |
-| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Optional provider credentials declared as secrets. Configure only the provider in use. |
+| `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Optional provider credentials declared as secrets. |
+| `OPENAI_API_KEY` | Optional AppRC secret for custom child tooling. Managed LTCook OpenAI models use the Codex sign-in. |
 | `LTCOOK_API_TOKEN` | Runtime API credential, created in AppRC secret storage during explicit setup. |
 | `LTCOOK_PASEO_PASSWORD` | Optional secret for Paseo API and WebSocket authentication; it does not protect the static web UI. Never include it in a URL. |
 | `LTCOOK_PASEO_LISTEN` | Paseo listener address; defaults to `127.0.0.1:6767`. The runtime prints the actual listener at startup. |
 | `PASEO_HOME` | Mutable Paseo data home; defaults to `<LTCOOK_DEPLOYMENT_DIR>/paseo` and must stay inside deployment but outside `<LTCOOK_DEPLOYMENT_DIR>/app`. |
 | `PI_CODING_AGENT_DIR` | Workspace-specific Pi home; defaults to `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` and must remain within the deployment. |
-| `LTCOOK_PI_AUTH_DIR` | Global `runtime.pi_auth_dir`; defaults to native Pi's `~/.pi/agent`. All project SDK runtimes share its `auth.json`; project overrides do not change this auth location. |
+| `LTCOOK_PI_AUTH_DIR` | Global `runtime.pi_auth_dir`. Defaults to native Pi's `~/.pi/agent` for shared credentials for providers other than OpenAI. |
 | `LTCOOK_SEARXNG_URL` | SearXNG endpoint; its declared default is `http://127.0.0.1:8888`. |
 | `LTCOOK_CRAWL4AI_URL` | Crawl4AI endpoint; defaults to `http://127.0.0.1:11235`. |
 | `CRAWL4AI_API_TOKEN`, `SEARXNG_SECRET` | Credentials passed to the Compose services and marked secret. |
@@ -283,7 +284,7 @@ not encryption of the AppRC-managed files.
 | `<LTCOOK_DEPLOYMENT_DIR>/paseo/config.json` | Paseo configuration written by the Node host; the home also holds mutable Paseo data. |
 | `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` | Workspace-specific Pi home; `write-native-config` writes its private `web-search.json`. |
 | `<PI_CODING_AGENT_DIR>/settings.json.ltcook-extensions.json` | Versioned exact ownership of LTCook-managed extension paths; independent extensions remain in `settings.json`. |
-| `<LTCOOK_PI_AUTH_DIR>/auth.json` | Shared Pi-managed API keys/OAuth credentials; native login/logout and all LTCook project SDK runtimes use this file without copying it. |
+| `<LTCOOK_PI_AUTH_DIR>/auth.json` | Shared Pi-managed API keys and OAuth credentials for providers other than OpenAI. |
 | `<LTCOOK_DEPLOYMENT_DIR>/logs/backend.log` | Private append-only captured runtime stdout/stderr, followed alongside telemetry and Paseo daemon output by bare `ltcook`. |
 
 `resolve_launch()` uses AppRC `current_env_mapping()` for each section and

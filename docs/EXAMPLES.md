@@ -53,17 +53,14 @@ for session identity and workspace constraints.
 
 # Authenticate with Pi
 
-Use the installed native Pi login without configuring OAuth in AppRC:
+Reuse your Codex CLI account sign-in for Pi and LTCook's hosted OpenAI calls:
 
 ```shell
-ltcook auth login openai
-ltcook auth check --provider openai --json --no-refresh
+ltcook auth check --provider openai-codex --json
 ```
 
-For an API key rather than account sign-in, use
-`ltcook auth login openai --api-key`. For headless account sign-in, use
-`--no-browser`. Credentials are shared through `runtime.pi_auth_dir`, normally
-`~/.pi/agent`; project Pi settings and histories remain isolated.
+Use `ltcook auth login openai-codex` only if Codex needs a sign-in.
+For OpenAI Platform API key mode, use `ltcook auth login openai --api-key`.
 See [Pi authentication](How-To-User-Guides.md#authenticate-with-pi).
 
 <br>

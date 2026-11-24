@@ -3,10 +3,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  estimateMemoryTokens,
   mergeMemoryEntries,
   parseMemorySelections,
   preservePromptMessages,
   memoryEntriesSchema,
+  renderMemoryHandoff,
+  selectMemoryContext,
   type MemoryEntry,
   type MemoryMessage,
 } from '../../../runtime/src/session-memory/extraction.js';
@@ -52,6 +55,94 @@ test('the runtime preserves exact user messages and derives the authors of order
       additions: [{ kind: 'finding', excerpt: 1, text: 'Invented claim' }],
     }),
   ).toThrow('invalid shape');
+  const excerptsWithinBudget = Array.from({ length: 20 }, (_, index) => ({
+    excerpt: index + 1,
+    ...finding,
+    text: `Check ${index} passed.`,
+    author: 'agent' as const,
+  }));
+  expect(
+    parseMemorySelections(excerptsWithinBudget, {
+      additions: excerptsWithinBudget.map(({ excerpt }) => ({ kind: 'progress', excerpt })),
+    }),
+  ).toHaveLength(20);
+});
+
+test('packs short relevant evidence and keeps the newest user correction within the handoff budget', () => {
+  const entries = Array.from({ length: 40 }, (_, index): MemoryEntry => ({
+    kind: 'progress',
+    author: 'agent',
+    seq: index + 2,
+    text: `Cobalt check ${index} passed.`,
+  }));
+  const latest = { ...correction, seq: 42, text: correction.text + ' 🧪'.repeat(2000) };
+  const context = selectMemoryContext([original!, ...entries], [latest], 'cobalt', false);
+  const output = renderMemoryHandoff(context);
+  expect(context.entries.length).toBeGreaterThan(6);
+  expect(output).toContain(correction.text);
+  expect(context.incomplete).toBe(true);
+  expect(estimateMemoryTokens(output)).toBeLessThan(1250);
+});
+
+test('searches older source text omitted by extraction and returns a full cited message', async () => {
+  const source = { ...finding, seq: 1, text: 'Unrelated filler. '.repeat(900) + 'ArchiveSentinel' };
+  const newest = { ...correction, seq: 49 };
+  const runtime = { ...issue, seq: 2, author: 'runtime' as const, text: 'ArchiveSentinel' };
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: {
+      async read(_id, cursor, direction) {
+        return direction === 'tail'
+          ? {
+              epoch: 'fixture',
+              earliest: 1,
+              start: 3,
+              latest: 49,
+              through: 49,
+              reset: false,
+              messages: [newest],
+            }
+          : {
+              epoch: 'fixture',
+              earliest: 1,
+              start: 1,
+              latest: 49,
+              through: 2,
+              reset: false,
+              messages: [source, runtime].filter(({ seq }) => seq < cursor!.seq),
+            };
+      },
+    },
+    peers(id) {
+      return id === 'reader' ? ['leader'] : [];
+    },
+    async extract() {
+      throw new Error('Searching should never invoke inference.');
+    },
+  });
+  try {
+    const result = await memory.search('reader', '', 'ArchiveSentinel', 'leader');
+    expect(result.matches).toMatchObject([
+      {
+        agentId: 'leader',
+        epoch: 'fixture',
+        entries: [{ kind: 'original-message', seq: 1, truncated: true }],
+      },
+    ]);
+    expect(result.matches[0]?.entries).toHaveLength(1);
+    expect(result.matches[0]?.entries[0]?.text).toContain('ArchiveSentinel');
+    const reference = { agentId: 'leader', epoch: 'fixture', seq: 1 };
+    expect(await memory.sourceMessage('reader', '', reference)).toEqual({
+      ...reference,
+      ...source,
+    });
+    expect(await memory.sourceMessage('reader', '', { ...reference, seq: 2 })).toBeUndefined();
+    await expect(memory.search('outsider', '', 'ArchiveSentinel', 'leader')).rejects.toThrow(
+      'access denied',
+    );
+  } finally {
+    await memory.close();
+  }
 });
 
 test('a handoff retains a pending correction behind a tool-heavy timeline tail', async () => {
@@ -287,7 +378,12 @@ test('coalesces updates, shares only authorized context, and recovers from a fai
         {
           agentId: 'leader',
           epoch,
-          entries: [revision, { kind: 'finding', ...finding }, original],
+          entries: [
+            { kind: 'original-message', ...issue },
+            revision,
+            { kind: 'finding', ...finding },
+            original,
+          ],
         },
       ],
     });

@@ -260,6 +260,13 @@ Audit and full summarization qualification.
 When the categories run together, semantic audit uses the prompt already
 captured during Behavior Evaluation rather than launching another agent task.
 
+For Bonsai-backed Agent Evals, use GPT-6 Luna at high reasoning on hosts with
+no usable GPU or when Bonsai exhausts its safeguard. Use the authorized hosted
+provider for the evaluation and report the model and reasoning level. Restart
+matched comparisons with the fallback for every arm so model changes cannot
+be confused with differences in the input. Explicitly local candidate
+comparisons keep their assigned models and inference settings.
+
 ### Summarization qualification
 
 The core evaluates fixed, focus-specific facts for status, negation, migration
@@ -343,20 +350,33 @@ Run `bun evals/session-memory-live.ts` to compare hybrid extraction on
 the fixed workflow corpus. The runner uses native Pi with relevant original
 source as the downstream control and grades extraction omissions,
 contradictions, attribution, categorization and invalid output separately.
-It records model digests, CPU residency, request latency, throughput and Pi
-input-token changes. The first argument selects the downstream Pi model.
-The second selects one candidate tag or `remaining` to compare the other
-models after Qwen. The third selects an estimated token threshold. An optional
-`--cadence` as the final argument selects the longer workflow without forced
-task-boundary updates. See the
-[hybrid qualification](../evals/session-memory-hybrid-results.md) and the
+It records model digests, reasoning token evidence, prefill and generation time,
+end-to-end request latency, CPU residency, available process peak RSS and Pi
+input-token changes. Positional arguments select the downstream Pi model,
+extractor tag, and estimated token threshold. Pass `--extract-only` to run
+the CPU extractor comparison without the Pi handoffs. Use `--include-cadence`
+to add the long transcript or `--cadence` to run it alone. Add `--task-aware`
+to test a task-focus prompt with the same input, model and batch settings.
+
+Run `bun evals/session-memory-edit-live.ts` with optional extractor and worker
+model tags to compare conventional delegation, deterministic conversation search,
+and hybrid context on repository edits. Pass `gpt-6-luna` as the worker to use
+the high-reasoning fallback in Pi through the existing Codex sign-in.
+Each Pi worker edits its own
+copy of the same files from a pinned LTCook commit. The runner checks the edits
+against the latest confirmed decisions and records tool calls and usage. See the
+[CPU and edit comparison](../evals/session-memory-budget-results.md), the
+[hybrid qualification](../evals/session-memory-hybrid-results.md), and the
 [initial qualification](../evals/session-memory-results.md).
 
 The runtime stores original prompts, derived additions and the Paseo timeline
 checkpoint in `session-memory-v2.sqlite` under runtime state. It rebuilds
-from Paseo history with the new format. A changed history epoch invalidates
-the previous citations. A reconstructed prompt with no submission identifier
-remains searchable as `unattributed-prompt` with `author: unknown`. It stays
+from Paseo history. Search reads original conversation pages from Paseo on
+demand. The search response and automatic handoff use estimated token budgets,
+and citations retain the agent, epoch and sequence of the full source. A changed
+history epoch invalidates the previous citations. A reconstructed prompt with no
+submission identifier remains searchable as `unattributed-prompt` with
+`author: unknown`. It stays
 outside the confirmed user section of delegation context and outside model
 extraction. Existing TeamInstances and Core bindings
 determine shared read access. The checkout's native Pi and Paseo system test

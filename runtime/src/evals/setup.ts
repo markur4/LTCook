@@ -7,6 +7,7 @@ import type { EvalEnvironmentOverrides, EvalSetup } from './contracts.js';
 import type { OllamaSettings } from '../integrations/ollama.js';
 
 export const EVAL_MODEL = 'ltcook-bonsai-2-27b-ctx65536:latest';
+export const LUNA_EVALUATION = { model: 'gpt-6-luna', reasoning: 'high' } as const;
 export const EVAL_CONTEXT_WINDOW = 65536;
 export const FIXTURE_REVISION = 'agent-evals-v6';
 export const EVAL_COMPACTION = { enabled: true, reserveTokens: 4096, keepRecentTokens: 1024 };

@@ -73,6 +73,8 @@ const provider = createHttpServer(async (request, response) => {
     const toolResult = input.messages.slice(userIndex + 1).findLast(({ role }) => role === 'tool');
     if (readsMemory && toolResult) {
       assert.match(toolResult.content, /Keep the cobalt fixture unchanged/);
+      assert.match(toolResult.content, /First-turn coordination succeeded/);
+      assert.match(toolResult.content, /original-message/);
       peerMemoryRead = true;
     } else if (toolResult) {
       const value = JSON.parse(toolResult.content) as { value: Array<{ id: string }> };
@@ -100,7 +102,7 @@ const provider = createHttpServer(async (request, response) => {
               name: readsMemory ? 'session-memory' : 'ltcook_team',
               arguments: JSON.stringify(
                 readsMemory
-                  ? { agentId: leaderId, query: 'cobalt fixture' }
+                  ? { agentId: leaderId, query: 'cobalt fixture coordination succeeded' }
                   : { command: { type: 'guidance.inspect' } },
               ),
             },

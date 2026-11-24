@@ -49,13 +49,14 @@ export function createPaseoMemorySource(api: PaseoApi, secret?: string): MemoryS
         direction,
         projection: 'canonical',
         cursor,
-        limit: direction === 'before' ? 4 : 48,
+        limit: 48,
       });
       if (page.error || !page.agent) throw new Error('Session Memory history is unavailable.');
       return {
         epoch: page.epoch,
         latest: page.window.minSeq === 0 ? -1 : page.window.maxSeq,
         start: page.startCursor?.seq,
+        earliest: page.window.minSeq,
         through: page.endCursor?.seq ?? cursor?.seq ?? -1,
         reset: page.reset || page.staleCursor || page.gap,
         messages: readMessages(agentId, secret, page.entries),
@@ -79,14 +80,14 @@ function readMessages(
             {
               seq: seqEnd,
               author: promptAuthor(item.clientMessageId, agentId, secret),
-              text: item.text.slice(0, 12000),
+              text: item.text,
             },
           ];
         case 'assistant_message':
-          return [{ seq: seqEnd, author: 'agent', text: item.text.slice(0, 12000) }];
+          return [{ seq: seqEnd, author: 'agent', text: item.text }];
         case 'tool_call': {
           if (item.agentMessage?.event === 'message')
-            return [{ seq: seqEnd, author: 'agent', text: item.agentMessage.text.slice(0, 12000) }];
+            return [{ seq: seqEnd, author: 'agent', text: item.agentMessage.text }];
           const result = toolOutcome(item);
           return result ? [{ seq: seqEnd, author: 'tool', text: result }] : [];
         }

@@ -9,6 +9,8 @@ const { summarization } = resolveEvaluationContext({
   teamSelection: process.env.LTCOOK_TEAM ?? 'default-minimal',
 });
 if (!summarization) throw new Error('AppRC summarizer settings are unavailable.');
+const args = process.argv.slice(2);
+const [worker, model, threshold] = args.filter((arg) => !arg.startsWith('--'));
 
 const controller = new AbortController();
 const cancel = () => controller.abort();
@@ -18,12 +20,15 @@ try {
   const report = await runSessionMemoryEvaluation(
     summarization,
     controller.signal,
-    process.argv[2],
+    worker,
     (event) => console.error(event),
     {
-      model: process.argv[3],
-      threshold: process.argv[4] ? Number(process.argv[4]) : undefined,
-      cadence: process.argv.includes('--cadence'),
+      model,
+      threshold: threshold === undefined ? undefined : Number(threshold),
+      cadence: args.includes('--cadence'),
+      includeCadence: args.includes('--include-cadence'),
+      extractOnly: args.includes('--extract-only'),
+      taskAware: args.includes('--task-aware'),
     },
   );
   console.log(JSON.stringify(report, null, 2));

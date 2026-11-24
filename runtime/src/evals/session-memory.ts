@@ -1,11 +1,17 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { cpus, platform, tmpdir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { ollamaEndpoint, type OllamaSettings, type OllamaUsage } from '../integrations/ollama.js';
+import {
+  ollamaEndpoint,
+  type OllamaChatMetrics,
+  type OllamaSettings,
+  type OllamaUsage,
+} from '../integrations/ollama.js';
 import {
   estimateMemoryTokens,
   extractMemory,
+  memoryGeneration,
   MemoryOutputError,
   mergeMemoryEntries,
   preservePromptMessages,
@@ -24,15 +30,11 @@ import {
 import { inspectEvaluationModel, listEvaluationModels, modelTag } from './summarization-grader.js';
 
 const models = [
-  'qwen3.5:0.8b-q8_0',
-  'hf.co/LiquidAI/LFM2.5-350M-GGUF:Q8_0',
   'LiquidAI/lfm2.5-1.2b-instruct:q8_0',
-  'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
+  'lfm3:1.7b-q8_0',
+  'lfm3:1.7b-qad-q4_0',
 ] as const;
-const generation = {
-  think: false,
-  options: { num_ctx: 16384, num_predict: 768, temperature: 0 },
-};
+const generation = memoryGeneration;
 const qualification = {
   criticalFacts:
     'Every scheduled update must retain expected critical facts with correct source attribution and no fixture contradiction.',
@@ -66,6 +68,28 @@ async function residency(endpoint: URL, digest: string, signal: AbortSignal) {
   const { models } = runningModelSchema.parse(await response.json());
   const loaded = models.find((model) => model.digest === digest);
   return loaded ? { bytes: loaded.size, gpuBytes: loaded.size_vram } : null;
+}
+
+async function peakRunnerRss(weightsDigest?: string) {
+  if (!weightsDigest || platform() !== 'linux') return undefined;
+  const blob = `sha256-${weightsDigest.replace(/^sha256:/, '')}`;
+  const processes = await readdir('/proc').catch(() => []);
+  const samples = await Promise.all(
+    processes
+      .filter((pid) => /^\d+$/.test(pid))
+      .map(async (pid) => {
+        const directory = `/proc/${pid}`;
+        try {
+          const args = (await readFile(`${directory}/cmdline`, 'utf8')).split('\0');
+          if (path.basename(args[args.indexOf('--model') + 1] ?? '') !== blob) return 0;
+          const status = await readFile(`${directory}/status`, 'utf8');
+          return Number(/^VmHWM:\s+(\d+)/m.exec(status)?.[1] ?? 0) * 1024;
+        } catch {
+          return 0;
+        }
+      }),
+  );
+  return Math.max(0, ...samples) || undefined;
 }
 
 function gradeMemory(
@@ -123,7 +147,7 @@ function gradeMemory(
   };
 }
 
-async function runFixture(input: {
+export async function evaluateMemoryFixture(input: {
   fixture: MemoryFixture;
   settings: OllamaSettings;
   digest: string;
@@ -131,6 +155,10 @@ async function runFixture(input: {
   downstreamModel: string;
   directory: string;
   signal: AbortSignal;
+  extractOnly?: boolean;
+  weightsDigest?: string;
+  taskAware?: boolean;
+  finalize?: boolean;
 }) {
   const { fixture, settings, digest, threshold, downstreamModel, directory, signal } = input;
   const endpoint = ollamaEndpoint(settings.endpoint);
@@ -149,6 +177,7 @@ async function runFixture(input: {
     const pending = seen.slice(processed);
     entries = mergeMemoryEntries(entries, preservePromptMessages(pending));
     let usage: OllamaUsage | undefined;
+    let metrics: OllamaChatMetrics | undefined;
     let error: string | undefined;
     let output: 'valid' | 'invalid' | 'unavailable' | 'skipped' = 'skipped';
     const attempted = pending.some(({ author }) => author === 'agent' || author === 'tool');
@@ -156,8 +185,14 @@ async function runFixture(input: {
     const start = performance.now();
     try {
       if (attempted) {
-        const additions = await extractMemory(settings, pending, signal, (value) => {
-          usage = value;
+        const additions = await extractMemory(settings, pending, signal, {
+          focus: input.taskAware ? fixture.focus : undefined,
+          onUsage(value) {
+            usage = value;
+          },
+          onMetrics(value) {
+            metrics = value;
+          },
         });
         entries = mergeMemoryEntries(entries, additions);
         output = 'valid';
@@ -178,9 +213,11 @@ async function runFixture(input: {
       residencyBefore: !attempted ? undefined : before ? 'loaded' : 'unloaded',
       elapsedMs: Math.round(elapsedMs),
       usage,
+      metrics,
       outputTokensPerSecond:
         usage?.outputTokens === undefined ? undefined : (usage.outputTokens * 1000) / elapsedMs,
       loadedBytes: after?.bytes,
+      peakRunnerRssBytes: attempted ? await peakRunnerRss(input.weightsDigest) : undefined,
       gpuBytes: after?.gpuBytes,
       cpuVerified: after?.gpuBytes === 0,
       output,
@@ -219,21 +256,23 @@ async function runFixture(input: {
     earlierUserSources: selectedUserSources.filter((seq) => seq <= (seen[processed - 1]?.seq ?? 0)),
     potentiallyIncomplete: context.incomplete,
   };
-  const finalUpdate = await update();
-  attempts.push(finalUpdate);
-  const downstream = await evaluateMemoryHandoff({
-    context: handoff,
-    endpoint: settings.endpoint,
-    model: downstreamModel,
-    directory,
-    signal,
-    task: fixture.task,
-  });
+  if (input.finalize !== false) attempts.push(await update());
+  const downstream = input.extractOnly
+    ? undefined
+    : await evaluateMemoryHandoff({
+        context: handoff,
+        endpoint: settings.endpoint,
+        model: downstreamModel,
+        directory,
+        signal,
+        task: fixture.task,
+      });
   return {
     fixture: fixture.id,
     attempts,
     freshness,
     downstream,
+    handoff,
     finalMemory: entries,
     passed:
       attempts.every(
@@ -242,7 +281,7 @@ async function runFixture(input: {
       ) &&
       freshness.correctionIncluded &&
       freshness.earlierUserSources.length > 0 &&
-      downstream.passed,
+      (downstream?.passed ?? true),
   };
 }
 
@@ -251,14 +290,25 @@ export async function runSessionMemoryEvaluation(
   signal: AbortSignal,
   downstreamModel = EVAL_MODEL,
   onProgress?: (event: string) => void,
-  selection?: { model?: string; threshold?: number; cadence?: boolean },
+  selection?: {
+    model?: string;
+    threshold?: number;
+    cadence?: boolean;
+    includeCadence?: boolean;
+    extractOnly?: boolean;
+    taskAware?: boolean;
+  },
 ) {
   const selectedModels = models.filter((model) => {
     if (selection?.model === 'remaining') return model !== models[0];
     return !selection?.model || modelTag(model) === modelTag(selection.model);
   });
   const threshold = selection?.threshold ?? 3000;
-  const fixtures = selection?.cadence ? [memoryCadenceFixture()] : memoryFixtures;
+  const fixtures = selection?.cadence
+    ? [memoryCadenceFixture()]
+    : selection?.includeCadence
+      ? [...memoryFixtures, memoryCadenceFixture()]
+      : memoryFixtures;
   if (!selectedModels.length || !Number.isInteger(threshold) || threshold < 1 || threshold > 6500)
     throw new Error(
       'Choose a Session Memory candidate or remaining, and optional cadence from 1 to 6500.',
@@ -271,11 +321,12 @@ export async function runSessionMemoryEvaluation(
       const model = catalog.find((entry) => modelTag(entry.name) === modelTag(name));
       return model ? inspectEvaluationModel(settings.endpoint, model, signal) : undefined;
     };
-    const downstreamIdentity = await inspect(downstreamModel);
-    if (!downstreamIdentity) throw new Error('The downstream Pi evaluation model is unavailable.');
+    const downstreamIdentity = selection?.extractOnly ? undefined : await inspect(downstreamModel);
+    if (!downstreamIdentity && !selection?.extractOnly)
+      throw new Error('The downstream Pi evaluation model is unavailable.');
 
     const baseline = [];
-    for (const fixture of fixtures) {
+    for (const fixture of downstreamIdentity ? fixtures : []) {
       const sources = fixture.turns
         .flat()
         .filter(({ seq }) => fixture.originalSources.includes(seq));
@@ -283,7 +334,7 @@ export async function runSessionMemoryEvaluation(
       const result = await evaluateMemoryHandoff({
         context: JSON.stringify(sources),
         endpoint: settings.endpoint,
-        model: downstreamIdentity.name,
+        model: downstreamIdentity!.name,
         directory: path.join(directory, 'original', fixture.id),
         signal,
         task: fixture.task,
@@ -301,7 +352,7 @@ export async function runSessionMemoryEvaluation(
       for (const fixture of fixtures) {
         onProgress?.(`Evaluating ${requestedModel} on ${fixture.id}`);
         try {
-          const result = await runFixture({
+          const result = await evaluateMemoryFixture({
             fixture,
             settings: {
               ...settings,
@@ -311,14 +362,17 @@ export async function runSessionMemoryEvaluation(
               generation: JSON.stringify(generation),
             },
             digest: identity.digest,
+            weightsDigest: identity.weightsDigest,
             threshold,
-            downstreamModel: downstreamIdentity.name,
+            downstreamModel: downstreamIdentity?.name ?? downstreamModel,
             directory: path.join(directory, String(candidates.length), fixture.id),
             signal,
+            extractOnly: selection?.extractOnly,
+            taskAware: selection?.taskAware,
           });
           const original = baseline.find(({ fixture: id }) => id === fixture.id);
           const originalInput = original?.inputTokens;
-          const hybridInput = result.downstream.inputTokens;
+          const hybridInput = result.downstream?.inputTokens;
           const contextReduction =
             originalInput && hybridInput !== undefined
               ? {
@@ -329,7 +383,7 @@ export async function runSessionMemoryEvaluation(
           scenarios.push({
             ...result,
             contextReduction,
-            passed: result.passed && original?.passed === true,
+            passed: result.passed && (selection?.extractOnly || original?.passed === true),
           });
         } catch (error) {
           signal.throwIfAborted();
@@ -344,7 +398,7 @@ export async function runSessionMemoryEvaluation(
     }
     const after = await listEvaluationModels(settings.endpoint, signal);
     const identities = [
-      downstreamIdentity,
+      ...(downstreamIdentity ? [downstreamIdentity] : []),
       ...candidates.flatMap(({ identity }) => (identity ? [identity] : [])),
     ];
     const identityUnchanged = identities.every((model) =>
@@ -361,6 +415,7 @@ export async function runSessionMemoryEvaluation(
       platform: platform(),
       cpu: { model: cpus()[0]?.model, logicalCount: cpus().length },
       generation,
+      taskAware: selection?.taskAware ?? false,
       qualification,
       identityUnchanged,
       downstreamIdentity,

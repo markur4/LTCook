@@ -4,6 +4,11 @@ import type { ExtensionFactory, ModelRuntime } from '@earendil-works/pi-coding-a
 import { modelCommand, piThinking } from './adapters.js';
 import { resolveModel, type ResolvedModel } from './aliases.js';
 import { agentEnvironment } from '../integrations/native-policy.js';
+import {
+  codexBackedTerminalProvider,
+  codexEnvironment,
+  isOpenAiProvider,
+} from '../integrations/codex-auth.js';
 
 function validateNativeArgs(harness: 'pi' | 'codex', args: string[]): void {
   const options =
@@ -46,7 +51,7 @@ async function registeredPiModel(
   selection: ResolvedModel,
   authDir: string,
   runtime: typeof ModelRuntime,
-): Promise<ExtensionFactory[]> {
+): Promise<{ providerId: string; extensionFactories: ExtensionFactory[] }> {
   const authPath = path.join(authDir, 'auth.json');
   const nativePath = path.join(authDir, 'models.json');
   const modelsPath = process.env.LTCOOK_PI_MODELS_PATH || nativePath;
@@ -77,9 +82,17 @@ async function registeredPiModel(
 
   // > Pi normalizes models.json into complete native models and their provider auth.
   const provider = catalog.getProvider(selection.provider);
-  return preparedModel && modelsPath !== nativePath && provider
-    ? [(pi) => pi.registerProvider(provider)]
-    : [];
+  if (isOpenAiProvider(selection.provider) && provider) {
+    const backed = codexBackedTerminalProvider(provider, model);
+    return { providerId: backed.id, extensionFactories: [(pi) => pi.registerProvider(backed)] };
+  }
+  return {
+    providerId: selection.provider,
+    extensionFactories:
+      preparedModel && modelsPath !== nativePath && provider
+        ? [(pi) => pi.registerProvider(provider)]
+        : [],
+  };
 }
 
 export async function launchModel(argv: string[]): Promise<void> {
@@ -90,24 +103,35 @@ export async function launchModel(argv: string[]): Promise<void> {
     );
   validateNativeArgs(harness, nativeArgs);
   const selection = resolveModel(alias, process.env, { sessionReasoning: reasoning || undefined });
-  const command = modelCommand(harness, selection, process.env);
   const safeEnv = agentEnvironment(
     Object.fromEntries(
       Object.entries(process.env).filter((item): item is [string, string] => item[1] !== undefined),
     ),
   );
   if (harness === 'pi') {
+    if (
+      isOpenAiProvider(selection.provider) &&
+      nativeArgs.some((arg) => arg.split('=', 1)[0] === '--api-key')
+    ) {
+      throw new Error('LTCook uses the centralized Codex sign-in for OpenAI models.');
+    }
     const authDir = process.env.LTCOOK_PI_AUTH_DIR;
     if (!authDir || !path.isAbsolute(authDir))
       throw new Error('AppRC did not resolve the shared Pi authentication directory.');
     Object.assign(process.env, safeEnv, { PI_CODING_AGENT_DIR: authDir });
     const { main, ModelRuntime } = await import('@earendil-works/pi-coding-agent');
-    const extensionFactories = await registeredPiModel(selection, authDir, ModelRuntime);
+    const { providerId, extensionFactories } = await registeredPiModel(
+      selection,
+      authDir,
+      ModelRuntime,
+    );
+    const command = modelCommand(harness, { ...selection, provider: providerId }, process.env);
     await main([...command.args, ...nativeArgs], { extensionFactories });
     return;
   }
+  const command = modelCommand(harness, selection, process.env);
   const child = spawn(command.command, [...command.args, ...nativeArgs], {
-    env: { ...safeEnv, ...command.env },
+    env: { ...codexEnvironment(safeEnv), ...command.env },
     stdio: 'inherit',
     windowsHide: true,
   });

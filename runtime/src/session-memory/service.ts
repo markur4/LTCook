@@ -1,6 +1,7 @@
 import { chmodSync } from 'node:fs';
 import Database from 'libsql';
 import {
+  budgetMemoryText,
   estimateMemoryTokens,
   memoryEntriesSchema,
   mergeMemoryEntries,
@@ -17,6 +18,7 @@ export type MemoryPage = {
   epoch: string;
   latest: number;
   start?: number;
+  earliest?: number;
   through: number;
   reset: boolean;
   messages: MemoryMessage[];
@@ -50,6 +52,25 @@ function latestSequence(state: MemoryState): number {
 
 const maxBatchTokens = 6500;
 const maxBatchPages = 8;
+const searchTokens = 2200;
+type SearchEntry = Omit<MemoryMessage, 'author'> & {
+  author: Exclude<MemoryMessage['author'], 'runtime'>;
+  kind: MemoryEntry['kind'] | 'original-message';
+  truncated?: true;
+};
+type SearchHit = SearchEntry & { agentId: string; epoch: string; score: number };
+
+function compareHits(a: SearchHit, b: SearchHit): number {
+  return b.score - a.score || b.seq - a.seq;
+}
+
+function searchEntry({ agentId: _id, epoch: _epoch, score: _score, ...entry }: SearchHit) {
+  return entry;
+}
+
+function searchCost({ score: _score, ...entry }: SearchHit): number {
+  return estimateMemoryTokens(JSON.stringify(entry) + ',');
+}
 
 export class SessionMemory {
   private readonly database: Database.Database;
@@ -257,39 +278,88 @@ export class SessionMemory {
     return renderMemoryHandoff({ ...context, agentId, epoch: tail.epoch });
   }
 
-  async search(agentId: string, workspaceRoot: string, query = '', target?: string) {
+  private async searchConversation(id: string, query: string, signal: AbortSignal) {
+    const { state, tail } = await this.current(id);
+    let incomplete = !state || state.seq < tail.latest || tail.reset;
+    let hits: SearchHit[] = [];
+    const add = (entry: SearchEntry) => {
+      const score = memoryRelevance(entry.text, query);
+      if (query && !score) return;
+      hits.push({ ...entry, agentId: id, epoch: tail.epoch, score });
+    };
+    const entries = state?.entries ?? [];
+    const stored = new Map<number, Set<string>>();
+    for (const entry of entries) {
+      add(entry);
+      const texts = stored.get(entry.seq) ?? new Set();
+      texts.add(entry.text);
+      stored.set(entry.seq, texts);
+    }
+    let page = tail;
+    while (true) {
+      signal.throwIfAborted();
+      for (const message of page.messages) {
+        if (message.author === 'runtime' || stored.get(message.seq)?.has(message.text)) continue;
+        add(
+          preservePromptMessages([message])[0] ?? {
+            ...message,
+            kind: 'original-message',
+            author: message.author,
+          },
+        );
+      }
+      const budgeted = budgetMemoryText(hits.sort(compareHits), searchTokens, query, searchCost);
+      hits = budgeted.selected;
+      incomplete ||= budgeted.incomplete;
+      if (page.start === undefined || page.start <= (page.earliest ?? 1)) break;
+      const previous = await this.options.source.read(
+        id,
+        { epoch: tail.epoch, seq: page.start },
+        'before',
+      );
+      if (previous.epoch !== tail.epoch || previous.latest < tail.latest) {
+        return { hits: [], incomplete: true };
+      }
+      if (previous.reset || previous.start === undefined || previous.start >= page.start) {
+        incomplete = true;
+        break;
+      }
+      page = previous;
+    }
+    return { hits, incomplete };
+  }
+
+  async search(
+    agentId: string,
+    workspaceRoot: string,
+    query = '',
+    target?: string,
+    signal = this.abort.signal,
+  ) {
     const peers = new Set([agentId, ...(this.options.peers?.(agentId, workspaceRoot) ?? [])]);
     if (target && !peers.has(target)) throw new Error('Session Memory access denied.');
     const results = await Promise.all(
       [...(target ? [target] : peers)].map(async (id) => {
         try {
-          const { state, tail } = await this.current(id);
-          const entries = (state?.entries ?? [])
-            .map((entry) => ({ entry, score: memoryRelevance(entry.text, query) }))
-            .filter(({ score }) => !query || score)
-            .sort((a, b) => b.score - a.score || b.entry.seq - a.entry.seq);
-          return {
-            incomplete: !state || state.seq < tail.latest || entries.length > 12,
-            match: entries.length
-              ? {
-                  agentId: id,
-                  epoch: tail.epoch,
-                  entries: entries.slice(0, 12).map(({ entry }) => entry),
-                }
-              : undefined,
-            score: entries[0]?.score ?? 0,
-          };
+          return await this.searchConversation(id, query.trim(), signal);
         } catch {
-          return { incomplete: true, match: undefined, score: 0 };
+          signal.throwIfAborted();
+          return { incomplete: true, hits: [] };
         }
       }),
     );
-    const matches = results
-      .sort((a, b) => b.score - a.score)
-      .flatMap(({ match }) => (match ? [match] : []));
+    const ranked = results.flatMap(({ hits }) => hits).sort(compareHits);
+    const { selected, incomplete } = budgetMemoryText(ranked, searchTokens, query, searchCost);
+    const matches = new Map<string, { agentId: string; epoch: string; entries: SearchEntry[] }>();
+    for (const hit of selected) {
+      const { agentId, epoch } = hit;
+      const match = matches.get(agentId) ?? { agentId, epoch, entries: [] };
+      match.entries.push(searchEntry(hit));
+      matches.set(agentId, match);
+    }
     return {
-      incomplete: results.some(({ incomplete }) => incomplete) || matches.length > 8,
-      matches: matches.slice(0, 8),
+      incomplete: incomplete || results.some(({ incomplete }) => incomplete),
+      matches: [...matches.values()],
     };
   }
 
@@ -309,7 +379,8 @@ export class SessionMemory {
       'before',
     );
     const message = page.messages.find(({ seq }) => seq === reference.seq);
-    if (page.reset || page.epoch !== reference.epoch || !message) return undefined;
+    if (page.reset || page.epoch !== reference.epoch || !message || message.author === 'runtime')
+      return undefined;
     return { ...reference, ...message };
   }
 
