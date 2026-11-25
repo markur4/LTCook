@@ -804,14 +804,37 @@ try {
   await browser('screenshot', path.join(directory, 'activity-explorer-dark.png'));
   await browser('set', 'media', 'light');
   await inspectStage('native-activity-tools-and-skills');
-  await browser('set', 'viewport', '1440', '1000');
 
+  await browser(
+    'wait',
+    '--fn',
+    `(() => {
+      const row = document.querySelector('[aria-label^="Adjutant,"]');
+      return row && row.getAttribute('aria-expanded') !== 'true';
+    })()`,
+  );
+  await browser('wait', '[aria-label="Open Adjutant conversation"]');
+  assert.equal(
+    (await browser('get', 'text', '[aria-label="Open Adjutant conversation"]')).trim(),
+    'Open',
+  );
   await clickButton('Open Adjutant conversation');
   await waitForComposer('Adjutant');
+  await browser('set', 'viewport', '1440', '1000');
   await browser(
     'wait',
     '--fn',
     `Boolean(document.querySelector('[aria-label="Adjutant"][aria-selected="true"]'))`,
+  );
+  assert.equal(
+    (
+      await browser(
+        'eval',
+        `document.querySelectorAll('[aria-label="Adjutant"][aria-selected]').length`,
+      )
+    ).trim(),
+    '1',
+    'Open reuses the Adjutant tab opened earlier',
   );
   await clickButton(`Back to ${mobileLeader.agent.title}`);
   await waitForComposer(mobileLeader.agent.title);
