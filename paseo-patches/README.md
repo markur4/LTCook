@@ -18,6 +18,11 @@ belongs to a tool group, the call appears as an individual row at its position i
 the transcript. The action resolves after that row comes into view. A replaced
 timeline, unavailable host, or missing event rejects the action with an error.
 
+`session-worktrees.patch` updates **Changes** using the focused conversation's
+worktree subscription from LTCook. The **Worktree** picker lets the user pin a
+checkout or resume following. When the panel shows a linked checkout, the inline
+diff uses its directory and provides read-only controls.
+
 ## Build the web assets
 
 Run the builder from the LTCook repository with Node, npm, curl, tar, Git, and
@@ -27,12 +32,12 @@ network access to GitHub and the npm registry.
 node paseo-patches/build.mjs
 ```
 
-The builder verifies the pinned source archive's SHA-256 and applies the patch
+The builder verifies the pinned source archive's SHA-256 and applies both patches
 in a temporary directory. It installs the upstream lockfile, generates Paseo's
 protocol validators, and runs the upstream `build:daemon-web-ui` script. The
 default output is `runtime/dist/paseo-web`. Pass an output directory as the first
 argument to stage elsewhere. The build marker identifies the upstream revision,
-source archive, patch, and builder. Re-running with a matching build marker and
+source archive, patches, and builder. Re-running with a matching build marker and
 web entry point reuses the staged directory.
 
 LTCook packages these generated assets with its runtime and points the embedded

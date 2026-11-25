@@ -1,0 +1,476 @@
+diff --git a/packages/app/src/git/diff-pane.tsx b/packages/app/src/git/diff-pane.tsx
+--- a/packages/app/src/git/diff-pane.tsx
++++ b/packages/app/src/git/diff-pane.tsx
+@@ -186,6 +186,7 @@
+   cwd: string;
+   enabled?: boolean;
+   presentation?: ChangesPresentation;
++  readOnly?: boolean;
+   focusPath?: string;
+   focusRequestId?: number;
+   onOpenFile?: (path: string) => void;
+@@ -496,7 +497,7 @@
+ 
+ interface ChangesHeaderProps {
+   compact: boolean;
+-  repository: ChangesRepositoryToolbarModel;
++  repository: ChangesRepositoryToolbarModel | null;
+   comparison: ChangesComparisonToolbarModel;
+   sidebarSurface: boolean;
+ }
+@@ -564,11 +565,13 @@
+   }
+   return (
+     <View>
+-      <ChangesRepositoryToolbar
+-        compact={compact}
+-        model={repository}
+-        sidebarSurface={sidebarSurface}
+-      />
++      {repository ? (
++        <ChangesRepositoryToolbar
++          compact={compact}
++          model={repository}
++          sidebarSurface={sidebarSurface}
++        />
++      ) : null}
+       <ChangesComparisonToolbar
+         compact={compact}
+         model={comparison}
+@@ -1493,6 +1496,7 @@
+   cwd,
+   enabled,
+   presentation = "combined",
++  readOnly = false,
+   focusPath,
+   focusRequestId,
+   onOpenFile,
+@@ -1616,7 +1620,7 @@
+     workspaceId: workspaceId ?? undefined,
+     cwd,
+     attachment: reviewAttachment,
+-    enabled: true,
++    enabled: !readOnly,
+   });
+   const {
+     status: pullRequestStatus,
+@@ -1750,10 +1754,10 @@
+   const workingMode = useMemo(
+     () => ({
+       kind: "working" as const,
+-      reviewActions,
++      reviewActions: readOnly ? undefined : reviewActions,
+       focusPath: documentFocusRequest?.path,
+       focusRequestId: documentFocusRequest?.revision,
+-      workspaceFileDragScope: workspaceId ? { serverId, workspaceId } : undefined,
++      workspaceFileDragScope: !readOnly && workspaceId ? { serverId, workspaceId } : undefined,
+       onOpenFile,
+       onOpenToSide,
+       onAddToChat,
+@@ -1762,10 +1766,11 @@
+       onReveal: fileManagerTarget ? handleRevealPath : undefined,
+       revealTargetName: fileManagerTarget?.label,
+       onDownload: handleDownloadPath,
+-      onDuplicate: fsEntryDuplicateEnabled ? handleDuplicatePath : undefined,
+-      onRevert: onRevertPath,
++      onDuplicate: !readOnly && fsEntryDuplicateEnabled ? handleDuplicatePath : undefined,
++      onRevert: readOnly ? undefined : onRevertPath,
+     }),
+     [
++      readOnly,
+       reviewActions,
+       documentFocusRequest?.path,
+       documentFocusRequest?.revision,
+@@ -1861,15 +1866,17 @@
+           mode={workingMode}
+         />
+       </DiffBodyContent>
+-      <ReviewFeedbackAction
+-        bottomOffset={jumpToFileInset}
+-        enabled={enabled}
+-        hasDiff={presentation !== "tree"}
+-        model={reviewFeedback.model}
+-        state={reviewFeedback.state}
+-        serverId={serverId}
+-        workspaceId={workspaceId}
+-      />
++      {readOnly ? null : (
++        <ReviewFeedbackAction
++          bottomOffset={jumpToFileInset}
++          enabled={enabled}
++          hasDiff={presentation !== "tree"}
++          model={reviewFeedback.model}
++          state={reviewFeedback.state}
++          serverId={serverId}
++          workspaceId={workspaceId}
++        />
++      )}
+     </View>
+   );
+   const bodyContent = (
+@@ -1991,7 +1998,7 @@
+       {isGit ? (
+         <ChangesHeader
+           compact={isMobile}
+-          repository={changesHeaderModel.repository}
++          repository={readOnly ? null : changesHeaderModel.repository}
+           comparison={changesHeaderModel.comparison}
+           sidebarSurface={presentation === "tree"}
+         />
+@@ -2012,21 +2019,25 @@
+         ) : null}
+       </View>
+ 
+-      <ReviewCommentSheet
+-        enabled={enabled}
+-        editor={reviewActions.sheetEditor}
+-        reviewActions={reviewActions}
+-        onChangeBody={reviewActions.onChangeEditorBody}
+-      />
+-
+-      <ChangesCommits
+-        presentation={presentation}
+-        serverId={serverId}
+-        cwd={cwd}
+-        onCommitPress={handleCommitPress}
+-        collapsed={instanceState.commitsCollapsed}
+-        onCollapsedChange={handleCommitsCollapsedChange}
+-      />
++      {readOnly ? null : (
++        <>
++          <ReviewCommentSheet
++            enabled={enabled}
++            editor={reviewActions.sheetEditor}
++            reviewActions={reviewActions}
++            onChangeBody={reviewActions.onChangeEditorBody}
++          />
++
++          <ChangesCommits
++            presentation={presentation}
++            serverId={serverId}
++            cwd={cwd}
++            onCommitPress={handleCommitPress}
++            collapsed={instanceState.commitsCollapsed}
++            onCollapsedChange={handleCommitsCollapsedChange}
++          />
++        </>
++      )}
+     </View>
+   );
+ }
+diff --git a/packages/app/src/panels/diff-panel.tsx b/packages/app/src/panels/diff-panel.tsx
+--- a/packages/app/src/panels/diff-panel.tsx
++++ b/packages/app/src/panels/diff-panel.tsx
+@@ -21,6 +21,7 @@
+ import type { WorkspaceTabTarget } from "@/workspace-tabs/model";
+ import { defaultChangesState, changesStateSchema } from "@/panels/changes/state";
+ import { usePanelState } from "@/panels/use-panel-state";
++import { useSessionWorktree } from "./changes/session-worktree";
+ import { RenderProfile } from "@/utils/render-profiler";
+ 
+ const ThemedFileDiff = withUnistyles(FileDiff);
+@@ -83,8 +84,14 @@
+     usePaneContext();
+   const [changesState, setChangesState] = usePanelState(changesStateSchema, defaultChangesState);
+   const { preferences } = useChangesPreferences();
+-  const cwd = useWorkspaceDirectory(serverId, workspaceId);
++  const workspaceDirectory = useWorkspaceDirectory(serverId, workspaceId);
+   const isActive = useRetainedPanelActive();
++  const { cwd, reviewingWorktree, picker } = useSessionWorktree(
++    serverId,
++    workspaceId,
++    workspaceDirectory,
++    isActive,
++  );
+   const { addFile, canAddToChat } = useAddFileToChat({ serverId, workspaceId });
+   invariant(
+     target.kind === "working_diff" || target.kind === "changes_tree",
+@@ -118,7 +125,7 @@
+ 
+   const presentation = resolveChangesPresentation({
+     isTree,
+-    inlineDiff: preferences.inlineDiff,
++    inlineDiff: preferences.inlineDiff || reviewingWorktree,
+     isCompact,
+     isNative,
+   });
+@@ -127,8 +134,11 @@
+ 
+   return (
+     <View style={styles.container} testID={testID}>
++      {picker}
+       <RenderProfile id={profileId}>
+         <ChangesSurface
++          key={cwd}
++          readOnly={reviewingWorktree}
+           serverId={serverId}
+           workspaceId={workspaceId}
+           cwd={cwd}
+@@ -137,9 +147,9 @@
+           focusPath={target.kind === "working_diff" ? target.focusPath : undefined}
+           focusRequestId={target.kind === "working_diff" ? target.focusRequestId : undefined}
+           onSelectDiffFile={isTree ? handleSelectDiffFile : undefined}
+-          onOpenFile={handleOpenFile}
++          onOpenFile={reviewingWorktree ? undefined : handleOpenFile}
+           onOpenToSide={isTree && openTargetToSide ? handleOpenDiffToSide : undefined}
+-          onAddToChat={canAddToChat ? addFile : undefined}
++          onAddToChat={!reviewingWorktree && canAddToChat ? addFile : undefined}
+           state={changesState}
+           onStateChange={setChangesState}
+         />
+diff --git a/packages/app/src/panels/changes/session-worktree-target.test.ts b/packages/app/src/panels/changes/session-worktree-target.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/app/src/panels/changes/session-worktree-target.test.ts
+@@ -0,0 +1,36 @@
++import { expect, it } from "vitest";
++import {
++  resolveSessionWorktree,
++  type SessionWorktreeSnapshot,
++} from "./session-worktree-target";
++
++const first = { path: "/projects/first", branch: "feature/first" };
++const second = { path: "/projects/second", branch: "feature/second" };
++const snapshot: SessionWorktreeSnapshot = {
++  agentId: "agent-one",
++  sessionId: "session-one",
++  original: "/projects/main",
++  following: first,
++  available: [first, second],
++};
++
++it("follows the session by default and uses the original checkout after removal", () => {
++  expect(resolveSessionWorktree(snapshot, undefined)).toBe(first.path);
++  expect(
++    resolveSessionWorktree(
++      { ...snapshot, following: null, available: [second] },
++      undefined
++    )
++  ).toBe(snapshot.original);
++});
++
++it("pins an existing checkout across follow updates and resumes following when unpinned or removed", () => {
++  expect(resolveSessionWorktree(snapshot, snapshot.original)).toBe(
++    snapshot.original
++  );
++  expect(resolveSessionWorktree(snapshot, second.path)).toBe(second.path);
++  expect(resolveSessionWorktree(snapshot, undefined)).toBe(first.path);
++  expect(
++    resolveSessionWorktree({ ...snapshot, available: [first] }, second.path)
++  ).toBe(first.path);
++});
+diff --git a/packages/app/src/panels/changes/session-worktree-target.ts b/packages/app/src/panels/changes/session-worktree-target.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/app/src/panels/changes/session-worktree-target.ts
+@@ -0,0 +1,30 @@
++import { z } from "zod";
++
++const worktree = z.object({
++  path: z.string().min(1),
++  branch: z.string().optional(),
++});
++
++export const sessionWorktreeSnapshot = z.object({
++  agentId: z.string().min(1),
++  sessionId: z.string().min(1),
++  original: z.string().min(1),
++  following: worktree.nullable(),
++  available: z.array(worktree),
++});
++
++export type SessionWorktreeSnapshot = z.infer<typeof sessionWorktreeSnapshot>;
++
++export function resolveSessionWorktree(
++  snapshot: SessionWorktreeSnapshot,
++  pinned: string | undefined
++): string {
++  if (
++    pinned &&
++    (pinned === snapshot.original ||
++      snapshot.available.some(({ path }) => path === pinned))
++  ) {
++    return pinned;
++  }
++  return snapshot.following?.path ?? snapshot.original;
++}
+diff --git a/packages/app/src/panels/changes/session-worktree.tsx b/packages/app/src/panels/changes/session-worktree.tsx
+new file mode 100644
+--- /dev/null
++++ b/packages/app/src/panels/changes/session-worktree.tsx
+@@ -0,0 +1,175 @@
++import { useEffect, useMemo, useState } from "react";
++import { create } from "zustand";
++import { SelectField } from "@/components/ui/select-field";
++import { resolveFocusedChatTarget } from "@/composer/focused-chat-target";
++import { useInstalledPlugin } from "@/plugins/registry";
++import {
++  collectAllTabs,
++  useWorkspaceLayoutStore,
++} from "@/stores/workspace-layout-store";
++import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
++import {
++  resolveSessionWorktree,
++  sessionWorktreeSnapshot,
++  type SessionWorktreeSnapshot,
++} from "./session-worktree-target";
++
++type WorktreePins = {
++  bySession: ReadonlyMap<string, string>;
++  setPin(session: string, path: string | undefined): void;
++};
++
++const useWorktreePins = create<WorktreePins>((set) => ({
++  bySession: new Map(),
++  setPin(session, path) {
++    set(({ bySession }) => {
++      const pins = new Map(bySession);
++      if (path === undefined) pins.delete(session);
++      else pins.set(session, path);
++      return { bySession: pins };
++    });
++  },
++}));
++
++export function useSessionWorktree(
++  serverId: string,
++  workspaceId: string,
++  workspaceDirectory: string | null,
++  enabled: boolean
++) {
++  const workspaceKey = buildWorkspaceTabPersistenceKey({
++    serverId,
++    workspaceId,
++  });
++  const layout = useWorkspaceLayoutStore((state) =>
++    workspaceKey ? state.layoutByWorkspace[workspaceKey] : undefined
++  );
++  const agentId = useMemo(() => {
++    if (!layout) return null;
++    const chat = resolveFocusedChatTarget({ serverId, layout });
++    const tab = collectAllTabs(layout.root).find(
++      ({ tabId }) => tabId === chat?.tabId
++    );
++    return tab?.target.kind === "agent" ? tab.target.agentId : null;
++  }, [layout, serverId]);
++  const plugin = useInstalledPlugin(serverId, "ltcook");
++  const [received, setReceived] = useState<{
++    plugin: typeof plugin;
++    snapshot: SessionWorktreeSnapshot;
++  }>();
++  useEffect(() => {
++    if (!enabled || !plugin || !agentId) return;
++    let active = true;
++    const closed = () => {
++      if (active) setReceived(undefined);
++    };
++    const subscription = plugin.subscribe(
++      "ltcook.session.worktrees",
++      { agentId },
++      {
++        event(input: unknown) {
++          const parsed = sessionWorktreeSnapshot.safeParse(input);
++          if (active && parsed.success && parsed.data.agentId === agentId) {
++            setReceived({ plugin, snapshot: parsed.data });
++          }
++        },
++        closed,
++      }
++    );
++    void subscription.ready.catch(closed);
++    return () => {
++      active = false;
++      subscription();
++    };
++  }, [enabled, plugin, agentId]);
++  const snapshot =
++    received &&
++    received.plugin === plugin &&
++    received.snapshot.agentId === agentId
++      ? received.snapshot
++      : undefined;
++  const sessionKey = snapshot
++    ? JSON.stringify([serverId, snapshot.sessionId])
++    : undefined;
++  const pinned = useWorktreePins(
++    (state) => sessionKey && state.bySession.get(sessionKey)
++  );
++  const setPin = useWorktreePins((state) => state.setPin);
++  const validPin =
++    pinned &&
++    snapshot &&
++    (pinned === snapshot.original ||
++      snapshot.available.some(({ path }) => path === pinned))
++      ? pinned
++      : undefined;
++  useEffect(() => {
++    if (sessionKey && pinned && !validPin) setPin(sessionKey, undefined);
++  }, [pinned, sessionKey, setPin, validPin]);
++
++  const target = snapshot && resolveSessionWorktree(snapshot, validPin);
++  const reviewingWorktree = Boolean(target && target !== snapshot?.original);
++  const picker =
++    snapshot &&
++    sessionKey &&
++    snapshot.available.some(({ path }) => path !== snapshot.original) ? (
++      <SessionWorktreePicker
++        snapshot={snapshot}
++        pinned={validPin}
++        onPin={(path) => setPin(sessionKey, path)}
++      />
++    ) : null;
++  return {
++    cwd: reviewingWorktree ? target ?? workspaceDirectory : workspaceDirectory,
++    reviewingWorktree,
++    picker,
++  };
++}
++
++function SessionWorktreePicker({
++  snapshot,
++  pinned,
++  onPin,
++}: {
++  snapshot: SessionWorktreeSnapshot;
++  pinned?: string;
++  onPin(path: string | undefined): void;
++}) {
++  const options = [
++    { id: "follow", value: "", label: "Follow session" },
++    {
++      id: "original",
++      value: snapshot.original,
++      label: "Original checkout",
++      description: snapshot.original,
++    },
++    ...snapshot.available
++      .filter(({ path }) => path !== snapshot.original)
++      .map(({ path, branch }) => ({
++        id: path,
++        value: path,
++        label: branch || path.split(/[\\/]/).at(-1) || path,
++        description: path,
++      })),
++  ];
++  const value = pinned ?? "";
++  const display = pinned
++    ? options.find((option) => option.value === pinned) ?? null
++    : {
++        label: "Follow session",
++        description: snapshot.following?.branch ?? "Original checkout",
++      };
++  return (
++    <SelectField
++      label="Worktree"
++      value={value}
++      selectedDisplay={display}
++      options={options}
++      onChange={(next) => onPin(next || undefined)}
++      placeholder="Worktree"
++      emptyText="No linked worktrees"
++      field={false}
++      size="sm"
++      triggerTestID="changes-worktree-picker"
++    />
++  );
++}

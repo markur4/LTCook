@@ -47,6 +47,10 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- **Changes** in LTCook's bundled Paseo web app follows the focused session's
+  reported Git worktree. The **Worktree** picker can pin an existing checkout
+  for that session or resume following while leaving the Git branch in place.
+
 - A Paseo Explorer **Activity** panel shows direct subagents, running and recent
   tools, observed skill loads, model context usage, ColGREP index status, and
   Session Memory summaries and delivery evidence. On desktop, Activity opens on

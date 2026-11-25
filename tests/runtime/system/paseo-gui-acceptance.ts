@@ -4,7 +4,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { buildAgentDeepLinkRoute } from '@getpaseo/protocol/agent-deep-link';
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import path from 'node:path';
@@ -1159,6 +1160,65 @@ try {
   await openExplorerPanel('Tasks');
   await browser('wait', '--text', 'Task Board');
   await inspectStage('contextual-task-board');
+
+  stage = 'session-worktree-changes';
+  const gitCheckout = await host.api.workspaces.open(gitWorkspace);
+  const created = await Promise.all(
+    ['first', 'second'].map(async (name) => {
+      const agent = await gitCheckout.agents.create({
+        title: `Worktree fixture ${name}`,
+        config: { provider: 'pi/fixture/test' },
+        env: environment,
+      });
+      return { name, agent, checkout: path.join(directory, `changes-${name}`) };
+    }),
+  );
+  const [first, second] = created;
+  assert(first && second);
+  for (const { name, agent, checkout } of created) {
+    await run('git', ['worktree', 'add', '-b', `changes/${name}`, checkout], {
+      cwd: gitWorkspace,
+    });
+    await writeFile(path.join(checkout, `${name}-session.txt`), `${name} worktree change\n`);
+    await api.worktreeTool.invoke(
+      { operation: 'use', path: checkout },
+      {
+        agentId: agent.id,
+        workspaceRoot: gitWorkspace,
+        workspaceFileAccess: true,
+        signal: AbortSignal.timeout(5000),
+      },
+    );
+  }
+  const serverId = JSON.parse(
+    await browser('eval', `decodeURIComponent(location.pathname.split('/')[2] ?? '')`),
+  ) as string;
+  assert(serverId);
+  for (const { name, agent } of [second, first]) {
+    await browser(
+      'open',
+      `http://${host.listen}${buildAgentDeepLinkRoute({ serverId, agentId: agent.id })}`,
+    );
+    await waitForComposer(`Worktree fixture ${name}`);
+  }
+  await browser('find', 'role', 'tab', 'click', '--name', 'Changes', '--exact');
+  const worktreePicker = '[data-testid="changes-worktree-picker"]';
+  await browser('wait', worktreePicker);
+  await browser('wait', '--text', 'first-session.txt');
+  await browser('click', worktreePicker);
+  await browser('find', 'text', 'Original checkout', 'click', '--exact');
+  await browser('wait', '[data-testid="changes-branch-switcher"]');
+  await browser('find', 'role', 'tab', 'click', '--name', 'Worktree fixture second', '--exact');
+  await browser('wait', '--text', 'second-session.txt');
+  await browser('find', 'role', 'tab', 'click', '--name', 'Worktree fixture first', '--exact');
+  await browser('wait', '[data-testid="changes-branch-switcher"]');
+  await browser('click', worktreePicker);
+  await browser('find', 'text', 'Follow session', 'click', '--exact');
+  await browser('wait', '--text', 'first-session.txt');
+  await unlink(path.join(first.checkout, 'first-session.txt'));
+  await run('git', ['worktree', 'remove', first.checkout], { cwd: gitWorkspace });
+  await browser('wait', '[data-testid="changes-branch-switcher"]');
+  await inspectStage('session-worktree-changes');
 
   await telemetry.exportTrace();
   const trace = JSON.parse(await readFile(tracePath, 'utf8')) as {

@@ -188,6 +188,17 @@ whenever you need them.
 The Command Center also offers **Open Activity panel**, **Open Team panel**,
 and **Open Tasks panel**.
 
+In the bundled Paseo web app, **Changes** follows the focused session's active
+Git worktree. Managed Pi and supported Paseo Pi and Codex agents report the
+checkout they use through `ltcook_worktree`. When the worktree disappears,
+Changes returns to the session's original checkout. Use **Worktree** to pin
+another checkout for the current session or select **Follow session** to resume
+automatic switching. Diffs for linked checkouts open inline for inspection.
+
+The branch picker runs `git checkout` in the workspace directory. When Git
+says a branch is already in use by a worktree, select that checkout in the
+**Worktree** picker to view its changes where the branch is checked out.
+
 Expand **RAG Index** to see the worktree that the selected conversation is
 authorized to search. Index availability and indexing activity are independent.
 **Checking index** means a ranked query is active and its indexing phase is
