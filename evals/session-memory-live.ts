@@ -24,6 +24,11 @@ import {
   routineContextStrategies,
   sampleContextMemory,
 } from './session-memory-context.js';
+import {
+  compareSimplifiedMemory,
+  diagnoseApprovalReference,
+  qualifySemanticMemory,
+} from './session-memory-simplified.js';
 import { resolveEvaluationContext } from '../runtime/src/evals/setup.js';
 
 const root = path.resolve(import.meta.dir, '..');
@@ -63,13 +68,54 @@ try {
       teamSelection: process.env.LTCOOK_TEAM ?? 'default-minimal',
     });
     if (!summarization) throw new Error('AppRC summarizer settings are unavailable.');
-    if (args.includes('--context-aware') || args.includes('--cpu-sample')) {
+    const diagnostic = args.includes('--diagnose-approval');
+    const semantic = args.includes('--semantic');
+    if (
+      (diagnostic || semantic || args.includes('--simplified')) &&
+      !args.includes('--production-suspended')
+    )
+      throw new Error(
+        'Suspend production inference before this comparison and pass --production-suspended.',
+      );
+    if (
+      args.includes('--context-aware') ||
+      args.includes('--cpu-sample') ||
+      args.includes('--simplified') ||
+      diagnostic ||
+      semantic
+    ) {
       const { signal } = controller;
       const catalog = await listEvaluationModels(summarization.endpoint, signal);
       const selected = catalog.find(({ name }) => modelTag(name) === modelTag(contextModel));
       if (!selected) throw new Error('The Session Memory summarizer is missing from Ollama.');
       const modelInfo = await inspectEvaluationModel(summarization.endpoint, selected, signal);
-      if (args.includes('--cpu-sample')) {
+      if (diagnostic) {
+        const report = await diagnoseApprovalReference({
+          settings: summarization,
+          digest: modelInfo.digest,
+          signal,
+          auditOutput: args.includes('--audit-output'),
+          progress: console.error,
+        });
+        console.log(JSON.stringify({ model: modelInfo, ...report }, null, 2));
+      } else if (args.includes('--simplified') || semantic) {
+        const compare = semantic ? qualifySemanticMemory : compareSimplifiedMemory;
+        const comparison = await compare({
+          settings: summarization,
+          digest: modelInfo.digest,
+          signal,
+          fixtureId: option('fixture'),
+          auditOutput: args.includes('--audit-output'),
+          progress: (event) => console.error(event),
+        });
+        const identityUnchanged = (await listEvaluationModels(summarization.endpoint, signal)).some(
+          ({ name, digest }) => name === modelInfo.name && digest === modelInfo.digest,
+        );
+        console.log(
+          JSON.stringify({ model: modelInfo, identityUnchanged, ...comparison }, null, 2),
+        );
+        if (!identityUnchanged || !comparison.passed) process.exitCode = 1;
+      } else if (args.includes('--cpu-sample')) {
         const [seed, extra] = contextSeeds(option('seeds'));
         if (seed === undefined || extra !== undefined)
           throw new Error('The CPU benchmark accepts one seed.');

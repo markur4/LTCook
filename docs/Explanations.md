@@ -245,7 +245,7 @@ These terms describe work, not ten separate workflow engines or database tables:
 | Discussion | A conversation between a user and an agent within a Session. |
 | User>Agent Message Pair (UAMP) | A user message and its corresponding completed agent response. Native steering messages are additional sources. |
 | Agent Action (AA) | An operation performed by an agent and recorded as an Action by native Pi or Paseo history. |
-| Agent Action Batch (AAB) | Related AAs grouped for summarization. Known Plan, Pass, Task, and Step identifiers apply to the AAB. |
+| Agent Action Batch (AAB) | Related AAs grouped for deterministic recording. Known Plan, Pass, Task, and Step identifiers apply to the AAB. |
 | Request | The native initiating message for work; a Task may reference its native message identifier. |
 | Plan | A document specifying intended work and integration strategy. LTCook references it rather than storing a second plan history. |
 | Pass | An explicitly created integration unit with a title and an optional Plan reference. |
@@ -449,53 +449,43 @@ remain separate from coordination state.
 
 ## Context-aware Session Memory
 
-The runtime summarizes completed UAMPs and groups observed AAs at execution
-boundaries and an estimated token threshold. Native user messages remain the
-authority for goals and decisions. Original user messages stay available while
-summarization is pending, after compaction, and when agents resume work or share
-authorized context. Each summary cites its native source sequences, including
-which sequences are original user instructions.
+The runtime records completed UAMPs as Discussion and groups observed AAs at
+execution boundaries and an estimated token threshold. A UAMP includes its user
+messages, final agent replies and supplied attachment text. When their combined
+size is below 256 estimated tokens, the runtime records references to the
+originals. Larger UAMPs receive a Markdown summary. Portions that exceed the
+input budget are summarized separately under the same UAMP.
 
-An opt-in delegation handoff can include explicit, named check outcomes
-from original tool results. LTCook searches the original conversation for
-requested paths and technical identifiers even when a summary already mentions
-them. It can include the cited evidence within the same handoff budget.
+AAB records contain bounded previews, counts, and references to the original
+actions and intermediate messages. Their compact tool projection preserves
+typed outcomes, file paths, exit codes, and recognized verification lines.
+Paseo supplies original details on demand, including tool types that have no
+specialized projection. AABs that span native turns are shown once. Session
+Memory continues recording AABs and short UAMPs while generation is paused.
 
-Delegation handoffs use compact source references. The current Task guides the
-selection. The latest applicable original user instruction follows the older
-evidence, and the approved assignment governs scope and required verification.
-Tool outcomes from earlier work are labeled as historical. A source reference
-identifies the agent, conversation epoch, and original sequence for retrieval.
-Stored summaries retain their full provenance.
+Native user messages remain authoritative for goals and decisions. An opt-in
+delegation handoff uses stored records and can recover additional evidence
+from authorized original history. Current Task scope guides the selection.
+The latest applicable original user instruction follows the older evidence.
+Tool outcomes describe historical work. Source references identify the agent,
+conversation epoch, and original sequence. Session Memory search reports
+pending summaries, result truncation, and original-history availability.
 
-Session Memory search reports pending summaries, result truncation, and
-original-history availability independently. Original messages can be
-available while summarization is pending. A bounded result may contain
-excerpts, and partial history means some originals could not be inspected.
-An exact source lookup also distinguishes a missing sequence from inaccessible
-history and includes the latest known sequence when the source can report it.
+Immediate Context supplies the current Task objective and acceptance criteria.
+It uses up to 512 estimated supplementary tokens for Task context and relevant
+preceding Discussion when the current material leaves room. The current
+summary can resolve a reference using one preceding UAMP and original
+messages from subsequent skipped UAMPs. When there are skipped exchanges
+after a summarized UAMP, Markdown summarization uses that preceding UAMP’s
+original messages when available. Its generated summary remains the fallback. The runtime can use
+Discussion from the same Session and compatible Plan and Pass when work enters
+a Task. Prior context helps resolve references. Approval and execution claims
+must come from the current sources.
 
-Immediate Context supplies the current Task objective and acceptance criteria
-when Core knows them. For an AAB it also supplies the initiating user
-instructions or runtime assignment and applicable steering. This material is
-separate from the current original messages and serves as instructions.
-An attachment on an initiating instruction is supplied as current reference
-evidence for the AAB. Its source sequence remains citable when the native
-turn ends with an action and produces no completed UAMP.
-One recent relevant completed UAMP provides background for references.
-A previous summary cannot establish that an Action occurred or a decision
-was accepted in the current unit.
-
-The selection follows chronology within the known Task scope. Where Task
-identity is absent, matching Session, Plan, and Pass scope is used when
-available. Immediate Context aims for about 256 to 512 additional estimated
-tokens. Authoritative instructions can exceed that target, and the available
-space for previous summary text shrinks to protect current sources.
-All completed summaries stay in chronological storage. Retrieval can select
-individual recognized field statements and cite the original sequences used
-by their summary portion. Retrieval also searches the full JSON value when
-those statements omit nested evidence. A response that cannot be parsed as
-JSON leaves its summary portion pending.
+Recognized headings and bullets supply individually retrievable statements.
+The raw Markdown remains available for reading and retrieval when formatting
+varies. The original attachment supplied to a tool-only turn stays citable
+through the AAB's reference to the initiating instruction.
 
 Rewind invalidates affected summaries and receipts that were tied to the
 replaced history. The runtime rebuilds from authorized original messages.

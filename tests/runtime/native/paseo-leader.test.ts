@@ -193,14 +193,14 @@ test('anchors summary shortcuts to each completed turn and current timeline epoc
       id: 'memory-summaries:turn',
       kind: 'memory-summaries',
       version: 1,
-      data: { passage: { epoch, start: 6, position: 8 } },
+      data: { passage: { epoch, start: 6, position: 9, turnId: 'turn' } },
     },
     {
       type: 'plugin',
       id: 'memory-summaries:another',
       kind: 'memory-summaries',
       version: 1,
-      data: { passage: { epoch, start: 10, position: 11 } },
+      data: { passage: { epoch, start: 10, position: 11, turnId: 'another' } },
     },
   ]);
   epoch = 'after-rewind';
@@ -212,7 +212,7 @@ test('anchors summary shortcuts to each completed turn and current timeline epoc
   expect(appended).toHaveLength(3);
   expect(appended[2]).toMatchObject({
     id: 'memory-summaries:turn',
-    data: { passage: { epoch, start: 6, position: 8 } },
+    data: { passage: { epoch, start: 6, position: 9, turnId: 'turn' } },
   });
 });
 

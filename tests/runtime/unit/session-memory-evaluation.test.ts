@@ -1,10 +1,21 @@
 import { expect, test } from 'bun:test';
 import { MemoryEditProgress } from '../../../evals/session-memory-edit-progress.js';
-import { gradesMemoryFact } from '../../../evals/session-memory-context.js';
+import { semanticMemoryFixtures } from '../../../evals/session-memory-semantic-fixtures.js';
+import {
+  originalTokenCount,
+  shortDiscussionTokens,
+} from '../../../runtime/src/session-memory/service.js';
+import { identifyMemoryUnits } from '../../../runtime/src/session-memory/units.js';
+import { contextTranscript, gradesMemoryFact } from '../../../evals/session-memory-context.js';
+import {
+  gradeSimplifiedLayer,
+  simplifiedCorpus,
+} from '../../../evals/session-memory-simplified.js';
 import {
   contradictsMemoryFact,
   matchesMemoryFact,
 } from '../../../runtime/src/evals/session-memory-facts.js';
+import { prepareMemorySummaries } from '../../../runtime/src/session-memory/summarization.js';
 import { memoryFixtures } from '../../../runtime/src/evals/session-memory-fixtures.js';
 
 test('grades multiline named results without borrowing the status of another check', () => {
@@ -46,4 +57,96 @@ test('stops an alternating tool loop and gives changed results room to progress'
   expect(search()).toBe(false);
   expect(read('after')).toBe(false);
   expect(search()).toBe(true);
+});
+
+test('requires the complete critical Session Memory corpus', () => {
+  const corpus = simplifiedCorpus();
+  expect(corpus).toHaveLength(5);
+  expect(corpus.flatMap(({ facts }) => facts).filter(({ critical }) => critical)).toHaveLength(14);
+});
+
+test('records recovery separately and rejects attributed reversals and invented outcomes', () => {
+  const fixture = simplifiedCorpus().find(({ id }) => id === 'runtime-rebuild-and-cache-recovery')!;
+  const originals = fixture.turns.flat();
+  const facts = fixture.facts.filter(({ critical }) => critical);
+  const entries = originals.filter(({ seq }) => [5, 8].includes(seq));
+  expect(gradeSimplifiedLayer(facts, entries, originals)).toMatchObject({
+    retained: 3,
+    required: 3,
+    passed: true,
+  });
+  expect(gradeSimplifiedLayer(facts, entries.slice(1), originals)).toMatchObject({
+    retained: 1,
+    required: 3,
+    passed: false,
+  });
+  const fabricated = [...entries, { seq: 8, text: 'CACHE_OPEN_RESTART PASS. EXTRA_CHECK PASS.' }];
+  expect(gradeSimplifiedLayer(facts, fabricated, originals)).toMatchObject({
+    contradictions: [
+      { sources: [8], name: 'CACHE_OPEN_RESTART', status: 'pass' },
+      { sources: [8], name: 'EXTRA_CHECK', status: 'pass' },
+    ],
+    retained: 3,
+    passed: false,
+  });
+});
+
+test('semantic fixtures actually generate UAMP summaries and carry critical labels', () => {
+  for (const fixture of semanticMemoryFixtures) {
+    const { messages, prompts } = contextTranscript(fixture);
+    const units = identifyMemoryUnits(messages, prompts, 3000, true);
+    const generated = units.filter(
+      ({ type, messages }) =>
+        type === 'UAMP' && originalTokenCount(messages) >= shortDiscussionTokens,
+    );
+    expect(generated.length).toBeGreaterThan(0);
+    for (const fact of fixture.facts.filter(({ critical }) => critical)) {
+      expect(
+        generated.some(({ messages }) => messages.some(({ seq }) => seq === fact.source)),
+      ).toBe(true);
+    }
+  }
+});
+
+test('semantic grading accepts the named failure and reads a nonbreaking retry hyphen', () => {
+  const [preview, retry] = semanticMemoryFixtures;
+  const failure = preview!.facts.find(({ check }) => check === 'EXPORT_MISSING_HEADER')!;
+  expect(matchesMemoryFact(failure, 'EXPORT_QUOTED_ROW PASS. EXPORT_MISSING_HEADER FAIL.')).toBe(
+    true,
+  );
+  expect(
+    contradictsMemoryFact(failure, 'EXPORT_QUOTED_ROW PASS. EXPORT_MISSING_HEADER FAIL.'),
+  ).toBe(false);
+  expect(contradictsMemoryFact(failure, 'EXPORT_MISSING_HEADER PASS.')).toBe(true);
+  expect(matchesMemoryFact(retry!.facts[0]!, 'Approved a 45‑second reporting retry delay.')).toBe(
+    true,
+  );
+  expect(contradictsMemoryFact(retry!.facts[0]!, 'Approved a 10‑second delay.')).toBe(true);
+});
+
+test('keeps the generated anchor when an original preview would lose its technical referent', () => {
+  const [part] = prepareMemorySummaries(
+    { type: 'UAMP', messages: [{ seq: 4, author: 'user', text: 'Implement that.' }] },
+    [
+      {
+        id: 'proposal',
+        type: 'UAMP',
+        format: 'markdown',
+        content: '**Intent**\n- Consider reuseExportManifest for unchanged exports.',
+      },
+    ],
+    undefined,
+    {
+      format: 'markdown',
+      skipped: [
+        { id: 'clarification', messages: [{ seq: 3, author: 'agent', text: 'Still a proposal.' }] },
+      ],
+      originalAnchor:
+        'Long original prefix. '.repeat(180) + 'Agent #2: Consider reuseExportManifest.',
+    },
+  );
+  expect(part?.historyText).toContain('reuseExportManifest');
+  expect(part?.historyText).toContain('Still a proposal.');
+  expect(part?.historyText).not.toContain('Long original prefix.');
+  expect(part?.historyEstimatedTokens).toBeLessThanOrEqual(512);
 });

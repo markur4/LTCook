@@ -42,14 +42,14 @@ export async function readPaseoMemoryPassage(
 ) {
   if (signal.aborted || !hasCurrentHistory(tail)) return;
   let page = tail;
-  let sources = readMemoryMessages(tail.entries);
+  let sources = passageMessages(tail.entries);
   let index = sources.findLastIndex(
     (source) => source.turnId === turnId && (source.author === 'agent' || source.author === 'tool'),
   );
   const position = sources[index]?.seq;
   if (position === undefined) return;
 
-  const passage = { epoch: tail.epoch, start: position, position };
+  const passage = { epoch: tail.epoch, start: position, position, turnId };
   index--;
   while (true) {
     // > Use the same source entries as Session Memory, including its turn boundaries.
@@ -75,14 +75,19 @@ export async function readPaseoMemoryPassage(
       page.startCursor.seq >= cursor.seq
     )
       return;
-    sources = readMemoryMessages(page.entries);
+    sources = passageMessages(page.entries);
     index = sources.length - 1;
   }
+}
+
+function passageMessages(entries: Timeline['entries']) {
+  return readMemoryMessages(entries, undefined, true);
 }
 
 export function readMemoryMessages(
   entries: Timeline['entries'],
   identifyPromptAuthor: (id?: string) => PaseoMemoryMessage['author'] = () => 'unknown',
+  includeAllTools = false,
 ): PaseoMemoryMessage[] {
   return entries
     .flatMap(({ seqEnd, turnId, timestamp, item }): PaseoMemoryMessage[] => {
@@ -130,7 +135,8 @@ export function readMemoryMessages(
                 text: item.detail.text ?? '',
               },
             ];
-          const result = toolOutcome(item);
+          const result =
+            toolOutcome(item) ?? (includeAllTools ? `${item.name} ${item.status}.` : undefined);
           return result
             ? [
                 {
@@ -207,4 +213,68 @@ function verificationLines(output?: string): string[] {
         !/\b(?:secret|password|credential|authorization|api[_ -]?key)\b/i.test(line)
       );
     });
+}
+
+type EvidenceReference = {
+  seq: number;
+  messageId?: string;
+  turnId?: string;
+  author?: 'agent' | 'tool';
+};
+
+export async function readPaseoMemoryEvidence(
+  timeline: Pick<TimelineHandle, 'refetch'>,
+  epoch: string,
+  references: readonly EvidenceReference[],
+  signal: AbortSignal,
+) {
+  const entries = await Promise.all(
+    references.map(async ({ seq, messageId, turnId, author }) => {
+      signal.throwIfAborted();
+      const page = await timeline
+        .refetch({
+          direction: 'before',
+          projection: 'canonical',
+          cursor: { epoch, seq: seq + 1 },
+          limit: 1,
+        })
+        .catch(() => undefined);
+      signal.throwIfAborted();
+      const unavailable = { seq, source: null };
+      if (!page || !hasCurrentHistory(page) || page.epoch !== epoch) return unavailable;
+      const entry = page.entries.find(({ seqEnd }) => seqEnd === seq);
+      if (!entry || (author && entry.turnId !== turnId)) return unavailable;
+      const match = entry.item;
+      if (
+        match.type === 'assistant_message' &&
+        (!author || author === 'agent') &&
+        (!messageId || match.messageId === messageId)
+      ) {
+        return { seq, source: { kind: 'agent' as const, text: match.text } };
+      }
+      if (
+        match.type === 'tool_call' &&
+        (!author || author === 'tool') &&
+        match.status !== 'running' &&
+        !match.agentMessage &&
+        (!messageId || match.callId === messageId)
+      ) {
+        return {
+          seq,
+          source: {
+            kind: 'tool' as const,
+            name: match.name,
+            status: match.status,
+            details: JSON.stringify(match.detail, null, 2),
+          },
+        };
+      }
+      return unavailable;
+    }),
+  );
+  const tail = await timeline.refetch({ direction: 'tail', projection: 'canonical', limit: 1 });
+  signal.throwIfAborted();
+  return hasCurrentHistory(tail) && tail.epoch === epoch
+    ? entries
+    : references.map(({ seq }) => ({ seq, source: null }));
 }

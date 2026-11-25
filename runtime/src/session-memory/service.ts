@@ -8,6 +8,7 @@ import {
   estimateMemoryTokens,
   memoryIdentifierMatches,
   memoryIdentifiers,
+  memoryPreview,
 } from './text.js';
 import {
   compactHandoffLine,
@@ -32,9 +33,11 @@ import {
   relevantMemoryScope,
   retrievableSummaryStatements,
   prepareMemorySummaries,
+  originalUampDialogue,
   type MemoryBudgets,
   type MemorySummaryProgress,
   type MemorySummaryResult,
+  type MemorySummaryFormat,
 } from './summarization.js';
 import {
   identifyMemoryUnits,
@@ -125,7 +128,10 @@ const cpuMemoryDevice = { id: 'cpu', label: 'CPU' };
 const unknownDevice = 'The selected GPU is unavailable in Ollama.';
 const unaddressableDevice = 'Ollama cannot select this GPU by a unique index.';
 
+export type MemoryProcessing = 'legacy-json' | 'deterministic-json' | 'deterministic-markdown';
+
 type MemoryOptions = {
+  processing?: MemoryProcessing;
   databasePath: string;
   source: MemorySource;
   summarize(
@@ -134,6 +140,7 @@ type MemoryOptions = {
     signal: AbortSignal,
     placement: MemoryPlacement,
     onProgress?: (rate: MemorySummaryProgress | undefined) => void,
+    format?: MemorySummaryFormat,
   ): Promise<MemorySummaryResult>;
   deviceCatalog?(refresh?: boolean): Promise<OllamaDeviceCatalog>;
   releaseCpuModel?(signal: AbortSignal): Promise<void>;
@@ -173,7 +180,133 @@ export type MemorySearchEntry = {
 type SearchEntry = MemorySearchEntry;
 type SearchHit = SearchEntry & { agentId: string; epoch: string; score: number };
 const searchTokens = 2200;
+export const shortDiscussionTokens = 256;
+const overviewLimit = 12;
+
+function memorySources(messages: readonly MemorySourceMessage[]) {
+  return messages.map(({ seq, turnId, author, messageId, timestamp }) => ({
+    seq,
+    turnId,
+    author,
+    messageId,
+    timestamp,
+  }));
+}
+
+export function originalTokenCount(messages: readonly MemorySourceMessage[]) {
+  const attachmentIds = new Set<string>();
+  const text = messages.map(
+    ({ text, attachments }) =>
+      text +
+      (attachments ?? [])
+        .filter(({ id }) => {
+          if (attachmentIds.has(id)) return false;
+          attachmentIds.add(id);
+          return true;
+        })
+        .map(({ text }) => text)
+        .join(''),
+  );
+  return estimateMemoryTokens(text.join(''));
+}
+
+function actionOverview(messages: readonly MemorySourceMessage[]): StoredMemorySummary['action'] {
+  const counts = new Map<string, number>();
+  const paths = new Map<string, Map<string, number>>();
+  const modified = new Set<string>();
+  let failureCount = 0;
+  for (const { tool } of messages) {
+    if (!tool) continue;
+    const kind = ['shell', 'edit', 'write', 'read', 'search'].includes(tool.kind)
+      ? tool.kind
+      : 'other';
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+    if (tool.status === 'failed' || tool.status === 'error' || (tool.exitCode ?? 0) !== 0)
+      failureCount++;
+    if (!tool.filePath) continue;
+    const operations = paths.get(tool.filePath) ?? new Map<string, number>();
+    operations.set(kind, (operations.get(kind) ?? 0) + 1);
+    paths.set(tool.filePath, operations);
+    if (tool.status === 'completed' && (kind === 'edit' || kind === 'write'))
+      modified.add(tool.filePath);
+  }
+  const counted = (values: ReadonlyMap<string, number>) =>
+    [...values].map(([kind, count]) => ({ kind, count }));
+  const checks = observedMemoryChecks(messages);
+  return {
+    counts: counted(counts),
+    files: [...paths].slice(0, overviewLimit).map(([path, operations]) => ({
+      path: memoryPreview(path, 128),
+      counts: counted(operations),
+    })),
+    pathCount: paths.size,
+    fileCount: modified.size,
+    checks: checks.slice(0, overviewLimit),
+    checkCount: checks.length,
+    failureCount,
+  };
+}
+
+function relevantDiscussionScope(
+  previous: MemoryScope | undefined,
+  current: MemoryScope | undefined,
+) {
+  if (relevantMemoryScope(previous, current)) return true;
+  return (
+    !!current?.taskId &&
+    !!current.sessionId &&
+    !previous?.taskId &&
+    previous?.sessionId === current.sessionId &&
+    (!previous.planId || previous.planId === current.planId) &&
+    (!previous.passId || previous.passId === current.passId)
+  );
+}
+
+type MemoryReference = StoredMemorySummary['sources'][number];
+
+function matchesReference(message: MemorySourceMessage, reference: MemoryReference): boolean {
+  return (
+    message.seq === reference.seq &&
+    message.author === reference.author &&
+    message.messageId === reference.messageId &&
+    message.turnId === reference.turnId
+  );
+}
+
+function referenceEntry(
+  summary: StoredMemorySummary,
+  message: MemorySourceMessage,
+  includeText: boolean,
+): SearchEntry[] {
+  const entry = {
+    ...sourceEntry(message),
+    kind: summary.type,
+    summaryId: summary.id,
+    sources: [message.seq],
+  };
+  return [
+    ...(includeText && message.text.trim() ? [entry] : []),
+    ...(message.attachments ?? []).map(({ text }) => ({ ...entry, author: 'attachment', text })),
+  ];
+}
+
 export const memoryDispatchDeadlineMs = 500;
+
+async function beforeReadDeadline<T>(read: () => Promise<T>, signal: AbortSignal) {
+  if (signal.aborted) return undefined;
+  let stop: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      new Promise<undefined>((resolve) => {
+        stop = () => resolve(undefined);
+        signal.addEventListener('abort', stop, { once: true });
+      }),
+      read(),
+    ]);
+  } finally {
+    if (stop) signal.removeEventListener('abort', stop);
+  }
+}
 
 function compareHits(a: SearchHit, b: SearchHit): number {
   return (
@@ -258,6 +391,8 @@ function originalHistoryAvailability(
 export class SessionMemory {
   private readonly store: MemoryStore;
   private readonly threshold: number;
+  private readonly processing: MemoryProcessing;
+  private readonly awaitingInference = new Set<string>();
   private readonly budgets: MemoryBudgets;
   private readonly pending = new Map<string, { force: boolean; queuedAt: number }>();
   private readonly foreground = new Set<string>();
@@ -280,6 +415,7 @@ export class SessionMemory {
   private drain?: Promise<void>;
 
   constructor(private readonly options: MemoryOptions) {
+    this.processing = options.processing ?? 'deterministic-markdown';
     this.threshold = options.threshold ?? 3000;
     this.budgets = options.budgets ?? defaultMemoryBudgets;
     const { input } = this.budgets;
@@ -333,7 +469,7 @@ export class SessionMemory {
     if (enabled === !this.summarizationAbort.signal.aborted) return;
     if (enabled) {
       this.summarizationAbort = new AbortController();
-      this.startDrain();
+      this.resumeInference();
     } else {
       this.inference = undefined;
       this.summarizationAbort.abort();
@@ -420,6 +556,125 @@ export class SessionMemory {
       ...page,
       storagePath: this.options.databasePath === ':memory:' ? null : this.options.databasePath,
     };
+  }
+
+  async readEvidenceReferences(
+    agentId: string,
+    { epoch, id, position }: MemorySummaryCursor,
+    after = -1,
+  ) {
+    const generation = this.activity.get(agentId)?.generation;
+    const tail = await this.options.source.read(agentId, undefined, 'tail');
+    this.abort.signal.throwIfAborted();
+    const record = this.store.summary(agentId, epoch, id);
+    const state = this.store.state(agentId);
+    if (
+      tail.reset ||
+      tail.epoch !== epoch ||
+      generation !== this.activity.get(agentId)?.generation ||
+      (state?.epoch === epoch && state.seq > tail.latest) ||
+      position > tail.latest ||
+      record?.state !== 'recorded' ||
+      record.position !== position
+    )
+      return { sources: [], next: null };
+    const sources: (Pick<MemoryReference, 'seq' | 'messageId' | 'turnId'> & {
+      author: 'agent' | 'tool';
+    })[] = [];
+    let next: number | null = null;
+    // > A small page limits the original tool output fetched in one expansion.
+    for (const { seq, messageId, turnId, author } of record.sources) {
+      if (seq <= after || (author !== 'agent' && author !== 'tool')) continue;
+      if (sources.length === 8) {
+        next = sources.at(-1)!.seq;
+        break;
+      }
+      sources.push({ seq, messageId, turnId, author });
+    }
+    return { sources, next };
+  }
+
+  private async referencedMessages(
+    agentId: string,
+    epoch: string,
+    references: readonly MemoryReference[],
+    signal: AbortSignal,
+    known: readonly MemorySourceMessage[] = [],
+    lookupSignal?: AbortSignal,
+    latest?: number,
+  ) {
+    const found = new Map(known.map((message) => [message.seq, message]));
+    const requested = [...new Set(references.map(({ seq }) => seq))].sort((a, b) => b - a);
+    for (const seq of requested) {
+      signal.throwIfAborted();
+      if (found.has(seq)) continue;
+      const read = () =>
+        this.options.source.read(agentId, { epoch, seq: seq + 1 }, 'before').catch(() => undefined);
+      const page = lookupSignal ? await beforeReadDeadline(read, lookupSignal) : await read();
+      signal.throwIfAborted();
+      if (page && (page.epoch !== epoch || (latest !== undefined && page.latest < latest)))
+        return { messages: [], originalHistory: 'unavailable' as const };
+      if (!page || page.reset) break;
+      for (const message of page.messages) found.set(message.seq, message);
+    }
+    const messages = references.flatMap((reference) => {
+      const message = found.get(reference.seq);
+      return message && matchesReference(message, reference) ? [message] : [];
+    });
+    return {
+      messages,
+      originalHistory:
+        messages.length === references.length ? ('available' as const) : ('partial' as const),
+    };
+  }
+
+  async recordEntries(
+    agentId: string,
+    epoch: string,
+    summaries: readonly StoredMemorySummary[],
+    signal = this.abort.signal,
+  ): Promise<MemorySearchEntry[]> {
+    return (await this.resolveRecordEntries(agentId, epoch, summaries, signal)).entries;
+  }
+
+  private async resolveRecordEntries(
+    agentId: string,
+    epoch: string,
+    summaries: readonly StoredMemorySummary[],
+    signal: AbortSignal,
+    known: readonly MemorySourceMessage[] = [],
+    lookupSignal?: AbortSignal,
+    latest?: number,
+  ) {
+    const references = summaries
+      .filter(({ state, complete }) => complete && (state === 'skipped' || state === 'recorded'))
+      .flatMap(({ sources, attachmentSources }) => [...sources, ...(attachmentSources ?? [])]);
+    const resolved = await this.referencedMessages(
+      agentId,
+      epoch,
+      references,
+      signal,
+      known,
+      lookupSignal,
+      latest,
+    );
+    const bySequence = new Map(resolved.messages.map((message) => [message.seq, message]));
+    const entries = summaries.flatMap((summary) => {
+      if (!summary.complete) return [];
+      if (summary.state !== 'skipped' && summary.state !== 'recorded')
+        return summaryEntries(summary);
+      const entriesFor = (reference: MemoryReference, includeText: boolean) => {
+        const message = bySequence.get(reference.seq);
+        return message && matchesReference(message, reference)
+          ? referenceEntry(summary, message, includeText)
+          : [];
+      };
+      return [
+        ...summary.sources.flatMap((reference) => entriesFor(reference, true)),
+        ...(summary.attachmentSources ?? []).flatMap((reference) => entriesFor(reference, false)),
+      ];
+    });
+    return { entries, originalHistory: resolved.originalHistory };
   }
 
   private agentActivity(agentId: string): AgentMemoryActivity {
@@ -526,7 +781,7 @@ export class SessionMemory {
 
   foregroundEnded(id: string): void {
     this.foreground.delete(id);
-    this.startDrain();
+    this.resumeInference();
   }
 
   holdForeground(): () => void {
@@ -610,9 +865,27 @@ export class SessionMemory {
     this.startDrain();
   }
 
+  private resumeInference(): void {
+    if (!this.foreground.size && !this.summarizationAbort.signal.aborted) {
+      for (const agentId of this.awaitingInference) {
+        this.awaitingInference.delete(agentId);
+        this.observe(agentId);
+      }
+    }
+    this.startDrain();
+  }
+
+  async settled(): Promise<void> {
+    while (this.drain) await this.drain;
+  }
+
   private startDrain(): void {
-    if (this.drain || this.foreground.size || !this.pending.size) return;
-    const signal = AbortSignal.any([this.abort.signal, this.summarizationAbort.signal]);
+    if (this.drain || !this.pending.size) return;
+    const legacy = this.processing === 'legacy-json';
+    if (legacy && this.foreground.size) return;
+    const signal = legacy
+      ? AbortSignal.any([this.abort.signal, this.summarizationAbort.signal])
+      : this.abort.signal;
     if (signal.aborted) return;
     this.drain = Promise.resolve().then(async () => {
       try {
@@ -633,7 +906,11 @@ export class SessionMemory {
   }
 
   private async runPending(signal: AbortSignal): Promise<void> {
-    while (this.pending.size && !this.foreground.size && !signal.aborted) {
+    while (
+      this.pending.size &&
+      !signal.aborted &&
+      (this.processing !== 'legacy-json' || !this.foreground.size)
+    ) {
       const [agentId, pending] = this.pending.entries().next().value!;
       this.pending.delete(agentId);
       const activity = this.agentActivity(agentId);
@@ -859,44 +1136,142 @@ export class SessionMemory {
         checkpoint = Math.min(checkpoint, (start?.seq ?? message.seq) - 1);
       }
     }
+    const legacy = this.processing === 'legacy-json';
+    const format = this.processing === 'deterministic-markdown' ? 'markdown' : 'json';
+    let deferred = false;
+    this.awaitingInference.delete(agentId);
+    const saveFinished = (summary: StoredMemorySummary) => {
+      this.store.saveSummary(summary);
+      summaries.set(summary.id, summary);
+      const count = summary.type === 'UAMP' ? 'uamp' : 'aab';
+      const stored = activity.stored;
+      if (stored?.epoch === epoch) stored[count]++;
+      if (pendingUnits.delete(summary.id)) pendingCounts[count]--;
+      notePending();
+    };
     for (const unit of units) {
-      if (this.foreground.size) return true;
+      if (legacy && this.foreground.size) return true;
       const id = unitId(unit);
       const existing = summaries.get(id);
       if (existing?.complete) continue;
       const position = unit.messages.at(-1)!.seq;
-      let latestUamp: StoredMemorySummary | undefined;
-      for (const summary of summaries.values()) {
-        if (
-          summary.type === 'UAMP' &&
-          summary.complete &&
-          summary.position < position &&
-          (!latestUamp || summary.position > latestUamp.position) &&
-          relevantMemoryScope(summary.scope, unit.scope) &&
-          summary.parts.some(
-            ({ content }) => !isEmptyMemorySummary(content) && memorySummaryText(content).trim(),
-          )
-        )
-          latestUamp = summary;
+      const originalTokens = originalTokenCount(unit.messages);
+      const record: StoredMemorySummary = {
+        id,
+        agentId,
+        sessionId: unit.scope?.sessionId ?? agentId,
+        epoch,
+        position,
+        type: unit.type,
+        scope: unit.scope,
+        sources: memorySources(unit.messages),
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
+        originalTokens,
+        historyHash: '',
+        parts: [],
+        expectedParts: 1,
+        complete: false,
+      };
+      if (!legacy && (unit.type === 'AAB' || originalTokens < shortDiscussionTokens)) {
+        if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+        if (unit.type === 'AAB') {
+          record.state = 'recorded';
+          record.action = actionOverview(unit.messages);
+          record.observedChecks = observedMemoryChecks(unit.messages);
+          record.attachmentSources = memorySources(
+            unit.instructions?.filter(({ attachments }) => attachments?.length) ?? [],
+          );
+        } else {
+          record.state = 'skipped';
+        }
+        record.complete = true;
+        saveFinished(record);
+        continue;
       }
-      const prior = latestUamp;
-      const history = prior
-        ? prior.parts.map((part, index) => ({
+      if (!legacy && (this.foreground.size || this.summarizationAbort.signal.aborted)) {
+        retainCoverage(unit);
+        deferred = true;
+        if (!existing) {
+          if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+          this.store.saveSummary({ ...record, state: 'pending' });
+        }
+        continue;
+      }
+      const prior = [...summaries.values()]
+        .filter(
+          (candidate) =>
+            candidate.type === 'UAMP' &&
+            candidate.complete &&
+            candidate.position < position &&
+            (legacy ? relevantMemoryScope : relevantDiscussionScope)(candidate.scope, unit.scope) &&
+            (candidate.state === 'skipped' ||
+              candidate.parts.some(
+                ({ content }) =>
+                  !isEmptyMemorySummary(content) && memorySummaryText(content).trim(),
+              )),
+        )
+        .sort((a, b) => b.position - a.position);
+      const anchor = prior.find(({ state }) => state !== 'skipped');
+      const history = anchor
+        ? anchor.parts.map((part, index) => ({
             ...part,
-            type: prior.type,
-            scope: prior.scope,
-            unitId: prior.id,
-            id: `${prior.id}/${index + 1}`,
+            type: anchor.type,
+            scope: unit.scope,
+            unitId: anchor.id,
+            id: `${anchor.id}/${index + 1}`,
           }))
         : [];
+      const historyGeneration = activity.generation;
+      const resolveDiscussion = (summary: StoredMemorySummary) =>
+        this.referencedMessages(
+          agentId,
+          epoch,
+          summary.sources,
+          signal,
+          messages,
+          undefined,
+          latest,
+        );
+      const confirmHistory = async () =>
+        (await this.currentHistory(agentId, epoch, latest, signal)) &&
+        activity.generation === historyGeneration;
+      const skipped = [];
+      let skippedTokens = 0;
+      for (const candidate of prior) {
+        if (candidate.state !== 'skipped' || skippedTokens >= 512) break;
+        const { messages: originals, originalHistory } = await resolveDiscussion(candidate);
+        if (activity.generation !== historyGeneration) return true;
+        if (originalHistory === 'unavailable') {
+          if (!(await confirmHistory())) return true;
+          break;
+        }
+        if (originals.length) skipped.push({ id: candidate.id, messages: originals });
+        skippedTokens += Math.max(32, candidate.originalTokens ?? 32);
+      }
+      let originalAnchor: string | undefined;
+      if (format === 'markdown' && anchor && skipped.length) {
+        // > A short exchange can refer to an earlier proposal.
+        const { messages: originals, originalHistory } = await resolveDiscussion(anchor);
+        if (activity.generation !== historyGeneration) return true;
+        if (originalHistory === 'unavailable' && !(await confirmHistory())) return true;
+        if (originalHistory === 'available') originalAnchor = originalUampDialogue(originals);
+      }
       let parts: ReturnType<typeof prepareMemorySummaries>;
       try {
-        parts = prepareMemorySummaries(unit, history, this.budgets);
+        parts = prepareMemorySummaries(unit, history, this.budgets, {
+          format,
+          skipped,
+          originalAnchor,
+        });
       } catch (error) {
         if (!(error instanceof MemoryInputBudgetError)) throw error;
         retainCoverage(unit);
         this.noteFailure(agentId, error.message);
         this.options.onFailure?.();
+        if (!legacy) {
+          if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+          this.store.saveSummary({ ...record, state: 'failed' });
+        }
         continue;
       }
       const historyHash = createHash('sha256')
@@ -907,31 +1282,11 @@ export class SessionMemory {
           ? existing
           : undefined;
       const retainedParts = reusable?.parts ?? [];
-      const originals = new Map(unit.messages.map((message) => [message.seq, message]));
-      let originalTokens = 0;
-      for (const { text, attachments } of originals.values()) {
-        originalTokens += estimateMemoryTokens(text);
-        for (const attachment of attachments ?? [])
-          originalTokens += estimateMemoryTokens(attachment.text);
-      }
       const summary: StoredMemorySummary = {
-        id,
-        agentId,
-        sessionId: unit.scope?.sessionId ?? agentId,
-        epoch,
-        position,
-        type: unit.type,
-        scope: unit.scope,
-        sources: unit.messages.map(({ seq, author, messageId, timestamp }) => ({
-          seq,
-          author,
-          messageId,
-          timestamp,
-        })),
-        createdAt: existing?.createdAt ?? new Date().toISOString(),
-        originalTokens,
+        ...record,
+        state: legacy ? undefined : 'pending',
         summaryTokens: retainedParts.reduce(
-          (total, { content }) => total + estimateMemoryTokens(JSON.stringify(content)),
+          (total, { content }) => total + estimateMemoryTokens(memorySummaryText(content)),
           0,
         ),
         // > An older partial summary may have portions with unknown durations.
@@ -942,10 +1297,21 @@ export class SessionMemory {
         parts: retainedParts,
         observedChecks: unit.type === 'AAB' ? observedMemoryChecks(unit.messages) : undefined,
         expectedParts: parts.length,
-        complete: false,
       };
+      const inferenceSignal = legacy
+        ? signal
+        : AbortSignal.any([signal, this.summarizationAbort.signal]);
+      let failure = false;
+      if (!legacy && !existing) {
+        if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+        this.store.saveSummary(summary);
+      }
       for (const part of parts.slice(summary.parts.length)) {
-        if (this.foreground.size) return true;
+        if (this.foreground.size || inferenceSignal.aborted) {
+          if (legacy) return true;
+          deferred = true;
+          break;
+        }
         const generation = activity.generation;
         const queueMs = Math.round(performance.now() - queuedAt);
         const started = performance.now();
@@ -968,9 +1334,8 @@ export class SessionMemory {
             placement = { cpuOnly: true };
           } else if (device.id !== automaticMemoryDevice.id) {
             const catalog = await this.readDeviceCatalog();
-            signal.throwIfAborted();
+            inferenceSignal.throwIfAborted();
             if (
-              this.foreground.size ||
               this.store.deviceSettings().device.id !== device.id ||
               activity.generation !== generation
             )
@@ -981,6 +1346,7 @@ export class SessionMemory {
                 agentId,
                 selected?.unavailable ?? catalog.diagnostic ?? unknownDevice,
               );
+              failure = true;
               this.options.onFailure?.();
               break;
             }
@@ -988,8 +1354,8 @@ export class SessionMemory {
           }
           if (!placement.cpuOnly && cpuRunner && this.options.releaseCpuModel) {
             // > Ollama can reuse a CPU-only runner until it is unloaded.
-            await this.options.releaseCpuModel(signal);
-            signal.throwIfAborted();
+            await this.options.releaseCpuModel(inferenceSignal);
+            inferenceSignal.throwIfAborted();
             const current = this.store.deviceSettings();
             this.store.saveDeviceSettings({ ...current, cpuRunner: false });
             if (
@@ -999,25 +1365,38 @@ export class SessionMemory {
             )
               return true;
           }
+          if (this.foreground.size) {
+            if (legacy) return true;
+            deferred = true;
+            break;
+          }
+          inferenceSignal.throwIfAborted();
           if (placement.cpuOnly && !cpuRunner)
             this.store.saveDeviceSettings({ device, cpuRunner: true });
           const inference: ActiveMemoryInference = { agentId, generation };
           this.inference = inference;
           let ollamaFailure: string | undefined;
           const result = await this.options
-            .summarize(unit.type, part.prompt, signal, placement, (rate) => {
-              if (
-                this.inference === inference &&
-                activity.generation === generation &&
-                !signal.aborted
-              )
-                inference.rate = rate;
-            })
+            .summarize(
+              unit.type,
+              part.prompt,
+              inferenceSignal,
+              placement,
+              (rate) => {
+                if (
+                  this.inference === inference &&
+                  activity.generation === generation &&
+                  !inferenceSignal.aborted
+                )
+                  inference.rate = rate;
+              },
+              format,
+            )
             .finally(() => {
               this.inference = undefined;
             })
             .catch((error: unknown): MemorySummaryResult => {
-              signal.throwIfAborted();
+              inferenceSignal.throwIfAborted();
               if (error instanceof OllamaSummaryError) ollamaFailure = error.message;
               return {
                 type: unit.type,
@@ -1026,7 +1405,7 @@ export class SessionMemory {
                 elapsedMs: performance.now() - started,
               };
             });
-          signal.throwIfAborted();
+          inferenceSignal.throwIfAborted();
           report(result);
           if (!result.complete) {
             this.noteFailure(
@@ -1036,12 +1415,13 @@ export class SessionMemory {
                   ? 'Ollama returned invalid JSON for a Session Memory summary.'
                   : 'Session Memory returned an incomplete summary.'),
             );
+            failure = true;
             this.options.onFailure?.();
             break;
           }
-          summary.parts.push({ content: result.content, sources: part.sources });
+          summary.parts.push({ content: result.content, format, sources: part.sources });
           summary.summaryTokens =
-            (summary.summaryTokens ?? 0) + estimateMemoryTokens(JSON.stringify(result.content));
+            (summary.summaryTokens ?? 0) + estimateMemoryTokens(memorySummaryText(result.content));
           if (summary.durationMs !== undefined) {
             const durationMs = summary.durationMs + Math.round(result.elapsedMs);
             summary.durationMs =
@@ -1050,18 +1430,21 @@ export class SessionMemory {
           summary.complete = summary.parts.length === parts.length;
           if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
           signal.throwIfAborted();
-          this.store.saveSummary(summary);
           if (summary.complete) {
+            if (!legacy) summary.state = 'summarized';
             activity.lastSuccessfulSummaryAt = new Date().toISOString();
-            const count = unit.type === 'UAMP' ? 'uamp' : 'aab';
-            const stored = activity.stored;
-            if (stored?.epoch === epoch) stored[count]++;
-            if (pendingUnits.delete(id)) pendingCounts[count]--;
-            notePending();
+            saveFinished(summary);
+          } else {
+            this.store.saveSummary(summary);
           }
         } catch (error) {
           this.inference = undefined;
           signal.throwIfAborted();
+          if (inferenceSignal.aborted) {
+            deferred = true;
+            break;
+          }
+          failure = true;
           this.noteFailure(
             agentId,
             error instanceof OllamaSummaryError
@@ -1073,6 +1456,7 @@ export class SessionMemory {
         }
       }
       if (!summary.complete) {
+        if (failure && !legacy) summary.state = 'failed';
         retainCoverage(unit);
         if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
         signal.throwIfAborted();
@@ -1083,6 +1467,10 @@ export class SessionMemory {
     const tail = await this.currentHistory(agentId, epoch, latest, signal);
     signal.throwIfAborted();
     if (!tail) return true;
+    if (deferred) {
+      this.awaitingInference.add(agentId);
+      if (!this.foreground.size && !this.summarizationAbort.signal.aborted) return true;
+    }
     const seq = Math.max(previous, checkpoint);
     this.store.saveState(agentId, { epoch, seq });
     if (activity.stored?.epoch === epoch) activity.stored.coveredThrough = seq < 0 ? null : seq;
@@ -1180,6 +1568,10 @@ export class SessionMemory {
     selection?: MemoryHandoffSelection;
   }> {
     const signal = deadline ? AbortSignal.any([deadline, this.abort.signal]) : this.abort.signal;
+    // > Leave time to assemble the handoff even when historical page reads lag.
+    const lookupSignal = deadline
+      ? AbortSignal.any([signal, AbortSignal.timeout(memoryDispatchDeadlineMs - 100)])
+      : undefined;
     signal.throwIfAborted();
     const { tail, state, summaries, sourceGeneration } = await this.current(agentId);
     signal.throwIfAborted();
@@ -1290,20 +1682,36 @@ export class SessionMemory {
         ...observedMemoryChecks(recent),
       ].map((check) => [JSON.stringify([check.seq, check.text]), check]),
     );
+    const applicableRecords = summaries.filter(
+      ({ complete, scope: recordedScope }) =>
+        complete &&
+        (!scope?.taskId || !recordedScope?.taskId || recordedScope.taskId === scope.taskId),
+    );
+    const resolved = await this.resolveRecordEntries(
+      agentId,
+      tail.epoch,
+      applicableRecords,
+      signal,
+      recent,
+      lookupSignal,
+      tail.latest,
+    );
+    if (resolved.originalHistory === 'unavailable') {
+      this.observe(agentId, true);
+      return unavailableHandoff;
+    }
+    if (resolved.originalHistory === 'partial') originalHistory = 'partial';
+    const recordScopes = new Map(applicableRecords.map(({ id, scope }) => [id, scope]));
     const candidates: SearchEntry[] = [
-      ...summaries
-        .filter(({ complete }) => complete)
-        .flatMap((summary) =>
-          summaryEntries(summary).filter(
-            (entry) =>
-              applies(entry.seq, entry.text, false, summary.scope) &&
-              !(
-                entry.userSources?.length &&
-                entry.userSources.every((seq) => superseded.has(seq)) &&
-                ['intent', 'decisions', 'disagreements', 'questions'].includes(entry.field ?? '')
-              ),
+      ...resolved.entries.filter(
+        (entry) =>
+          applies(entry.seq, entry.text, false, recordScopes.get(entry.summaryId!)) &&
+          !(
+            entry.userSources?.length &&
+            entry.userSources.every((seq) => superseded.has(seq)) &&
+            ['intent', 'decisions', 'disagreements', 'questions'].includes(entry.field ?? '')
           ),
-        ),
+      ),
       ...[...observed.values()]
         .filter(({ seq }) => seq <= through)
         .map(({ seq, text }) => sourceEntry({ seq, text, author: 'tool' })),
@@ -1324,7 +1732,14 @@ export class SessionMemory {
             ]
           : [],
       ),
-    ].filter(({ seq, author, text }) => author === 'summary' || applies(seq, text));
+    ].filter(
+      ({ seq, author, text, summaryId }) => summaryId || author === 'summary' || applies(seq, text),
+    );
+    const nativeRecordIds = new Set(
+      applicableRecords
+        .filter(({ state }) => state === 'recorded' || state === 'skipped')
+        .map(({ id }) => id),
+    );
     const borrowedSources = new Map<SearchEntry, number>();
     const normalized = (text: string) => text.trim().replace(/\s+/g, ' ');
     const alreadySelectedUsers = new Set([
@@ -1364,12 +1779,16 @@ export class SessionMemory {
     };
     let evidence = selectEvidence();
     if (recoverOriginals && identifiers.length) {
-      const discovered = await this.searchConversation(agentId, identifiers.join(' '), signal, {
-        tail,
-        state,
-        summaries: [],
-        identifiers,
-      }).catch(() => undefined);
+      const search = () =>
+        this.searchConversation(agentId, identifiers.join(' '), lookupSignal ?? signal, {
+          tail,
+          state,
+          summaries: [],
+          identifiers,
+        }).catch(() => undefined);
+      const discovered = lookupSignal
+        ? await beforeReadDeadline(search, lookupSignal)
+        : await search();
       signal.throwIfAborted();
       if (discovered?.stale) {
         this.observe(agentId, true);
@@ -1379,7 +1798,13 @@ export class SessionMemory {
         originalHistory = 'partial';
       const evidenceKey = ({ seq, author, text }: { seq: number; author: string; text: string }) =>
         JSON.stringify([seq, author, text]);
-      const represented = new Map(candidates.map((entry) => [evidenceKey(entry), entry]));
+      const represented = new Map<string, SearchEntry>();
+      for (const entry of candidates) {
+        const key = evidenceKey(entry);
+        const existing = represented.get(key);
+        if (!existing || (entry.summaryId && nativeRecordIds.has(entry.summaryId)))
+          represented.set(key, entry);
+      }
       const selectedUserKeys = new Set(users.selected.map(evidenceKey));
       const originals = discovered?.hits ?? [];
       const firstForIdentifier = new Set(
@@ -1398,6 +1823,7 @@ export class SessionMemory {
         if (epoch !== tail.epoch || selectedUserKeys.has(key) || !applies(entry.seq, entry.text))
           continue;
         const existing = represented.get(key);
+        if (existing?.summaryId && nativeRecordIds.has(existing.summaryId)) continue;
         const borrowed = existing ?? entry;
         if (!borrowedSources.has(borrowed)) borrowedSources.set(borrowed, borrowedSources.size);
         if (!existing) {
@@ -1479,12 +1905,39 @@ export class SessionMemory {
       if (query && !score) return;
       hits.push({ ...entry, agentId: id, epoch: tail.epoch, score });
     };
-    for (const summary of summaries) if (summary.complete) summaryEntries(summary).forEach(add);
+    const recordsBySequence = new Map<
+      number,
+      { record: StoredMemorySummary; reference: MemoryReference; includeText: boolean }[]
+    >();
+    for (const summary of summaries) {
+      if (!summary.complete) continue;
+      if (summary.state !== 'recorded' && summary.state !== 'skipped') {
+        summaryEntries(summary).forEach(add);
+        continue;
+      }
+      const index = (references: readonly MemoryReference[], includeText: boolean) => {
+        for (const reference of references) {
+          const records = recordsBySequence.get(reference.seq) ?? [];
+          records.push({ record: summary, reference, includeText });
+          recordsBySequence.set(reference.seq, records);
+        }
+      };
+      index(summary.sources, true);
+      index(summary.attachmentSources ?? [], false);
+    }
     let page = tail;
     while (true) {
       signal.throwIfAborted();
       for (const message of page.messages) {
         if (message.author === 'runtime') continue;
+        const records = recordsBySequence.get(message.seq) ?? [];
+        let includedText = false;
+        for (const { record, reference, includeText } of records) {
+          if (!matchesReference(message, reference)) continue;
+          referenceEntry(record, message, includeText).forEach(add);
+          includedText ||= includeText;
+        }
+        if (includedText) continue;
         if (message.text.trim()) add(sourceEntry(message));
         for (const attachment of message.attachments ?? [])
           add({
