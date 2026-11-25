@@ -364,6 +364,8 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- Changed files start collapsed when reviewing a linked worktree in Paseo.
+
 - Activity can show observed Codex skill reads in idle and active chats.
 
 - Session Memory delegation sends compact, Task-scoped evidence followed by the

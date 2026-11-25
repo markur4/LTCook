@@ -207,7 +207,8 @@ Git worktree. Managed Pi and supported Paseo Pi and Codex agents report the
 checkout they use through `ltcook_worktree`. When the worktree disappears,
 Changes returns to the session's original checkout. Use **Worktree** to pin
 another checkout for the current session or select **Follow session** to resume
-automatic switching. Diffs for linked checkouts open inline for inspection.
+automatic switching. Diffs for linked checkouts open inline with each file
+collapsed. Select a file header to expand its diff.
 
 The branch picker runs `git checkout` in the workspace directory. When Git
 says a branch is already in use by a worktree, select that checkout in the
