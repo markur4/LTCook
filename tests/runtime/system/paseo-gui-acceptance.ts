@@ -666,6 +666,10 @@ try {
   const skillDocument = '[data-testid="ltcook-skill-document"]';
   const skillPreview = '[data-testid="ltcook-passage-skill-preview"]';
   stage = 'native-activity-skill-document';
+  assert.match(
+    await browser('get', 'text', '[aria-label="Open skill in new tab"]'),
+    /Open skill in new tab/,
+  );
   await clickButton('Open skill in new tab');
   await browser('wait', skillDocument);
   await browser(

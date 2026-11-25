@@ -207,13 +207,11 @@ function OpenSkillButton({
   theme,
   skill,
   onOpenSkill,
-  showName = false,
   disambiguate = false,
 }: {
   theme: Theme;
   skill: SkillLoad;
   onOpenSkill: (skill: SkillLoad) => void;
-  showName?: boolean;
   disambiguate?: boolean;
 }) {
   const label = 'Open skill in new tab';
@@ -225,7 +223,8 @@ function OpenSkillButton({
       compact
     >
       <Icon name="ArrowUpRight" size={11} color={theme.colors.accent} />
-      {showName && <ActivityText theme={theme}>{skill.name}</ActivityText>}
+      <ActivityText theme={theme}>{label}</ActivityText>
+      {disambiguate && <ActivityText theme={theme}>{skill.name}</ActivityText>}
     </ActivityButton>
   );
 }
@@ -433,7 +432,6 @@ export function ActivityAgentCard({
                 theme={theme}
                 skill={item}
                 onOpenSkill={onOpenSkill}
-                showName
                 disambiguate={toolSkills.size > 1}
               />
             ))
@@ -463,7 +461,7 @@ export function ActivityAgentCard({
                       <ActivityStatus theme={theme} label={status} tone={toolTones[call.status]} />
                     )}
                     <ActivityText theme={theme} tone="muted">
-                      {time}
+                      {singleCall ? time : `${index + 1} · ${time}`}
                       {call.durationMs !== undefined && ` · ${call.durationMs.toLocaleString()} ms`}
                     </ActivityText>
                   </View>
@@ -518,7 +516,9 @@ export function ActivityAgentCard({
                 style={{ gap: 4, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}
               >
                 <ActivityText theme={theme} tone="muted">
-                  Observed {time}
+                  {skill.occurrences.length === 1
+                    ? `Observed ${time}`
+                    : `Use ${index + 1} · ${time}`}
                 </ActivityText>
                 <ShowInChatButton
                   theme={theme}
