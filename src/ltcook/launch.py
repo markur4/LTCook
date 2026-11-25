@@ -177,7 +177,9 @@ def resolve_launch(
         _user_path(global_config.runtime.pi_auth_dir, home)
     )
     environment["LTCOOK_OLLAMA_ENDPOINT"] = global_config.runtime.ollama_endpoint
-    environment["LTCOOK_MODEL_TINY_LOCAL"] = global_config.runtime.tiny_local_model
+    environment["LTCOOK_MODEL_LOCAL_CPU"] = global_config.runtime.local_cpu_model
+    environment["LTCOOK_MODEL_LOCAL_TINY"] = global_config.runtime.local_tiny_model
+    environment["LTCOOK_MODEL_LOCAL"] = global_config.runtime.local_model
     environment["LTCOOK_SUMMARIZER_KEEP_ALIVE"] = str(
         global_config.runtime.summarizer_keep_alive
     )
@@ -334,7 +336,7 @@ def evaluation_context(
                 "webConfiguration": web,
                 "summarization": {
                     "endpoint": launch.environment["LTCOOK_OLLAMA_ENDPOINT"],
-                    "model": launch.environment["LTCOOK_MODEL_TINY_LOCAL"],
+                    "model": launch.environment["LTCOOK_MODEL_LOCAL_CPU"],
                     "keepAlive": int(
                         launch.environment["LTCOOK_SUMMARIZER_KEEP_ALIVE"]
                     ),

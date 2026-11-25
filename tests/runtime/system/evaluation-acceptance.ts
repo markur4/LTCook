@@ -4,9 +4,11 @@ import { readdirSync } from 'node:fs';
 import { mkdtemp, rm, mkdir, writeFile, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { catalogModelAliases } from '../../../runtime/src/models/aliases.js';
 import { createEvalEngine } from '../../../runtime/src/evals/engine.js';
 import {
   EVAL_MODEL,
+  EVAL_MODEL_ENVIRONMENT,
   EVAL_CONTEXT_WINDOW,
   EVAL_MAX_OUTPUT_TOKENS,
   EVALUATION_EXECUTION_CONTEXT,
@@ -342,6 +344,16 @@ const previousAnthropic = process.env.ANTHROPIC_API_KEY;
 process.env.OPENAI_API_KEY = 'must-not-enter-evaluation';
 process.env.ANTHROPIC_API_KEY = 'must-not-enter-evaluation';
 try {
+  const catalog = catalogModelAliases(
+    { modelAlias: 'local', thinking: 'low' },
+    EVAL_MODEL_ENVIRONMENT,
+  );
+  assert(
+    catalog.aliases.every(
+      ({ provider, model, reasoning }) =>
+        provider === 'ollama' && model === EVAL_MODEL && reasoning === 'low',
+    ),
+  );
   const workspace = path.join(directory, 'current-workspace');
   await mkdir(workspace);
   await writeFile(

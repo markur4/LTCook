@@ -12,6 +12,7 @@ import { Telemetry } from '../diagnostics/telemetry.js';
 import type { GuidanceInspection } from '../guidance-api/index.js';
 import {
   EVAL_MODEL,
+  EVAL_MODEL_ENVIRONMENT,
   EVAL_CONTEXT_WINDOW,
   EVAL_COMPACTION,
   EVAL_MAX_OUTPUT_TOKENS,
@@ -219,10 +220,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       LTCOOK_GUIDANCE_DIR: path.join(job.directory, 'guidance'),
       LTCOOK_SHARED_SKILLS_DIR: path.join(job.directory, 'guidance', 'shared-skills'),
       LTCOOK_JS_ROOT: job.appRoot,
-      LTCOOK_MODEL_SMART: `ollama/${EVAL_MODEL}`,
-      LTCOOK_MODEL_SMOL: `ollama/${EVAL_MODEL}`,
-      LTCOOK_MODEL_EXPENSIVE: `ollama/${EVAL_MODEL}`,
-      LTCOOK_MODEL_TINY_LOCAL: EVAL_MODEL,
+      ...EVAL_MODEL_ENVIRONMENT,
       LTCOOK_BROWSER_ENABLED: 'false',
       LTCOOK_CODESEARCH_ENABLED: 'false',
       LTCOOK_CONTEXT7_ENABLED: 'false',

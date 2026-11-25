@@ -27,6 +27,34 @@ async function localAuthority(): Promise<string> {
   return `127.0.0.1:${address.port}`;
 }
 
+test('the @local-cpu summarizer sends reasoning off by default', async () => {
+  const model = 'lfm3:1.7b-qad-q4_0';
+  const ollama = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(request) {
+      expect(new URL(request.url).pathname).toBe('/api/chat');
+      expect(await request.json()).toMatchObject({ model, think: false });
+      return Response.json({ model, message: { content: 'Fixture summary' }, done: true });
+    },
+  });
+  try {
+    const tool = createSummarizeTool({ endpoint: ollama.url.origin, model, keepAlive: 0 });
+    const result = await tool.execute(
+      { text: 'Fixture source' },
+      {
+        agentId: 'summary-fixture',
+        workspaceRoot: tmpdir(),
+        workspaceFileAccess: false,
+        signal: AbortSignal.timeout(2_000),
+      },
+    );
+    expect(result).toMatchObject({ model, summary: 'Fixture summary' });
+  } finally {
+    await ollama.stop(true);
+  }
+});
+
 test('waits for the unloaded Ollama runner to disappear before reusing the model', async () => {
   const model = LFM3_SUMMARIZER_MODEL;
   const other = { name: 'other:latest' };

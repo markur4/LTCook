@@ -3,13 +3,16 @@ import {
   catalogModelAliases,
   reasoningOptions,
   resolveModel,
+  resolveSummarizerModel,
   ResolvedModelSchema,
 } from '../../../runtime/src/models/aliases.js';
 import { modelCommand } from '../../../runtime/src/models/adapters.js';
 
 const environment = {
   LTCOOK_MODEL_SMOL: 'openai-codex/gpt-6-luna',
-  LTCOOK_MODEL_TINY_LOCAL: 'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
+  LTCOOK_MODEL_LOCAL_CPU: 'lfm3:1.7b-qad-q4_0',
+  LTCOOK_MODEL_LOCAL_TINY: 'SparkLLM/Spark-X2.6-4B:q8_0',
+  LTCOOK_MODEL_LOCAL: 'qwen3.8:27b-q4_K_M',
   LTCOOK_MODEL_SMART: 'openai-codex/gpt-6.2-sol',
   LTCOOK_MODEL_EXPENSIVE: 'openai-codex/gpt-6-astra',
   LTCOOK_OLLAMA_ENDPOINT: 'http://127.0.0.1:21434/',
@@ -18,7 +21,8 @@ const environment = {
 test.each([
   ['smol', 'openai-codex', 'gpt-6-luna', undefined],
   ['tiny', 'openai-codex', 'gpt-6-luna', 'low'],
-  ['tiny-local', 'ollama', environment.LTCOOK_MODEL_TINY_LOCAL, 'none'],
+  ['local-tiny', 'ollama', environment.LTCOOK_MODEL_LOCAL_TINY, 'none'],
+  ['local', 'ollama', environment.LTCOOK_MODEL_LOCAL, 'medium'],
   ['smart', 'openai-codex', 'gpt-6.2-sol', undefined],
   ['plan', 'openai-codex', 'gpt-6.2-sol', 'xhigh'],
   ['expensive', 'openai-codex', 'gpt-6-astra', undefined],
@@ -32,6 +36,23 @@ test.each([
     ...(preset === undefined ? {} : { preset, reasoning: preset }),
     reasoningSource: preset === undefined ? 'default' : 'alias',
   });
+});
+
+test('only the two Team local aliases can be selected', () => {
+  const catalog = catalogModelAliases({ modelAlias: 'local' }, environment);
+  expect(
+    catalog.aliases
+      .filter(({ provider }) => provider === 'ollama')
+      .map(({ alias, reasoning, reasoningOptions }) => ({ alias, reasoning, reasoningOptions })),
+  ).toEqual([
+    { alias: 'local-tiny', reasoning: 'none', reasoningOptions: ['none', 'low', 'high'] },
+    { alias: 'local', reasoning: 'medium', reasoningOptions: ['none', 'low', 'medium', 'high'] },
+  ]);
+  for (const alias of ['@tiny-local', '@local-cpu', '@local-evals']) {
+    expect(() => resolveModel(alias, environment)).toThrow('Choose a model alias');
+  }
+  expect(resolveSummarizerModel(environment)).toBe(environment.LTCOOK_MODEL_LOCAL_CPU);
+  expect(() => resolveSummarizerModel({})).toThrow('LTCOOK_MODEL_LOCAL_CPU');
 });
 
 test('session reasoning wins over a Team setting, which wins over the preset', () => {
@@ -95,10 +116,10 @@ test('validates the selected AppRC setting and the effective reasoning level', (
   expect(() => resolveModel('plan', { LTCOOK_MODEL_SMART: 'openai/gpt-6.1-sol:high' })).toThrow(
     'Set reasoning in the Session or Team member',
   );
-  expect(() => resolveModel('tiny-local', { LTCOOK_MODEL_TINY_LOCAL: ' ' })).toThrow(
-    'LTCOOK_MODEL_TINY_LOCAL',
+  expect(() => resolveModel('local-tiny', { LTCOOK_MODEL_LOCAL_TINY: ' ' })).toThrow(
+    'LTCOOK_MODEL_LOCAL_TINY',
   );
-  expect(() => resolveModel('tiny-local', environment, { sessionReasoning: 'medium' })).toThrow(
+  expect(() => resolveModel('local-tiny', environment, { sessionReasoning: 'medium' })).toThrow(
     'supports none, low, high reasoning',
   );
   expect(() => resolveModel('review-art', environment, { sessionReasoning: 'none' })).toThrow(
@@ -140,12 +161,12 @@ test.each([
   ['low', 'low'],
   ['high', 'high'],
 ])('preserves Spark reasoning %s across launchers', (effort, piEffort) => {
-  const selected = resolveModel('tiny-local', environment, { sessionReasoning: effort });
+  const selected = resolveModel('local-tiny', environment, { sessionReasoning: effort });
   expect(modelCommand('pi', selected, environment).args).toEqual([
     '--provider',
     'ollama',
     '--model',
-    environment.LTCOOK_MODEL_TINY_LOCAL,
+    environment.LTCOOK_MODEL_LOCAL_TINY,
     '--thinking',
     piEffort,
   ]);
@@ -153,7 +174,7 @@ test.each([
     command: 'codex',
     args: [
       '-m',
-      environment.LTCOOK_MODEL_TINY_LOCAL,
+      environment.LTCOOK_MODEL_LOCAL_TINY,
       '-c',
       'model_provider="ollama"',
       '-c',

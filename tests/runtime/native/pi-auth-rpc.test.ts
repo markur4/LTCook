@@ -230,7 +230,7 @@ test('runs the compiled Pi entry through its npm-style symlink with Node', () =>
 test('launches a standalone Pi alias with a normalized managed model', () => {
   const root = mkdtempSync(join(tmpdir(), 'ltcook-pi-model-alias-'));
   directories.push(root);
-  const model = 'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0';
+  const model = 'SparkLLM/Spark-X2.6-4B:q8_0';
   const modelsPath = join(root, 'managed-models.json');
   const launcher = resolve(import.meta.dir, '../../../runtime/src/main.ts');
   writeFileSync(
@@ -250,7 +250,7 @@ test('launches a standalone Pi alias with a normalized managed model', () => {
   const launch = (id: string, effort: string) =>
     spawnSync(
       process.execPath,
-      [launcher, 'model-launch', 'pi', '@tiny-local', effort, '--', '--list-models', 'Spark'],
+      [launcher, 'model-launch', 'pi', '@local-tiny', effort, '--', '--list-models', 'Spark'],
       {
         cwd: root,
         encoding: 'utf8',
@@ -261,7 +261,7 @@ test('launches a standalone Pi alias with a normalized managed model', () => {
           PATH: process.env.PATH,
           LTCOOK_PI_AUTH_DIR: root,
           LTCOOK_PI_MODELS_PATH: modelsPath,
-          LTCOOK_MODEL_TINY_LOCAL: id,
+          LTCOOK_MODEL_LOCAL_TINY: id,
           PI_OFFLINE: '1',
         },
       },

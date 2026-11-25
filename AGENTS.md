@@ -43,6 +43,13 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
 - Repository policy: call the two categories Traditional Tests and Agent Evals. Use the established labels Instruction Audit, Behavior Evaluation, and Bottleneck Attribution in interfaces, documentation, and reports. Routine Agent Evals use full instructions in the selected setup, with one repetition by default. Behavior Evaluation and Bottleneck Attribution share the same executions; do not add reduced-instruction runs or repeated timing runs by default.
 - Agent Evals safeguards use three times the slowest of the five most recent comparable successful attempts, with separate no-reasoning and low-reasoning histories. Preserve diagnostics before fallback, cancellation, or failure; failed attempts must not increase the safeguard. The 120-second safeguard applies only when there is no compatible successful history.
 - Run the project’s relevant lint, type-check, and test commands before considering the task done.
+- Include the [synthetic summarization Agent Eval](docs/Development.md#summarization-qualification)
+  when planning a change to the recommended summarizer or its input or generation
+  settings. Report its qualification verdict separately from Traditional Tests.
+  Check the configured candidate and evaluator model inventory before running it.
+  Permission to run the Agent Eval and permission to install missing models are
+  separate decisions. Reuse existing authorization for both, and report the
+  candidate as unqualified if the Agent Eval is blocked or deferred.
 - Before native installer work, follow the
   [integration and system procedures](docs/Development.md#integration-and-system-procedures).
 - From WSL, never launch native Windows verification executables, directly or

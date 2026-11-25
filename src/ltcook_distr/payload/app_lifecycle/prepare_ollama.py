@@ -92,10 +92,10 @@ def summarizer_readiness(
     status: dict[str, str | bool] = {"ready": False}
     try:
         settings = resolve_global_config(environment=environment).build(RuntimeSettings)
-        model = settings.tiny_local_model.strip()
+        model = settings.local_cpu_model.strip()
         if not model or settings.summarizer_keep_alive < -1:
             raise SetupError(
-                "Configure a tiny-local model and a summarizer keep-alive "
+                "Configure an @local-cpu model (LTCOOK_MODEL_LOCAL_CPU) and a summarizer keep-alive "
                 "of -1 or nonnegative seconds."
             )
         endpoint = local_ollama_endpoint(settings.ollama_endpoint)
@@ -114,7 +114,7 @@ def summarizer_readiness(
             for item in models
         ):
             raise SetupError(
-                f"The tiny-local model is missing. Run `ollama pull {shlex.quote(model)}` "
+                f"The @local-cpu summarizer model is missing. Run `ollama pull {shlex.quote(model)}` "
                 f"against {endpoint}."
             )
         status["ready"] = True

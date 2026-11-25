@@ -249,8 +249,8 @@ Windows and macOS installation behavior requires verification on those platforms
 Agent Evals uses the shared installed CLI and Paseo run service. Static audit
 needs no model. Team Behavior Evaluation and semantic Instruction Audit use the
 prepared local Bonsai model `ltcook-bonsai-2-27b-ctx65536:latest`. Evaluation
-runs use models that are already available.
-If the configured model is missing, setup uses `bonsai-2:27b` to create it with
+runs use models that are already available. The `@local-evals` role has a fixed
+target. If that model is missing, application setup uses `bonsai-2:27b` to create it with
 `num_ctx` set to 65,536, pulling the base tag if needed. Once the configured model
 exists, setup and `ltcook app doctor` work with that tag alone.
 The run checks the saved model configuration; use `ollama ps` while it is loaded
@@ -313,8 +313,15 @@ deterministic evidence validation, file access, and Ollama failures.
 
 Run `ltcook eval run --all --setup synthetic --case summarization` for changes
 to the recommended summarizer, its prompt, generation settings, or preparation
-of input. The report identifies local models by their resolved tags and
-digests. It includes a code fingerprint, hashes for
+of input. Include this Agent Eval in the verification plan alongside the
+Traditional Tests and report its qualification verdict separately. Check for
+the configured `@local-cpu` candidate and the prepared `@local-evals` model before
+running it. Get authorization to install any missing models separately from
+authorization to run the evaluation. The evaluation never pulls candidate
+models. If qualification is deferred or blocked, report the candidate as
+unqualified and name the gap.
+
+The report identifies local models by their resolved tags and digests. It includes a code fingerprint, hashes for
 the fixtures and prompts, effective settings, individual results, fixed-fixture
 summaries and quotations, latency, and token counts when available. Concision
 and readability are separate from the required-fact verdict.
@@ -325,10 +332,11 @@ The engine fingerprints its runtime bundle at startup. Source checkouts
 fingerprint the evaluation and summarizer source files and the Bun lockfile
 at engine creation.
 
-Set the global AppRC model and generation options before starting the evaluation
-runtime to compare a candidate. Leave both settings unset to qualify the
-current default. The initial LFM3 baseline used
-the LFM3 tag (set `LTCOOK_MODEL_TINY_LOCAL=lfm3:1.7b-q8_0` to reproduce it) with this generation value.
+Set the global AppRC options `LTCOOK_MODEL_LOCAL_CPU` and
+`LTCOOK_SUMMARIZER_GENERATION` before starting the evaluation runtime to compare
+a candidate. Use the AppRC defaults to qualify LFM3 QAD Q4 with reasoning off.
+To reproduce the initial LFM3 baseline, set
+`LTCOOK_MODEL_LOCAL_CPU=lfm3:1.7b-q8_0` and use this generation value.
 
 ```shell
 export LTCOOK_SUMMARIZER_GENERATION='{"think":false,"stream":false,"options":{"temperature":0.1,"num_ctx":4096,"num_predict":128}}'

@@ -207,6 +207,12 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🛠️ Changed
 
+- **Breaking:** 💥 Use `@local-tiny` and `LTCOOK_MODEL_LOCAL_TINY` for Spark in
+  Team declarations and AppRC. `@local` adds Qwen3.8 27B with medium reasoning
+  by default. The background summarizer now uses LFM3 QAD Q4 with reasoning off
+  through the separate `@local-cpu` setting, `LTCOOK_MODEL_LOCAL_CPU`. Agent
+  Evals use the prepared Bonsai model through the `@local-evals` service role.
+
 - Session Memory uses Immediate Context with current Task instructions and one
   relevant completed UAMP. The production rolling-window budget settings were
   removed. Chronological summaries remain available for retrieval.

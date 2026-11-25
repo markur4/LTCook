@@ -122,8 +122,11 @@ def pi_documents(
     ollama_endpoint = local_ollama_endpoint(
         effective.get("LTCOOK_OLLAMA_ENDPOINT", config.runtime.ollama_endpoint)
     )
-    tiny_local_model = effective.get(
-        "LTCOOK_MODEL_TINY_LOCAL", config.runtime.tiny_local_model
+    local_tiny_model = effective.get(
+        "LTCOOK_MODEL_LOCAL_TINY", config.runtime.local_tiny_model
+    ).strip()
+    local_model = effective.get(
+        "LTCOOK_MODEL_LOCAL", config.runtime.local_model
     ).strip()
     ollama_models: list[dict[str, object]] = [
         {
@@ -135,10 +138,12 @@ def pi_documents(
             "thinkingLevelMap": {"off": "none", "low": "low", "high": "high"},
         }
     ]
-    if tiny_local_model and tiny_local_model != EVAL_MODEL:
+    for model in dict.fromkeys((local_tiny_model, local_model)):
+        if not model or model == EVAL_MODEL:
+            continue
         ollama_models.append(
             {
-                "id": tiny_local_model,
+                "id": model,
                 "baseUrl": f"{ollama_endpoint}/v1",
                 "contextWindow": 32768,
                 "maxTokens": 4096,
@@ -148,7 +153,7 @@ def pi_documents(
                     "off": "none",
                     "minimal": None,
                     "low": "low",
-                    "medium": None,
+                    "medium": "medium" if model == local_model else None,
                     "high": "high",
                     "xhigh": None,
                     "max": None,

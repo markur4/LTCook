@@ -208,6 +208,16 @@ The TypeScript host connects native agent operations to the
 [`RuntimeController`](../runtime/src/core/runtime.ts), keeping settings
 resolution separate from scheduling and coordination.
 
+The local model roles have different callers. Team members and the Paseo model
+selector use `@local-tiny` for Spark or `@local` for Qwen. AppRC resolves each alias
+to an Ollama tag. The runtime also uses two service roles. `@local-cpu` supplies
+LFM3 for background summaries and `@local-evals` supplies the Bonsai model that
+LTCook prepares for Agent Evals. The evaluation worker points its Team aliases
+at the prepared model so comparisons use the same model. Session Memory has a
+separate setting even when it uses the same LFM3 tag as the summarizer.
+See [Choose a model alias](How-To-User-Guides.md#choose-a-model-alias) for setup
+and reasoning options.
+
 Starting the server without a project opens only Paseo and the local runtime
 API. A user explicitly opens a project from the terminal or submits the native
 **+ → LTCook → Team** composer. The Paseo-created agent is adopted as the

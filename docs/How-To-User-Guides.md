@@ -254,16 +254,16 @@ and shells use their harness permissions for operations in other checkouts.
   focus tells the summarizer what to emphasize. Check consequential details
   such as identifiers and negated actions against the source.
 
-The summarizer uses `@tiny-local`, which defaults to Spark X2.6 4B Q8_0 with
-reasoning off. Pull it on the configured Ollama instance before the first
-summary. Setup checks readiness without downloading Spark.
+The summarizer uses `@local-cpu`, which defaults to LFM3 1.7B QAD Q4 with
+reasoning off. Pull the model on the configured Ollama instance before the
+first summary. LTCook setup reports whether the configured model is ready.
 
 ```shell
-ollama pull hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0
+ollama pull lfm3:1.7b-qad-q4_0
 ```
 
 Run `ltcook app doctor --verbose --json` to check readiness. RIED and ordinary
-hosted chats work without Spark. AppRC's global
+hosted chats work without the summarizer model. AppRC's global
 [summarizer settings](References.md#environment-variables) apply when the runtime
 starts. A keep-alive of `-1` keeps the model resident after use. Set it to `0`
 to unload after a request or to a positive number of seconds for timed residency.
@@ -537,7 +537,8 @@ management commands rather than inventing another configuration editor.
 | --- | --- | --- |
 | `@smol` | GPT-6 Luna | Provider default |
 | `@tiny` | GPT-6 Luna | Low |
-| `@tiny-local` | Spark X2.6 4B Q8_0 on Ollama | Off |
+| `@local-tiny` | Spark X2.6 4B Q8_0 on Ollama | Off |
+| `@local` | Qwen3.8 27B Q4_K_M on Ollama | Medium |
 | `@smart` | GPT-6.2 Sol | Provider default |
 | `@plan` | GPT-6.2 Sol | Xhigh |
 | `@expensive` | GPT-6 Astra | Provider default |
@@ -548,7 +549,21 @@ Leader. **Team assignment** uses the Leader's declared alias. An explicit
 session reasoning choice takes priority over the Team member setting, the alias
 preset, and the provider default, in that order. The composer shows when a
 setting overrides the alias preset. For example, the default Team's Reviewer
-uses `@plan` with its explicit high effort. Spark supports off, low, and high.
+uses `@plan` with its explicit high effort. `@local-tiny` supports off, low, and
+high. `@local` also supports medium.
+
+Pull the model for the Team alias you intend to use on the configured Ollama
+instance.
+
+```shell
+ollama pull SparkLLM/Spark-X2.6-4B:q8_0
+ollama pull qwen3.8:27b-q4_K_M
+```
+
+Two local roles are reserved for services. `@local-cpu` runs background
+summarization. `@local-evals` runs Agent Evals with LTCook's prepared Bonsai
+model. [Session Memory](Explanations.md#context-aware-session-memory) has its own
+model setting.
 
 The draft previews runtime defaults. Workspace AppRC settings are applied at
 launch. Paseo saves the resolved provider, model, and reasoning with the
@@ -561,7 +576,7 @@ Use the terminal launcher to start a new native conversation:
 ```shell
 ltcook launch model pi @plan
 ltcook launch model codex @tiny
-ltcook launch model pi @tiny-local --reasoning high
+ltcook launch model pi @local-tiny --reasoning high
 ```
 
 Pi uses the configured provider and the native Pi login. Codex uses its installed
@@ -576,8 +591,8 @@ can generate.
 Change the physical model slots in
 [AppRC](References.md#environment-variables). For hosted slots enter
 `provider/model` and set effort through the Team or session. Drop any previous
-`:effort` suffix. `@plan` shares the smart slot. The tiny-local slot accepts the
-Ollama model tag, including its quantization suffix.
+`:effort` suffix. `@plan` shares the smart slot. The local Team settings accept Ollama
+model tags, including their quantization suffixes.
 
 ## Authenticate with Pi
 

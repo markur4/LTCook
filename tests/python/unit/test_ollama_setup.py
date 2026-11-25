@@ -81,7 +81,7 @@ def test_missing_derived_model_is_created_from_exact_bonsai_source(
     monkeypatch.setattr(prepare_ollama, "run", run)
 
     receipt = prepare_ollama.prepare_ollama(
-        tmp_path, environment={"PATH": "", "LTCOOK_MODEL_TINY_LOCAL": summary_model}
+        tmp_path, environment={"PATH": "", "LTCOOK_MODEL_LOCAL_CPU": summary_model}
     )
 
     pull = (
@@ -103,14 +103,14 @@ def test_missing_derived_model_is_created_from_exact_bonsai_source(
     assert json.loads(receipt.read_text())["eval_model"] == prepare_ollama.EVAL_MODEL
 
 
-def test_installation_and_doctor_report_missing_tiny_local_without_pulling(
+def test_installation_and_doctor_report_missing_local_cpu_without_pulling(
     tmp_path, monkeypatch
 ):
     endpoint = "http://127.0.0.1:34239"
     model = "fixture-summarizer"
     settings = {
         "LTCOOK_OLLAMA_ENDPOINT": endpoint,
-        "LTCOOK_MODEL_TINY_LOCAL": model,
+        "LTCOOK_MODEL_LOCAL_CPU": model,
         "LTCOOK_OLLAMA_EXECUTABLE": "/usr/bin/ollama",
         "OLLAMA_HOST": "http://127.0.0.1:12345",
         "PATH": "",
@@ -130,7 +130,7 @@ def test_installation_and_doctor_report_missing_tiny_local_without_pulling(
         return {"models": [{"name": prepare_ollama.EVAL_MODEL}]}
 
     def reject_summary_pull(*_args, **_kwargs):
-        pytest.fail("Setup must leave tiny-local provisioning explicit")
+        pytest.fail("Setup must leave summarizer provisioning explicit")
 
     monkeypatch.setattr(prepare_ollama, "_json", json_response)
     monkeypatch.setattr(prepare_ollama, "run", reject_summary_pull)
@@ -142,7 +142,7 @@ def test_installation_and_doctor_report_missing_tiny_local_without_pulling(
         "model": model,
         "endpoint": endpoint,
         "error": (
-            f"The tiny-local model is missing. Run `ollama pull {model}` "
+            f"The @local-cpu summarizer model is missing. Run `ollama pull {model}` "
             f"against {endpoint}."
         ),
     }

@@ -217,10 +217,12 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_RIED_CACHE_DIR` | Launch-derived `<AppRC cache>/projects`, holding the single versioned RIED cache. |
 | `LTCOOK_COLGREP_CACHE_DIR` | Launch-derived `<AppRC cache>/colgrep`, holding workspace-scoped ColGREP indexes. |
 | `LTCOOK_COLGREP_DEPLOYMENT` | Launch-derived `<global AppRC appdata>/deployment/colgrep`, holding the verified ColGREP executable, ONNX Runtime, and model snapshot. |
-| `LTCOOK_OLLAMA_ENDPOINT` | Global `runtime.ollama_endpoint`. Ollama loopback HTTP URL with a port, default `http://127.0.0.1:11434`. Used by the tiny-local adapters, summarization, and readiness. |
-| `LTCOOK_MODEL_TINY_LOCAL` | Global `runtime.tiny_local_model`. Ollama tag for `@tiny-local` and `ltcook_summarize`. Defaults to `hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0`. Pull it explicitly. |
+| `LTCOOK_OLLAMA_ENDPOINT` | Global `runtime.ollama_endpoint`. Ollama loopback HTTP URL with a port, default `http://127.0.0.1:11434`. Used by local Team launchers, summarization, and readiness. |
+| `LTCOOK_MODEL_LOCAL_CPU` | Global `runtime.local_cpu_model`. Ollama tag for the `@local-cpu` summarizer role. Defaults to `lfm3:1.7b-qad-q4_0`. Pull it explicitly. |
+| `LTCOOK_MODEL_LOCAL_TINY` | Global `runtime.local_tiny_model`. Ollama tag for the `@local-tiny` Team alias. Defaults to `SparkLLM/Spark-X2.6-4B:q8_0`. Pull it explicitly. |
+| `LTCOOK_MODEL_LOCAL` | Global `runtime.local_model`. Ollama tag for the `@local` Team alias. Defaults to `qwen3.8:27b-q4_K_M`. Pull it explicitly. |
 | `LTCOOK_SUMMARIZER_KEEP_ALIVE` | Global `runtime.summarizer_keep_alive`. Default `-1` keeps the loaded model resident. Use `0` to unload or a positive number of seconds. |
-| `LTCOOK_SUMMARIZER_GENERATION` | Global `runtime.summarizer_generation`. Optional JSON object with `options` containing `num_ctx`, `num_predict`, and `temperature`. Supports optional `think`, `top_k`, and `repeat_penalty` (the latter two inside `options`). Streaming is disabled. The default Spark profile uses reasoning off, a 32,768-token context, a 512-token generation limit, and temperature 0.1. An explicit generation profile is used as supplied. A smaller context reduces the supported source byte limit. |
+| `LTCOOK_SUMMARIZER_GENERATION` | Global `runtime.summarizer_generation`. Optional JSON object with `options` containing `num_ctx`, `num_predict`, and `temperature`. Supports optional `think`, `top_k`, and `repeat_penalty` (the latter two inside `options`). Streaming is disabled. The default LFM3 QAD Q4 profile uses reasoning off, a 32,768-token context, a 512-token generation limit, and temperature 0.1. An explicit generation profile is used as supplied. A smaller context reduces the supported source byte limit. |
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
 | `LTCOOK_SESSION_MEMORY_THRESHOLD` | Global `runtime.session_memory_threshold`. Default 3,000 estimated Agent Action tokens per AAB. Use an integer from 1 to 6,500. Set 0 to disable capture and the tool. |
 | `LTCOOK_SESSION_MEMORY_MODEL` | Global `runtime.session_memory_model`. An empty value uses `lfm3:1.7b-qad-q4_0`. A configured value selects an installed Ollama model for Session Memory with reasoning disabled. Ollama uses GPU acceleration when available and falls back to CPU. |
@@ -252,6 +254,10 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_BROWSER_ENABLED` | Enable Pi browser extension integration; defaults to true. |
 | `LTCOOK_CODESEARCH_ENABLED` | Enable hosted public-code search; defaults to true. |
 | `LTCOOK_CONTEXT7_ENABLED` | Enable optional hosted Context7 MCP integration; defaults to false. |
+
+The `@local-evals` service role uses `ltcook-bonsai-2-27b-ctx65536:latest`,
+prepared from `bonsai-2:27b` with 65,536 tokens of context. See
+[Local Ollama and Agent Evals](Development.md#local-ollama-and-agent-evals).
 
 The runtime's ready line prints `Paseo <listen>`. Open `http://<listen>/` in a
 browser to use Paseo's bundled web UI; no separate server, assets, or dependency

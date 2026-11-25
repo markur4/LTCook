@@ -25,9 +25,13 @@ class RuntimeSettings(rc.Config):
     expensive_model: str = rc.field(
         "LTCOOK_MODEL_EXPENSIVE", default="openai-codex/gpt-6-astra"
     )
-    tiny_local_model: str = rc.field(
-        "LTCOOK_MODEL_TINY_LOCAL", default="hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0"
+    local_cpu_model: str = rc.field(
+        "LTCOOK_MODEL_LOCAL_CPU", default="lfm3:1.7b-qad-q4_0"
     )
+    local_tiny_model: str = rc.field(
+        "LTCOOK_MODEL_LOCAL_TINY", default="SparkLLM/Spark-X2.6-4B:q8_0"
+    )
+    local_model: str = rc.field("LTCOOK_MODEL_LOCAL", default="qwen3.8:27b-q4_K_M")
     logs: str = rc.field("LTCOOK_LOGS", default="")
     traces: str = rc.field("LTCOOK_TRACES", default="")
     browser_enabled: bool = rc.field("LTCOOK_BROWSER_ENABLED", default=True)

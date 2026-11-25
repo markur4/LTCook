@@ -228,7 +228,9 @@ def _native_config():
             paseo_listen="127.0.0.1:6767",
             paseo_password="secret-value",
             ollama_endpoint="http://localhost:11435/",
-            tiny_local_model="hf.co/Test/model:Q8_0",
+            local_tiny_model="hf.co/Test/model:Q8_0",
+            local_model="fixture-large",
+            local_cpu_model="fixture-summary",
         ),
         crawl4ai=SimpleNamespace(api_token="secret-value"),
         searxng=SimpleNamespace(secret="secret-value"),
@@ -267,7 +269,9 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
             guidance_dir="",
             database="",
             ollama_endpoint="http://127.0.0.1:11434",
-            tiny_local_model="fixture-model",
+            local_tiny_model="fixture-model",
+            local_model="fixture-large",
+            local_cpu_model="fixture-summary",
             summarizer_keep_alive=-1,
             summarizer_generation="",
             session_memory_threshold=3000,
@@ -305,7 +309,9 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
         source_root / "node_modules" / ".bin"
     )
     assert result.environment["LTCOOK_MODEL_SMOL"] == "workspace-model"
-    assert result.environment["LTCOOK_MODEL_TINY_LOCAL"] == "fixture-model"
+    assert result.environment["LTCOOK_MODEL_LOCAL_CPU"] == "fixture-summary"
+    assert result.environment["LTCOOK_MODEL_LOCAL_TINY"] == "fixture-model"
+    assert result.environment["LTCOOK_MODEL_LOCAL"] == "fixture-large"
     assert result.environment["SHELL_ONLY"] == "preserved"
     assert "LTCOOK_SHELL_PROVENANCE" not in result.environment
     next_launch = launch.resolve_launch(
@@ -339,7 +345,9 @@ def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_p
             guidance_dir="",
             database="",
             ollama_endpoint="http://127.0.0.1:11434",
-            tiny_local_model="fixture-model",
+            local_tiny_model="fixture-model",
+            local_model="fixture-large",
+            local_cpu_model="fixture-summary",
             summarizer_keep_alive=-1,
             summarizer_generation="",
             session_memory_threshold=3000,
@@ -430,7 +438,7 @@ def test_pi_documents_keep_secrets_out_of_json_and_write_private_files(tmp_path)
     ] == {"off": "none", "low": "low", "high": "high"}
     providers = documents[pi_home / "models.json"]["providers"]
     local = providers["ollama"]["models"][1]
-    assert local["id"] == config.runtime.tiny_local_model
+    assert local["id"] == config.runtime.local_tiny_model
     assert local["baseUrl"] == "http://localhost:11435/v1"
     assert local["thinkingLevelMap"] == {
         "off": "none",
@@ -440,6 +448,16 @@ def test_pi_documents_keep_secrets_out_of_json_and_write_private_files(tmp_path)
         "high": "high",
         "xhigh": None,
         "max": None,
+    }
+    large = providers["ollama"]["models"][2]
+    assert large["id"] == config.runtime.local_model
+    assert large["baseUrl"] == local["baseUrl"]
+    assert large["thinkingLevelMap"] == {
+        **local["thinkingLevelMap"],
+        "medium": "medium",
+    }
+    assert config.runtime.local_cpu_model not in {
+        model["id"] for model in providers["ollama"]["models"]
     }
     for provider, api in (
         ("openai", "openai-responses"),
@@ -490,7 +508,7 @@ def test_pi_writer_retains_the_prior_local_model_after_alias_edit(tmp_path):
         owned_dir=deployment / "app",
         pi_home=pi_home,
         runtime_environment={
-            "LTCOOK_MODEL_TINY_LOCAL": "hf.co/Other/model:Q8_0",
+            "LTCOOK_MODEL_LOCAL_TINY": "hf.co/Other/model:Q8_0",
             "LTCOOK_OLLAMA_ENDPOINT": "http://127.0.0.1:11436",
         },
     )
@@ -499,7 +517,7 @@ def test_pi_writer_retains_the_prior_local_model_after_alias_edit(tmp_path):
     models = {model["id"]: model for model in providers["ollama"]["models"]}
     assert models["hf.co/Test/model:Q8_0"]["baseUrl"] == "http://localhost:11435/v1"
     assert models["hf.co/Other/model:Q8_0"]["baseUrl"] == "http://127.0.0.1:11436/v1"
-    assert len(providers["ollama"]["models"]) == 3
+    assert len(providers["ollama"]["models"]) == 4
 
 
 @pytest.mark.parametrize("harness", ["pi", "codex"])

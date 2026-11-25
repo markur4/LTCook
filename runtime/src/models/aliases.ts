@@ -3,7 +3,8 @@ import { z } from 'zod';
 export const MODEL_ALIASES = [
   'smol',
   'tiny',
-  'tiny-local',
+  'local-tiny',
+  'local',
   'smart',
   'plan',
   'expensive',
@@ -37,10 +38,13 @@ export const ResolvedModelSchema = z.object({
 });
 export type ResolvedModel = z.infer<typeof ResolvedModelSchema>;
 
-const aliases: Readonly<Record<ModelAlias, { setting: string; preset?: ReasoningEffort }>> = {
+const aliases: Readonly<
+  Record<ModelAlias, { setting: string; preset?: ReasoningEffort; provider?: 'ollama' }>
+> = {
   smol: { setting: 'LTCOOK_MODEL_SMOL' },
   tiny: { setting: 'LTCOOK_MODEL_SMOL', preset: 'low' },
-  'tiny-local': { setting: 'LTCOOK_MODEL_TINY_LOCAL', preset: 'none' },
+  'local-tiny': { setting: 'LTCOOK_MODEL_LOCAL_TINY', provider: 'ollama', preset: 'none' },
+  local: { setting: 'LTCOOK_MODEL_LOCAL', provider: 'ollama', preset: 'medium' },
   smart: { setting: 'LTCOOK_MODEL_SMART' },
   plan: { setting: 'LTCOOK_MODEL_SMART', preset: 'xhigh' },
   expensive: { setting: 'LTCOOK_MODEL_EXPENSIVE' },
@@ -57,7 +61,8 @@ export function reasoningOptions({
   provider,
   model,
 }: Pick<ResolvedModel, 'alias' | 'provider' | 'model'>): readonly ReasoningEffort[] {
-  if (alias === 'tiny-local' || provider === 'ollama') return ollamaReasoning;
+  if (alias === 'local') return ['none', 'low', 'medium', 'high'];
+  if (provider === 'ollama') return ollamaReasoning;
   if (provider === 'openai' || provider === 'openai-codex') {
     if (model === 'gpt-6-luna') return lunaReasoning;
     if (['gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6-astra'].includes(model)) return hostedReasoning;
@@ -82,6 +87,27 @@ function unsupportedReasoning(
   return new Error(`@${alias} with ${provider}/${model} supports ${options.join(', ')} reasoning.`);
 }
 
+function configuredModel(
+  alias: string,
+  setting: string,
+  environment: Record<string, string | undefined>,
+) {
+  const configured = environment[setting]?.trim();
+  if (!configured) throw new Error(`Set ${setting} in AppRC to use @${alias}.`);
+  return configured;
+}
+
+function validateOllamaModel(model: string, setting: string) {
+  if (!modelId.test(model)) throw new Error(`${setting} must contain an Ollama model ID.`);
+  return model;
+}
+
+/** Resolve the service-only @local-cpu role for background summarization. */
+export function resolveSummarizerModel(environment: Record<string, string | undefined>) {
+  const setting = 'LTCOOK_MODEL_LOCAL_CPU';
+  return validateOllamaModel(configuredModel('local-cpu', setting, environment), setting);
+}
+
 function aliasModel(requestedAlias: unknown, environment: Record<string, string | undefined>) {
   const parsedAlias = ModelAliasSchema.safeParse(
     typeof requestedAlias === 'string' ? requestedAlias.replace(/^@/, '') : requestedAlias,
@@ -91,16 +117,14 @@ function aliasModel(requestedAlias: unknown, environment: Record<string, string 
       `Choose a model alias: ${MODEL_ALIASES.map((alias) => `@${alias}`).join(', ')}.`,
     );
   const alias = parsedAlias.data;
-  const { setting, preset } = aliases[alias];
-  const configured = environment[setting]?.trim();
-  if (!configured) throw new Error(`Set ${setting} in AppRC to use @${alias}.`);
-
+  const { setting, preset, provider: fixedProvider } = aliases[alias];
+  const configured = configuredModel(alias, setting, environment);
   const separator = configured.indexOf('/');
-  const provider = alias === 'tiny-local' ? 'ollama' : configured.slice(0, separator);
-  const model = alias === 'tiny-local' ? configured : configured.slice(separator + 1);
-  if (alias === 'tiny-local') {
-    if (!modelId.test(model)) throw new Error(`${setting} must contain an Ollama model ID.`);
-  } else {
+  const provider = fixedProvider ?? configured.slice(0, separator);
+  const model = fixedProvider
+    ? validateOllamaModel(configured, setting)
+    : configured.slice(separator + 1);
+  if (!fixedProvider) {
     if (separator < 1 || !providerId.test(provider) || !modelId.test(model))
       throw new Error(`${setting} must use the provider/model format.`);
     const suffix = model.includes(':') ? model.split(':')[1] : undefined;

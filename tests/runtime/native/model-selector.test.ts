@@ -9,9 +9,9 @@ import {
 describe('Paseo model selection contract', () => {
   test('accepts a resolved model with session reasoning and rejects incomplete settings', () => {
     const resolved = {
-      alias: 'tiny-local',
+      alias: 'local-tiny',
       provider: 'ollama',
-      model: 'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
+      model: 'SparkLLM/Spark-X2.6-4B:q8_0',
       reasoning: 'none',
       preset: 'none',
       reasoningSource: 'session',
@@ -37,14 +37,23 @@ describe('Paseo model selection contract', () => {
           reasoningSource: 'alias',
         },
         {
-          alias: 'tiny-local',
+          alias: 'local-tiny',
           provider: 'ollama',
-          model: 'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
+          model: 'SparkLLM/Spark-X2.6-4B:q8_0',
           reasoning: 'none',
           preset: 'none',
           reasoningSource: 'alias',
           reasoningOptions: ['none', 'low', 'high'],
           configurationError: 'The Team effort is unavailable for this alias.',
+        },
+        {
+          alias: 'local',
+          provider: 'ollama',
+          model: 'qwen3.8:27b-q4_K_M',
+          reasoning: 'medium',
+          preset: 'medium',
+          reasoningSource: 'alias',
+          reasoningOptions: ['none', 'low', 'medium', 'high'],
         },
       ],
     };
@@ -64,7 +73,7 @@ describe('Paseo model selection contract', () => {
       ModelCatalogResponseSchema.safeParse({
         ...response,
         aliases: response.aliases.map((item) =>
-          item.alias === 'tiny-local' ? { ...item, reasoningOptions: ['unsupported'] } : item,
+          item.alias === 'local-tiny' ? { ...item, reasoningOptions: ['unsupported'] } : item,
         ),
       }).success,
     ).toBe(false);
@@ -82,7 +91,7 @@ test('running Paseo settings display a native override while retaining the alias
   });
   expect(
     effectiveRunningModel(selected, {
-      model: 'ollama/hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
+      model: 'ollama/SparkLLM/Spark-X2.6-4B:q8_0',
       thinking: 'off',
     }),
   ).toMatchObject({
