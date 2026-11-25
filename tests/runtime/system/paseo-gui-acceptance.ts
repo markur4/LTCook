@@ -814,7 +814,10 @@ try {
     })()`,
   );
   await browser('wait', '[aria-label="Open Adjutant conversation"]');
-  assert.equal(await browser('get', 'text', '[aria-label="Open Adjutant conversation"]'), 'Open');
+  assert.equal(
+    (await browser('get', 'text', '[aria-label="Open Adjutant conversation"]')).trim(),
+    'Open',
+  );
   await clickButton('Open Adjutant conversation');
   await waitForComposer('Adjutant');
   await browser(
