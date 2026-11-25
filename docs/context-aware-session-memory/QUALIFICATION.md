@@ -770,12 +770,12 @@ implementation symbol but described the approved proposal as still awaiting a
 decision. Its 0.1 retry preserved the named outcomes and lost both the exact
 path and parser name.
 
-The first MNN-Pocket retry-stage output correctly said “maximum attempts
-remain at three.” The checker initially missed that phrasing and started the
-0.1 profile too early. The checker now accepts that wording. A focused seeded
-replay at 0.8 verified the two preceding stages before running manifest
-approval. The 0.1 attempt counts as the model’s one retry. No profile
-qualified, so the screen did not run LFM3 again or compare total CPU time.
+The checker initially scored MNN-Pocket’s retry-stage output at 2/3 and
+started the 0.1 profile too early. It now accepts the output’s wording,
+“maximum attempts remain at three.” A focused seeded replay at 0.8 verified
+the two preceding stages before running manifest approval. The 0.1 attempt
+counts as the model’s one retry. No profile qualified, so the screen did not
+run LFM3 again or compare total CPU time.
 
 ### Per-request CPU measurements
 
@@ -786,10 +786,15 @@ loaded runner. Loaded size is Ollama's working model size. Peak RAM is the
 Linux runner's RSS high-water mark, which can include a prior request in that
 runner.
 
+The table includes all ten requests. The corrected replay supplies the
+qualification scores for MNN-Pocket at 0.8.
+
 | Model | Temperature | Fixture and request | Fixture facts | Input / output tokens | Prefill / generation tok/s | Load s | Wall s | Loaded / peak MiB |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | LFM2.5-1.2B-Instruct QAD Q4_0 | 0.4 | export-header 1/1 | 1/4 | 577 / 50 | 542 / 50 | 1.270 | 3.345 | 1022 / 1001 |
 | LFM2.5-350M Q8_0 | 0.4 | export-header 1/1 | 0/4 | 577 / 133 | 887 / 80 | 0.513 | 2.832 | 658 / 655 |
+| MNN-Pocket-0.3B Q8_0 | 0.8 | export-header 1/1 (initial) | 4/4 | 555 / 170 | 957 / 84 | 0.764 | 3.384 | 670 / 660 |
+| MNN-Pocket-0.3B Q8_0 | 0.8 | retry-correction 1/1 (initial) | 2/3 (grader error) | 557 / 113 | 781 / 82 | 0.514 | 2.608 | 670 / 660 |
 | MNN-Pocket-0.3B Q8_0 | 0.8 | export-header 1/1 | 4/4 | 555 / 170 | 883 / 94 | 0.514 | 2.957 | 670 / 660 |
 | MNN-Pocket-0.3B Q8_0 | 0.8 | retry-correction 1/1 | 3/3 | 557 / 113 | 942 / 100 | 0.515 | 2.243 | 670 / 660 |
 | MNN-Pocket-0.3B Q8_0 | 0.8 | manifest-reference 1/2 | 3/4 | 583 / 212 | 956 / 92 | 0.516 | 3.434 | 670 / 661 |

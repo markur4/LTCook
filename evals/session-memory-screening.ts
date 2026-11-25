@@ -137,8 +137,26 @@ export async function screenSessionMemory(input: {
       signal: AbortSignal.any([requestSignal, AbortSignal.timeout(20_000)]),
       redirect: 'error',
     });
+    if (method === 'DELETE' && response.status === 404) {
+      await response.body?.cancel();
+      return;
+    }
     if (!response.ok) throw new Error(`Ollama ${route} failed (HTTP ${response.status}).`);
     return (await response.json()) as unknown;
+  };
+  const runWithCleanup = async <T>(work: () => Promise<T>, cleanup: () => Promise<void>) => {
+    let result: T;
+    try {
+      result = await work();
+    } catch (error) {
+      await cleanup().catch((cleanupError: unknown) => {
+        const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+        progress?.(`Ollama cleanup also failed: ${message}`);
+      });
+      throw error;
+    }
+    await cleanup();
+    return result;
   };
   const inventory = () => listEvaluationModels(input.settings.endpoint, signal);
   const find = (models: readonly ModelIdentity[], name: string) =>
@@ -211,57 +229,65 @@ export async function screenSessionMemory(input: {
     const native = modelDefinition.parse(await api('show', { model: source.name }));
     const alias = 'ltcook-memory-screen-' + randomUUID();
     const parameters = { top_p: profile.top_p, presence_penalty: 0, min_p: 0 };
-    const attempts = [];
     let created = false;
-    try {
-      await api('create', { model: alias, from: source.name, parameters, stream: false });
-      created = true;
-      const aliasModel = find(await inventory(), alias);
-      if (!aliasModel) throw new Error('Cannot find the isolated sampling profile.');
-      const model = await inspectEvaluationModel(input.settings.endpoint, aliasModel, signal);
-      const actual = modelDefinition.parse(await api('show', { model: alias }));
-      if (
-        model.weightsDigest !== profile.weights ||
-        actual.template !== native.template ||
-        JSON.stringify(nativeDirectives(actual.modelfile)) !==
-          JSON.stringify(nativeDirectives(native.modelfile)) ||
-        JSON.stringify(parameterLines(actual.parameters, parameters)) !==
-          JSON.stringify(parameterLines(native.parameters, parameters)) ||
-        Object.entries(parameters).some(
-          ([key, value]) =>
-            !actual.parameters.split('\n').some((line) => {
-              const [name, setting] = line.trim().split(/\s+/);
-              return name === key && Number(setting) === value;
-            }),
+    const attempts = await runWithCleanup(
+      async () => {
+        await api('create', { model: alias, from: source.name, parameters, stream: false });
+        created = true;
+        const aliasModel = find(await inventory(), alias);
+        if (!aliasModel) throw new Error('Cannot find the isolated sampling profile.');
+        const model = await inspectEvaluationModel(input.settings.endpoint, aliasModel, signal);
+        const actual = modelDefinition.parse(await api('show', { model: alias }));
+        if (
+          model.weightsDigest !== profile.weights ||
+          actual.template !== native.template ||
+          JSON.stringify(nativeDirectives(actual.modelfile)) !==
+            JSON.stringify(nativeDirectives(native.modelfile)) ||
+          JSON.stringify(parameterLines(actual.parameters, parameters)) !==
+            JSON.stringify(parameterLines(native.parameters, parameters)) ||
+          Object.entries(parameters).some(
+            ([key, value]) =>
+              !actual.parameters.split('\n').some((line) => {
+                const [name, setting] = line.trim().split(/\s+/);
+                return name === key && Number(setting) === value;
+              }),
+          )
         )
-      )
-        throw new Error(`Ollama did not preserve the native definition for ${profile.name}.`);
-      for (const temperature of [profile.temperature, 0.1]) {
-        const generation = {
-          ...sessionMemoryGeneration,
-          options: {
-            ...sessionMemoryGeneration.options,
-            seed: simplifiedSeed,
-            temperature,
-            top_k: profile.top_k,
-            repeat_penalty: profile.repeat_penalty,
-          },
-        };
-        const settings = {
-          ...input.settings,
-          model: model.name,
-          keepAlive: 900,
-          generation: JSON.stringify(generation),
-        };
-        const result = await run(settings, model, `${profile.name} T=${temperature}`);
-        attempts.push({ generation, ...result });
-        if (input.allowRetry === false || !result.nearPass || temperature === 0.1) break;
-      }
-    } finally {
-      const cleanup = AbortSignal.timeout(25_000);
-      await releaseOllamaModel({ ...input.settings, model: alias }, cleanup).catch(() => undefined);
-      if (created) await api('delete', { model: alias }, 'DELETE', cleanup);
-    }
+          throw new Error(`Ollama did not preserve the native definition for ${profile.name}.`);
+        const attempts = [];
+        for (const temperature of [profile.temperature, 0.1]) {
+          const generation = {
+            ...sessionMemoryGeneration,
+            options: {
+              ...sessionMemoryGeneration.options,
+              seed: simplifiedSeed,
+              temperature,
+              top_k: profile.top_k,
+              repeat_penalty: profile.repeat_penalty,
+            },
+          };
+          const settings = {
+            ...input.settings,
+            model: model.name,
+            keepAlive: 900,
+            generation: JSON.stringify(generation),
+          };
+          const result = await run(settings, model, `${profile.name} T=${temperature}`);
+          attempts.push({ generation, ...result });
+          if (input.allowRetry === false || !result.nearPass || temperature === 0.1) break;
+        }
+        return attempts;
+      },
+      async () => {
+        const cleanup = AbortSignal.timeout(25_000);
+        try {
+          if (created) await releaseOllamaModel({ ...input.settings, model: alias }, cleanup);
+        } finally {
+          // > Ollama may create the alias before a client receives the response.
+          await api('delete', { model: alias }, 'DELETE', cleanup);
+        }
+      },
+    );
     results.push({ profile, identity: verified, parameters, attempts });
   }
   const qualifiers = results.flatMap(({ profile, attempts }) =>
@@ -281,7 +307,10 @@ export async function screenSessionMemory(input: {
         options: { ...sessionMemoryGeneration.options, seed: simplifiedSeed },
       }),
     };
-    const baseline = await run(settings, model, 'LFM3 baseline');
+    const baseline = await runWithCleanup(
+      () => run(settings, model, 'LFM3 baseline'),
+      () => releaseOllamaModel(settings, AbortSignal.timeout(10_000)),
+    );
     const wallMs = (profile: typeof baseline) =>
       profile.stages.reduce((sum, stage) => sum + stage.measurements.isolatedCpuWallMs, 0);
     comparison = {
@@ -293,7 +322,6 @@ export async function screenSessionMemory(input: {
         reduction: baseline.qualified ? 1 - wallMs(attempt) / wallMs(baseline) : null,
       })),
     };
-    await releaseOllamaModel(settings, signal);
   }
   const after = await inventory();
   const unchanged =
