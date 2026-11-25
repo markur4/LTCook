@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 import { Icon } from '@getpaseo/plugin/client/ui';
-import type { AgentActivity, SkillLoad, ToolCall } from '../../shared/activity';
+import type { ActivityAnchor, AgentActivity, SkillLoad, ToolCall } from '../../shared/activity';
 import {
   ActivityButton,
   ActivityCard,
@@ -45,11 +45,10 @@ const toolTones = {
 } as const;
 
 function orderTools(calls: ToolCall[]) {
-  const unique = [...new Map(calls.map((call) => [call.id, call])).values()];
-  const running = unique
+  const running = calls
     .filter((call) => call.status === 'running')
     .sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id));
-  const recent = unique
+  const recent = calls
     .filter((call) => call.status !== 'running')
     .sort(
       (a, b) =>
@@ -147,6 +146,7 @@ function ItemPreview({
   preview,
   status,
   tone,
+  actions,
   children,
   onClose,
 }: {
@@ -156,6 +156,7 @@ function ItemPreview({
   preview?: string;
   status: string;
   tone: (typeof toolTones)[keyof typeof toolTones];
+  actions?: ReactNode;
   children: ReactNode;
   onClose: () => void;
 }) {
@@ -170,11 +171,21 @@ function ItemPreview({
         gap: 5,
       }}
     >
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-        <View style={{ flex: 1, minWidth: 0 }}>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5 }}>
+        <View
+          style={{
+            flex: 1,
+            minWidth: 0,
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 5,
+          }}
+        >
           <ActivityText theme={theme} strong>
             {name}
           </ActivityText>
+          {actions}
         </View>
         <ActivityStatus theme={theme} label={status} tone={tone} />
         <ActivityButton theme={theme} label={`Close ${name} preview`} onPress={onClose}>
@@ -192,16 +203,71 @@ function ItemPreview({
   );
 }
 
+function OpenSkillButton({
+  theme,
+  skill,
+  onOpenSkill,
+  disambiguate = false,
+}: {
+  theme: Theme;
+  skill: SkillLoad;
+  onOpenSkill: (skill: SkillLoad) => void;
+  disambiguate?: boolean;
+}) {
+  const label = 'Open skill in new tab';
+  return (
+    <ActivityButton
+      theme={theme}
+      label={disambiguate ? `${label} (${skill.name})` : label}
+      onPress={() => onOpenSkill(skill)}
+      compact
+    >
+      <Icon name="ArrowUpRight" size={11} color={theme.colors.accent} />
+      <ActivityText theme={theme}>{label}</ActivityText>
+      {disambiguate && <ActivityText theme={theme}>{skill.name}</ActivityText>}
+    </ActivityButton>
+  );
+}
+
+function ShowInChatButton({
+  theme,
+  target,
+  label,
+  onShowInChat,
+}: {
+  theme: Theme;
+  target?: ActivityAnchor;
+  label: string;
+  onShowInChat?: (target: ActivityAnchor) => void;
+}) {
+  if (!target || !onShowInChat) return null;
+  const role = target.kind === 'tool' ? 'tool call' : 'message';
+  return (
+    <ActivityButton
+      theme={theme}
+      label={`Show in Chat, ${label}, ${role}`}
+      onPress={() => onShowInChat(target)}
+      compact
+    >
+      <ActivityText theme={theme}>Show in Chat</ActivityText>
+    </ActivityButton>
+  );
+}
+
 export function ActivityAgentCard({
   theme,
   agent,
   selected = false,
   onOpenConversation,
+  onShowInChat,
+  onOpenSkill,
 }: {
   theme: Theme;
   agent: AgentActivity;
   selected?: boolean;
   onOpenConversation?: (agentId: string) => void;
+  onShowInChat?: (target: ActivityAnchor) => void;
+  onOpenSkill?: (skill: SkillLoad) => void;
 }) {
   const [open, setOpen] = useState(selected);
   const [moreTools, setMoreTools] = useState(false);
@@ -215,6 +281,18 @@ export function ActivityAgentCard({
       .slice(0, moreTools ? undefined : runningGroups + RECENT_LIMIT)
       .find((item) => item.name === preview.id);
   const singleCall = tool && tool.calls.length === 1 ? tool.calls[0] : undefined;
+  const toolSkills = new Map<string, SkillLoad>();
+  for (const { skillId, skillDocumentAvailable, target } of tool ? tool.calls : []) {
+    if (!skillId || !skillDocumentAvailable || !target) continue;
+    const previous = toolSkills.get(skillId)?.occurrences[0];
+    if (previous && previous.position >= target.position) continue;
+    toolSkills.set(skillId, {
+      id: skillId,
+      name: skillId,
+      loadedAt: target.at,
+      occurrences: [target],
+    });
+  }
   const skill =
     preview?.kind === 'skill' &&
     skills.slice(0, moreSkills ? undefined : RECENT_LIMIT).find((item) => item.id === preview.id);
@@ -300,6 +378,7 @@ export function ActivityAgentCard({
               key={item.name}
               theme={theme}
               label={`${item.name}, ${item.calls.length === 1 ? statusLabel(item.status) : item.details.join(', ')}`}
+              expanded={tool === item}
               selected={tool === item}
               onPress={() => choose({ kind: 'tool', id: item.name })}
             >
@@ -328,6 +407,7 @@ export function ActivityAgentCard({
             key={item.id}
             theme={theme}
             label={`${item.name}, observed skill load`}
+            expanded={skill === item}
             selected={skill === item}
             onPress={() => choose({ kind: 'skill', id: item.id })}
           >
@@ -344,38 +424,65 @@ export function ActivityAgentCard({
           preview={singleCall?.preview}
           status={singleCall ? statusLabel(tool.status) : tool.details[0]!}
           tone={toolTones[tool.status]}
+          actions={
+            onOpenSkill &&
+            [...toolSkills.values()].map((item) => (
+              <OpenSkillButton
+                key={item.id}
+                theme={theme}
+                skill={item}
+                onOpenSkill={onOpenSkill}
+                disambiguate={toolSkills.size > 1}
+              />
+            ))
+          }
           onClose={() => setPreview(null)}
         >
-          {singleCall?.durationMs !== undefined && (
-            <ActivityText theme={theme} tone="muted">
-              {singleCall.durationMs.toLocaleString()} ms
-            </ActivityText>
-          )}
-          {tool.calls.length > 1 &&
-            tool.calls.map((call) => (
+          {tool.calls.map((call, index) => {
+            const time = new Date(call.startedAt).toLocaleTimeString();
+            const status = statusLabel(call.status);
+            const occurrence = singleCall
+              ? tool.name
+              : `${tool.name} ${index + 1} of ${tool.calls.length}`;
+            return (
               <View
-                key={call.id}
-                accessible
-                accessibilityLabel={`${tool.name} call, ${statusLabel(call.status)}, ${new Date(call.startedAt).toLocaleTimeString()}`}
-                style={{ gap: 3, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}
+                key={JSON.stringify([call.id, call.target?.turnId ?? call.target?.position])}
+                style={{ gap: 3 }}
               >
-                <ActivityStatus
-                  theme={theme}
-                  label={statusLabel(call.status)}
-                  tone={toolTones[call.status]}
-                />
-                <ActivityText theme={theme} tone="muted">
-                  {new Date(call.startedAt).toLocaleTimeString()}
-                  {call.durationMs !== undefined && ` · ${call.durationMs.toLocaleString()} ms`}
-                </ActivityText>
-                {call.description && <ActivityText theme={theme}>{call.description}</ActivityText>}
-                {call.preview && (
+                <View
+                  style={{ gap: 4, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}
+                >
+                  <View
+                    accessible
+                    accessibilityLabel={`${tool.name} call, ${status}, ${time}`}
+                    style={{ gap: 3, flexDirection: 'row', alignItems: 'center' }}
+                  >
+                    {!singleCall && (
+                      <ActivityStatus theme={theme} label={status} tone={toolTones[call.status]} />
+                    )}
+                    <ActivityText theme={theme} tone="muted">
+                      {singleCall ? time : `${index + 1} · ${time}`}
+                      {call.durationMs !== undefined && ` · ${call.durationMs.toLocaleString()} ms`}
+                    </ActivityText>
+                  </View>
+                  <ShowInChatButton
+                    theme={theme}
+                    target={call.target}
+                    label={`${occurrence} at ${time}`}
+                    onShowInChat={onShowInChat}
+                  />
+                </View>
+                {!singleCall && call.description && (
+                  <ActivityText theme={theme}>{call.description}</ActivityText>
+                )}
+                {!singleCall && call.preview && (
                   <ActivityText theme={theme} tone="muted">
                     {call.preview}
                   </ActivityText>
                 )}
               </View>
-            ))}
+            );
+          })}
         </ItemPreview>
       )}
       {skill && (
@@ -386,11 +493,42 @@ export function ActivityAgentCard({
           preview={skill.preview}
           status="Loaded"
           tone="success"
+          actions={
+            skill.documentAvailable &&
+            onOpenSkill && <OpenSkillButton theme={theme} skill={skill} onOpenSkill={onOpenSkill} />
+          }
           onClose={() => setPreview(null)}
         >
-          <ActivityText theme={theme} tone="muted">
-            Observed {new Date(skill.loadedAt).toLocaleString()}
-          </ActivityText>
+          {skill.occurrences.length === 0 && (
+            <ActivityText theme={theme} tone="muted">
+              Observed {new Date(skill.loadedAt).toLocaleString()}
+            </ActivityText>
+          )}
+          {skill.occurrences.map((target, index) => {
+            const time = new Date(target.at).toLocaleString();
+            const occurrence =
+              skill.occurrences.length === 1
+                ? skill.name
+                : `${skill.name} ${index + 1} of ${skill.occurrences.length}`;
+            return (
+              <View
+                key={JSON.stringify([target.epoch, target.position, target.kind, target.id])}
+                style={{ gap: 4, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}
+              >
+                <ActivityText theme={theme} tone="muted">
+                  {skill.occurrences.length === 1
+                    ? `Observed ${time}`
+                    : `Use ${index + 1} · ${time}`}
+                </ActivityText>
+                <ShowInChatButton
+                  theme={theme}
+                  target={target}
+                  label={`${occurrence} at ${time}`}
+                  onShowInChat={onShowInChat}
+                />
+              </View>
+            );
+          })}
         </ItemPreview>
       )}
       <View

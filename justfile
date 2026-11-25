@@ -807,6 +807,7 @@ build-assets: _check-uv
     test -d "$UV_PROJECT_ENVIRONMENT" || uv venv "$UV_PROJECT_ENVIRONMENT"
     {{quote(BUN)}} install --frozen-lockfile
     {{quote(BUN)}} run build
+    {{quote(BUN)}} run build:paseo-web
     PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.package_assets --root . --destination src/ltcook_distr/bundle.zip
 
 [group('Build')]

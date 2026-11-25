@@ -57,8 +57,12 @@ All notable changes to `ltcook` will be documented in this file.
   **Stored for this agent** to inspect summary timings, token estimates, and
   source positions. The **Stored Summaries** tab shows the storage path and
   syntax-colored JSON with clipboard export. **Show summary** in the chat
-  reveals the passage summary and can open its complete entry. The Session Memory card shows live tokens per
-  second during generation.
+  reveals the passage summary and can open its complete entry. The Session
+  Memory card shows live tokens per second during generation.
+
+- Activity links individual tool and skill occurrences to their chat rows in
+  LTCook's Paseo web app. The details header opens skill documents in a workspace
+  tab, and each turn offers inline previews of its observed skills.
 
 - `ltcook restart` stops the local runtime and reopens Paseo. On Linux and macOS,
   `--update` applies the registered AppRC update before starting.

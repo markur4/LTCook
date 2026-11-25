@@ -169,8 +169,12 @@ whenever you need them.
 - **Activity** follows the focused agent. Expand the agent or a direct subagent
   to inspect running and recent tools, observed skill loads, and model context
   usage when available. Repeated calls share one entry per tool. Select a tool
-  to see the individual calls. The conversation button opens a subagent's
-  native chat.
+  or skill to see its observed occurrences. **Show in Chat** jumps to the exact
+  occurrence in LTCook's bundled Paseo web app. The details header offers
+  **Open skill in new tab** when the skill document is available. Skills loaded
+  during a turn also appear beside **Show summary** in the chat. Select a skill
+  for an inline preview or use **Open in new tab** to read the full document.
+  The conversation button opens a subagent's native chat.
   For Codex, Activity recognizes successful direct reads of `SKILL.md` with
   `cat`, `head`, or `sed -n` when the returned front matter names a
   skill in the provider's catalog.
