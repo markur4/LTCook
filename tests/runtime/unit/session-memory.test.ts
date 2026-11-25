@@ -483,6 +483,26 @@ test('stores chronological summaries, preserves original authority, and removes 
     expect(fullCatalog.summaries[0]?.parts).toEqual([
       { content: { resolution: { value: 'corrected-decision' } }, sources: [3, 4] },
     ]);
+    const firstPassage = await memory.readStoredSummaries('leader', undefined, {
+      passage: { epoch: 'one', position: 2 },
+    });
+    expect(firstPassage.summaries).toEqual([fullCatalog.summaries[1]]);
+    expect(firstPassage.next).toBeNull();
+    const unmatchedPassage = await memory.readStoredSummaries('leader', undefined, {
+      passage: { epoch: 'one', position: 3 },
+    });
+    expect(unmatchedPassage.summaries).toEqual([]);
+    await expect(
+      memory.readStoredSummaries('leader', undefined, {
+        passage: { epoch: 'replacement', position: 2 },
+      }),
+    ).rejects.toThrow('Conversation history changed.');
+    await expect(
+      memory.readStoredSummaries('leader', undefined, {
+        passage: { epoch: 'one', position: 5 },
+      }),
+    ).rejects.toThrow('Conversation history changed.');
+    expect(prompts).toHaveLength(2);
     const catalog = await memory.readStoredSummaries('leader', undefined, {
       includeContent: false,
     });

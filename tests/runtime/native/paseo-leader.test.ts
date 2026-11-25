@@ -119,20 +119,34 @@ test('missing Team selection fails before opening native LTCook', async () => {
   ).toBeUndefined();
 });
 
-test('restores the stored-summary shortcut after Paseo replaces the conversation epoch', async () => {
+test('anchors summary shortcuts to each completed turn and current timeline epoch', async () => {
   const hook = hooks()('agent.turn.after');
   process.env.LTCOOK_RUNTIME_API_URL = 'http://runtime.invalid';
   process.env.LTCOOK_RUNTIME_USER_TOKEN = 'server-secret';
   globalThis.fetch = (async () => Response.json({ memoryEnabled: true })) as typeof fetch;
   let epoch = 'before-rewind';
-  const appended: unknown[] = [];
+  const appended: Array<{
+    id: string;
+    type: string;
+    kind: string;
+    version: number;
+    data: unknown;
+  }> = [];
+  const source = [
+    { seqEnd: 8, turnId: 'turn', item: { type: 'assistant_message' } },
+    { seqEnd: 11, turnId: 'another', item: { type: 'assistant_message' } },
+  ];
   const timeline = {
-    async append(row: unknown) {
+    async append(row: (typeof appended)[number]) {
       appended.push(row);
       return { epoch };
     },
     async refetch() {
-      return { epoch, agent: { archivedAt: null } };
+      return {
+        epoch,
+        agent: { archivedAt: null },
+        entries: [...source, ...appended.map((item) => ({ item }))],
+      };
     },
   };
   const context = {
@@ -156,13 +170,30 @@ test('restores the stored-summary shortcut after Paseo replaces the conversation
   };
   await hook(turn, context);
   await hook(turn, context);
+  await hook({ ...turn, turnId: 'another' }, context);
   expect(appended).toEqual([
-    { type: 'plugin', id: 'memory-summaries', kind: 'memory-summaries', version: 1, data: {} },
+    {
+      type: 'plugin',
+      id: 'memory-summaries:turn',
+      kind: 'memory-summaries',
+      version: 1,
+      data: { passage: { epoch, position: 8 } },
+    },
+    {
+      type: 'plugin',
+      id: 'memory-summaries:another',
+      kind: 'memory-summaries',
+      version: 1,
+      data: { passage: { epoch, position: 11 } },
+    },
   ]);
   epoch = 'after-rewind';
   await hook(turn, context);
-  expect(appended).toHaveLength(2);
-  expect(appended[1]).toEqual(appended[0]);
+  expect(appended).toHaveLength(3);
+  expect(appended[2]).toMatchObject({
+    id: 'memory-summaries:turn',
+    data: { passage: { epoch, position: 8 } },
+  });
 });
 
 test('a real turn fails before inference when native initialization is unavailable', async () => {

@@ -10,6 +10,7 @@ import {
   MemoryDeviceSchema,
   MemoryRateSchema,
   MEMORY_SUMMARIES_TIMELINE_KIND,
+  MemorySummariesTimelineSchema,
   MemoryUnitCountsSchema,
   storedSummariesRpc,
 } from './shared/activity';
@@ -463,7 +464,6 @@ export default function contribute(server: PluginServerContext) {
       () => undefined,
     );
   };
-  const memoryShortcuts = new Map<string, { epoch?: string; pending?: boolean }>();
   const memoryObservation = z.object({ memoryEnabled: z.boolean() });
   const cleanup = [
     server.addHook('agent.turn.before', async ({ agent, turnId }, context) => {
@@ -483,41 +483,57 @@ export default function contribute(server: PluginServerContext) {
       );
       if (
         outcome.kind !== 'completed' ||
+        !turnId ||
         !agent.workspaceId ||
         !observed.success ||
         !observed.data.memoryEnabled ||
         signal.aborted
       )
         return;
-      const shortcut = memoryShortcuts.get(agent.id) ?? {};
-      if (shortcut.pending) return;
-      shortcut.pending = true;
-      memoryShortcuts.set(agent.id, shortcut);
       try {
         const timeline = paseo.agents.ref(agent.id).timeline;
-        if (shortcut.epoch) {
-          // > A cursor before all entries returns no messages while the timeline epoch is current.
-          const page = await timeline.refetch({
-            direction: 'before',
-            cursor: { epoch: shortcut.epoch, seq: 0 },
-            limit: 1,
-          });
-          if (page.error || !page.agent || page.agent.archivedAt || page.epoch === shortcut.epoch)
-            return;
-        }
-        if (signal.aborted || memoryShortcuts.get(agent.id) !== shortcut) return;
-        const { epoch } = await timeline.append({
+        const page = await timeline.refetch({
+          direction: 'tail',
+          projection: 'canonical',
+          limit: 48,
+        });
+        if (signal.aborted || page.error || !page.agent || page.agent.archivedAt || page.reset)
+          return;
+        const source = page.entries.findLast(
+          ({ turnId: sourceTurn, item }) =>
+            sourceTurn === turnId &&
+            (item.type === 'assistant_message' ||
+              (item.type === 'tool_call' && item.status !== 'running')),
+        );
+        if (!source) return;
+        const markerId = `${MEMORY_SUMMARIES_TIMELINE_KIND}:${turnId}`;
+        const passage = { epoch: page.epoch, position: source.seqEnd };
+        if (
+          page.entries.some(({ item }) => {
+            if (
+              item.type !== 'plugin' ||
+              item.id !== markerId ||
+              item.kind !== MEMORY_SUMMARIES_TIMELINE_KIND
+            )
+              return false;
+            const marker = MemorySummariesTimelineSchema.safeParse(item.data);
+            return (
+              marker.success &&
+              marker.data.passage?.epoch === passage.epoch &&
+              marker.data.passage.position === passage.position
+            );
+          })
+        )
+          return;
+        await timeline.append({
           type: 'plugin',
-          id: MEMORY_SUMMARIES_TIMELINE_KIND,
+          id: markerId,
           kind: MEMORY_SUMMARIES_TIMELINE_KIND,
           version: 1,
-          data: {},
+          data: { passage },
         });
-        shortcut.epoch = epoch;
       } catch {
-        // > A later completed turn can retry an unavailable timeline.
-      } finally {
-        shortcut.pending = false;
+        // > An unavailable timeline leaves the passage unmarked.
       }
     }),
     server.addHook('agent.close.after', async ({ agent }) => {
@@ -606,7 +622,6 @@ export default function contribute(server: PluginServerContext) {
       };
     }),
     server.addHook('agent.archive.after', async ({ agent }) => {
-      memoryShortcuts.delete(agent.id);
       if (!['ltcook', 'pi', 'codex'].includes(agent.provider)) return;
       observeMemory(agent, { force: true });
       await runtimeJson('/v1/mcp/revoke', { nativeAgentId: agent.id });

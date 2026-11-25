@@ -200,6 +200,7 @@ export class MemoryStore {
     through: number,
     before?: MemorySummaryCursor,
     includeContent = true,
+    position?: number,
   ) {
     const pageSize = 8;
     const rows = this.database
@@ -213,10 +214,18 @@ export class MemoryStore {
          FROM memory_summary
          WHERE agent = ? AND epoch = ? AND position <= ?
            AND json_extract(value, '$.complete') = 1
+           ${position === undefined ? '' : 'AND position = ?'}
            ${before ? 'AND (position, id) < (?, ?)' : ''}
          ORDER BY position DESC, id DESC LIMIT ?`,
       )
-      .all(agentId, epoch, through, ...(before ? [before.position, before.id] : []), pageSize + 1);
+      .all(
+        agentId,
+        epoch,
+        through,
+        ...(position === undefined ? [] : [position]),
+        ...(before ? [before.position, before.id] : []),
+        pageSize + 1,
+      );
     const summaries = rows.slice(0, pageSize).map((row) => {
       const { parts, ...metadata } = catalogRowSchema.parse(row);
       return {

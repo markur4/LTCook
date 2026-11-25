@@ -56,8 +56,8 @@ All notable changes to `ltcook` will be documented in this file.
   acknowledged delegation handoffs in the Session Memory card. Select
   **Stored for this agent** to inspect summary timings, token estimates, and
   source positions. The **Stored Summaries** tab shows the storage path and
-  syntax-colored JSON with clipboard export. Open it from Activity or the chat's
-  **Show summaries** button. The Session Memory card shows live tokens per
+  syntax-colored JSON with clipboard export. **Show summary** in the chat
+  reveals the passage summary and can open its complete entry. The Session Memory card shows live tokens per
   second during generation.
 
 - `ltcook restart` stops the local runtime and reopens Paseo. On Linux and macOS,
