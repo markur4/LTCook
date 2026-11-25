@@ -1102,6 +1102,8 @@ replies prefixed correct JSON with prose, including the realistic approval.
 
 ### Extractive Markdown screen
 
+Run the screen with `bun evals/session-memory-live.ts --qualify-mnn-extractive --production-suspended`.
+
 MNN-Pocket Q8_0 ran the supplied extractive prompt on retry correction
 at temperature 0.8 and seed 17 with reasoning disabled. The corrected
 chronological handoff and current-only UAMP input were pinned at
@@ -1115,9 +1117,10 @@ and 25.577 s of generation. The request used 379 input tokens and runner
 RSS peaked at 653 MiB. The failed gate stopped the remaining three fixtures.
 
 The evaluator validates complete sentences against the source named by
-the author label or source sequence. It permits Markdown list and heading
-markers outside the excerpt and ignores surrounding whitespace. It counts
-attribution and markup in the output byte total. Invalid excerpts and
+the author label or source sequence, including attached reference text.
+It permits Markdown list and heading markers outside the excerpt, ignores
+surrounding whitespace, and preserves internal spaces and line breaks.
+It counts attribution and markup in the output byte total. Invalid excerpts and
 outputs that are at least as large as the original exchange are rejected.
 Focused tests cover valid compression, changed wording, wrong authorship,
 lost negation and a full copy.

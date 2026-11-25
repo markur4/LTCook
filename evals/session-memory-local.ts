@@ -58,44 +58,62 @@ Keep exact technical identifiers, paths, numbers, negations and distinctions bet
 
 Omit redundant sentences. Do not paraphrase or invent information.`;
 
-const excerptSource = z.object({ seq: z.number(), author: z.string(), text: z.string() });
+const excerptSource = z.object({
+  seq: z.number(),
+  author: z.string(),
+  text: z.string(),
+  attachment: z.object({ text: z.string().optional() }).optional(),
+});
 const sentences = new Intl.Segmenter('en', { granularity: 'sentence' });
 
 export function inspectExtractiveSummary(prompt: Prompt, text: string) {
   const sources = prompt[1].content
     .split('\n')
     .filter((line) => line.startsWith('{'))
-    .map((line) => excerptSource.parse(JSON.parse(line)));
+    .map((line) => {
+      const source = excerptSource.parse(JSON.parse(line));
+      const text = source.attachment?.text ?? source.text;
+      const boundaries = [...sentences.segment(text)]
+        .filter(({ segment }) => segment.trim())
+        .map(({ segment, index }) => ({
+          start: index + segment.length - segment.trimStart().length,
+          end: index + segment.trimEnd().length,
+        }));
+      return {
+        seq: source.seq,
+        author: source.author,
+        text,
+        starts: boundaries.map(({ start }) => start),
+        ends: new Set(boundaries.map(({ end }) => end)),
+      };
+    });
   const sourceBytes = sources.reduce((total, source) => total + Buffer.byteLength(source.text), 0);
   const summaryBytes = Buffer.byteLength(text);
   let attribution: string | undefined;
   let excerpts = 0;
-  const lines = text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-  for (const line of lines) {
-    const content = line.replace(/^(?:[-*+]\s+|#{1,6}\s+)/, '');
+  const lines = text.split('\n');
+  for (let index = 0; index < lines.length; index++) {
+    const content = lines[index]!.trimStart().replace(/^(?:[-*+]\s+|#{1,6}\s+)/, '');
     const labeled = /^(?:\*\*)?(User|Agent|#[0-9]+)(?:\*\*)?(?:\s*:\s*|\s*$)(.*)$/i.exec(content);
     if (labeled) attribution = labeled[1]!.toLowerCase();
-    const excerpt = (labeled ? labeled[2]! : content).trim();
-    if (!excerpt) continue;
-    const matched = sources.some((source) => {
-      if (attribution !== source.author && attribution !== `#${source.seq}`) return false;
-      const sourceSentences = [...sentences.segment(source.text)].map(({ segment }) =>
-        segment.trim(),
-      );
-      return sourceSentences.some((_, index) => {
-        let span = '';
-        for (const sentence of sourceSentences.slice(index)) {
-          span = span ? span + ' ' + sentence : sentence;
-          if (span === excerpt) return true;
-          if (!excerpt.startsWith(span)) break;
+    const excerpt = labeled ? labeled[2]! : content;
+    if (!excerpt.trim()) continue;
+    let lastMatch = index - 1;
+    for (const source of sources) {
+      if (attribution !== source.author && attribution !== `#${source.seq}`) continue;
+      for (const start of source.starts) {
+        let span = excerpt;
+        for (let last = index; last < lines.length; last++) {
+          if (last > index) span += '\n' + lines[last];
+          const candidate = span.trimEnd();
+          if (!source.text.startsWith(candidate, start)) break;
+          if (source.ends.has(start + candidate.length)) lastMatch = Math.max(lastMatch, last);
         }
-        return false;
-      });
-    });
-    if (!matched) return { sourceBytes, summaryBytes, verdict: 'invalid-excerpt' as const };
+      }
+    }
+    if (lastMatch < index)
+      return { sourceBytes, summaryBytes, verdict: 'invalid-excerpt' as const };
+    index = lastMatch;
     excerpts++;
   }
   const verdict = !excerpts
