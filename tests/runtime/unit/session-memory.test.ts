@@ -413,6 +413,18 @@ test('stores chronological summaries, preserves original authority, and removes 
       lastDelivered: null,
       currentContext: null,
     });
+    const catalog = await memory.readStoredSummaries('leader', undefined, { includeText: false });
+    expect(catalog.storagePath).toBe(options.databasePath);
+    expect(
+      catalog.summaries.map(({ position, durationMs, parts }) => ({ position, durationMs, parts })),
+    ).toEqual([
+      { position: 4, durationMs: 1, parts: [] },
+      { position: 2, durationMs: 1, parts: [] },
+    ]);
+    for (const summary of catalog.summaries) {
+      expect(summary.originalTokens).toBeGreaterThan(0);
+      expect(summary.summaryTokens).toBeGreaterThan(0);
+    }
     let acknowledge: (() => void) | undefined;
     const handoff = await memory.handoff('leader', 'cursor', undefined, (payload) => {
       acknowledge = memory.prepareDelivery('session', 'worker', payload);

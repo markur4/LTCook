@@ -460,6 +460,7 @@ export async function observeActivity(
 
   try {
     while (!signal.aborted) {
+      const started = performance.now();
       await refresh();
       if (signal.aborted) break;
       await new Promise<void>((resolve) => {
@@ -469,7 +470,7 @@ export async function observeActivity(
           resolve();
         };
         signal.addEventListener('abort', done, { once: true });
-        timer = setTimeout(done, 1500);
+        timer = setTimeout(done, Math.max(0, 1000 - (performance.now() - started)));
       });
     }
   } finally {

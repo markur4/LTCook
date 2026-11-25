@@ -756,8 +756,15 @@ try {
   memory = new SessionMemory({
     databasePath: path.join(directory, 'activity-memory.sqlite'),
     source: createPaseoMemorySource(host.api, secret),
-    async summarize(type, prompt) {
-      if (JSON.stringify(prompt).includes('Summarize without Activity')) backgroundSummary = true;
+    async summarize(type, prompt, _signal, _cpuOnly, onProgress) {
+      const input = JSON.stringify(prompt);
+      if (input.includes('Summarize without Activity')) backgroundSummary = true;
+      if (input.includes('Measure live summary throughput')) {
+        onProgress?.({ tokensPerSecond: 12.5, estimated: true });
+        await Bun.sleep(2100);
+        onProgress?.({ tokensPerSecond: 19, estimated: true });
+        await Bun.sleep(2100);
+      }
       return { type, text: 'Background summary fixture', complete: true, elapsedMs: 1 };
     },
   });
@@ -779,18 +786,33 @@ try {
   stage = 'native-activity-memory-summaries';
   await browser('wait', '[aria-label^="Session Memory,"][aria-label*="stored"]');
   await browser('click', '[aria-label^="Session Memory,"]');
-  const useGpu = '[role="switch"][aria-label="Use GPU"]';
-  await browser('wait', `${useGpu}[aria-checked="true"]`);
-  await browser('click', useGpu);
-  await browser('wait', `${useGpu}[aria-checked="false"]`);
+  await browser('find', 'text', 'Inference device', 'click', '--exact');
+  await browser('find', 'text', 'CPU', 'click', '--exact');
   assert.equal(memory.status(undefined, mobileSession.id).cpuOnly, true);
-  await browser('click', useGpu);
-  await browser('wait', `${useGpu}[aria-checked="true"]`);
+  await browser('find', 'text', 'Inference device', 'click', '--exact');
+  await browser('find', 'text', 'GPU (automatic)', 'click', '--exact');
   assert.equal(memory.status(undefined, mobileSession.id).cpuOnly, false);
+  await host.api.agents
+    .ref(mobileSession.id)
+    .send('Measure live summary throughput', { clientMessageId: randomUUID() });
+  await browser('wait', '--text', '12.5 tokens/s');
+  await browser('wait', '--text', '19 tokens/s');
   await browser('wait', '--text', 'Stored for this agent');
   await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
+  await browser('wait', '--text', 'UAMP');
+  assert(
+    !(await browser('snapshot')).includes('Background summary fixture'),
+    'The narrow Explorer does not render summary bodies',
+  );
+  await clickButton('Open stored summaries');
   await browser('wait', '--text', 'Background summary fixture');
-  await browser('wait', '--text', 'UAMP · User–agent message pair');
+  await browser('wait', '--text', 'activity-memory.sqlite');
+  await browser('find', 'role', 'button', 'click', '--name', mobileLeader.agent.title, '--exact');
+  await waitForComposer(mobileLeader.agent.title);
+  await clickButton('Show summaries');
+  await browser('wait', '--text', 'Background summary fixture');
+  await browser('find', 'role', 'button', 'click', '--name', mobileLeader.agent.title, '--exact');
+  await waitForComposer(mobileLeader.agent.title);
   await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
   await browser('wait', '--text', 'No acknowledged handoff available for this agent.');
   await browser('click', '[aria-label^="Session Memory,"]');

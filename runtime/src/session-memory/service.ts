@@ -27,6 +27,7 @@ import {
   retrievableSummaryStatements,
   prepareMemorySummaries,
   type MemoryBudgets,
+  type MemorySummaryProgress,
   type MemorySummaryResult,
 } from './summarization.js';
 import {
@@ -84,6 +85,7 @@ export type MemoryHandoffObservation = UnitCounts & {
 export type SessionMemoryStatus = {
   cpuOnly: boolean;
   summarization: SummaryOutcome | 'queued' | 'summarizing';
+  rate: MemorySummaryProgress | null;
   lastSuccessfulSummaryAt: string | null;
   lastError: MemoryError | null;
   stored: StoredMemory | null;
@@ -104,6 +106,12 @@ type AgentMemoryActivity = {
   lastError?: MemoryError;
 };
 
+type ActiveMemoryInference = {
+  agentId: string;
+  generation: symbol;
+  rate?: MemorySummaryProgress;
+};
+
 type MemoryOptions = {
   databasePath: string;
   source: MemorySource;
@@ -112,6 +120,7 @@ type MemoryOptions = {
     request: ReturnType<typeof prepareMemorySummaries>[number]['prompt'],
     signal: AbortSignal,
     cpuOnly: boolean,
+    onProgress?: (rate: MemorySummaryProgress | undefined) => void,
   ): Promise<MemorySummaryResult>;
   releaseCpuModel?(signal: AbortSignal): Promise<void>;
   threshold?: number;
@@ -252,7 +261,7 @@ export class SessionMemory {
       order: number;
     }
   >();
-  private inferenceAgentId?: string;
+  private inference?: ActiveMemoryInference;
   private sendOrder = 0;
   private drain?: Promise<void>;
 
@@ -276,6 +285,11 @@ export class SessionMemory {
     const mismatched =
       epoch !== undefined && recorded?.epoch !== undefined && recorded.epoch !== epoch;
     const activity = mismatched ? undefined : recorded;
+    const inference = this.inference;
+    const summarizing =
+      inference?.agentId === agentId &&
+      inference.generation === activity?.generation &&
+      !this.abort.signal.aborted;
     const delivery = sessionId
       ? this.deliveries.get(JSON.stringify([sessionId, agentId]))
       : undefined;
@@ -289,11 +303,12 @@ export class SessionMemory {
       cpuOnly: this.store.deviceSettings().cpuOnly,
       summarization: mismatched
         ? 'unknown'
-        : this.inferenceAgentId === agentId
+        : summarizing
           ? 'summarizing'
           : this.pending.has(agentId)
             ? 'queued'
             : (activity?.outcome ?? 'unknown'),
+      rate: summarizing && inference.rate ? { ...inference.rate } : null,
       lastSuccessfulSummaryAt: activity?.lastSuccessfulSummaryAt ?? null,
       lastError: activity?.lastError ? { ...activity.lastError } : null,
       stored: activity?.stored ? { ...activity.stored } : null,
@@ -304,7 +319,11 @@ export class SessionMemory {
     };
   }
 
-  async readStoredSummaries(agentId: string, before?: MemorySummaryCursor) {
+  async readStoredSummaries(
+    agentId: string,
+    before?: MemorySummaryCursor,
+    { includeText = true }: { includeText?: boolean } = {},
+  ) {
     const generation = this.activity.get(agentId)?.generation;
     const tail = await this.options.source.read(agentId, undefined, 'tail');
     this.abort.signal.throwIfAborted();
@@ -317,15 +336,10 @@ export class SessionMemory {
     ) {
       throw new Error('Conversation history changed. Reopen the stored summaries.');
     }
-    const { summaries, next } = this.store.summaryPage(agentId, tail.epoch, tail.latest, before);
+    const page = this.store.summaryPage(agentId, tail.epoch, tail.latest, before, includeText);
     return {
-      summaries: summaries.map(({ id, type, createdAt, parts }) => ({
-        id,
-        type,
-        createdAt,
-        parts: parts.map(({ text, sources }) => ({ text, sources })),
-      })),
-      next,
+      ...page,
+      storagePath: this.options.databasePath === ':memory:' ? null : this.options.databasePath,
     };
   }
 
@@ -787,6 +801,18 @@ export class SessionMemory {
       const historyHash = createHash('sha256')
         .update(JSON.stringify(parts.map(({ prompt }) => prompt)))
         .digest('hex');
+      const reusable =
+        existing?.historyHash === historyHash && existing.expectedParts === parts.length
+          ? existing
+          : undefined;
+      const retainedParts = reusable?.parts ?? [];
+      const originals = new Map(unit.messages.map((message) => [message.seq, message]));
+      let originalTokens = 0;
+      for (const { text, attachments } of originals.values()) {
+        originalTokens += estimateMemoryTokens(text);
+        for (const attachment of attachments ?? [])
+          originalTokens += estimateMemoryTokens(attachment.text);
+      }
       const summary: StoredMemorySummary = {
         id,
         agentId,
@@ -802,19 +828,24 @@ export class SessionMemory {
           timestamp,
         })),
         createdAt: existing?.createdAt ?? new Date().toISOString(),
+        originalTokens,
+        summaryTokens: retainedParts.reduce(
+          (total, { text }) => total + estimateMemoryTokens(text),
+          0,
+        ),
+        // > An older partial summary may have portions with unknown durations.
+        durationMs: retainedParts.length ? reusable?.durationMs : 0,
         model: this.options.model,
         configuration: this.options.configuration,
         historyHash,
-        parts:
-          existing?.historyHash === historyHash && existing.expectedParts === parts.length
-            ? existing.parts
-            : [],
+        parts: retainedParts,
         observedChecks: unit.type === 'AAB' ? observedMemoryChecks(unit.messages) : undefined,
         expectedParts: parts.length,
         complete: false,
       };
       for (const part of parts.slice(summary.parts.length)) {
         if (this.foreground.size) return true;
+        const generation = activity.generation;
         const queueMs = Math.round(performance.now() - queuedAt);
         const started = performance.now();
         const report = (result: MemorySummaryResult) =>
@@ -836,14 +867,27 @@ export class SessionMemory {
             await this.options.releaseCpuModel(this.abort.signal);
             const current = this.store.deviceSettings();
             this.store.saveDeviceSettings({ ...current, cpuRunner: false });
-            if (this.foreground.size || current.cpuOnly !== cpuOnly) return true;
+            if (
+              this.foreground.size ||
+              current.cpuOnly !== cpuOnly ||
+              activity.generation !== generation
+            )
+              return true;
           }
           if (cpuOnly && !cpuRunner) this.store.saveDeviceSettings({ cpuOnly, cpuRunner: true });
-          this.inferenceAgentId = agentId;
+          const inference: ActiveMemoryInference = { agentId, generation };
+          this.inference = inference;
           const result = await this.options
-            .summarize(unit.type, part.prompt, this.abort.signal, cpuOnly)
+            .summarize(unit.type, part.prompt, this.abort.signal, cpuOnly, (rate) => {
+              if (
+                this.inference === inference &&
+                activity.generation === generation &&
+                !this.abort.signal.aborted
+              )
+                inference.rate = rate;
+            })
             .finally(() => {
-              this.inferenceAgentId = undefined;
+              this.inference = undefined;
             })
             .catch((): MemorySummaryResult => {
               this.abort.signal.throwIfAborted();
@@ -866,6 +910,12 @@ export class SessionMemory {
             sources: part.sources,
             noUsefulInformation: result.noUsefulInformation,
           });
+          summary.summaryTokens = (summary.summaryTokens ?? 0) + estimateMemoryTokens(result.text);
+          if (summary.durationMs !== undefined) {
+            const durationMs = summary.durationMs + Math.round(result.elapsedMs);
+            summary.durationMs =
+              result.elapsedMs >= 0 && Number.isSafeInteger(durationMs) ? durationMs : undefined;
+          }
           summary.complete = summary.parts.length === parts.length;
           if (!(await this.currentHistory(agentId, epoch, latest))) return true;
           this.store.saveSummary(summary);
@@ -878,7 +928,7 @@ export class SessionMemory {
             notePending();
           }
         } catch {
-          this.inferenceAgentId = undefined;
+          this.inference = undefined;
           this.abort.signal.throwIfAborted();
           this.noteFailure(agentId, 'Session Memory could not complete the summary.');
           this.options.onFailure?.();

@@ -395,12 +395,12 @@ export class RuntimeApi {
           response.writeHead(403).end('{}');
           return;
         }
-        const { agentId, before } = storedSummariesRpc.input.parse(parsed);
+        const { agentId, before, includeText } = storedSummariesRpc.input.parse(parsed);
         if (!this.memory) {
           response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
           return;
         }
-        const page = await this.memory.readStoredSummaries(agentId, before);
+        const page = await this.memory.readStoredSummaries(agentId, before, { includeText });
         response.writeHead(200).end(JSON.stringify(page));
         return;
       }
@@ -525,7 +525,7 @@ export class RuntimeApi {
         } else {
           this.memory?.observe(id, actor.kind === 'user' && input.force === true);
         }
-        response.writeHead(202).end('{}');
+        response.writeHead(202).end(JSON.stringify({ memoryEnabled: this.memory !== undefined }));
         return;
       }
       if (request.url === '/v1/mcp/grant' || request.url === '/v1/mcp/revoke') {

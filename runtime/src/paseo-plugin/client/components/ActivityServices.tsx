@@ -1,14 +1,13 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { Text, View } from 'react-native';
 import { useRpc } from '@getpaseo/plugin/client';
-import { Icon, SettingsSwitch } from '@getpaseo/plugin/client/ui';
+import { Icon, SettingsSelect } from '@getpaseo/plugin/client/ui';
 import {
   memoryDeviceRpc,
-  storedSummariesRpc,
   type ActivitySnapshot,
   type MemoryUnitCounts,
-  type StoredSummariesPage,
 } from '../../shared/activity';
+import { useStoredSummaries } from '../use-stored-summaries';
 import {
   ActivityButton,
   ActivityCard,
@@ -50,8 +49,87 @@ function memoryCounts({ uamp, aab }: MemoryUnitCounts) {
   return `${uamp.toLocaleString()} user–agent ${uamp === 1 ? 'pair' : 'pairs'} · ${aab.toLocaleString()} action ${aab === 1 ? 'batch' : 'batches'}`;
 }
 
-type SummaryReader =
-  { status: 'loading' | 'ready'; page: StoredSummariesPage } | { status: 'error'; message: string };
+const memoryDevices = [
+  { label: 'CPU', value: 'cpu' },
+  { label: 'GPU (automatic)', value: 'automatic' },
+] as const;
+
+function StoredSummaryMetadata({
+  theme,
+  agentId,
+  onOpenSummaries,
+}: {
+  theme: Theme;
+  agentId: string;
+  onOpenSummaries: () => void;
+}) {
+  const { page, error, loading, loadOlder, reload } = useStoredSummaries(agentId, false);
+  return (
+    <>
+      <ActivityButton theme={theme} label="Open stored summaries" onPress={onOpenSummaries}>
+        <Icon name="ArrowUpRight" size={11} color={theme.colors.accent} />
+        <ActivityText theme={theme}>Open stored summaries</ActivityText>
+      </ActivityButton>
+      {page?.summaries.map((summary) => {
+        const date = new Date(summary.createdAt);
+        const duration =
+          summary.durationMs === null
+            ? 'Duration unknown'
+            : summary.durationMs < 1_000
+              ? `Duration ${summary.durationMs.toLocaleString()} ms`
+              : `Duration ${(summary.durationMs / 1_000).toLocaleString(undefined, { maximumFractionDigits: 1 })} s`;
+        return (
+          <View
+            key={summary.id}
+            style={{
+              borderTopColor: theme.colors.border,
+              borderTopWidth: 1,
+              paddingVertical: 4,
+              gap: 3,
+            }}
+          >
+            <ActivityText theme={theme} strong>
+              {summary.type} ·{' '}
+              {Number.isNaN(date.valueOf()) ? 'Time unknown' : date.toLocaleString()}
+            </ActivityText>
+            <ActivityText theme={theme} tone="muted" size={10}>
+              Est. tokens · Original {summary.originalTokens?.toLocaleString() ?? 'unknown'} ·
+              Summary {summary.summaryTokens?.toLocaleString() ?? 'unknown'}
+            </ActivityText>
+            <ActivityText theme={theme} tone="muted" size={10}>
+              {duration}
+            </ActivityText>
+          </View>
+        );
+      })}
+      {loading && (
+        <ActivityText theme={theme} tone="muted">
+          Loading stored summaries…
+        </ActivityText>
+      )}
+      {error && (
+        <>
+          <ActivityText theme={theme} tone="danger">
+            {error}
+          </ActivityText>
+          <ActivityButton theme={theme} label="Reload stored summaries" onPress={reload}>
+            <ActivityText theme={theme}>Reload stored summaries</ActivityText>
+          </ActivityButton>
+        </>
+      )}
+      {!loading && !error && page?.summaries.length === 0 && (
+        <ActivityText theme={theme} tone="muted">
+          No completed summaries for this agent.
+        </ActivityText>
+      )}
+      {!loading && !error && page?.next && (
+        <ActivityButton theme={theme} label="Load older summaries" onPress={loadOlder}>
+          <ActivityText theme={theme}>Load older summaries</ActivityText>
+        </ActivityButton>
+      )}
+    </>
+  );
+}
 
 export function ActivityServices({
   theme,
@@ -59,59 +137,40 @@ export function ActivityServices({
   rag,
   memory,
   onCpuOnlyChange,
+  onOpenSummaries,
   agentWorktree,
 }: Pick<ActivitySnapshot, 'rag' | 'memory'> & {
   theme: Theme;
   agentId: string;
   onCpuOnlyChange: (cpuOnly: boolean) => void;
+  onOpenSummaries: () => void;
   agentWorktree?: string;
 }) {
   const [ragOpen, setRagOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [savingDevice, setSavingDevice] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
-  const [reader, setReader] = useState<SummaryReader | null>(null);
-  const request = useRef(0);
-  const fetchSummaries = useRpc(storedSummariesRpc);
+  const [storedOpen, setStoredOpen] = useState(false);
   const saveMemoryDevice = useRpc(memoryDeviceRpc);
-  async function changeMemoryDevice(useGpu: boolean) {
+  async function changeMemoryDevice(cpuOnly: boolean) {
     setSavingDevice(true);
     setDeviceError(null);
     try {
-      const { cpuOnly } = await saveMemoryDevice({ cpuOnly: !useGpu });
-      onCpuOnlyChange(cpuOnly);
+      const saved = await saveMemoryDevice({ cpuOnly });
+      onCpuOnlyChange(saved.cpuOnly);
     } catch (error) {
       setDeviceError(error instanceof Error ? error.message : 'Could not change inference device.');
     } finally {
       setSavingDevice(false);
     }
   }
-  function closeReader() {
-    request.current++;
-    setReader(null);
-  }
-  async function readSummaries(before?: NonNullable<StoredSummariesPage['next']>) {
-    const version = ++request.current;
-    const summaries = before && reader?.status === 'ready' ? reader.page.summaries : [];
-    setReader({ status: 'loading', page: { summaries, next: null } });
-    try {
-      const page = await fetchSummaries({ agentId, before });
-      if (version === request.current)
-        setReader({
-          status: 'ready',
-          page: { ...page, summaries: [...summaries, ...page.summaries] },
-        });
-    } catch (error) {
-      if (version === request.current)
-        setReader({
-          status: 'error',
-          message: error instanceof Error ? error.message : 'Stored summaries are unavailable.',
-        });
-    }
-  }
   const ragActivity = statusLabel(rag.activity);
   const ragAvailability = statusLabel(rag.availability);
   const summarization = statusLabel(memory.summarization);
+  const rate = memory.summarization === 'summarizing' ? memory.rate : null;
+  const rateLabel = rate
+    ? `${rate.tokensPerSecond.toLocaleString(undefined, { maximumFractionDigits: 1 })} tokens/s${rate.estimated ? ' (estimated)' : ''}`
+    : null;
   const storedCounts = memory.stored ? memoryCounts(memory.stored) : 'Counts unavailable';
   const stored = memory.stored ? memory.stored.uamp + memory.stored.aab : null;
   const memorySummary = [
@@ -169,116 +228,69 @@ export function ActivityServices({
         statusTone={memoryTones[memory.summarization]}
         open={memoryOpen}
         onToggle={() => {
-          if (memoryOpen) closeReader();
+          if (memoryOpen) setStoredOpen(false);
           setMemoryOpen(!memoryOpen);
         }}
-        summaryLabel={memorySummary}
+        summaryLabel={rateLabel ? `${rateLabel}, ${memorySummary}` : memorySummary}
         summary={
-          <ActivityText theme={theme} tone="muted" size={10}>
-            {memorySummary}
-          </ActivityText>
+          <>
+            {rateLabel && (
+              <ActivityText theme={theme} tone="running" size={12} strong>
+                {rateLabel}
+              </ActivityText>
+            )}
+            <ActivityText theme={theme} tone="muted" size={10}>
+              {memorySummary}
+            </ActivityText>
+          </>
         }
       >
         <ActivityText theme={theme} strong>
           Background summaries
         </ActivityText>
         {memory.cpuOnly !== null && (
-          <SettingsSwitch
-            label="Use GPU"
-            value={!memory.cpuOnly}
+          <SettingsSelect
+            label="Inference device"
+            value={memory.cpuOnly ? 'cpu' : 'automatic'}
+            options={memoryDevices}
             disabled={savingDevice}
-            onValueChange={(useGpu) => void changeMemoryDevice(useGpu)}
+            onValueChange={(device) => {
+              const cpuOnly = device === 'cpu';
+              if (cpuOnly !== memory.cpuOnly) void changeMemoryDevice(cpuOnly);
+            }}
             error={deviceError}
           />
         )}
         {memory.summarization !== 'disabled' && (
-          <ActivityButton
-            theme={theme}
-            label={`Stored for this agent, ${storedCounts}`}
-            expanded={reader !== null}
-            onPress={() => (reader ? closeReader() : void readSummaries())}
-          >
-            <Icon
-              name={reader ? 'ChevronDown' : 'ChevronRight'}
-              size={11}
-              color={theme.colors.accent}
-            />
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <ActivityText theme={theme} strong>
-                Stored for this agent
-              </ActivityText>
-              <ActivityText theme={theme} tone="muted">
-                {storedCounts}
-              </ActivityText>
-            </View>
-          </ActivityButton>
-        )}
-        {reader?.status === 'error' && (
           <>
-            <ActivityText theme={theme} tone="danger">
-              {reader.message}
-            </ActivityText>
             <ActivityButton
               theme={theme}
-              label="Retry stored summaries"
-              onPress={() => void readSummaries()}
+              label={`Stored for this agent, ${storedCounts}`}
+              expanded={storedOpen}
+              onPress={() => setStoredOpen(!storedOpen)}
             >
-              <ActivityText theme={theme}>Retry</ActivityText>
-            </ActivityButton>
-          </>
-        )}
-        {reader && reader.status !== 'error' && (
-          <>
-            {reader.page.summaries.map((summary) => (
-              <View
-                key={summary.id}
-                style={{
-                  borderColor: theme.colors.border,
-                  borderWidth: 1,
-                  borderRadius: 5,
-                  padding: 7,
-                  gap: 5,
-                }}
-              >
+              <Icon
+                name={storedOpen ? 'ChevronDown' : 'ChevronRight'}
+                size={11}
+                color={theme.colors.accent}
+              />
+              <View style={{ flex: 1, minWidth: 0 }}>
                 <ActivityText theme={theme} strong>
-                  {summary.type === 'UAMP'
-                    ? 'UAMP · User–agent message pair'
-                    : 'AAB · Agent action batch'}
+                  Stored for this agent
                 </ActivityText>
-                <ActivityText theme={theme} tone="muted" size={10}>
-                  {new Date(summary.createdAt).toLocaleString()}
+                <ActivityText theme={theme} tone="muted">
+                  {storedCounts}
                 </ActivityText>
-                {summary.parts.map((part, index) => (
-                  <View key={index} style={{ gap: 3 }}>
-                    <ActivityText theme={theme} size={12}>
-                      {part.text}
-                    </ActivityText>
-                    {part.sources.length > 0 && (
-                      <ActivityText theme={theme} tone="muted" size={10}>
-                        Sources {part.sources.map((source) => `#${source}`).join(', ')}
-                      </ActivityText>
-                    )}
-                  </View>
-                ))}
               </View>
-            ))}
-            {reader.status === 'loading' ? (
-              <ActivityText theme={theme} tone="muted">
-                Loading stored summaries…
-              </ActivityText>
-            ) : reader.page.summaries.length === 0 ? (
-              <ActivityText theme={theme} tone="muted">
-                No completed summaries for this agent.
-              </ActivityText>
-            ) : reader.page.next ? (
-              <ActivityButton
+            </ActivityButton>
+            {storedOpen && (
+              <StoredSummaryMetadata
+                key={memory.lastSummaryAt ?? 'initial'}
+                agentId={agentId}
                 theme={theme}
-                label="Load older summaries"
-                onPress={() => void readSummaries(reader.page.next ?? undefined)}
-              >
-                <ActivityText theme={theme}>Load older summaries</ActivityText>
-              </ActivityButton>
-            ) : null}
+                onOpenSummaries={onOpenSummaries}
+              />
+            )}
           </>
         )}
         {memory.pending && (

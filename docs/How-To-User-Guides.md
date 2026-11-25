@@ -191,16 +191,25 @@ unconfirmed. Opening the panel does not start a search or build.
 
 **Session Memory** shows the selected agent's background summaries and last
 acknowledged delegation handoff. Stored and pending counts describe that
-agent's conversation. Turn off **Use GPU** to run background summaries on CPU.
-The switch is on by default and lets Ollama use a GPU when available, with CPU
-fallback. LTCook saves the choice for the host and applies it to the next
-summary request. Select **Stored for this agent** to read its completed
-UAMP and AAB summaries, starting with the newest. Use **Load older summaries**
-to continue through the conversation. The handoff shows the sending agent, receipt time,
-payload size, and the number of summaries represented. A handoff can also
-carry original user instructions and tool evidence. The agent card shows
-model context usage when Paseo reports it. Summarization and search continue
-independently of whether the panel is visible.
+agent's conversation. Use **Inference device** to choose **CPU** or
+**GPU (automatic)**. Automatic placement is the default and lets Ollama use a
+GPU when available, with CPU fallback. LTCook saves the choice for the host and
+applies it to the next summary request. While a summary is generating, the panel
+updates tokens per second once a second and labels estimated rates.
+
+Expand **Stored for this agent** for a newest-first list with creation time,
+source position, estimated original and summary tokens, and generation time.
+Older entries can have unknown metrics. **Open stored summaries** or the
+**Show summaries** button in the conversation opens the **Stored Summaries**
+tab. The tab shows the storage path and syntax-colored JSON. Use **Load all
+summaries** if older pages are available, then **Copy JSON** to export the
+complete list to the clipboard.
+
+The handoff shows the sending agent, receipt time, payload size, and the number
+of summaries represented. A handoff can also carry original user instructions
+and tool evidence. The agent card shows model context usage when Paseo reports
+it. Summarization and search continue independently of whether the panel is
+visible.
 
 ## Use workspace tools in Pi or Codex
 

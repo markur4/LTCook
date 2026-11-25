@@ -64,6 +64,9 @@ export type MemorySummaryResult = MemorySummary & {
   metrics?: OllamaChatMetrics;
 };
 
+/** Rate of streamed output during the latest sample interval. */
+export type MemorySummaryProgress = { tokensPerSecond: number; estimated: boolean };
+
 function hasSummaryContent(value: unknown): boolean {
   if (typeof value === 'string') return !!value.trim();
   if (value && typeof value === 'object') return Object.values(value).some(hasSummaryContent);
@@ -352,6 +355,7 @@ export async function summarizeMemory(
   signal: AbortSignal,
   type: MemoryUnit['type'],
   diagnostics = false,
+  onProgress?: (progress: MemorySummaryProgress | undefined) => void,
 ): Promise<MemorySummaryResult> {
   const start = performance.now();
   let usage: OllamaUsage | undefined;
@@ -368,6 +372,16 @@ export async function summarizeMemory(
       metrics = value;
     },
     diagnostics,
+    onProgress &&
+      ((progress) => {
+        if (!progress) {
+          onProgress(undefined);
+          return;
+        }
+        const { elapsedMs, countedTokens, uncountedText, estimated } = progress;
+        const tokens = countedTokens + estimateMemoryTokens(uncountedText);
+        onProgress({ tokensPerSecond: (tokens * 1_000) / elapsedMs, estimated });
+      }),
   );
   const summary = parseMemorySummary(type, response.summary);
   return {

@@ -7,16 +7,17 @@ import {
   type PluginWorkspacePanelProps,
   type PluginClientContext,
 } from '@getpaseo/plugin/client';
-import { ScrollView } from '@getpaseo/plugin/client/ui';
+import { ScrollView, useToast } from '@getpaseo/plugin/client/ui';
 import { activitySubscription, type ActivitySnapshot } from '../../shared/activity';
 import { ActivityStatus, ActivityText } from '../components/ActivityCard';
 import { ActivityAgentCard } from '../components/ActivityAgentCard';
 import { ActivityServices } from '../components/ActivityServices';
 import type { Theme } from '../components/PanelChrome';
 import { useFocusedAgent } from '../explorer-panels';
+import { MEMORY_SUMMARIES_PANEL_ID } from './StoredSummaries';
 
 type ActivityPanelProps = PluginWorkspacePanelProps & {
-  client: Pick<PluginClientContext, 'composers'>;
+  client: Pick<PluginClientContext, 'composers' | 'openPanel'>;
 };
 
 type ViewportObserver = new (
@@ -54,8 +55,11 @@ function Section({
   );
 }
 
-function ObservedActivity(props: ActivityPanelProps & { selectedAgentId: string }) {
-  const { selectedAgentId, theme, navigation, host } = props;
+function ObservedActivity(
+  props: ActivityPanelProps & { selectedAgentId: string; selectedWorkspaceId: string },
+) {
+  const { selectedAgentId, selectedWorkspaceId, theme, navigation, host, client } = props;
+  const toast = useToast();
   const [snapshot, setSnapshot] = useState<ActivitySnapshot>();
   const stream = useSubscription(activitySubscription, { agentId: selectedAgentId }, (next) => {
     if (next.selectedAgentId !== selectedAgentId || next.agent.id !== selectedAgentId) return;
@@ -74,6 +78,18 @@ function ObservedActivity(props: ActivityPanelProps & { selectedAgentId: string 
   const openConversation = navigation
     ? (agentId: string) => navigation.openAgent({ agentId, serverId: host.id })
     : undefined;
+
+  function openStoredSummaries() {
+    try {
+      client.openPanel(MEMORY_SUMMARIES_PANEL_ID, {
+        agentId: selectedAgentId,
+        workspaceId: selectedWorkspaceId,
+        location: 'workspace',
+      });
+    } catch {
+      toast.error('Could not open stored summaries for this agent.');
+    }
+  }
 
   return (
     <ScrollView
@@ -100,6 +116,7 @@ function ObservedActivity(props: ActivityPanelProps & { selectedAgentId: string 
                 current ? { ...current, memory: { ...current.memory, cpuOnly } } : current,
               )
             }
+            onOpenSummaries={openStoredSummaries}
             agentWorktree={snapshot.agent.worktree?.path}
           />
           <Section theme={theme} title="Agent" />
@@ -160,7 +177,14 @@ function FocusedActivity(props: ActivityPanelProps) {
       </View>
     );
   }
-  return <ObservedActivity {...props} key={focused.id} selectedAgentId={focused.id} />;
+  return (
+    <ObservedActivity
+      {...props}
+      key={`${props.host.id}:${focused.id}`}
+      selectedAgentId={focused.id}
+      selectedWorkspaceId={workspaceId}
+    />
+  );
 }
 
 export function ActivityPanel(props: ActivityPanelProps) {

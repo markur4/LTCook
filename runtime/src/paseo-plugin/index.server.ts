@@ -6,6 +6,8 @@ import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
 import {
   activitySubscription,
   memoryDeviceRpc,
+  MemoryRateSchema,
+  MEMORY_SUMMARIES_TIMELINE_KIND,
   MemoryUnitCountsSchema,
   storedSummariesRpc,
 } from './shared/activity';
@@ -242,6 +244,7 @@ const activityServices = z.object({
   memory: z
     .object({
       cpuOnly: z.boolean(),
+      rate: MemoryRateSchema.nullable(),
       summarization: z.enum([
         'summarizing',
         'queued',
@@ -358,6 +361,7 @@ export default function contribute(server: PluginServerContext) {
           },
           memory: {
             cpuOnly: memory?.cpuOnly ?? null,
+            rate: memory?.rate ?? null,
             summarization: services?.memoryDisabled
               ? 'disabled'
               : (memory?.summarization ?? 'unknown'),
@@ -436,12 +440,13 @@ export default function contribute(server: PluginServerContext) {
     agent: { id: string; provider: string },
     event: Record<string, unknown> = {},
   ) => {
-    if (['ltcook', 'pi', 'codex'].includes(agent.provider)) {
-      void runtimeJson('/v1/session-memory/observe', { nativeAgentId: agent.id, ...event }).catch(
-        () => {},
-      );
-    }
+    if (!['ltcook', 'pi', 'codex'].includes(agent.provider)) return Promise.resolve(undefined);
+    return runtimeJson('/v1/session-memory/observe', { nativeAgentId: agent.id, ...event }).catch(
+      () => undefined,
+    );
   };
+  const memoryShortcutAgents = new Set<string>();
+  const memoryObservation = z.object({ memoryEnabled: z.boolean() });
   const cleanup = [
     server.addHook('agent.turn.before', async ({ agent, turnId }, context) => {
       const model = ResolvedModelSchema.safeParse(agent.metadata[RESOLVED_MODEL_METADATA_KEY]);
@@ -452,14 +457,30 @@ export default function contribute(server: PluginServerContext) {
       const local =
         (model.success && model.data.provider === 'ollama') ||
         current?.model?.startsWith('ollama/') === true;
-      observeMemory(agent, { turnId, outcome: 'running', local });
+      void observeMemory(agent, { turnId, outcome: 'running', local });
     }),
-    server.addHook('agent.turn.after', async ({ agent, turnId, outcome }) =>
-      observeMemory(agent, { turnId, outcome: outcome.kind }),
-    ),
-    server.addHook('agent.close.after', async ({ agent }) =>
-      observeMemory(agent, { closed: true }),
-    ),
+    server.addHook('agent.turn.after', async ({ agent, turnId, outcome }, { paseo }) => {
+      const observed = memoryObservation.safeParse(
+        await observeMemory(agent, { turnId, outcome: outcome.kind }),
+      );
+      if (outcome.kind !== 'completed' || memoryShortcutAgents.has(agent.id)) return;
+      if (!observed.success || !observed.data.memoryEnabled) return;
+      memoryShortcutAgents.add(agent.id);
+      try {
+        await paseo.agents.ref(agent.id).timeline.append({
+          type: 'plugin',
+          id: MEMORY_SUMMARIES_TIMELINE_KIND,
+          kind: MEMORY_SUMMARIES_TIMELINE_KIND,
+          version: 1,
+          data: {},
+        });
+      } catch {
+        memoryShortcutAgents.delete(agent.id);
+      }
+    }),
+    server.addHook('agent.close.after', async ({ agent }) => {
+      void observeMemory(agent, { closed: true });
+    }),
     server.addHook('agent.create.before', async ({ request }) => {
       if (request.config.provider.split('/')[0] !== 'ltcook') return;
       const selection = request.metadata?.['ltcook.team'];
@@ -543,6 +564,7 @@ export default function contribute(server: PluginServerContext) {
       };
     }),
     server.addHook('agent.archive.after', async ({ agent }) => {
+      memoryShortcutAgents.delete(agent.id);
       if (!['ltcook', 'pi', 'codex'].includes(agent.provider)) return;
       observeMemory(agent, { force: true });
       await runtimeJson('/v1/mcp/revoke', { nativeAgentId: agent.id });

@@ -79,6 +79,7 @@ async function idleCodexActivity(
       rag: { worktree: null, provider: 'ColGREP', availability: 'unknown', activity: 'unknown' },
       memory: {
         cpuOnly: null,
+        rate: null,
         lastHandoff: null,
         summarization: 'unknown',
         lastSummaryAt: null,

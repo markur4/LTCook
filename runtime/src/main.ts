@@ -330,8 +330,15 @@ async function run(): Promise<void> {
           databasePath: path.join(stateDirectory, 'session-memory-v3.sqlite'),
           source: createPaseoMemorySource(host.api, apiToken, pastedDocuments),
           threshold,
-          summarize: (type, prompt, signal, cpuOnly) =>
-            summarizeMemory({ ...memorySettings, cpuOnly }, prompt, signal, type),
+          summarize: (type, prompt, signal, cpuOnly, onProgress) =>
+            summarizeMemory(
+              { ...memorySettings, cpuOnly },
+              prompt,
+              signal,
+              type,
+              false,
+              onProgress,
+            ),
           releaseCpuModel: (signal) => releaseOllamaModel(memorySettings, signal),
           model: memorySettings.model,
           configuration: memorySettings.generation,
