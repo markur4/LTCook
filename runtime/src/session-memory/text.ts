@@ -1,8 +1,4 @@
-export type MemoryMessage = {
-  seq: number;
-  author: 'user' | 'agent' | 'tool' | 'runtime' | 'unknown';
-  text: string;
-};
+export type { MemoryMessage } from '../paseo-plugin/server/memory-source.js';
 
 export function estimateMemoryTokens(text: string): number {
   return Math.ceil(Buffer.byteLength(text) / 4);

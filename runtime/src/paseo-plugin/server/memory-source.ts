@@ -1,5 +1,24 @@
 import type { PaseoApi } from '@getpaseo/client';
-import type { MemorySourceMessage } from '../../session-memory/units.js';
+
+export type MemoryMessage = {
+  seq: number;
+  author: 'user' | 'agent' | 'tool' | 'runtime' | 'unknown';
+  text: string;
+};
+
+export type PaseoMemoryMessage = MemoryMessage & {
+  turnId?: string;
+  messageId?: string;
+  timestamp?: string;
+  runtimeAssignment?: true;
+  tool?: {
+    kind: string;
+    name: string;
+    status: string;
+    exitCode?: number;
+    filePath?: string;
+  };
+};
 
 type TimelineHandle = ReturnType<PaseoApi['agents']['ref']>['timeline'];
 type Timeline = Awaited<ReturnType<TimelineHandle['refetch']>>;
@@ -63,10 +82,10 @@ export async function readPaseoMemoryPassage(
 
 export function readMemoryMessages(
   entries: Timeline['entries'],
-  identifyPromptAuthor: (id?: string) => MemorySourceMessage['author'] = () => 'unknown',
-): MemorySourceMessage[] {
+  identifyPromptAuthor: (id?: string) => PaseoMemoryMessage['author'] = () => 'unknown',
+): PaseoMemoryMessage[] {
   return entries
-    .flatMap(({ seqEnd, turnId, timestamp, item }): MemorySourceMessage[] => {
+    .flatMap(({ seqEnd, turnId, timestamp, item }): PaseoMemoryMessage[] => {
       const origin = { seq: seqEnd, turnId, timestamp };
       switch (item.type) {
         case 'user_message': {

@@ -1,4 +1,4 @@
-import type { MemoryMessage } from './text.js';
+import type { PaseoMemoryMessage } from '../paseo-plugin/server/memory-source.js';
 import { estimateMemoryTokens } from './text.js';
 import type { MemoryAttachment } from './pasted-documents.js';
 
@@ -10,21 +10,10 @@ export type MemoryScope = {
   stepId?: string;
 };
 
-export type MemorySourceMessage = MemoryMessage & {
-  turnId?: string;
-  messageId?: string;
-  timestamp?: string;
+export type MemorySourceMessage = PaseoMemoryMessage & {
   intermediate?: true;
-  runtimeAssignment?: true;
   scope?: MemoryScope;
   task?: MemoryTaskContext;
-  tool?: {
-    kind: string;
-    name: string;
-    status: string;
-    exitCode?: number;
-    filePath?: string;
-  };
   attachments?: MemoryAttachment[];
 };
 
