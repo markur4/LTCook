@@ -4,16 +4,12 @@ import type { summarizeMemory } from '../runtime/src/session-memory/summarizatio
 import { gradeSimplifiedLayer, runSimplifiedMemoryArm } from './session-memory-simplified.js';
 
 const comparisonArms = ['immediate', 'local-template', 'local-bullets'] as const;
-export const localMemoryArms = [
-  ...comparisonArms,
-  'local-extractive',
-  'local-work-status',
-] as const;
-type LocalArm = (typeof localMemoryArms)[number];
+export const localMemoryArms = [...comparisonArms, 'local-extractive'] as const;
+type LocalArm = (typeof localMemoryArms)[number] | 'local-work-status';
 type Prompt = Parameters<typeof summarizeMemory>[1];
 type ArmInput = Parameters<typeof runSimplifiedMemoryArm>[2];
 
-export function localValidationArms(report: unknown): LocalArm[] {
+export function localValidationArms(report: unknown): (typeof localMemoryArms)[number][] {
   const { localResults } = z
     .object({
       frozenRevision: z.literal('e7f1d601d1382586b903e757281c165ffffc396d'),
