@@ -147,6 +147,8 @@ try {
       await client.close();
     }
   }
+  const extraFile = path.join(first.checkout, 'first-extra.txt');
+  await writeFile(extraFile, 'Another change in the first worktree\n');
   const status = await fetch(`http://${host.listen}/api/status`);
   assert.equal(status.status, 200);
   const { serverId } = (await status.json()) as { serverId: string };
@@ -175,11 +177,18 @@ try {
   await clickButton('Working tree diff');
   const worktreePicker = '[data-testid="changes-worktree-picker"]';
   const waitForFile = (name: string) => browser('wait', `[aria-label^="${name}-session.txt,"]`);
+  const firstFile = '[aria-label^="first-session.txt,"][aria-expanded]';
+  const secondFile = '[aria-label^="second-session.txt,"][aria-expanded]';
+  const extraCollapsed = '[aria-label^="first-extra.txt,"][aria-expanded="false"]';
   await browser('wait', worktreePicker);
-  await waitForFile('first');
+  await browser('wait', `${firstFile}[aria-expanded="false"]`);
+  await browser('wait', extraCollapsed);
+  await browser('click', firstFile);
+  await browser('wait', `${firstFile}[aria-expanded="true"]`);
+  await browser('wait', extraCollapsed);
   await browser('click', worktreePicker);
   await browser('find', 'text', 'changes/second', 'click', '--exact');
-  await waitForFile('second');
+  await browser('wait', `${secondFile}[aria-expanded="false"]`);
   await browser('click', worktreePicker);
   await browser('find', 'text', 'Original checkout', 'click', '--exact');
   await browser('wait', '[data-testid="changes-branch-switcher"]');
@@ -189,8 +198,8 @@ try {
   await browser('wait', '[data-testid="changes-branch-switcher"]');
   await browser('click', worktreePicker);
   await browser('find', 'text', 'Follow session', 'click', '--exact');
-  await waitForFile('first');
-  await unlink(path.join(first.checkout, 'first-session.txt'));
+  await browser('wait', `${firstFile}[aria-expanded="false"]`);
+  await Promise.all([unlink(path.join(first.checkout, 'first-session.txt')), unlink(extraFile)]);
   await run('git', ['worktree', 'remove', first.checkout], { cwd: gitWorkspace });
   await browser('wait', '[data-testid="changes-branch-switcher"]');
   assert.equal(
