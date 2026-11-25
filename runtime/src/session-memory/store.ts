@@ -32,9 +32,11 @@ const tokenCountSchema = z.number().int().nonnegative();
 const durationMsSchema = z.number().int().nonnegative();
 
 const recordState = z.enum(['summarized', 'skipped', 'pending', 'failed', 'recorded']);
+const actionCount = z.object({ kind: z.string(), count: tokenCountSchema });
 const actionOverview = z.object({
-  counts: z.array(z.object({ kind: z.string(), count: tokenCountSchema })),
-  files: z.array(z.string()),
+  counts: z.array(actionCount),
+  files: z.array(z.object({ path: z.string(), counts: z.array(actionCount) })),
+  pathCount: tokenCountSchema,
   fileCount: tokenCountSchema,
   checks: z.array(z.object({ seq: tokenCountSchema, text: z.string() })),
   checkCount: tokenCountSchema,

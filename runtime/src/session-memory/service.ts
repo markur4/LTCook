@@ -179,7 +179,7 @@ export type MemorySearchEntry = {
 type SearchEntry = MemorySearchEntry;
 type SearchHit = SearchEntry & { agentId: string; epoch: string; score: number };
 const searchTokens = 2200;
-const shortDiscussionTokens = 256;
+export const shortDiscussionTokens = 256;
 const overviewLimit = 12;
 
 function memorySources(messages: readonly MemorySourceMessage[]) {
@@ -192,7 +192,7 @@ function memorySources(messages: readonly MemorySourceMessage[]) {
   }));
 }
 
-function originalTokenCount(messages: readonly MemorySourceMessage[]) {
+export function originalTokenCount(messages: readonly MemorySourceMessage[]) {
   const attachmentIds = new Set<string>();
   const text = messages.map(
     ({ text, attachments }) =>
@@ -211,7 +211,8 @@ function originalTokenCount(messages: readonly MemorySourceMessage[]) {
 
 function actionOverview(messages: readonly MemorySourceMessage[]): StoredMemorySummary['action'] {
   const counts = new Map<string, number>();
-  const files = new Set<string>();
+  const paths = new Map<string, Map<string, number>>();
+  const modified = new Set<string>();
   let failureCount = 0;
   for (const { tool } of messages) {
     if (!tool) continue;
@@ -221,14 +222,24 @@ function actionOverview(messages: readonly MemorySourceMessage[]): StoredMemoryS
     counts.set(kind, (counts.get(kind) ?? 0) + 1);
     if (tool.status === 'failed' || tool.status === 'error' || (tool.exitCode ?? 0) !== 0)
       failureCount++;
-    if (tool.status === 'completed' && (kind === 'edit' || kind === 'write') && tool.filePath)
-      files.add(tool.filePath);
+    if (!tool.filePath) continue;
+    const operations = paths.get(tool.filePath) ?? new Map<string, number>();
+    operations.set(kind, (operations.get(kind) ?? 0) + 1);
+    paths.set(tool.filePath, operations);
+    if (tool.status === 'completed' && (kind === 'edit' || kind === 'write'))
+      modified.add(tool.filePath);
   }
+  const counted = (values: ReadonlyMap<string, number>) =>
+    [...values].map(([kind, count]) => ({ kind, count }));
   const checks = observedMemoryChecks(messages);
   return {
-    counts: [...counts].map(([kind, count]) => ({ kind, count })),
-    files: [...files].slice(0, overviewLimit).map((file) => memoryPreview(file, 128)),
-    fileCount: files.size,
+    counts: counted(counts),
+    files: [...paths].slice(0, overviewLimit).map(([path, operations]) => ({
+      path: memoryPreview(path, 128),
+      counts: counted(operations),
+    })),
+    pathCount: paths.size,
+    fileCount: modified.size,
     checks: checks.slice(0, overviewLimit),
     checkCount: checks.length,
     failureCount,
@@ -250,7 +261,22 @@ function relevantDiscussionScope(
   );
 }
 
-function referenceEntry(summary: StoredMemorySummary, message: MemorySourceMessage): SearchEntry[] {
+type MemoryReference = StoredMemorySummary['sources'][number];
+
+function matchesReference(message: MemorySourceMessage, reference: MemoryReference): boolean {
+  return (
+    message.seq === reference.seq &&
+    message.author === reference.author &&
+    message.messageId === reference.messageId &&
+    message.turnId === reference.turnId
+  );
+}
+
+function referenceEntry(
+  summary: StoredMemorySummary,
+  message: MemorySourceMessage,
+  includeText: boolean,
+): SearchEntry[] {
   const entry = {
     ...sourceEntry(message),
     kind: summary.type,
@@ -258,13 +284,28 @@ function referenceEntry(summary: StoredMemorySummary, message: MemorySourceMessa
     sources: [message.seq],
   };
   return [
-    ...(message.text.trim() && summary.sources.some(({ seq }) => seq === message.seq)
-      ? [entry]
-      : []),
+    ...(includeText && message.text.trim() ? [entry] : []),
     ...(message.attachments ?? []).map(({ text }) => ({ ...entry, author: 'attachment', text })),
   ];
 }
+
 export const memoryDispatchDeadlineMs = 500;
+
+async function beforeReadDeadline<T>(read: () => Promise<T>, signal: AbortSignal) {
+  if (signal.aborted) return undefined;
+  let stop: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      new Promise<undefined>((resolve) => {
+        stop = () => resolve(undefined);
+        signal.addEventListener('abort', stop, { once: true });
+      }),
+      read(),
+    ]);
+  } finally {
+    if (stop) signal.removeEventListener('abort', stop);
+  }
+}
 
 function compareHits(a: SearchHit, b: SearchHit): number {
   return (
@@ -519,51 +560,71 @@ export class SessionMemory {
   async readEvidenceReferences(
     agentId: string,
     { epoch, id, position }: MemorySummaryCursor,
-    after = 0,
+    after = -1,
   ) {
-    const { tail, sourceGeneration } = await this.current(agentId);
+    const generation = this.activity.get(agentId)?.generation;
+    const tail = await this.options.source.read(agentId, undefined, 'tail');
+    this.abort.signal.throwIfAborted();
     const record = this.store.summary(agentId, epoch, id);
+    const state = this.store.state(agentId);
     if (
-      sourceGeneration === undefined ||
+      tail.reset ||
       tail.epoch !== epoch ||
+      generation !== this.activity.get(agentId)?.generation ||
+      (state?.epoch === epoch && state.seq > tail.latest) ||
       position > tail.latest ||
       record?.state !== 'recorded' ||
       record.position !== position
     )
       return { sources: [], next: null };
-    const remaining = record.sources.filter(({ seq }) => seq > after);
-    // A smaller page limits the amount of original tool output fetched in a single expansion.
-    const sources = remaining.slice(0, 8).map(({ seq, messageId }) => ({ seq, messageId }));
-    return { sources, next: remaining.length > sources.length ? sources.at(-1)!.seq : null };
+    const sources: (Pick<MemoryReference, 'seq' | 'messageId' | 'turnId'> & {
+      author: 'agent' | 'tool';
+    })[] = [];
+    let next: number | null = null;
+    // > A small page limits the original tool output fetched in one expansion.
+    for (const { seq, messageId, turnId, author } of record.sources) {
+      if (seq <= after || (author !== 'agent' && author !== 'tool')) continue;
+      if (sources.length === 8) {
+        next = sources.at(-1)!.seq;
+        break;
+      }
+      sources.push({ seq, messageId, turnId, author });
+    }
+    return { sources, next };
   }
 
   private async referencedMessages(
     agentId: string,
     epoch: string,
-    references: readonly StoredMemorySummary['sources'][number][],
+    references: readonly MemoryReference[],
     signal: AbortSignal,
     known: readonly MemorySourceMessage[] = [],
+    lookupSignal?: AbortSignal,
+    latest?: number,
   ) {
     const found = new Map(known.map((message) => [message.seq, message]));
     const requested = [...new Set(references.map(({ seq }) => seq))].sort((a, b) => b - a);
     for (const seq of requested) {
       signal.throwIfAborted();
       if (found.has(seq)) continue;
-      const page = await this.options.source
-        .read(agentId, { epoch, seq: seq + 1 }, 'before')
-        .catch(() => undefined);
+      const read = () =>
+        this.options.source.read(agentId, { epoch, seq: seq + 1 }, 'before').catch(() => undefined);
+      const page = lookupSignal ? await beforeReadDeadline(read, lookupSignal) : await read();
       signal.throwIfAborted();
-      if (!page || page.epoch !== epoch || page.reset) break;
+      if (page && (page.epoch !== epoch || (latest !== undefined && page.latest < latest)))
+        return { messages: [], originalHistory: 'unavailable' as const };
+      if (!page || page.reset) break;
       for (const message of page.messages) found.set(message.seq, message);
     }
-    return references.flatMap((reference) => {
+    const messages = references.flatMap((reference) => {
       const message = found.get(reference.seq);
-      return message?.author === reference.author &&
-        message.messageId === reference.messageId &&
-        message.turnId === reference.turnId
-        ? [message]
-        : [];
+      return message && matchesReference(message, reference) ? [message] : [];
     });
+    return {
+      messages,
+      originalHistory:
+        messages.length === references.length ? ('available' as const) : ('partial' as const),
+    };
   }
 
   async recordEntries(
@@ -571,22 +632,48 @@ export class SessionMemory {
     epoch: string,
     summaries: readonly StoredMemorySummary[],
     signal = this.abort.signal,
-    known: readonly MemorySourceMessage[] = [],
   ): Promise<MemorySearchEntry[]> {
+    return (await this.resolveRecordEntries(agentId, epoch, summaries, signal)).entries;
+  }
+
+  private async resolveRecordEntries(
+    agentId: string,
+    epoch: string,
+    summaries: readonly StoredMemorySummary[],
+    signal: AbortSignal,
+    known: readonly MemorySourceMessage[] = [],
+    lookupSignal?: AbortSignal,
+    latest?: number,
+  ) {
     const references = summaries
       .filter(({ state, complete }) => complete && (state === 'skipped' || state === 'recorded'))
       .flatMap(({ sources, attachmentSources }) => [...sources, ...(attachmentSources ?? [])]);
-    const messages = await this.referencedMessages(agentId, epoch, references, signal, known);
-    const bySequence = new Map(messages.map((message) => [message.seq, message]));
-    return summaries.flatMap((summary) => {
+    const resolved = await this.referencedMessages(
+      agentId,
+      epoch,
+      references,
+      signal,
+      known,
+      lookupSignal,
+      latest,
+    );
+    const bySequence = new Map(resolved.messages.map((message) => [message.seq, message]));
+    const entries = summaries.flatMap((summary) => {
       if (!summary.complete) return [];
       if (summary.state !== 'skipped' && summary.state !== 'recorded')
         return summaryEntries(summary);
-      return [...summary.sources, ...(summary.attachmentSources ?? [])].flatMap(({ seq }) => {
-        const message = bySequence.get(seq);
-        return message ? referenceEntry(summary, message) : [];
-      });
+      const entriesFor = (reference: MemoryReference, includeText: boolean) => {
+        const message = bySequence.get(reference.seq);
+        return message && matchesReference(message, reference)
+          ? referenceEntry(summary, message, includeText)
+          : [];
+      };
+      return [
+        ...summary.sources.flatMap((reference) => entriesFor(reference, true)),
+        ...(summary.attachmentSources ?? []).flatMap((reference) => entriesFor(reference, false)),
+      ];
     });
+    return { entries, originalHistory: resolved.originalHistory };
   }
 
   private agentActivity(agentId: string): AgentMemoryActivity {
@@ -1137,7 +1224,7 @@ export class SessionMemory {
       let skippedTokens = 0;
       for (const candidate of prior) {
         if (candidate.state !== 'skipped' || skippedTokens >= 512) break;
-        const originals = await this.referencedMessages(
+        const { messages: originals } = await this.referencedMessages(
           agentId,
           epoch,
           candidate.sources,
@@ -1455,6 +1542,10 @@ export class SessionMemory {
     selection?: MemoryHandoffSelection;
   }> {
     const signal = deadline ? AbortSignal.any([deadline, this.abort.signal]) : this.abort.signal;
+    // > Leave time to assemble the handoff even when historical page reads lag.
+    const lookupSignal = deadline
+      ? AbortSignal.any([signal, AbortSignal.timeout(memoryDispatchDeadlineMs - 100)])
+      : undefined;
     signal.throwIfAborted();
     const { tail, state, summaries, sourceGeneration } = await this.current(agentId);
     signal.throwIfAborted();
@@ -1570,16 +1661,23 @@ export class SessionMemory {
         complete &&
         (!scope?.taskId || !recordedScope?.taskId || recordedScope.taskId === scope.taskId),
     );
-    const storedEvidence = await this.recordEntries(
+    const resolved = await this.resolveRecordEntries(
       agentId,
       tail.epoch,
       applicableRecords,
       signal,
       recent,
+      lookupSignal,
+      tail.latest,
     );
+    if (resolved.originalHistory === 'unavailable') {
+      this.observe(agentId, true);
+      return unavailableHandoff;
+    }
+    if (resolved.originalHistory === 'partial') originalHistory = 'partial';
     const recordScopes = new Map(applicableRecords.map(({ id, scope }) => [id, scope]));
     const candidates: SearchEntry[] = [
-      ...storedEvidence.filter(
+      ...resolved.entries.filter(
         (entry) =>
           applies(entry.seq, entry.text, false, recordScopes.get(entry.summaryId!)) &&
           !(
@@ -1655,12 +1753,16 @@ export class SessionMemory {
     };
     let evidence = selectEvidence();
     if (recoverOriginals && identifiers.length) {
-      const discovered = await this.searchConversation(agentId, identifiers.join(' '), signal, {
-        tail,
-        state,
-        summaries: [],
-        identifiers,
-      }).catch(() => undefined);
+      const search = () =>
+        this.searchConversation(agentId, identifiers.join(' '), lookupSignal ?? signal, {
+          tail,
+          state,
+          summaries: [],
+          identifiers,
+        }).catch(() => undefined);
+      const discovered = lookupSignal
+        ? await beforeReadDeadline(search, lookupSignal)
+        : await search();
       signal.throwIfAborted();
       if (discovered?.stale) {
         this.observe(agentId, true);
@@ -1777,30 +1879,39 @@ export class SessionMemory {
       if (query && !score) return;
       hits.push({ ...entry, agentId: id, epoch: tail.epoch, score });
     };
-    const recordsBySequence = new Map<number, StoredMemorySummary[]>();
+    const recordsBySequence = new Map<
+      number,
+      { record: StoredMemorySummary; reference: MemoryReference; includeText: boolean }[]
+    >();
     for (const summary of summaries) {
       if (!summary.complete) continue;
-      if (summary.state === 'recorded' || summary.state === 'skipped') {
-        for (const { seq } of [...summary.sources, ...(summary.attachmentSources ?? [])]) {
-          const records = recordsBySequence.get(seq) ?? [];
-          records.push(summary);
-          recordsBySequence.set(seq, records);
-        }
-      } else {
+      if (summary.state !== 'recorded' && summary.state !== 'skipped') {
         summaryEntries(summary).forEach(add);
+        continue;
       }
+      const index = (references: readonly MemoryReference[], includeText: boolean) => {
+        for (const reference of references) {
+          const records = recordsBySequence.get(reference.seq) ?? [];
+          records.push({ record: summary, reference, includeText });
+          recordsBySequence.set(reference.seq, records);
+        }
+      };
+      index(summary.sources, true);
+      index(summary.attachmentSources ?? [], false);
     }
     let page = tail;
     while (true) {
       signal.throwIfAborted();
       for (const message of page.messages) {
         if (message.author === 'runtime') continue;
-        const records = recordsBySequence.get(message.seq);
-        if (records) {
-          for (const record of records) referenceEntry(record, message).forEach(add);
-          if (records.some(({ sources }) => sources.some(({ seq }) => seq === message.seq)))
-            continue;
+        const records = recordsBySequence.get(message.seq) ?? [];
+        let includedText = false;
+        for (const { record, reference, includeText } of records) {
+          if (!matchesReference(message, reference)) continue;
+          referenceEntry(record, message, includeText).forEach(add);
+          includedText ||= includeText;
         }
+        if (includedText) continue;
         if (message.text.trim()) add(sourceEntry(message));
         for (const attachment of message.attachments ?? [])
           add({

@@ -130,6 +130,7 @@ const summaryPassage = z.object({
 });
 export const MemorySummariesTimelineSchema = z.object({ passage: summaryPassage.optional() });
 
+const actionCount = z.object({ kind: id, count });
 export const storedSummariesRpc = defineRpc({
   name: 'ltcook.activity.stored-summaries',
   input: z.object({
@@ -148,8 +149,9 @@ export const storedSummariesRpc = defineRpc({
         discussionId: id.optional(),
         action: z
           .object({
-            counts: z.array(z.object({ kind: id, count })),
-            files: z.array(z.string()),
+            counts: z.array(actionCount),
+            files: z.array(z.object({ path: z.string(), counts: z.array(actionCount) })),
+            pathCount: count,
             fileCount: count,
             checks: z.array(z.object({ seq: count, text: z.string() })),
             checkCount: count,
@@ -170,7 +172,16 @@ export const storedSummariesRpc = defineRpc({
 });
 
 export const MemoryEvidenceReferencesSchema = z.object({
-  sources: z.array(z.object({ seq: count, messageId: id.optional() })).max(8),
+  sources: z
+    .array(
+      z.object({
+        seq: count,
+        messageId: id.optional(),
+        turnId: id.optional(),
+        author: z.enum(['agent', 'tool']),
+      }),
+    )
+    .max(8),
   next: count.nullable(),
 });
 

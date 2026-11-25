@@ -215,7 +215,12 @@ function verificationLines(output?: string): string[] {
     });
 }
 
-type EvidenceReference = { seq: number; messageId?: string };
+type EvidenceReference = {
+  seq: number;
+  messageId?: string;
+  turnId?: string;
+  author?: 'agent' | 'tool';
+};
 
 export async function readPaseoMemoryEvidence(
   timeline: Pick<TimelineHandle, 'refetch'>,
@@ -224,7 +229,7 @@ export async function readPaseoMemoryEvidence(
   signal: AbortSignal,
 ) {
   const entries = await Promise.all(
-    references.map(async ({ seq, messageId }) => {
+    references.map(async ({ seq, messageId, turnId, author }) => {
       signal.throwIfAborted();
       const page = await timeline
         .refetch({
@@ -237,13 +242,19 @@ export async function readPaseoMemoryEvidence(
       signal.throwIfAborted();
       const unavailable = { seq, source: null };
       if (!page || !hasCurrentHistory(page) || page.epoch !== epoch) return unavailable;
-      const match = page.entries.find(({ seqEnd }) => seqEnd === seq)?.item;
-      if (!match) return unavailable;
-      if (match.type === 'assistant_message' && (!messageId || match.messageId === messageId)) {
+      const entry = page.entries.find(({ seqEnd }) => seqEnd === seq);
+      if (!entry || (author && entry.turnId !== turnId)) return unavailable;
+      const match = entry.item;
+      if (
+        match.type === 'assistant_message' &&
+        (!author || author === 'agent') &&
+        (!messageId || match.messageId === messageId)
+      ) {
         return { seq, source: { kind: 'agent' as const, text: match.text } };
       }
       if (
         match.type === 'tool_call' &&
+        (!author || author === 'tool') &&
         match.status !== 'running' &&
         !match.agentMessage &&
         (!messageId || match.callId === messageId)

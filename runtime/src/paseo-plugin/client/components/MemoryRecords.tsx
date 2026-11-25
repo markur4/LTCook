@@ -119,7 +119,7 @@ function EvidenceList({
           )}
         </View>
       ))}
-      {(error || stale) && (
+      {(error || stale || (page?.entries.length === 0 && page.next === null)) && (
         <Text accessibilityRole="alert" style={{ color: theme.colors.statusDanger }}>
           Original evidence unavailable.
         </Text>
@@ -196,9 +196,14 @@ function ExecutionCard({
       </Text>
       {action.files.length > 0 && (
         <Text selectable style={{ color: theme.colors.foreground }}>
-          {action.files.join('\n')}
-          {action.fileCount > action.files.length &&
-            `\n${action.fileCount - action.files.length} more files`}
+          {action.files
+            .map(
+              ({ path, counts }) =>
+                `${path} · ${counts.map(({ kind, count }) => `${kind} ${count}`).join(' · ')}`,
+            )
+            .join('\n')}
+          {action.pathCount > action.files.length &&
+            `\n${action.pathCount - action.files.length} more paths`}
         </Text>
       )}
       {action.checks.map(({ seq, text }, index) => (
