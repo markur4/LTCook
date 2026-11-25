@@ -1051,3 +1051,51 @@ from 529 to 69 for the approval. Both would fall below the existing
 repetition as a concrete stressor, but the transformed inputs would exercise
 the skip path instead of qualifying summarization. The original acceptance
 fixture remains unchanged.
+
+### Realistic skipped Discussions
+
+The repetition case above remains the separate stress test. The realistic
+fixture uses a 308-token proposal and a 289-token approval. Its two skipped
+Discussions are 10 and 15 tokens and retain their original dialogue. The
+same five critical facts, source sequences and Task transition apply.
+
+Both context-independent prompts used the Q8_0 checkpoint at the established
+sampling settings and seed 17. Production inference was suspended during the
+CPU run. All requests completed with CPU placement verified and zero reasoning
+tokens. The table reports generated facts, with matching counts in stored
+records and handoff evidence. A contradiction still fails the gate.
+
+| Fixture | Prompt | Facts | CPU wall s | Prefill / generation s | Peak runner MiB |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Realistic skipped Discussions | Template | 4/5 | 3.810 | 0.839 / 2.442 | 667 |
+| Realistic skipped Discussions | Bullets | 5/5 | 6.294 | 0.711 / 5.057 | 662 |
+| Export discovery | Template | 2/4 | 2.602 | 0.567 / 1.516 | 659 |
+| Export discovery | Bullets | 4/4 | 3.353 | 0.393 / 2.439 | 652 |
+| Retry correction | Template | 3/3 | 3.541 | 0.562 / 2.462 | 659 |
+| Retry correction | Bullets | 3/3, contradiction | 1.896 | 0.397 / 0.982 | 652 |
+| Manifest approval | Template | 4/4 | 5.805 | 1.030 / 4.246 | 669 |
+| Manifest approval | Bullets | 4/4 | 6.430 | 0.789 / 5.112 | 661 |
+
+On the realistic fixture, both handoffs retained the skipped Discussions
+in sequence. The template returned an empty Markdown fence for the
+proposal. The bullets retained all five facts largely by copying the
+message bodies. The template lost the exact export reader path and symbol.
+The bullets treated a planned retry notes update as complete, which failed
+the contradiction gate. Neither prompt qualified.
+
+The eval reports incomplete-summary fallback separately. It projects a failed
+record into the existing source-reference reader and grades the reopened
+originals as fallback evidence. It does not rewrite the failed record or
+count the originals as generated summary facts. The injected-failure
+regression recovered the exact user and agent messages from the saved
+references and left the stored record incomplete. The live Q8 run had no
+incomplete responses, so it recorded zero fallbacks. An empty answer that
+Ollama marks complete is still a factual failure and does not trigger this
+probe. A production fallback would need an explicit record status that
+remains distinct from both a short skipped Discussion and a summary.
+
+GPT-6 Luna high resolved the snapshot proposal from the realistic bullet
+handoff and cited the original proposal and approval sequences. All five
+eligible handoffs yielded the expected factual fields on inspection. Only
+the retry template passed the strict receiver format check. The other four
+replies prefixed correct JSON with prose, including the realistic approval.

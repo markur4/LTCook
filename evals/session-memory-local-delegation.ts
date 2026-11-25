@@ -8,7 +8,7 @@ import { prepareLunaPiEvaluation } from '../runtime/src/evals/summarization-deci
 import { modelTag } from '../runtime/src/evals/summarization-grader.js';
 import { localMemoryArms, localMemoryFacts } from './session-memory-local.js';
 import { candidateScreeningFixtures } from './session-memory-screening.js';
-import { gradeSimplifiedLayer } from './session-memory-simplified.js';
+import { gradeSimplifiedLayer, realisticReferenceFixture } from './session-memory-simplified.js';
 
 const localReport = z.object({
   seed: z.literal(17),
@@ -34,6 +34,7 @@ function expectedDecision(fixture: MemoryFixture) {
     case 'semantic-manifest-reference':
       return { ...expected, originalProposal: 1, userApproval: 5, workCompleted: false };
     case 'approval-after-skipped-discussion':
+    case 'realistic-approval-after-skipped-discussion':
       return {
         ...expected,
         originalProposal: 1,
@@ -68,7 +69,7 @@ export async function evaluateLocalDelegation(
   auditOutput = false,
   allowBaseline = false,
 ) {
-  const fixtures = candidateScreeningFixtures();
+  const fixtures = [...candidateScreeningFixtures(), realisticReferenceFixture()];
   const cases = reports.flatMap((report) =>
     localReport.parse(report).localResults.flatMap(({ model, arms }) =>
       arms.flatMap((arm) => {

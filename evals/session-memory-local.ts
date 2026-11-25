@@ -110,7 +110,7 @@ export function localMemoryFacts(fixture: MemoryFixture, arm: LocalArm): MemoryF
           }
         : fact,
     );
-  if (fixture.id !== 'approval-after-skipped-discussion' || arm === 'immediate')
+  if (!fixture.id.endsWith('approval-after-skipped-discussion') || arm === 'immediate')
     return fixture.facts;
   return fixture.facts.map((fact) =>
     fact.source === 7 && fact.contextSource === 1
@@ -139,7 +139,7 @@ export async function compareLocalMemory(
       const facts = localMemoryFacts(fixture, arm);
       const hasReference =
         fixture.id === 'semantic-manifest-reference' ||
-        fixture.id === 'approval-after-skipped-discussion';
+        fixture.id.endsWith('approval-after-skipped-discussion');
       const approval = fixture.id === 'semantic-manifest-reference' ? 5 : 7;
       const skippedSources = fixture.id === 'semantic-manifest-reference' ? [3, 4] : [3, 4, 5, 6];
       let handoff = '';

@@ -175,6 +175,39 @@ export function referenceFixture(): MemoryFixture {
   };
 }
 
+export function realisticReferenceFixture(): MemoryFixture {
+  const fixture = referenceFixture();
+  const turns = fixture.turns.map((turn) =>
+    turn.map((message) => {
+      switch (message.seq) {
+        case 1:
+          return {
+            ...message,
+            text: 'Consider reusing selectWorkspaceSnapshot for compatible caches when a workspace restarts. This is a proposal. Please walk me through the case where someone reopens a workspace immediately after the process exits and the newest saved snapshot belongs to that same workspace. I want to understand what we can reuse without making callers supply more information. The support team sees this most often when a user switches between projects during a restart, so explain how we would avoid confusing two caches. Also tell me what remains visible when a snapshot cannot be reused. Leave the code alone while we discuss the approach.',
+          };
+        case 2:
+          return {
+            ...message,
+            text: 'I propose keeping the restart entry point as it is and using selectWorkspaceSnapshot to reuse only a compatible cache. A snapshot from another workspace is ineligible even if it was written more recently. If there is no compatible snapshot, restart should take the existing path and leave the current cache visible for troubleshooting. That also gives support a way to distinguish an incompatible cache from one that was never saved. I would verify both cases with two workspaces and a restart after a normal shutdown. The proposal is still open for your decision. I have made no changes and run no checks.',
+          };
+        case 7:
+          return {
+            ...message,
+            text: 'Implement that proposal, but preserve the existing API. Reject an automatic rebuild. We have scripted callers that depend on the current restart signature and response, and they should keep working during rollout. For a first restart with no usable snapshot, keep the current restart behavior. The incompatible snapshot case should leave the existing cache available so support can inspect it. In the review, show how the matching workspace was selected and how the mismatched case behaved. If you discover a separate problem in cleanup, write it down for a follow-up. Keep this change focused on the restart path.',
+          };
+        case 8:
+          return {
+            ...message,
+            text: 'I will implement the approved proposal with the existing restart API and keep automatic rebuild out of scope. For the matching case I will use a saved snapshot from the same workspace, and for the mismatch I will use a snapshot from a different workspace that was saved more recently. I will check what the caller sees on the existing fallback path, including the case with no saved snapshot. I will report the outcomes in the review once those checks have actually run. The implementation and verification are still pending. No changes yet.',
+          };
+        default:
+          return message;
+      }
+    }),
+  );
+  return { ...fixture, id: 'realistic-approval-after-skipped-discussion', turns };
+}
+
 function largeActionsFixture(): MemoryFixture {
   const first = 2;
   const last = 515;
@@ -306,6 +339,7 @@ export async function runSimplifiedMemoryArm(
     transformUampPrompt?: (
       prompt: Parameters<typeof summarizeMemory>[1],
     ) => Parameters<typeof summarizeMemory>[1];
+    inspectIncompleteFallback?: boolean;
   },
 ) {
   const { signal, digest } = input;
@@ -460,6 +494,29 @@ export async function runSimplifiedMemoryArm(
       original,
     );
     const sessionMemory = gradeSimplifiedLayer(fixture.facts, allEvidence, original);
+    const incompleteFallbacks = input.inspectIncompleteFallback
+      ? await Promise.all(
+          records
+            .filter(({ type, state }) => type === 'UAMP' && state === 'failed')
+            .map(async (record) => {
+              const entries = await readRecords([
+                { ...record, state: 'skipped', complete: true, parts: [] },
+              ]);
+              return {
+                position: record.position,
+                sources: record.sources.map(({ seq }) => seq),
+                resolved: [...new Set(entries.map(({ seq }) => seq))],
+                quality: gradeSimplifiedLayer(
+                  fixture.facts.filter(({ source }) =>
+                    record.sources.some(({ seq }) => seq === source),
+                  ),
+                  entries,
+                  original,
+                ),
+              };
+            }),
+        )
+      : undefined;
     available = original.map((message) => processedBySequence.get(message.seq) ?? message);
     const assemble = (recover: boolean) =>
       memory.handoffDetails(
@@ -519,6 +576,7 @@ export async function runSimplifiedMemoryArm(
     return {
       fixture: fixture.id,
       processing,
+      ...(incompleteFallbacks ? { incompleteFallbacks } : {}),
       requests,
       measurements: {
         requests: requests.length,
