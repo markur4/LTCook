@@ -5,11 +5,11 @@ import { gradeSimplifiedLayer, runSimplifiedMemoryArm } from './session-memory-s
 
 const comparisonArms = ['immediate', 'local-template', 'local-bullets'] as const;
 export const localMemoryArms = [...comparisonArms, 'local-extractive'] as const;
-type LocalArm = (typeof localMemoryArms)[number];
+type LocalArm = (typeof localMemoryArms)[number] | 'local-work-status';
 type Prompt = Parameters<typeof summarizeMemory>[1];
 type ArmInput = Parameters<typeof runSimplifiedMemoryArm>[2];
 
-export function localValidationArms(report: unknown): LocalArm[] {
+export function localValidationArms(report: unknown): (typeof localMemoryArms)[number][] {
   const { localResults } = z
     .object({
       frozenRevision: z.literal('e7f1d601d1382586b903e757281c165ffffc396d'),
@@ -49,6 +49,13 @@ Keep exact technical names, paths, numbers and observed outcomes.
 Distinguish proposed, approved and completed work.
 
 Preserve references to earlier discussions without guessing their meaning. Omit redundant information.`;
+
+const localWorkStatus = localBullets.replace(
+  'Distinguish proposed, approved and completed work.',
+  `Distinguish proposed, approved and completed work.
+
+Preserve whether work is required, planned, in progress or completed. Retain words such as 'should', 'will' and 'not yet' where they establish that distinction.`,
+);
 
 const localExtractive = `Select the important sentences from the current user-agent exchange.
 
@@ -133,7 +140,9 @@ export function localMemoryPrompt(prompt: Prompt, arm: Exclude<LocalArm, 'immedi
       ? { ...system, content: localBullets }
       : arm === 'local-extractive'
         ? { ...system, content: localExtractive }
-        : system,
+        : arm === 'local-work-status'
+          ? { ...system, content: localWorkStatus }
+          : system,
     {
       ...user,
       content: user.content

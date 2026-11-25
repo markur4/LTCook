@@ -121,6 +121,8 @@ export async function screenSessionMemory(input: {
   localComparison?: boolean;
   qualifyMnnLocal?: boolean;
   extractive?: boolean;
+  workStatus?: boolean;
+  proportionalOutputCap?: boolean;
   localValidation?: readonly (typeof localMemoryArms)[number][];
   mnnApprovalFirst?: boolean;
   allowRetry?: boolean;
@@ -135,6 +137,8 @@ export async function screenSessionMemory(input: {
       input.mnnApprovalFirst)
   )
     throw new Error('--qualify-mnn-local cannot be combined with other model or screening modes.');
+  if ([input.extractive, input.workStatus, input.proportionalOutputCap].filter(Boolean).length > 1)
+    throw new Error('Choose one MNN-Pocket qualification experiment at a time.');
   const revision = input.qualifyMnnLocal ? chronologicalHandoffRevision : frozenRevision;
   const frozen = Bun.spawnSync(
     [
@@ -378,9 +382,19 @@ export async function screenSessionMemory(input: {
               screening: { weightsDigest: model.weightsDigest },
               progress: (label: string) => progress?.(`${profile.name}: ${label}`),
             };
-            if (input.extractive) {
+            if (input.proportionalOutputCap) {
+              const arms = await compareLocalMemory(
+                [realisticReferenceFixture()],
+                { ...options, proportionalOutputCap: true },
+                ['local-bullets'],
+              );
+              localResults.push({ model: verified, arms });
+              break;
+            }
+            if (input.extractive || input.workStatus) {
+              const arm = input.workStatus ? 'local-work-status' : 'local-extractive';
               const retry = fixtures.find(({ id }) => id === 'semantic-retry-correction')!;
-              const first = await compareLocalMemory([retry], options, ['local-extractive']);
+              const first = await compareLocalMemory([retry], options, [arm]);
               const arms = first[0]?.passed
                 ? [
                     ...first,
@@ -392,7 +406,7 @@ export async function screenSessionMemory(input: {
                         ),
                       ],
                       options,
-                      ['local-extractive'],
+                      [arm],
                     )),
                   ]
                 : first;

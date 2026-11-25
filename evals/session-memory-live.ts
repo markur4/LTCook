@@ -97,7 +97,10 @@ try {
     const validateLocal = option('validate-local-memory');
     const localComparison = args.includes('--compare-local-memory') || validateLocal !== undefined;
     const extractive = args.includes('--qualify-mnn-extractive');
-    const qualifyMnnLocal = extractive || args.includes('--qualify-mnn-local');
+    const workStatus = args.includes('--qualify-mnn-work-status');
+    const proportionalOutputCap = args.includes('--probe-mnn-output-cap');
+    const qualifyMnnLocal =
+      extractive || workStatus || proportionalOutputCap || args.includes('--qualify-mnn-local');
     if (
       (qualifyMnnLocal ||
         localComparison ||
@@ -121,6 +124,8 @@ try {
         localComparison,
         qualifyMnnLocal,
         extractive,
+        workStatus,
+        proportionalOutputCap,
         localValidation: validateLocal
           ? localValidationArms(JSON.parse(await readFile(validateLocal, 'utf8')))
           : undefined,
