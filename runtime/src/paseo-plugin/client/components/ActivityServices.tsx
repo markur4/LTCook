@@ -108,14 +108,9 @@ function StoredSummaryMetadata({
         </ActivityText>
       )}
       {error && (
-        <>
-          <ActivityText theme={theme} tone="danger">
-            {error}
-          </ActivityText>
-          <ActivityButton theme={theme} label="Reload stored summaries" onPress={reload}>
-            <ActivityText theme={theme}>Reload stored summaries</ActivityText>
-          </ActivityButton>
-        </>
+        <ActivityText theme={theme} tone="danger">
+          {error}
+        </ActivityText>
       )}
       {!loading && !error && page?.summaries.length === 0 && (
         <ActivityText theme={theme} tone="muted">
@@ -125,6 +120,11 @@ function StoredSummaryMetadata({
       {!loading && !error && page?.next && (
         <ActivityButton theme={theme} label="Load older summaries" onPress={loadOlder}>
           <ActivityText theme={theme}>Load older summaries</ActivityText>
+        </ActivityButton>
+      )}
+      {!loading && (
+        <ActivityButton theme={theme} label="Reload stored summaries" onPress={reload}>
+          <ActivityText theme={theme}>Reload stored summaries</ActivityText>
         </ActivityButton>
       )}
     </>
@@ -285,7 +285,6 @@ export function ActivityServices({
             </ActivityButton>
             {storedOpen && (
               <StoredSummaryMetadata
-                key={memory.lastSummaryAt ?? 'initial'}
                 agentId={agentId}
                 theme={theme}
                 onOpenSummaries={onOpenSummaries}

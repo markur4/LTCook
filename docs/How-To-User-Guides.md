@@ -198,8 +198,9 @@ applies it to the next summary request. While a summary is generating, the panel
 updates tokens per second once a second and labels estimated rates.
 
 Expand **Stored for this agent** for a newest-first list with creation time,
-source position, estimated original and summary tokens, and generation time.
-Older entries can have unknown metrics. **Open stored summaries** or the
+source position, estimated original and summary tokens, and elapsed inference
+time. Older entries can have unknown metrics. Use **Reload stored summaries**
+to refresh the list after new summaries finish. **Open stored summaries** or the
 **Show summaries** button in the conversation opens the **Stored Summaries**
 tab. The tab shows the storage path and syntax-colored JSON. Use **Load all
 summaries** if older pages are available, then **Copy JSON** to export the

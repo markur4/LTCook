@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import type {
   PluginServerContext,
+  PluginHookContext,
   PluginHooks,
   PluginHookPayload,
   PluginHookResult,
@@ -9,6 +10,7 @@ import contribute from '../../../runtime/src/paseo-plugin/index.server.js';
 
 type Hook<Name extends keyof PluginHooks> = (
   payload: PluginHookPayload<Name>,
+  context?: PluginHookContext,
 ) => Promise<PluginHookResult<Name>>;
 const originalFetch = globalThis.fetch;
 const oldEndpoint = process.env.LTCOOK_RUNTIME_API_URL;
@@ -115,6 +117,52 @@ test('missing Team selection fails before opening native LTCook', async () => {
   expect(
     await hook({ request: { config: { provider: 'pi', cwd: '/workspace' } } }),
   ).toBeUndefined();
+});
+
+test('restores the stored-summary shortcut after Paseo replaces the conversation epoch', async () => {
+  const hook = hooks()('agent.turn.after');
+  process.env.LTCOOK_RUNTIME_API_URL = 'http://runtime.invalid';
+  process.env.LTCOOK_RUNTIME_USER_TOKEN = 'server-secret';
+  globalThis.fetch = (async () => Response.json({ memoryEnabled: true })) as typeof fetch;
+  let epoch = 'before-rewind';
+  const appended: unknown[] = [];
+  const timeline = {
+    async append(row: unknown) {
+      appended.push(row);
+      return { epoch };
+    },
+    async refetch() {
+      return { epoch, agent: { archivedAt: null } };
+    },
+  };
+  const context = {
+    signal: new AbortController().signal,
+    paseo: { agents: { ref: () => ({ timeline }) } } as unknown as PluginHookContext['paseo'],
+  };
+  const turn = {
+    agent: {
+      id: 'native-leader',
+      workspaceId: 'workspace',
+      parentAgentId: null,
+      provider: 'pi',
+      cwd: '/workspace',
+      title: null,
+      background: false,
+      metadata: {},
+    },
+    turnId: 'turn',
+    outcome: { kind: 'completed' as const },
+    timeline: [],
+  };
+  await hook(turn, context);
+  await hook(turn, context);
+  expect(appended).toEqual([
+    { type: 'plugin', id: 'memory-summaries', kind: 'memory-summaries', version: 1, data: {} },
+  ]);
+  epoch = 'after-rewind';
+  await hook(turn, context);
+  expect(appended).toHaveLength(2);
+  expect(appended[1]).toEqual(appended[0]);
 });
 
 test('a real turn fails before inference when native initialization is unavailable', async () => {

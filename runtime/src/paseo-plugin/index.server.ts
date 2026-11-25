@@ -445,7 +445,7 @@ export default function contribute(server: PluginServerContext) {
       () => undefined,
     );
   };
-  const memoryShortcutAgents = new Set<string>();
+  const memoryShortcuts = new Map<string, { epoch?: string; pending?: boolean }>();
   const memoryObservation = z.object({ memoryEnabled: z.boolean() });
   const cleanup = [
     server.addHook('agent.turn.before', async ({ agent, turnId }, context) => {
@@ -459,23 +459,47 @@ export default function contribute(server: PluginServerContext) {
         current?.model?.startsWith('ollama/') === true;
       void observeMemory(agent, { turnId, outcome: 'running', local });
     }),
-    server.addHook('agent.turn.after', async ({ agent, turnId, outcome }, { paseo }) => {
+    server.addHook('agent.turn.after', async ({ agent, turnId, outcome }, { paseo, signal }) => {
       const observed = memoryObservation.safeParse(
         await observeMemory(agent, { turnId, outcome: outcome.kind }),
       );
-      if (outcome.kind !== 'completed' || memoryShortcutAgents.has(agent.id)) return;
-      if (!observed.success || !observed.data.memoryEnabled) return;
-      memoryShortcutAgents.add(agent.id);
+      if (
+        outcome.kind !== 'completed' ||
+        !agent.workspaceId ||
+        !observed.success ||
+        !observed.data.memoryEnabled ||
+        signal.aborted
+      )
+        return;
+      const shortcut = memoryShortcuts.get(agent.id) ?? {};
+      if (shortcut.pending) return;
+      shortcut.pending = true;
+      memoryShortcuts.set(agent.id, shortcut);
       try {
-        await paseo.agents.ref(agent.id).timeline.append({
+        const timeline = paseo.agents.ref(agent.id).timeline;
+        if (shortcut.epoch) {
+          // > A cursor before all entries returns no messages while the timeline epoch is current.
+          const page = await timeline.refetch({
+            direction: 'before',
+            cursor: { epoch: shortcut.epoch, seq: 0 },
+            limit: 1,
+          });
+          if (page.error || !page.agent || page.agent.archivedAt || page.epoch === shortcut.epoch)
+            return;
+        }
+        if (signal.aborted || memoryShortcuts.get(agent.id) !== shortcut) return;
+        const { epoch } = await timeline.append({
           type: 'plugin',
           id: MEMORY_SUMMARIES_TIMELINE_KIND,
           kind: MEMORY_SUMMARIES_TIMELINE_KIND,
           version: 1,
           data: {},
         });
+        shortcut.epoch = epoch;
       } catch {
-        memoryShortcutAgents.delete(agent.id);
+        // > A later completed turn can retry an unavailable timeline.
+      } finally {
+        shortcut.pending = false;
       }
     }),
     server.addHook('agent.close.after', async ({ agent }) => {
@@ -564,7 +588,7 @@ export default function contribute(server: PluginServerContext) {
       };
     }),
     server.addHook('agent.archive.after', async ({ agent }) => {
-      memoryShortcutAgents.delete(agent.id);
+      memoryShortcuts.delete(agent.id);
       if (!['ltcook', 'pi', 'codex'].includes(agent.provider)) return;
       observeMemory(agent, { force: true });
       await runtimeJson('/v1/mcp/revoke', { nativeAgentId: agent.id });
