@@ -1029,7 +1029,8 @@ fixture was run.
 | Existing Markdown template | 3/5 | 42.011 | 1,505 / 2,489 | 1.512 / 39.693 | 709 |
 | Simple bullets | 0/5 | 4.489 | 1,197 / 240 | 1.395 / 2.567 | 671 |
 
-The template proposal repeated itself until the 2,048-token output limit.
+The template proposal repeated itself until the 2,048-token output limit and
+claimed verification had occurred without source evidence.
 The bullet proposal produced an empty Markdown fence, and the approval
 summary repeated an unrelated instruction instead of retaining the decision.
 The template's incomplete proposal was not stored as a completed summary.
