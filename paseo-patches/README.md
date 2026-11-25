@@ -38,3 +38,16 @@ web entry point reuses the staged directory.
 LTCook packages these generated assets with its runtime and points the embedded
 Paseo server at them through `PASEO_WEB_UI_DIST_DIR`. The native installer
 consumes the prebuilt runtime payload.
+
+## Idle restart
+
+`idle-restart/` guards the embedded daemon's work admission during idle
+restart. The loader verifies the installed Paseo version and original module
+digests before applying the patch, then forwards itself to the supervisor's
+worker. LTCook ships the loader with the runtime and enables it when launching
+its own Linux or WSL daemon.
+
+The local control route accepts the runtime owner credential. It temporarily
+reserves an idle daemon, rechecks observed work at commit, and requests
+Paseo's graceful supervisor shutdown. An abandoned reservation expires after
+30 seconds.

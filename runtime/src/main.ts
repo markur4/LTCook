@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
+import { z } from 'zod';
 import type { SessionSnapshot } from './workflow-api/index.js';
 import { TeamRegistry } from './integrations/team-loader.js';
 import { RiedService } from './repository/discovery.js';
@@ -24,6 +25,7 @@ import {
 import { PastedDocuments } from './session-memory/pasted-documents.js';
 import { catalogModelAliases, resolveModel } from './models/aliases.js';
 const EX_TEMPFAIL = 75;
+const restartResult = z.looseObject({ state: z.string(), message: z.string() });
 function isListenAddressInUse(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -391,18 +393,49 @@ async function run(): Promise<void> {
         void telemetry.log('warn', 'session-memory.unavailable', {});
       }
     }
-    api.setWorkspaceMcp(
-      new WorkspaceMcp(
-        createTools(ried, summarization, web, memory, api.activityColgrep),
-        apiListen,
-        web,
-      ),
+    const requestRestart =
+      host.reserveIdleRestart && process.env.LTCOOK_PASEO_PASSWORD
+        ? (update: boolean): Promise<Record<string, unknown>> =>
+            new Promise((resolve, reject) => {
+              const args = ['-m', 'ltcook', 'restart', '--when-idle', '--json'];
+              if (update) args.push('--update', '--yes');
+              childProcess.execFile(
+                python,
+                args,
+                {
+                  cwd: canonicalDeploymentRoot,
+                  env: captureShellEnvironment(process.env),
+                  timeout: 15_000,
+                  maxBuffer: 64 * 1024,
+                },
+                (error, stdout) => {
+                  if (error) {
+                    reject(
+                      new Error('Could not queue the idle restart. Check ltcook restart --status.'),
+                    );
+                    return;
+                  }
+                  try {
+                    resolve(restartResult.parse(JSON.parse(stdout)));
+                  } catch {
+                    reject(new Error('The registered restart command returned an invalid status.'));
+                  }
+                },
+              );
+            })
+        : undefined;
+    const workspaceMcp = new WorkspaceMcp(
+      createTools(ried, summarization, web, memory, api.activityColgrep),
+      apiListen,
+      web,
+      requestRestart,
     );
+    api.setWorkspaceMcp(workspaceMcp);
     const receipt = JSON.parse(
       await fs
         .readFile(path.join(canonicalDeploymentRoot, 'runtime.json'), 'utf8')
         .catch(() => '{}'),
-    ) as { browser_available?: boolean; browser_executable?: string };
+    ) as { browser_available?: boolean; browser_executable?: string; fingerprint?: string };
     if (stopping) return;
     const backend = await createPaseoAgentBackend({
       telemetry,
@@ -438,7 +471,14 @@ async function run(): Promise<void> {
       },
     });
     runtime = runtimeController;
-    disconnectPlanningDialogs = connectPlanningDialogs(host, runtimeController);
+    const disconnectPlanning = connectPlanningDialogs(host, runtimeController);
+    const disconnectRestartApproval = requestRestart
+      ? host.subscribePlanningDialogs(async (event) => workspaceMcp.observeRestartApproval(event))
+      : undefined;
+    disconnectPlanningDialogs = () => {
+      disconnectRestartApproval?.();
+      disconnectPlanning();
+    };
     api.setRuntime(runtimeController);
     if (workspaceRoot && sessionId) {
       workspaceShellEnvironments.set(sessionId, captureShellEnvironment(process.env));
@@ -535,8 +575,10 @@ async function run(): Promise<void> {
         backendLogPath,
         paseoLogPath: host.logPath,
         telemetryLogPath: path.resolve(logs),
+        buildFingerprint: receipt.fingerprint,
       },
       () => cleanup('API stop', 0),
+      host.reserveIdleRestart,
     );
     if (stopping) return;
     const summary = initialSnapshot

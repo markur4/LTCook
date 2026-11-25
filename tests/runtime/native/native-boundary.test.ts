@@ -724,6 +724,78 @@ describe('native runtime boundary', () => {
       }),
     ).toEqual({ A: 'original' });
   });
+  test('stops on the authenticated idle route only after Paseo commits', async () => {
+    const api = new RuntimeApi(undefined, 'owner', `127.0.0.1:${await freePort()}`);
+    const endpoint = await api.listen();
+    const stopFinished = Promise.withResolvers<void>();
+    let attempt = 0;
+    let released = 0;
+    let stopCalls = 0;
+    api.setOpenWorkspaceHandler(async () => {
+      throw new Error('lifecycle does not open a session');
+    });
+    api.setLifecycle(
+      {
+        instanceId: 'runtime-1',
+        deploymentRoot: '/deployment',
+        databasePath: '/deployment/runtime.db',
+        paseoListen: '127.0.0.1:4312',
+        backendLogPath: null,
+        paseoLogPath: '/deployment/paseo.log',
+        telemetryLogPath: '/deployment/events.jsonl',
+        buildFingerprint: 'installed-build',
+      },
+      async () => {
+        stopCalls += 1;
+        stopFinished.resolve();
+      },
+      async () => {
+        attempt += 1;
+        if (attempt === 1) return { status: 'busy', activeTurns: 3 };
+        return {
+          status: 'reserved',
+          async release() {
+            released += 1;
+          },
+          async commit() {
+            if (attempt === 2) throw new Error('Could not commit');
+            return { status: 'committed' };
+          },
+        };
+      },
+    );
+    const stop = (token: string, instanceId = 'runtime-1') =>
+      fetch(`${endpoint}/v1/runtime/stop`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ instanceId, whenIdle: true }),
+      });
+    try {
+      const status = await fetch(`${endpoint}/v1/status`, {
+        headers: { authorization: 'Bearer owner' },
+      });
+      expect(await status.json()).toMatchObject({
+        idleRestart: true,
+        buildFingerprint: 'installed-build',
+      });
+      expect((await stop(agentBearer('owner', 'agent'))).status).toBe(401);
+      expect((await stop('owner', 'stale-instance')).status).toBe(409);
+      expect(attempt).toBe(0);
+      const busy = await stop('owner');
+      expect(busy.status).toBe(423);
+      expect(await busy.json()).toEqual({ status: 'busy', activeTurns: 3 });
+      expect((await stop('owner')).status).toBe(503);
+      expect(released).toBe(1);
+      expect(stopCalls).toBe(0);
+      expect((await stop('owner')).status).toBe(202);
+      await stopFinished.promise;
+      expect(stopCalls).toBe(1);
+      expect(released).toBe(1);
+    } finally {
+      await api.close();
+    }
+  });
+
   test('requires user authentication and readiness for runtime status', async () => {
     const master = 'test-master-secret';
     const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`);

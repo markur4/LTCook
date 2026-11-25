@@ -47,6 +47,11 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- Linux and WSL can queue an LTCook restart until Paseo finishes active and
+  queued turns. Check or cancel the queued job from the CLI, or request it
+  through an agent that supports Paseo's approval dialog. An optional update
+  uses AppRC and accepts `-y` or `--yes`.
+
 - A Paseo Explorer **Activity** panel shows direct subagents, running and recent
   tools, observed skill loads, model context usage, ColGREP index status, and
   Session Memory summaries and delivery evidence. On desktop, Activity opens on

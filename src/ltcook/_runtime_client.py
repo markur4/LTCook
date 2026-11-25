@@ -29,6 +29,14 @@ class RuntimeClientError(ValueError):
     """A local lifecycle operation could not be completed safely."""
 
 
+class RuntimeBusyError(RuntimeClientError):
+    """The current runtime still has active or queued Paseo work."""
+
+    def __init__(self, active_turns: int) -> None:
+        self.active_turns = active_turns
+        super().__init__(f"Paseo has {active_turns} active or queued turns.")
+
+
 @dataclass(frozen=True)
 class RuntimeStatus:
     """Authenticated installation identity returned only by a ready owner."""
@@ -40,6 +48,8 @@ class RuntimeStatus:
     backend_log_path: str | None
     paseo_log_path: str
     telemetry_log_path: str
+    idle_restart: bool = False
+    build_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -236,6 +246,12 @@ def _status(
         backend,
         payload["paseoLogPath"],
         payload["telemetryLogPath"],
+        idle_restart=payload.get("idleRestart") is True,
+        build_fingerprint=(
+            payload["buildFingerprint"]
+            if isinstance(payload.get("buildFingerprint"), str)
+            else None
+        ),
     )
 
 
@@ -608,9 +624,27 @@ def follow_runtime_logs(
             follower.close()
 
 
-def stop_runtime(environment: Mapping[str, str]) -> int:
-    """Stop only the authenticated observed instance, never an arbitrary PID."""
+def stop_runtime(
+    environment: Mapping[str, str],
+    *,
+    when_idle: bool = False,
+    expected_instance_id: str | None = None,
+) -> int:
+    """Stop only the authenticated observed instance, optionally reserving idle Paseo.
+
+    :param environment: Resolved launch credentials and installation identity.
+    :param when_idle: Require an atomic Paseo idle reservation before shutdown.
+    :param expected_instance_id: Fail when the queued job's runtime was replaced.
+    :return: Process exit status after the stop is confirmed.
+    """
     status = probe_runtime(environment)
+    if expected_instance_id is not None and (
+        not isinstance(status, RuntimeStatus)
+        or status.instance_id != expected_instance_id
+    ):
+        raise RuntimeClientError(
+            "The queued restart runtime changed or is unavailable."
+        )
     if status is None:
         print("LTCook runtime is not running.")
         return 0
@@ -618,23 +652,45 @@ def stop_runtime(environment: Mapping[str, str]) -> int:
         raise RuntimeClientError(
             "The runtime is still starting or unresponsive; retry ltcook stop when ready."
         )
+    if when_idle and not status.idle_restart:
+        raise RuntimeClientError("This runtime does not support restarting when idle.")
     request = _request(
-        environment, "/v1/runtime/stop", {"instanceId": status.instance_id}
+        environment,
+        "/v1/runtime/stop",
+        {"instanceId": status.instance_id, "whenIdle": True}
+        if when_idle
+        else {"instanceId": status.instance_id},
     )
     try:
-        with _HTTP.open(request, timeout=1) as response:
+        with _HTTP.open(request, timeout=8 if when_idle else 1) as response:
             payload: object = json.loads(response.read().decode("utf-8"))
             if response.status != 202 or payload != {"stopping": True}:
                 raise RuntimeClientError(
                     "The runtime returned an invalid stop acknowledgement."
                 )
     except urllib.error.HTTPError as error:
+        if when_idle and error.code == 423:
+            try:
+                report = json.loads(error.read(4096))
+            except ValueError:
+                report = None
+            if isinstance(report, dict) and report.get("status") == "busy":
+                active_turns = report.get("activeTurns")
+                if type(active_turns) is int and active_turns >= 0:
+                    raise RuntimeBusyError(active_turns) from None
+            raise RuntimeClientError(
+                "Paseo returned an invalid idle response."
+            ) from None
         if error.code == 409:
             detail = (
                 "The runtime instance changed before stop; no replacement was stopped."
             )
         elif error.code == 503:
-            detail = "The runtime is starting or stopping; retry after it settles."
+            detail = (
+                "The runtime could not confirm an idle reservation in Paseo."
+                if when_idle
+                else "The runtime is starting or stopping; retry after it settles."
+            )
         elif error.code == 401:
             detail = "The configured runtime token was rejected for stop."
         else:

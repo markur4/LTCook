@@ -1,7 +1,7 @@
 import type { Telemetry } from '../diagnostics/telemetry.js';
 import process from 'node:process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { isRuntimeCommand } from '../workflow-api/commands.js';
 import type {
   RuntimeActor,
@@ -52,6 +52,8 @@ export interface RuntimeLifecycleIdentity {
   backendLogPath: string | null;
   paseoLogPath: string;
   telemetryLogPath: string;
+  buildFingerprint?: string;
+  idleRestart?: boolean;
 }
 
 export interface WorkspaceSessionRequest {
@@ -135,6 +137,8 @@ export class RuntimeApi {
   }
   private lifecycle: RuntimeLifecycleIdentity | undefined;
   private shutdown: (() => Promise<void>) | undefined;
+  private reserveIdleRestart?: PaseoHost['reserveIdleRestart'];
+  private reservingIdleRestart = false;
   private stopping = false;
   private workspaceMcp: WorkspaceMcp | undefined;
   setSessionMemory(memory: SessionMemory, context?: RuntimeApi['memoryContext']): void {
@@ -176,10 +180,56 @@ export class RuntimeApi {
   setEval(service: EvalRunService): void {
     this.evals = service;
   }
-  setLifecycle(identity: RuntimeLifecycleIdentity, shutdown: () => Promise<void>): void {
-    this.lifecycle = { ...identity };
+  setLifecycle(
+    identity: RuntimeLifecycleIdentity,
+    shutdown: () => Promise<void>,
+    reserveIdleRestart?: PaseoHost['reserveIdleRestart'],
+  ): void {
+    this.lifecycle = { ...identity, ...(reserveIdleRestart && { idleRestart: true }) };
     this.shutdown = shutdown;
+    this.reserveIdleRestart = reserveIdleRestart;
   }
+  private async canStopWhenIdle(response: ServerResponse): Promise<boolean> {
+    const reserve = this.reserveIdleRestart;
+    if (!reserve) {
+      response.writeHead(503).end('{"error":"Paseo idle reservations are unavailable"}');
+      return false;
+    }
+    this.reservingIdleRestart = true;
+    try {
+      const reservation = await reserve();
+      if (reservation.status === 'busy') {
+        response.writeHead(423).end(JSON.stringify(reservation));
+        return false;
+      }
+
+      let committed = false;
+      try {
+        if (response.destroyed) return false;
+        if (this.stopping) {
+          response.writeHead(503).end('{"error":"LTCook runtime is stopping"}');
+          return false;
+        }
+        const result = await reservation.commit();
+        if (result.status === 'busy') {
+          response.writeHead(423).end(JSON.stringify(result));
+          return false;
+        }
+        committed = true;
+        return true;
+      } finally {
+        if (!committed) await reservation.release().catch(() => undefined);
+      }
+    } catch {
+      if (!response.destroyed) {
+        response.writeHead(503).end('{"error":"Paseo could not confirm the idle reservation"}');
+      }
+      return false;
+    } finally {
+      this.reservingIdleRestart = false;
+    }
+  }
+
   beginShutdown(): void {
     this.stopping = true;
   }
@@ -347,9 +397,22 @@ export class RuntimeApi {
           response.writeHead(409).end('{"error":"Runtime instance changed; probe again"}');
           return;
         }
+        const whenIdle = 'whenIdle' in parsed ? parsed.whenIdle : false;
+        if (typeof whenIdle !== 'boolean') {
+          response.writeHead(400).end('{"error":"whenIdle must be a boolean"}');
+          return;
+        }
+        if (this.reservingIdleRestart) {
+          response.writeHead(503).end('{"error":"An idle reservation is in progress"}');
+          return;
+        }
         const shutdown = this.shutdown;
+        if (whenIdle && !(await this.canStopWhenIdle(response))) return;
         this.beginShutdown();
-        response.once('finish', () => {
+        let scheduled = false;
+        const scheduleShutdown = () => {
+          if (scheduled) return;
+          scheduled = true;
           setImmediate(() => {
             void shutdown().catch((error: unknown) => {
               const message =
@@ -360,7 +423,15 @@ export class RuntimeApi {
               process.exitCode = 1;
             });
           });
-        });
+        };
+        response.once('finish', scheduleShutdown);
+        if (whenIdle) {
+          response.once('close', scheduleShutdown);
+          if (response.destroyed) {
+            scheduleShutdown();
+            return;
+          }
+        }
         response.writeHead(202).end('{"stopping":true}');
         return;
       }

@@ -4,7 +4,7 @@ import { createHostClient } from '@getpaseo/client/node';
 import type { ProviderSubagentDescriptorPayload } from '@getpaseo/protocol/messages';
 import { createPaseoApi, type PaseoApi } from '@getpaseo/client';
 import { createHash, randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { chmod, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -26,10 +26,12 @@ import { configurePiExtensions } from './pi-settings.js';
 import { isWithin } from '../path-containment.js';
 import { memoryDispatchId } from './paseo-memory.js';
 import { WorkspacePreparationCache } from './workspace-preparation.js';
+import { connectIdleRestart, type IdleRestartReservation } from './paseo-idle-restart.js';
 export interface PaseoHost {
   api: PaseoApi;
   listen: string;
   logPath: string;
+  reserveIdleRestart?: () => Promise<IdleRestartReservation>;
   listProviderSubagents(agentId: string): Promise<ProviderSubagentDescriptorPayload[]>;
   subscribePlanningDialogs(handler: (event: PlanningDialogEvent) => Promise<void>): () => void;
   close(): Promise<void>;
@@ -154,7 +156,10 @@ export async function startPaseoHost(input: {
         'For multi-file investigations, call Locate trace with the question and up to four independent leads, such as behaviors, symbols, routes, or settings. Use its numbered evidence and check only specific gaps. ' +
         `Use ${REPO_SEARCH_TOOL_NAME} in hybrid mode when you know the behavior but lack the symbol. Discover these tools through tool search if needed. ` +
         'Batch independent symbols with symbols. Open an enclosing source block with Locate location {path, line}, or use follow: true for one local connection. ' +
-        'Use native search for quick literal checks. If repository retrieval is unavailable or indexing, use native search and file reads.',
+        'Use native search for quick literal checks. If repository retrieval is unavailable or indexing, use native search and file reads.' +
+        (input.password
+          ? ' When the user requests an idle LTCook restart, discover ltcook_restart if available. Paseo asks the user to approve the request.'
+          : ''),
       mcp: { enabled: false, injectIntoAgents: false },
       ...(input.password ? { auth: { password: hashDaemonPassword(input.password) } } : {}),
     },
@@ -176,10 +181,21 @@ export async function startPaseoHost(input: {
   const configFile = path.join(home, 'config.json');
   await writeFile(configFile, JSON.stringify(configuration, null, 2), { mode: 0o600 });
   await chmod(configFile, 0o600);
+  const maintenanceLoader = path.resolve(
+    input.pluginDirectory,
+    '..',
+    'paseo-idle-restart',
+    'register.mjs',
+  );
+  const hasMaintenanceLoader =
+    process.platform === 'linux' &&
+    (await stat(maintenanceLoader).catch(() => undefined))?.isFile();
   const started = await startDaemonInstance({
     home,
     command: input.node,
-    args: [supervisor],
+    args: hasMaintenanceLoader
+      ? ['--import', pathToFileURL(maintenanceLoader).href, supervisor]
+      : [supervisor],
     env,
     mode: 'deployment',
   });
@@ -195,8 +211,13 @@ export async function startPaseoHost(input: {
     await client.connect();
     const connectedClient = client;
     const api = createPaseoApi(connectedClient);
+    const reserveIdleRestart =
+      hasMaintenanceLoader && started.spawned
+        ? await connectIdleRestart(instance.listen, input.userToken)
+        : undefined;
     return {
       api,
+      reserveIdleRestart,
       listen: instance.listen,
       logPath: daemonLogPath(home),
       async listProviderSubagents(agentId) {

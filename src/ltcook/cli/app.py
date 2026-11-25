@@ -15,6 +15,7 @@ import apprc as rc
 import typer
 
 import ltcook
+from ltcook._app_update import app_update_command
 from ltcook._runtime_client import RuntimeClientError, stop_runtime
 from ltcook.auth import auth_cli
 from ltcook.cli.eval import eval_cli
@@ -297,7 +298,7 @@ def _registered_launcher() -> Path:
         )
         if launcher is not None and launcher.is_file():
             return launcher
-    raise ValueError("An installed LTCook command is required for restart --update.")
+    raise ValueError("This restart requires the registered LTCook command.")
 
 
 @app.command("restart")
@@ -307,14 +308,73 @@ def restart_cmd(
         typer.Option(
             "--update",
             "-u",
-            help="Apply the AppRC update before starting on Linux or macOS.",
+            help="Apply the registered AppRC update before starting.",
         ),
     ] = False,
+    when_idle: Annotated[
+        bool, typer.Option("--when-idle", help="Queue the restart until Paseo is idle.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Confirm the registered AppRC update.")
+    ] = False,
+    status: Annotated[
+        bool,
+        typer.Option("--status", help="Show the queued or most recent idle restart."),
+    ] = False,
+    cancel: Annotated[
+        bool,
+        typer.Option("--cancel", help="Cancel a queued idle restart before it starts."),
+    ] = False,
+    output_json: Annotated[
+        bool, typer.Option("--json", help="Print the deferred restart status as JSON.")
+    ] = False,
 ) -> None:
-    """Stop the local runtime and reopen Paseo.
+    """Stop the local runtime and reopen Paseo or queue an idle restart.
 
     :param update: Apply the registered installation's update before starting.
+    :param when_idle: Run independently after Paseo finishes its active turns.
+    :param yes: Approve the update without a caller-side prompt.
+    :param status: Display the most recent deferred restart.
+    :param cancel: Cancel a pending deferred restart.
+    :param output_json: Emit deferred status in machine-readable form.
     """
+    if (status and cancel) or ((status or cancel) and (update or when_idle or yes)):
+        raise typer.BadParameter(
+            "Use --status or --cancel by itself with optional --json."
+        )
+    if output_json and not (when_idle or status or cancel):
+        raise typer.BadParameter("--json requires --when-idle, --status, or --cancel.")
+    if yes and not update:
+        raise typer.BadParameter("--yes requires --update.")
+    if when_idle or status or cancel:
+        from ltcook._idle_restart import cancel_restart, queue_restart, restart_status
+
+        if sys.platform != "linux":
+            raise typer.BadParameter("Idle restarts currently require Linux or WSL.")
+        try:
+            environment = resolve_launch(None).environment
+            if status:
+                result = restart_status(environment)
+            elif cancel:
+                result = cancel_restart(environment)
+            else:
+                launcher = _registered_launcher()
+                if update and not yes:
+                    if not sys.stdin.isatty():
+                        raise typer.BadParameter(
+                            "A noninteractive deferred AppRC update requires --yes."
+                        )
+                    typer.confirm(
+                        "Allow AppRC to apply the registered update once Paseo is idle?",
+                        abort=True,
+                        err=True,
+                    )
+                result = queue_restart(environment, launcher, update=update)
+        except (OSError, ValueError) as error:
+            raise typer.BadParameter(str(error)) from error
+        typer.echo(json.dumps(result) if output_json else result["message"])
+        return
+
     launcher = None
     if update:
         if sys.platform == "win32":
@@ -335,7 +395,9 @@ def restart_cmd(
         raise typer.Exit(desktop_command())
 
     try:
-        result = subprocess.run([launcher, "app", "update"], check=False)
+        result = subprocess.run(
+            app_update_command(launcher, assume_yes=yes), check=False
+        )
         if result.returncode:
             raise typer.Exit(result.returncode)
         os.execv(launcher, [str(launcher), "serve"])

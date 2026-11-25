@@ -131,8 +131,22 @@ separately by `ltcook services stop`.
 
 Run `ltcook restart` to stop the runtime and reopen Paseo. On Linux or macOS,
 use `ltcook restart --update` (or `-u`) to apply the registered AppRC update
-before starting. On Windows, stop LTCook, run `ltcook app update`, and run
+before starting. Pass `-y` or `--yes` to confirm AppRC's update without a
+prompt. On Windows, stop LTCook, run `ltcook app update`, and run
 `ltcook serve` once AppRC finishes the update.
+
+On Linux and WSL with user systemd 254 or newer, run
+`ltcook restart --when-idle` to queue a restart for when Paseo finishes its
+active and queued work. To include the AppRC update, run
+`ltcook restart --when-idle --update --yes`. If you omit `--yes` at a terminal,
+LTCook asks permission to let AppRC apply the update later. AppRC selects and
+applies the update after Paseo becomes idle. Check the job with
+`ltcook restart --status` or cancel it before shutdown with
+`ltcook restart --cancel`. Add `--json` for machine-readable status.
+
+In Paseo, an agent with access to `ltcook_restart` can ask you to approve the
+same deferred restart, with or without an update. It requires a
+password-protected Paseo host and a client that supports the approval dialog.
 
 For a browser-free foreground server, use `ltcook launch runtime`. Ctrl+C stops
 a server started by that foreground command; reusing a server does not take over
