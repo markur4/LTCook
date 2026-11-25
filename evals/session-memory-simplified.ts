@@ -322,7 +322,7 @@ export async function runSimplifiedMemoryArm(
     loadedBytes?: number;
     peakRssBytes?: number;
     error?: string;
-    audit?: { summary: string; prompt: string };
+    audit?: { summary: string; prompt: string; systemPrompt: string };
   }[] = [];
   const memory = new SessionMemory({
     databasePath: file,
@@ -356,7 +356,13 @@ export async function runSimplifiedMemoryArm(
               }
             : {}),
           ...(input.auditOutput
-            ? { audit: { summary: result.text, prompt: prompt[1].content } }
+            ? {
+                audit: {
+                  summary: result.text,
+                  prompt: prompt[1].content,
+                  systemPrompt: prompt[0].content,
+                },
+              }
             : {}),
         });
         return result;

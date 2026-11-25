@@ -72,18 +72,20 @@ try {
     const diagnostic = args.includes('--diagnose-approval');
     const semantic = args.includes('--semantic');
     const screening = args.includes('--screen-candidates');
+    const mnnDiagnostic = args.includes('--diagnose-mnn-approval');
     if (
-      (screening || diagnostic || semantic || args.includes('--simplified')) &&
+      (mnnDiagnostic || screening || diagnostic || semantic || args.includes('--simplified')) &&
       !args.includes('--production-suspended')
     )
       throw new Error(
         'Suspend production inference before this comparison and pass --production-suspended.',
       );
-    if (screening) {
+    if (screening || mnnDiagnostic) {
       const report = await screenSessionMemory({
         settings: summarization,
         signal: controller.signal,
         profileId: option('screen-profile'),
+        approvalDiagnostic: mnnDiagnostic,
         mnnApprovalFirst: args.includes('--mnn-approval-first'),
         allowRetry: !args.includes('--no-screen-retry'),
         auditOutput: args.includes('--audit-output'),

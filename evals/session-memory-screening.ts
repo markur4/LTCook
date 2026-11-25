@@ -16,6 +16,7 @@ import {
   sessionMemoryModel,
 } from '../runtime/src/session-memory/summarization.js';
 import { semanticMemoryFixtures } from './session-memory-semantic-fixtures.js';
+import { diagnoseManifestApproval } from './session-memory-approval.js';
 import {
   referenceFixture,
   runSimplifiedMemoryArm,
@@ -113,6 +114,7 @@ export async function screenSessionMemory(input: {
   signal: AbortSignal;
   auditOutput?: boolean;
   profileId?: string;
+  approvalDiagnostic?: boolean;
   mnnApprovalFirst?: boolean;
   allowRetry?: boolean;
   progress?: (label: string) => void;
@@ -137,6 +139,8 @@ export async function screenSessionMemory(input: {
     throw new Error('Screening requires the production code and fixtures pinned at e7f1d60.');
   if (input.mnnApprovalFirst && input.profileId && input.profileId !== mnnProfileId)
     throw new Error('--mnn-approval-first selects the MNN-Pocket Q8_0 experiment.');
+  if (input.approvalDiagnostic && (input.profileId || input.mnnApprovalFirst))
+    throw new Error('The approval diagnostic runs both MNN-Pocket checkpoints at 0.8.');
   const qatScreen = input.profileId === mnnQatProfile.id;
   const approvalFirst = input.mnnApprovalFirst || qatScreen;
   const { signal, auditOutput, progress } = input;
@@ -232,10 +236,16 @@ export async function screenSessionMemory(input: {
     };
   };
   const results = [];
+  const diagnostics: (Awaited<ReturnType<typeof diagnoseManifestApproval>> & {
+    profile: (typeof profiles)[number];
+    generation: typeof sessionMemoryGeneration;
+  })[] = [];
   const profileId = input.mnnApprovalFirst ? mnnProfileId : input.profileId;
-  const selectedProfiles = qatScreen
-    ? [mnnQatProfile]
-    : profiles.filter(({ id }) => !profileId || id === profileId);
+  const selectedProfiles = input.approvalDiagnostic
+    ? [...profiles.filter(({ id }) => id === mnnProfileId), mnnQatProfile]
+    : qatScreen
+      ? [mnnQatProfile]
+      : profiles.filter(({ id }) => !profileId || id === profileId);
   if (!selectedProfiles.length) throw new Error('Unknown Session Memory screening profile.');
   for (const profile of selectedProfiles) {
     const source = find(models, profile.model);
@@ -291,6 +301,21 @@ export async function screenSessionMemory(input: {
             keepAlive: 900,
             generation: JSON.stringify(generation),
           };
+          if (input.approvalDiagnostic) {
+            if (!model.weightsDigest) throw new Error('The diagnostic requires verified weights.');
+            const fixture = fixtures.find(({ id }) => id === 'semantic-manifest-reference')!;
+            const diagnostic = await diagnoseManifestApproval({
+              fixture,
+              settings,
+              digest: model.digest,
+              weightsDigest: model.weightsDigest,
+              signal,
+              auditOutput,
+              progress: (label) => progress?.(`${profile.name}: ${label}`),
+            });
+            diagnostics.push({ profile, generation, ...diagnostic });
+            break;
+          }
           const result = await run(settings, model, `${profile.name} T=${temperature}`);
           attempts.push({ generation, ...result });
           if (input.allowRetry === false || !result.nearPass || temperature === 0.1) break;
@@ -347,5 +372,12 @@ export async function screenSessionMemory(input: {
     results.every(({ identity }) => find(after, identity.name)?.digest === identity.digest) &&
     (!comparison || find(after, comparison.model.name)?.digest === comparison.model.digest);
   if (!unchanged) throw new Error('A model identity changed during screening.');
-  return { frozenRevision, seed: simplifiedSeed, results, comparison, productionSuspended: true };
+  return {
+    frozenRevision,
+    seed: simplifiedSeed,
+    results,
+    comparison,
+    ...(input.approvalDiagnostic ? { diagnostics } : {}),
+    productionSuspended: true,
+  };
 }

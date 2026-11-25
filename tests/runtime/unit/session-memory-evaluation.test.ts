@@ -1,4 +1,5 @@
 import { candidateScreeningFixtures } from '../../../evals/session-memory-screening.js';
+import { manifestApprovalControls } from '../../../evals/session-memory-approval.js';
 import { expect, test } from 'bun:test';
 import { MemoryEditProgress } from '../../../evals/session-memory-edit-progress.js';
 import { semanticMemoryFixtures } from '../../../evals/session-memory-semantic-fixtures.js';
@@ -18,6 +19,46 @@ import {
 } from '../../../runtime/src/evals/session-memory-facts.js';
 import { prepareMemorySummaries } from '../../../runtime/src/session-memory/summarization.js';
 import { memoryFixtures } from '../../../runtime/src/evals/session-memory-fixtures.js';
+
+test('manifest approval controls isolate the rendered cue, history and instructions', () => {
+  const fixture = semanticMemoryFixtures.find(({ id }) => id === 'semantic-manifest-reference')!;
+  const [rendered] = prepareMemorySummaries(
+    { type: 'UAMP', messages: fixture.turns[2]!, task: fixture.taskContext },
+    [
+      {
+        id: 'proposal',
+        type: 'UAMP',
+        content: 'Earlier proposal: reuseExportManifest. Awaiting a decision.',
+      },
+    ],
+    undefined,
+    { format: 'markdown' },
+  );
+  const [system, user] = rendered!.prompt;
+  const [withoutHistory, explicit, rules, reorder] = manifestApprovalControls(
+    system.content,
+    user.content,
+  );
+  const taskStart = user.content.indexOf('\nCurrent Task scope and requirements.');
+  expect(withoutHistory).toMatchObject({
+    system: system.content,
+    user: user.content.slice(taskStart),
+  });
+  expect(withoutHistory!.user).toContain('Implement that proposal.');
+  expect(explicit!.system).toBe(system.content);
+  expect(
+    explicit!.user.replace(
+      'Implement reuseExportManifest for the manifest refresh.',
+      'Implement that proposal.',
+    ),
+  ).toBe(user.content);
+  expect(rules!.user).toBe(user.content);
+  expect(rules!.system.endsWith(system.content)).toBe(true);
+  expect(reorder!.user).toBe(user.content);
+  expect(reorder!.system.indexOf('**Decisions**')).toBeLessThan(
+    reorder!.system.indexOf('**Intent**'),
+  );
+});
 
 test('grades multiline named results without borrowing the status of another check', () => {
   const fact = memoryFixtures

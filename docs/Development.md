@@ -438,6 +438,17 @@ Use `--screen-profile=mnn-pocket-q4-1` for the official MNN-Pocket Q4_1 QAT
 checkpoint at temperature 0.8. This runs the same manifest-first order at
 seed 17. It stops at the first failed fixture and runs a single profile.
 
+To diagnose MNN-Pocket's manifest approval failure on CPU, use:
+
+```shell
+bun evals/session-memory-live.ts --diagnose-mnn-approval --production-suspended
+```
+
+The evaluator uses both MNN-Pocket checkpoints at seed 17, reproduces each
+original approval prompt and changes one input at a time. The diagnostic
+reports generated-summary grades only. With `--audit-output`, keep the exact
+rendered system and user messages and generated answers local.
+
 For downstream qualification on a host without a usable GPU, use the same
 CPU production pause and the native Pi GPT-6 Luna high-reasoning worker:
 
