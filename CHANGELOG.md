@@ -47,6 +47,10 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- Agent chats show live generation speed in the composer, refreshing every two
+  seconds. The bundled Turn Speed component marks estimated token rates and
+  offers a breakdown of the current turn.
+
 - Linux and WSL can queue an LTCook restart until Paseo finishes active and
   queued turns. Check or cancel the queued job from the CLI, or request it
   through an agent that supports Paseo's approval dialog. An optional update

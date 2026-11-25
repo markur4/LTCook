@@ -29,6 +29,11 @@ REQUIRED_RUNTIME_ENTRIES = (
 )
 REQUIRED_PASEO_WEB_ASSETS = ("index.html", "ltcook-paseo-build.json")
 REQUIRED_PASEO_PLUGIN_ASSETS = (
+    "turn-speed/paseo-plugin.json",
+    "turn-speed/index.client.tsx",
+    "turn-speed/index.server.ts",
+    "turn-speed/client/pill.tsx",
+    "turn-speed/LICENSE",
     "paseo-plugin.json",
     "index.server.ts",
     "index.client.tsx",
