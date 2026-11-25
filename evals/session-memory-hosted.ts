@@ -276,11 +276,12 @@ const hostedAudit = z.object({
               model: z.literal(LUNA_EVALUATION.model),
               serviceTier: z.literal('default'),
               providerModelVerified: z.literal(true),
+              reasoning: z.literal('low'),
               providerTier: z.literal('default').optional(),
             }),
             metrics: z.object({
-              reasoningTokens: z.literal(0),
-              thinkingPresent: z.literal(false),
+              reasoningTokens: z.number().int().nonnegative().optional(),
+              thinkingPresent: z.boolean(),
               cachedInputTokens: z.number().int().nonnegative(),
             }),
             usage: z.object({
@@ -307,8 +308,8 @@ export async function qualifyHostedMemory(input: {
 }) {
   const { signal, auditOutput, progress } = input;
   const selection = resolveModel('tiny', { LTCOOK_MODEL_SMOL: hostedModel });
-  if (selection.reasoning !== 'none' || selection.reasoningSource !== 'alias')
-    throw new Error('The hosted Session Memory qualification requires @tiny with no reasoning.');
+  if (selection.reasoning !== 'low' || selection.reasoningSource !== 'alias')
+    throw new Error('The hosted Session Memory qualification requires @tiny with low reasoning.');
   const saved = input.replay === undefined ? undefined : hostedAudit.parse(input.replay);
   const backend = saved ? undefined : createHostedMemorySummarizer(selection);
   const reference = realisticReferenceFixture();
@@ -373,7 +374,7 @@ export async function qualifyHostedMemory(input: {
             return { ...row.result, text: row.audit.summary, content: row.audit.summary };
           }),
         inference: {
-          hosted: { model: selection.model, reasoning: 'off' },
+          hosted: { model: selection.model, reasoning: selection.reasoning },
           local: { model: 'unused', reasoning: 'none' },
         },
       },
@@ -386,7 +387,7 @@ export async function qualifyHostedMemory(input: {
     const routing =
       result.inference?.mode === 'hosted' &&
       result.inference.model === selection.model &&
-      result.inference.reasoning === 'off' &&
+      result.inference.reasoning === selection.reasoning &&
       result.requests.length === requests &&
       result.requests.every(
         ({ result, currentOnly }) =>
@@ -395,8 +396,7 @@ export async function qualifyHostedMemory(input: {
           result.hosted?.serviceTier === 'default' &&
           result.hosted.providerModelVerified &&
           modelTag(result.hosted.model) === modelTag(selection.model) &&
-          result.metrics?.thinkingPresent === false &&
-          result.metrics?.reasoningTokens === 0,
+          result.hosted.reasoning === selection.reasoning,
       );
     const requestSources = result.requests.map(({ currentSources }) => currentSources);
     const generatedSources = result.sourcePreservation?.records

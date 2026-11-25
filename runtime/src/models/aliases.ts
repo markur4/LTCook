@@ -43,7 +43,7 @@ const aliases: Readonly<
   Record<ModelAlias, { setting: string; preset?: ReasoningEffort; provider?: 'ollama' }>
 > = {
   smol: { setting: 'LTCOOK_MODEL_SMOL' },
-  tiny: { setting: 'LTCOOK_MODEL_SMOL', preset: 'none' },
+  tiny: { setting: 'LTCOOK_MODEL_SMOL', preset: 'low' },
   'local-CPU': { setting: 'LTCOOK_MODEL_LOCAL_CPU', preset: 'none', provider: 'ollama' },
   'local-tiny': { setting: 'LTCOOK_MODEL_TINY_LOCAL', preset: 'none', provider: 'ollama' },
   'local-evals': { setting: 'LTCOOK_MODEL_LOCAL_EVALS', provider: 'ollama' },

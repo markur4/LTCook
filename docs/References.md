@@ -226,7 +226,7 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
 | `LTCOOK_SESSION_MEMORY_THRESHOLD` | Global `runtime.session_memory_threshold`. Default 3,000 estimated Agent Action tokens per AAB. Use an integer from 1 to 6,500. Set 0 to disable capture and the tool. |
 | `LTCOOK_SESSION_MEMORY_MODE` | Global `runtime.session_memory_mode`. Set `hosted` to enable OpenAI subscription inference or `local` to use Ollama. An empty value starts in Local mode until Hosted is selected explicitly in Activity. The saved Activity choice takes precedence. |
-| `LTCOOK_SESSION_MEMORY_MODEL` | Global `runtime.session_memory_model` selects the Local model. An empty value uses `@local-CPU`. You can supply an Ollama alias or an installed Ollama model tag. Hosted uses `@tiny` and requires an `openai-codex` model with reasoning off. |
+| `LTCOOK_SESSION_MEMORY_MODEL` | Global `runtime.session_memory_model` selects the Local model. An empty value uses `@local-CPU`. You can supply an Ollama alias or an installed Ollama model tag. Hosted uses `@tiny` and requires an `openai-codex` model with low reasoning. |
 | `LTCOOK_SESSION_MEMORY_INPUT_TOKENS` | Global `runtime.session_memory_input_tokens`. Total input target including instructions and current UAMP source text. Defaults to 8,000 estimated tokens. |
 | `LTCOOK_SESSION_MEMORY_DELEGATION` | Global `runtime.session_memory_delegation`. Set to `true` to add automatic supplemental context on Core assignments. Default `false`. Search and source retrieval remain available when capture is enabled. |
 | `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |
@@ -236,7 +236,7 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_WORKSPACE` | Project path supplied for an explicit project launch; absent for idle server startup. |
 | `LTCOOK_DEPLOYMENT_DIR` | LTCook-owned deployment location, normally beneath AppRC appdata. |
 | `LTCOOK_MODEL_SMART` | `runtime.smart_model` sets `@smart` and `@plan`. Defaults to `openai-codex/gpt-6.2-sol`. |
-| `LTCOOK_MODEL_SMOL` | `runtime.smol_model` sets `@smol` and `@tiny`. Defaults to `openai-codex/gpt-6-luna`. The `@tiny` preset turns reasoning off. |
+| `LTCOOK_MODEL_SMOL` | `runtime.smol_model` sets `@smol` and `@tiny`. Defaults to `openai-codex/gpt-6-luna`. The `@tiny` preset uses low reasoning. |
 | `LTCOOK_MODEL_EXPENSIVE` | `runtime.expensive_model` sets `@expensive` and `@review-art`. Defaults to `openai-codex/gpt-6-astra`. |
 | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Optional provider credentials declared as secrets. |
 | `OPENAI_API_KEY` | Optional AppRC secret for custom child tooling. Managed LTCook OpenAI models use the Codex sign-in. |
