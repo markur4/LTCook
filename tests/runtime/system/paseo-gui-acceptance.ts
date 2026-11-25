@@ -6,6 +6,8 @@ import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { buildAgentDeepLinkRoute } from '@getpaseo/protocol/agent-deep-link';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import path from 'node:path';
@@ -361,7 +363,7 @@ const evals = new EvalRunService(path.join(directory, 'eval-state'), async (requ
 });
 await evals.initialize();
 api.setEval(evals);
-api.setWorkspaceMcp(new WorkspaceMcp([], listen));
+api.setWorkspaceMcp(new WorkspaceMcp([api.worktreeTool], listen));
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 let runtime: ReturnType<typeof createRuntime> | undefined;
@@ -1180,15 +1182,33 @@ try {
       cwd: gitWorkspace,
     });
     await writeFile(path.join(checkout, `${name}-session.txt`), `${name} worktree change\n`);
-    await api.worktreeTool.invoke(
-      { operation: 'use', path: checkout },
-      {
-        agentId: agent.id,
+    const grant = await fetch(`${endpoint}/v1/mcp/grant`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        nativeAgentId: agent.id,
         workspaceRoot: gitWorkspace,
-        workspaceFileAccess: true,
-        signal: AbortSignal.timeout(5000),
-      },
-    );
+        provider: 'pi',
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(grant.status, 200);
+    const { token } = (await grant.json()) as { token: string };
+    const client = new Client({ name: 'worktree-fixture', version: '1.0.0' });
+    try {
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL(`${endpoint}/mcp`), {
+          requestInit: { headers: { authorization: `Bearer ${token}` } },
+        }),
+      );
+      const registration = await client.callTool({
+        name: 'ltcook_worktree',
+        arguments: { operation: 'use', path: checkout },
+      });
+      assert.deepEqual(registration.structuredContent, { ok: true });
+    } finally {
+      await client.close();
+    }
   }
   const serverId = JSON.parse(
     await browser('eval', `decodeURIComponent(location.pathname.split('/')[2] ?? '')`),
@@ -1201,16 +1221,16 @@ try {
     );
     await waitForComposer(`Worktree fixture ${name}`);
   }
-  await browser('find', 'role', 'tab', 'click', '--name', 'Changes', '--exact');
+  await browser('click', `${explorer} [data-testid="workspace-tab-changes_tree"]`);
   const worktreePicker = '[data-testid="changes-worktree-picker"]';
   await browser('wait', worktreePicker);
   await browser('wait', '--text', 'first-session.txt');
   await browser('click', worktreePicker);
   await browser('find', 'text', 'Original checkout', 'click', '--exact');
   await browser('wait', '[data-testid="changes-branch-switcher"]');
-  await browser('find', 'role', 'tab', 'click', '--name', 'Worktree fixture second', '--exact');
+  await clickButton('Worktree fixture second');
   await browser('wait', '--text', 'second-session.txt');
-  await browser('find', 'role', 'tab', 'click', '--name', 'Worktree fixture first', '--exact');
+  await clickButton('Worktree fixture first');
   await browser('wait', '[data-testid="changes-branch-switcher"]');
   await browser('click', worktreePicker);
   await browser('find', 'text', 'Follow session', 'click', '--exact');
