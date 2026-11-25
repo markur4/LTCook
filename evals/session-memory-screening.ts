@@ -24,6 +24,14 @@ import {
 
 const frozenRevision = 'e7f1d601d1382586b903e757281c165ffffc396d';
 const mnnProfileId = 'mnn-pocket';
+const mnnSampling = { temperature: 0.8, top_k: 20, top_p: 0.8, repeat_penalty: 1 };
+const mnnQatProfile = {
+  id: 'mnn-pocket-q4-1',
+  name: 'MNN-Pocket-0.3B Q4_1 QAT',
+  model: 'hf.co/taobao-mnn/MNN-Pocket-0.3B-GGUF:Q4_1',
+  weights: 'a281c127e388b16537fd3f5d31ab32d3f87739e6dc514ac1093c80d9eac8d097',
+  ...mnnSampling,
+};
 const liquid = { temperature: 0.4, top_k: 50, top_p: 1, repeat_penalty: 1.05 };
 const profiles = [
   {
@@ -45,10 +53,7 @@ const profiles = [
     name: 'MNN-Pocket-0.3B Q8_0',
     model: 'hf.co/taobao-mnn/MNN-Pocket-0.3B-GGUF:Q8_0',
     weights: '31eb5db92b2e02a80e9e3a9316aa83120cbee98e4f4a22ca19015ba601dbd690',
-    temperature: 0.8,
-    top_k: 20,
-    top_p: 0.8,
-    repeat_penalty: 1,
+    ...mnnSampling,
   },
   {
     id: 'lfm25-350m-qad',
@@ -131,7 +136,9 @@ export async function screenSessionMemory(input: {
   if (frozen.exitCode !== 0)
     throw new Error('Screening requires the production code and fixtures pinned at e7f1d60.');
   if (input.mnnApprovalFirst && input.profileId && input.profileId !== mnnProfileId)
-    throw new Error('The approval-first experiment is only for MNN-Pocket.');
+    throw new Error('--mnn-approval-first selects the MNN-Pocket Q8_0 experiment.');
+  const qatScreen = input.profileId === mnnQatProfile.id;
+  const approvalFirst = input.mnnApprovalFirst || qatScreen;
   const { signal, auditOutput, progress } = input;
   const endpoint = ollamaEndpoint(input.settings.endpoint);
   const api = async (route: string, body: object, method = 'POST', requestSignal = signal) => {
@@ -169,7 +176,7 @@ export async function screenSessionMemory(input: {
   const models = await inventory();
   const fixtures = candidateScreeningFixtures();
   const expected = [4, 3, 4, 5];
-  const order = input.mnnApprovalFirst ? [2, 0, 1, 3] : [0, 1, 2, 3];
+  const order = approvalFirst ? [2, 0, 1, 3] : [0, 1, 2, 3];
   const run = async (settings: OllamaSettings, model: ModelIdentity, label: string) => {
     if (!model.weightsDigest) throw new Error('Could not verify the Ollama model weights.');
     const stages = [];
@@ -226,7 +233,9 @@ export async function screenSessionMemory(input: {
   };
   const results = [];
   const profileId = input.mnnApprovalFirst ? mnnProfileId : input.profileId;
-  const selectedProfiles = profiles.filter(({ id }) => !profileId || id === profileId);
+  const selectedProfiles = qatScreen
+    ? [mnnQatProfile]
+    : profiles.filter(({ id }) => !profileId || id === profileId);
   if (!selectedProfiles.length) throw new Error('Unknown Session Memory screening profile.');
   for (const profile of selectedProfiles) {
     const source = find(models, profile.model);
@@ -263,7 +272,8 @@ export async function screenSessionMemory(input: {
         )
           throw new Error(`Ollama did not preserve the native definition for ${profile.name}.`);
         const attempts = [];
-        const temperatures = input.mnnApprovalFirst ? [0.6] : [profile.temperature, 0.1];
+        const firstTemperature = input.mnnApprovalFirst ? 0.6 : profile.temperature;
+        const temperatures = approvalFirst ? [firstTemperature] : [firstTemperature, 0.1];
         for (const temperature of temperatures) {
           const generation = {
             ...sessionMemoryGeneration,
@@ -303,7 +313,7 @@ export async function screenSessionMemory(input: {
     attempts.filter(({ qualified }) => qualified).map((attempt) => ({ profile, attempt })),
   );
   let comparison;
-  if (qualifiers.length) {
+  if (qualifiers.length && !qatScreen) {
     const source = find(models, sessionMemoryModel);
     if (!source) throw new Error('The pinned LFM3 baseline is missing.');
     const model = await inspectEvaluationModel(input.settings.endpoint, source, signal);
