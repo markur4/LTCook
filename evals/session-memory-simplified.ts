@@ -340,6 +340,10 @@ export async function runSimplifiedMemoryArm(
       prompt: Parameters<typeof summarizeMemory>[1],
     ) => Parameters<typeof summarizeMemory>[1];
     inspectIncompleteFallback?: boolean;
+    inspectExtract?: (
+      prompt: Parameters<typeof summarizeMemory>[1],
+      text: string,
+    ) => { sourceBytes: number; summaryBytes: number; verdict: string };
   },
 ) {
   const { signal, digest } = input;
@@ -362,6 +366,7 @@ export async function runSimplifiedMemoryArm(
     loadedBytes?: number;
     peakRssBytes?: number;
     error?: string;
+    extract?: ReturnType<NonNullable<typeof input.inspectExtract>>;
     audit?: { summary: string; prompt: string; systemPrompt: string };
   }[] = [];
   const memory = new SessionMemory({
@@ -385,11 +390,13 @@ export async function runSimplifiedMemoryArm(
         const observedMs = performance.now() - start;
         const loaded = await residency(endpoint, digest, signal);
         const { text: _text, content: _content, ...metrics } = result;
+        const extract = input.inspectExtract?.(prompt, result.text);
         requests.push({
           type,
           result: metrics,
           cpuVerified: !!loaded && loaded.bytes > 0 && loaded.gpuBytes === 0,
           observedMs,
+          ...(extract ? { extract } : {}),
           ...(input.screening
             ? {
                 loadedBytes: loaded?.bytes,
@@ -406,7 +413,7 @@ export async function runSimplifiedMemoryArm(
               }
             : {}),
         });
-        return result;
+        return extract && extract.verdict !== 'accepted' ? { ...result, complete: false } : result;
       } catch (error) {
         signal.throwIfAborted();
         const observedMs = performance.now() - start;

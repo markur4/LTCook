@@ -1099,3 +1099,29 @@ handoff and cited the original proposal and approval sequences. All five
 eligible handoffs yielded the expected factual fields on inspection. Only
 the retry template passed the strict receiver format check. The other four
 replies prefixed correct JSON with prose, including the realistic approval.
+
+### Extractive Markdown screen
+
+MNN-Pocket Q8_0 ran the supplied extractive prompt on retry correction
+at temperature 0.8 and seed 17 with reasoning disabled. The corrected
+chronological handoff and current-only UAMP input were pinned at
+`bbc9a3`. Production summarization was suspended and restored.
+
+The response alternated source labels without selecting a sentence and
+exhausted the 2,048-token output cap. It retained 0/3 facts as a generated
+summary. The 2,048-byte response was 180% of the 1,138-byte original UAMP,
+an 80% expansion. CPU wall time was 26.500 s, including 0.400 s of prefill
+and 25.577 s of generation. The request used 379 input tokens and runner
+RSS peaked at 653 MiB. The failed gate stopped the remaining three fixtures.
+
+The evaluator validates complete sentences against the source named by
+the author label or source sequence. It permits Markdown list and heading
+markers outside the excerpt and ignores surrounding whitespace. It counts
+attribution and markup in the output byte total. Invalid excerpts and
+outputs that are at least as large as the original exchange are rejected.
+Focused tests cover valid compression, changed wording, wrong authorship,
+lost negation and a full copy.
+
+The existing fallback probe reopened both original messages by their
+saved references and retained all 3/3 critical facts as fallback evidence.
+The incomplete summary stayed failed with zero stored summary bytes.
