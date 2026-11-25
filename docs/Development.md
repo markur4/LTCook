@@ -409,6 +409,25 @@ requires each intended long UAMP to run the summarizer. It gates critical
 facts and contradictions in generated summaries, complete records and
 assembled handoffs. It uses the same pinned LFM3 model and seed 17.
 
+For progressive screening of the four smaller checkpoints against the
+qualified Session Memory code at `e7f1d60`, install the exact model tags and
+suspend production inference before running:
+
+```shell
+bun evals/session-memory-live.ts --screen-candidates --production-suspended
+```
+
+The screen runs export discovery, retry correction, manifest approval, and
+approval after skipped Discussions in that order. It stops a profile on the
+first failed gate. A complete, contradiction-free result that misses exactly
+one critical fact permits one temperature-0.1 retry from the first fixture.
+`--screen-profile=ID` selects one candidate and `--no-screen-retry` disables
+further retries for a focused replay. The screen grades generated summaries
+before original-source recovery and runs the matched CPU LFM3 comparison only
+for a fully qualifying profile. Reports include provider timings and token
+counts, model residency and runner peak RSS. The model aliases created during
+the screen are removed after use.
+
 For downstream qualification on a host without a usable GPU, use the same
 CPU production pause and the native Pi GPT-6 Luna high-reasoning worker:
 
