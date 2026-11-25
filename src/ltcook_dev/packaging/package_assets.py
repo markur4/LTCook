@@ -24,6 +24,7 @@ REQUIRED_RUNTIME_ENTRIES = (
     "dist/guidance-api/index.js",
     "dist/workflow-api/index.js",
 )
+REQUIRED_PASEO_WEB_ASSETS = ("index.html", "ltcook-paseo-build.json")
 REQUIRED_PASEO_PLUGIN_ASSETS = (
     "paseo-plugin.json",
     "index.server.ts",
@@ -121,6 +122,16 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
             raise FileNotFoundError(
                 f"Compiled runtime entry is required before staging: {entry}"
             )
+    web_directory = root / "runtime/dist/paseo-web"
+    for name in REQUIRED_PASEO_WEB_ASSETS:
+        asset = web_directory / name
+        _no_links(asset)
+        if not asset.is_file():
+            raise FileNotFoundError(
+                f"Required patched Paseo web asset is missing: {name}"
+            )
+    if not any((web_directory / "_expo/static/js/web").glob("*.js")):
+        raise FileNotFoundError("Patched Paseo web assets contain no browser bundle.")
     plugin_directory = root / "runtime/dist/paseo-plugin"
     if plugin_directory.is_symlink() or not plugin_directory.is_dir():
         raise FileNotFoundError(
@@ -216,6 +227,7 @@ def validate_bundle(archive: Path) -> tuple[str, ...]:
         "runtime/src/workflow-api/commands.ts",
         *(f"runtime/{entry}" for entry in REQUIRED_RUNTIME_ENTRIES),
         *(f"runtime/dist/paseo-plugin/{name}" for name in REQUIRED_PASEO_PLUGIN_ASSETS),
+        *(f"runtime/dist/paseo-web/{name}" for name in REQUIRED_PASEO_WEB_ASSETS),
         "services/compose.yaml",
     }
     try:
@@ -242,6 +254,14 @@ def validate_bundle(archive: Path) -> tuple[str, ...]:
             if not required.issubset(names):
                 raise ValueError(
                     "Production bundle is missing a required production asset."
+                )
+            if not any(
+                name.startswith("runtime/dist/paseo-web/_expo/static/js/web/")
+                and name.endswith(".js")
+                for name in names
+            ):
+                raise ValueError(
+                    "Production bundle is missing the patched Paseo web bundle."
                 )
             for kind in ("rules", "skills"):
                 if not any(

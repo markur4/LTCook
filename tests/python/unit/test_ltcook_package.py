@@ -49,6 +49,15 @@ def _asset_source(root: Path) -> Path:
         path = root / "runtime/resources" / resource
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("required Core guidance", encoding="utf-8")
+    web_ui = root / "runtime/dist/paseo-web"
+    for name in (
+        "index.html",
+        "ltcook-paseo-build.json",
+        "_expo/static/js/web/fixture.js",
+    ):
+        asset = web_ui / name
+        asset.parent.mkdir(parents=True, exist_ok=True)
+        asset.write_text("patched Paseo asset", encoding="utf-8")
     plugin = root / "runtime/dist/paseo-plugin"
     for name in (
         "paseo-plugin.json",

@@ -6,7 +6,7 @@ import { createPaseoApi, type PaseoApi } from '@getpaseo/client';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   AgentBackend,
@@ -140,6 +140,13 @@ export async function startPaseoHost(input: {
   delete env.LTCOOK_SHELL_PROVENANCE;
   delete env.PASEO_DICTATION_ENABLED;
   delete env.PASEO_VOICE_MODE_ENABLED;
+  const patchedWebUi = path.resolve(input.pluginDirectory, '..', 'paseo-web');
+  if (
+    !env.PASEO_WEB_UI_DIST_DIR &&
+    (await stat(path.join(patchedWebUi, 'index.html')).catch(() => undefined))?.isFile()
+  ) {
+    env.PASEO_WEB_UI_DIST_DIR = patchedWebUi;
+  }
   const configuration = {
     daemon: {
       listen: input.listen,

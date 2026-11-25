@@ -1,0 +1,796 @@
+diff --git a/packages/app/src/agent-stream/presentation.test.ts b/packages/app/src/agent-stream/presentation.test.ts
+--- a/packages/app/src/agent-stream/presentation.test.ts
++++ b/packages/app/src/agent-stream/presentation.test.ts
+@@ -825,6 +825,28 @@
+   expect(result.tail.map((item) => item.id)).toEqual(["prompt", "turn-summary:prompt", "reply"]);
+ });
+
++it("renders the revealed tool call as its own row and keeps its neighboring calls grouped", () => {
++  const present = createStreamPresentation();
++  const tail = ["one", "two", "target", "four", "five"].map((id) => toolCall(id, "Read"));
++  const input = {
++    ...presentationOptions,
++    transform: undefined,
++    tail,
++    head: [],
++    isTurnActive: false,
++  };
++  expect(present(input).groupsByHostId.get("tool-one")?.run.calls).toEqual(tail);
++
++  const revealed = present({ ...input, revealedToolCallId: "tool-target" });
++  expect(revealed.tail.map((item) => item.id)).toEqual(["tool-one", "tool-target", "tool-four"]);
++  expect(revealed.tail[1]).toBe(tail[2]);
++  expect(revealed.groupsByHostId.has("tool-target")).toBe(false);
++  expect(revealed.groupsByHostId.get("tool-one")?.run.calls).toEqual(tail.slice(0, 2));
++  expect(revealed.groupsByHostId.get("tool-four")?.run.calls).toEqual(tail.slice(3));
++
++  expect(present(input).groupsByHostId.get("tool-one")?.run.calls).toEqual(tail);
++});
++
+ it("groups reasoning with tools unless Expand thinking is enabled, including setting changes", () => {
+   const present = createStreamPresentation();
+   const timestamp = new Date();
+diff --git a/packages/app/src/agent-stream/presentation.ts b/packages/app/src/agent-stream/presentation.ts
+--- a/packages/app/src/agent-stream/presentation.ts
++++ b/packages/app/src/agent-stream/presentation.ts
+@@ -19,6 +19,7 @@
+   transform: TimelineItemTransform | undefined;
+   display: ChatDisplay;
+   autoExpandReasoning?: boolean;
++  revealedToolCallId?: string;
+   /** User messages whose collapsed turn the reader opened. */
+   expandedTurnHostIds: ReadonlySet<string>;
+   isTurnActive: boolean;
+@@ -77,6 +78,7 @@
+   let historyRows: StreamItem[] = [];
+   let preparedTail: StreamItem[] | undefined;
+   let preparedAutoExpandReasoning: boolean | undefined;
++  let preparedRevealedToolCallId: string | undefined;
+   let preparedLevel: ToolCallDetailLevel | undefined;
+   let preparedHistory: PreparedToolCallHistory | null = null;
+   let historyGroupHosts: ReadonlyMap<string, string> = new Map();
+@@ -177,15 +179,22 @@
+     if (
+       preparedTail !== historyRows ||
+       preparedLevel !== level ||
+-      preparedAutoExpandReasoning !== input.autoExpandReasoning
++      preparedAutoExpandReasoning !== input.autoExpandReasoning ||
++      preparedRevealedToolCallId !== input.revealedToolCallId
+     ) {
+-      preparedHistory = prepareToolCallHistory(level, historyRows, input.autoExpandReasoning);
++      preparedHistory = prepareToolCallHistory(
++        level,
++        historyRows,
++        input.autoExpandReasoning,
++        input.revealedToolCallId,
++      );
+       historyGroupHosts = preparedHistory
+         ? groupedRowHosts(preparedHistory.grouped.tail, preparedHistory.grouped.groupsByHostId)
+         : new Map();
+       preparedTail = historyRows;
+       preparedLevel = level;
+       preparedAutoExpandReasoning = input.autoExpandReasoning;
++      preparedRevealedToolCallId = input.revealedToolCallId;
+     }
+     const projection = projectToolCallDetailLevel({
+       level,
+@@ -193,6 +202,7 @@
+       head,
+       preparedHistory,
+       isTurnActive: input.isTurnActive,
++      revealedToolCallId: input.revealedToolCallId,
+     });
+     const result = collapse(projection, input);
+     // Only the trailing retained group can absorb head rows. Reuse the retained
+diff --git a/packages/app/src/agent-stream/strategy-web.tsx b/packages/app/src/agent-stream/strategy-web.tsx
+--- a/packages/app/src/agent-stream/strategy-web.tsx
++++ b/packages/app/src/agent-stream/strategy-web.tsx
+@@ -694,7 +694,7 @@
+     reportReadingPosition();
+   }, [onNearBottomChange, reportReadingPosition]);
+
+-  const { isJumpSettling, scrollToMessage } = useScrollToMessage({
++  const { isJumpSettling, scrollToMessage, isMessageVisible } = useScrollToMessage({
+     active: isActive,
+     scrollContainerRef,
+     rowVirtualizer,
+@@ -1183,6 +1183,7 @@
+         apply();
+       },
+       scrollToMessage,
++      isMessageVisible,
+     };
+     viewportRef.current = handle;
+     return () => {
+@@ -1194,6 +1195,7 @@
+   }, [
+     cancelPendingStickToBottom,
+     forceStickToBottom,
++    isMessageVisible,
+     measureRows,
+     readingAnchor,
+     scheduleStickToBottom,
+diff --git a/packages/app/src/agent-stream/strategy.ts b/packages/app/src/agent-stream/strategy.ts
+--- a/packages/app/src/agent-stream/strategy.ts
++++ b/packages/app/src/agent-stream/strategy.ts
+@@ -64,6 +64,7 @@
+    */
+   holdRow: (rowId: string, apply: () => void, triggerEdge: DisclosureTriggerEdge) => void;
+   scrollToMessage?: (messageId: string, occurrence?: ScrollToMessageOccurrence) => void;
++  isMessageVisible?: (messageId: string) => boolean;
+ }
+
+ export interface StreamSegmentRenderers {
+diff --git a/packages/app/src/agent-stream/timeline-reveal.ts b/packages/app/src/agent-stream/timeline-reveal.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/app/src/agent-stream/timeline-reveal.ts
+@@ -0,0 +1,224 @@
++import { useEffect, useMemo, type RefObject } from "react";
++import { create } from "zustand";
++import type {
++  PluginRevealTimelineItemInput,
++  PluginTimelineNavigationTarget,
++} from "@getpaseo/plugin/client";
++import { useStableEvent } from "@/hooks/use-stable-event";
++import { getHostRuntimeStore } from "@/runtime/host-runtime";
++import { planTimelinePromptJump } from "@/timeline/timeline-sync-plan";
++import { isAgentToolCallItem, type StreamItem } from "@/types/stream";
++import { navigateToAgent } from "@/utils/navigate-to-agent";
++import type { StreamViewportHandle } from "./strategy";
++
++type Destination = PluginRevealTimelineItemInput & { serverId: string };
++
++interface RevealRequest extends Destination {
++  finish(error?: Error): void;
++}
++
++const useRevealRequest = create<{ pending: RevealRequest | null }>(() => ({ pending: null }));
++const REVEAL_TIMEOUT_MS = 15_000;
++
++export function requestTimelineReveal(input: Destination): Promise<void> {
++  const { serverId, agentId, target } = input;
++  if (
++    !serverId.trim() ||
++    !agentId.trim() ||
++    !target.epoch.trim() ||
++    !target.id.trim() ||
++    !Number.isSafeInteger(target.position) ||
++    target.position < 0 ||
++    !Number.isSafeInteger(
++      planTimelinePromptJump({ epoch: target.epoch, seq: target.position }).cursor.seq,
++    ) ||
++    !Number.isFinite(target.at) ||
++    (target.kind !== "message" && target.kind !== "tool")
++  ) {
++    return Promise.reject(new Error("Invalid chat timeline target."));
++  }
++  if (!getHostRuntimeStore().getClient(serverId)) {
++    return Promise.reject(new Error("The requested chat host is unavailable."));
++  }
++
++  useRevealRequest.getState().pending?.finish(new Error("Superseded by another chat reveal."));
++  return new Promise((resolve, reject) => {
++    const timer = setTimeout(
++      () => request.finish(new Error("Could not reveal the exact timeline item in chat.")),
++      REVEAL_TIMEOUT_MS,
++    );
++    const request: RevealRequest = {
++      serverId,
++      agentId,
++      target: { ...target },
++      finish(error) {
++        if (useRevealRequest.getState().pending !== request) return;
++        clearTimeout(timer);
++        useRevealRequest.setState({ pending: null });
++        if (error) reject(error);
++        else resolve();
++      },
++    };
++    useRevealRequest.setState({ pending: request });
++    try {
++      navigateToAgent({ serverId, agentId });
++    } catch (error) {
++      request.finish(error instanceof Error ? error : new Error(String(error)));
++    }
++  });
++}
++
++function matchesTimelineReveal(item: StreamItem, target: PluginTimelineNavigationTarget) {
++  if (
++    item.timelineCursor?.epoch !== target.epoch ||
++    item.timelineCursor.seq !== target.position ||
++    (target.turnId !== undefined && item.turnId !== target.turnId)
++  ) {
++    return false;
++  }
++  if (target.kind === "tool") {
++    return isAgentToolCallItem(item) && item.payload.data.callId === target.id;
++  }
++  return (
++    ((item.kind === "user_message" || item.kind === "assistant_message") &&
++      item.messageId === target.id) ||
++    (item.kind === "user_message" && item.clientMessageId === target.id)
++  );
++}
++
++interface RevealChatInput {
++  active: boolean;
++  serverId: string;
++  agentId: string;
++  epoch: string | null;
++  tail: readonly StreamItem[];
++  head: readonly StreamItem[];
++}
++
++export function useTimelineRevealTarget({
++  active,
++  serverId,
++  agentId,
++  epoch,
++  tail,
++  head,
++}: RevealChatInput) {
++  const request = useRevealRequest((state) => {
++    const pending = state.pending;
++    return active && pending?.serverId === serverId && pending.agentId === agentId
++      ? pending
++      : null;
++  });
++  const target = request?.target;
++  const item = useMemo(() => {
++    if (!target || target.epoch !== epoch) return undefined;
++    const matches = (row: StreamItem) => matchesTimelineReveal(row, target);
++    return tail.find(matches) ?? head.find(matches);
++  }, [epoch, head, tail, target]);
++  return { request, item };
++}
++
++interface RevealViewportInput {
++  request: RevealRequest | null;
++  item: StreamItem | undefined;
++  epoch: string | null;
++  viewportRef: RefObject<StreamViewportHandle | null>;
++  mountedMessageIds: { has(messageId: string): boolean };
++  revealLoadedMessage(messageId: string): boolean;
++}
++
++export function useRevealTimelineItem({
++  request,
++  item,
++  epoch,
++  viewportRef,
++  mountedMessageIds,
++  revealLoadedMessage,
++}: RevealViewportInput) {
++  const getViewport = useStableEvent(() => ({
++    epoch,
++    item,
++    viewport: viewportRef.current,
++    mountedMessageIds,
++    revealLoadedMessage,
++  }));
++
++  useEffect(() => {
++    if (!request) return;
++    let active = true;
++    let frame = 0;
++    let fetched = false;
++    let scrollingTo: string | null = null;
++    const tick = () => {
++      if (!active || useRevealRequest.getState().pending !== request) return;
++      const current = getViewport();
++      if (current.epoch !== null && current.epoch !== request.target.epoch) {
++        request.finish(new Error("Chat history changed. This timeline item is no longer available."));
++        return;
++      }
++      if (current.item && current.viewport?.scrollToMessage && current.viewport.isMessageVisible) {
++        const messageId = current.item.id;
++        if (!current.mountedMessageIds.has(messageId)) {
++          current.revealLoadedMessage(messageId);
++        } else if (scrollingTo !== messageId) {
++          current.viewport.scrollToMessage(messageId);
++          scrollingTo = messageId;
++        } else if (current.viewport.isMessageVisible(messageId)) {
++          current.viewport.focus?.();
++          request.finish();
++          return;
++        }
++      } else if (!current.item && !fetched && current.epoch !== null) {
++        fetched = true;
++        void getHostRuntimeStore()
++          .fetchAgentTimeline(
++            request.serverId,
++            request.agentId,
++            planTimelinePromptJump({ epoch: request.target.epoch, seq: request.target.position }),
++          )
++          .then((page) => {
++            if (!active) return;
++            if (page.reset || page.staleCursor || page.epoch !== request.target.epoch) {
++              request.finish(new Error("Chat history changed. This timeline item is no longer available."));
++              return;
++            }
++            if (
++              !page.entries.some((entry) => {
++                const { item, seqEnd, turnId } = entry;
++                const target = request.target;
++                if (
++                  seqEnd !== target.position ||
++                  (target.turnId !== undefined && turnId !== target.turnId)
++                ) {
++                  return false;
++                }
++                if (target.kind === "tool") {
++                  return item.type === "tool_call" && item.callId === target.id;
++                }
++                return (
++                  ((item.type === "user_message" || item.type === "assistant_message") &&
++                    item.messageId === target.id) ||
++                  (item.type === "user_message" && item.clientMessageId === target.id)
++                );
++              })
++            ) {
++              request.finish(new Error("This item is no longer available in the agent's chat history."));
++              return;
++            }
++            frame = requestAnimationFrame(tick);
++          })
++          .catch((error: unknown) => {
++            if (!active) return;
++            request.finish(error instanceof Error ? error : new Error(String(error)));
++          });
++        return;
++      }
++      frame = requestAnimationFrame(tick);
++    };
++    frame = requestAnimationFrame(tick);
++    return () => {
++      active = false;
++      cancelAnimationFrame(frame);
++    };
++  }, [getViewport, request]);
++}
+diff --git a/packages/app/src/agent-stream/use-scroll-to-message.web.ts b/packages/app/src/agent-stream/use-scroll-to-message.web.ts
+--- a/packages/app/src/agent-stream/use-scroll-to-message.web.ts
++++ b/packages/app/src/agent-stream/use-scroll-to-message.web.ts
+@@ -25,6 +25,10 @@
+   " ",
+ ]);
+
++function findMessageRow(container: HTMLElement | null, messageId: string) {
++  return container?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
++}
++
+ export function useScrollToMessage({
+   active,
+   scrollContainerRef,
+@@ -46,9 +50,7 @@
+             if (occurrence) return occurrence.targetTop();
+             // Every row of an assistant message carries the message id; the first one
+             // is the message's top.
+-            const target = scrollContainerRef.current?.querySelector<HTMLElement>(
+-              `[data-message-id="${CSS.escape(messageId)}"]`,
+-            );
++            const target = findMessageRow(scrollContainerRef.current, messageId);
+             return target ? target.getBoundingClientRect().top : null;
+           },
+           getContainerTop() {
+@@ -114,9 +116,7 @@
+       cancelPendingStickToBottom();
+       setFollowOutput(false);
+
+-      const mounted = container.querySelector<HTMLElement>(
+-        `[data-message-id="${CSS.escape(messageId)}"]`,
+-      );
++      const mounted = findMessageRow(container, messageId);
+       if (mounted) {
+         const delta =
+           mounted.getBoundingClientRect().top -
+@@ -149,8 +149,21 @@
+     ],
+   );
+
++  const isMessageVisible = useCallback(
++    (messageId: string) => {
++      const container = scrollContainerRef.current;
++      const row = findMessageRow(container, messageId);
++      if (!container || !row) return false;
++      const bounds = container.getBoundingClientRect();
++      const target = row.getBoundingClientRect();
++      return target.height > 0 && target.bottom > bounds.top && target.top < bounds.bottom;
++    },
++    [scrollContainerRef],
++  );
++
+   return {
+     isJumpSettling: settleController.isActive,
+     scrollToMessage,
++    isMessageVisible,
+   };
+ }
+diff --git a/packages/app/src/agent-stream/view.tsx b/packages/app/src/agent-stream/view.tsx
+--- a/packages/app/src/agent-stream/view.tsx
++++ b/packages/app/src/agent-stream/view.tsx
+@@ -58,6 +58,7 @@
+ import { resolveContentMaxWidth, useSettings } from "@/hooks/use-settings";
+ import type { ToastApi } from "@/components/toast-host";
+ import { returnToTimelineTail } from "./timeline-tail-navigation";
++import { useRevealTimelineItem, useTimelineRevealTarget } from "./timeline-reveal";
+ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+ import { ToolCallDetailsContent } from "@/components/tool-call-details";
+ import { QuestionFormCard } from "@/components/question-form-card";
+@@ -525,6 +526,39 @@
+     const effectiveStreamHead = useRetainedValue(streamHead, isActive);
+     const effectiveTurnPresentation = useRetainedValue(turnPresentation, isActive);
+     const isTurnActive = effectiveTurnPresentation.isActive;
++    const { request: timelineRevealRequest, item: timelineRevealItem } = useTimelineRevealTarget({
++      active: isWeb && isActive && isAuthoritativeHistoryReady,
++      serverId: resolvedServerId,
++      agentId,
++      epoch: timelineEpoch,
++      tail: effectiveStreamItems,
++      head: effectiveStreamHead ?? EMPTY_STREAM_HEAD,
++    });
++    const [revealedTool, setRevealedTool] = useState<{
++      serverId: string;
++      agentId: string;
++      epoch: string;
++      id: string;
++    }>();
++    const requestedToolId =
++      timelineRevealRequest?.target.kind === "tool" ? timelineRevealItem?.id : undefined;
++    // Keep the revealed call in the transcript as a row after the scroll has completed.
++    useEffect(() => {
++      if (!requestedToolId || timelineEpoch === null) return;
++      setRevealedTool({
++        serverId: resolvedServerId,
++        agentId,
++        epoch: timelineEpoch,
++        id: requestedToolId,
++      });
++    }, [agentId, requestedToolId, resolvedServerId, timelineEpoch]);
++    const revealedToolCallId =
++      requestedToolId ??
++      (revealedTool?.serverId === resolvedServerId &&
++      revealedTool.agentId === agentId &&
++      revealedTool.epoch === timelineEpoch
++        ? revealedTool.id
++        : undefined);
+     const presentStream = useMemo(() => createStreamPresentation(), []);
+     const presentation = useMemo(
+       () =>
+@@ -534,6 +568,7 @@
+           transform: transformTimelineItem,
+           display: chatDisplay,
+           autoExpandReasoning,
++          revealedToolCallId,
+           expandedTurnHostIds,
+           isTurnActive,
+           activeTurnId: effectiveTurnPresentation.turnId,
+@@ -545,6 +580,7 @@
+         transformTimelineItem,
+         chatDisplay,
+         autoExpandReasoning,
++        revealedToolCallId,
+         expandedTurnHostIds,
+         isTurnActive,
+         effectiveTurnPresentation.turnId,
+@@ -697,6 +733,14 @@
+         return true;
+       }
+       return revealLoadedHistory(messageId);
++    });
++    useRevealTimelineItem({
++      request: timelineRevealRequest,
++      item: timelineRevealItem,
++      epoch: timelineEpoch,
++      viewportRef,
++      mountedMessageIds,
++      revealLoadedMessage,
+     });
+     // Read through a stable event so a collapse rerun does not change the renderer identity;
+     // nested rows are revised through `historyRowRevision`.
+diff --git a/packages/app/src/plugins/host-navigation-model.ts b/packages/app/src/plugins/host-navigation-model.ts
+--- a/packages/app/src/plugins/host-navigation-model.ts
++++ b/packages/app/src/plugins/host-navigation-model.ts
+@@ -1,10 +1,16 @@
+-import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
++import type {
++  PluginRevealTimelineItemInput,
++  PluginSurfaceProps,
++} from "@getpaseo/plugin/client";
+ import type { NavigateToWorkspaceInput } from "@/stores/navigation-active-workspace-store";
+ import { isHttpUrl } from "@/utils/http-url";
+
+ interface HostNavigationOwner {
+   browserAvailable: boolean;
+   openAgent(input: { serverId: string; agentId: string }): void;
++  revealTimelineItem?(
++    input: PluginRevealTimelineItemInput & { serverId: string },
++  ): Promise<void>;
+   openWorkspace(input: NavigateToWorkspaceInput): void;
+   resolveWorkspace(input: { serverId: string; workspaceId: string }): string | null;
+   createBrowser(input: { initialUrl: string }): { browserId: string };
+@@ -14,9 +20,14 @@
+   serverId: string,
+   owner: HostNavigationOwner,
+ ): NonNullable<PluginSurfaceProps["navigation"]> {
++  const revealTimelineItem = owner.revealTimelineItem;
+   return {
+     openAgent: ({ agentId, serverId: targetServerId }) =>
+       owner.openAgent({ serverId: targetServerId ?? serverId, agentId }),
++    ...(revealTimelineItem && {
++      revealTimelineItem: ({ agentId, serverId: targetServerId, target }) =>
++        revealTimelineItem({ serverId: targetServerId ?? serverId, agentId, target }),
++    }),
+     openWorkspace: ({ workspaceId, serverId: targetServerId }) =>
+       owner.openWorkspace({ serverId: targetServerId ?? serverId, workspaceId }),
+     openBrowser: owner.browserAvailable
+diff --git a/packages/app/src/plugins/host-navigation.test.ts b/packages/app/src/plugins/host-navigation.test.ts
+--- a/packages/app/src/plugins/host-navigation.test.ts
++++ b/packages/app/src/plugins/host-navigation.test.ts
+@@ -2,7 +2,7 @@
+ import { createPluginHostNavigation } from "./host-navigation-model";
+
+ describe("plugin host navigation", () => {
+-  function setup(electron = true) {
++  function setup(electron = true, timelineReveal = false) {
+     const destinations: unknown[] = [];
+     const browsers: string[] = [];
+     const workspaces = new Set(["selected:one", "remote:two"]);
+@@ -11,6 +11,11 @@
+       resolveWorkspace: ({ serverId, workspaceId }) =>
+         workspaces.has(`${serverId}:${workspaceId}`) ? workspaceId : null,
+       openAgent: (input) => destinations.push(input),
++      revealTimelineItem: timelineReveal
++        ? async (input) => {
++            destinations.push(input);
++          }
++        : undefined,
+       openWorkspace: (input) => destinations.push(input),
+       createBrowser: ({ initialUrl }) => {
+         browsers.push(initialUrl);
+@@ -19,6 +24,27 @@
+     });
+     return { navigation, destinations, browsers, workspaces };
+   }
++
++  it("only offers timeline navigation when the host can reveal the exact target", async () => {
++    const unsupported = setup();
++    expect(unsupported.navigation.revealTimelineItem).toBeUndefined();
++
++    const { navigation, destinations } = setup(false, true);
++    const target = {
++      epoch: "epoch-1",
++      position: 42,
++      kind: "tool" as const,
++      id: "read-27",
++      at: 1000,
++      turnId: "turn-3",
++    };
++    await navigation.revealTimelineItem?.({ agentId: "agent-1", target });
++    await navigation.revealTimelineItem?.({ serverId: "remote", agentId: "agent-2", target });
++    expect(destinations).toEqual([
++      { serverId: "selected", agentId: "agent-1", target },
++      { serverId: "remote", agentId: "agent-2", target },
++    ]);
++  });
+
+   it("creates and focuses a local browser in the selected or explicit host workspace", () => {
+     const { navigation, destinations, browsers } = setup();
+diff --git a/packages/app/src/plugins/host-navigation.ts b/packages/app/src/plugins/host-navigation.ts
+--- a/packages/app/src/plugins/host-navigation.ts
++++ b/packages/app/src/plugins/host-navigation.ts
+@@ -5,7 +5,8 @@
+ import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
+ import { navigateToAgent } from "@/utils/navigate-to-agent";
+
+-import { getIsElectron } from "@/constants/platform";
++import { getIsElectron, isWeb } from "@/constants/platform";
++import { requestTimelineReveal } from "@/agent-stream/timeline-reveal";
+ import { createWorkspaceBrowser } from "@/desktop/browser/store";
+ import { createPluginHostNavigation } from "./host-navigation-model";
+
+@@ -17,6 +18,7 @@
+       createPluginHostNavigation(serverId, {
+         browserAvailable: getIsElectron(),
+         openAgent: navigateToAgent,
++        revealTimelineItem: isWeb ? requestTimelineReveal : undefined,
+         openWorkspace: navigateToWorkspace,
+         createBrowser: createWorkspaceBrowser,
+         resolveWorkspace: ({ serverId: targetServerId, workspaceId }) =>
+diff --git a/packages/app/src/tool-calls/detail-level/grouping.ts b/packages/app/src/tool-calls/detail-level/grouping.ts
+--- a/packages/app/src/tool-calls/detail-level/grouping.ts
++++ b/packages/app/src/tool-calls/detail-level/grouping.ts
+@@ -119,16 +119,16 @@
+   tail: StreamItem[];
+   buildGroup: (run: ToolCallRun) => TGroup;
+   autoExpandReasoning?: boolean;
++  revealedToolCallId?: string;
+ }): GroupedHistory<TGroup> {
+   const output: StreamItem[] = [];
+   const groups = new Map<string, TGroup>();
+   let pending: GroupableItem[] = [];
+
+   for (const item of input.tail) {
+-    if (
+-      isGroupableToolCall(item, input.autoExpandReasoning) &&
+-      !isTurnBoundary(pending.at(-1) ?? null, item)
+-    ) {
++    const groupable =
++      item.id !== input.revealedToolCallId && isGroupableToolCall(item, input.autoExpandReasoning);
++    if (groupable && !isTurnBoundary(pending.at(-1) ?? null, item)) {
+       pending.push(item);
+       continue;
+     }
+@@ -140,7 +140,7 @@
+       buildGroup: input.buildGroup,
+     });
+     pending = [];
+-    if (isGroupableToolCall(item, input.autoExpandReasoning)) pending.push(item);
++    if (groupable) pending.push(item);
+     else output.push(item);
+   }
+
+@@ -165,6 +165,7 @@
+   isTurnActive: boolean;
+   buildGroup: (run: ToolCallRun) => TGroup;
+   autoExpandReasoning?: boolean;
++  revealedToolCallId?: string;
+ }): GroupedToolCalls<TGroup> {
+   const head: StreamItem[] = [];
+   const liveGroups = new Map<string, TGroup>();
+@@ -191,7 +192,9 @@
+
+   for (const item of input.head) {
+     if (isTurnBoundary(pending.at(-1) ?? null, item)) flush(true);
+-    if (isGroupableToolCall(item, input.autoExpandReasoning)) {
++    if (
++      item.id !== input.revealedToolCallId && isGroupableToolCall(item, input.autoExpandReasoning)
++    ) {
+       if (pending.length === 0) {
+         hostPlacement = "head";
+       }
+diff --git a/packages/app/src/tool-calls/detail-level/projection.ts b/packages/app/src/tool-calls/detail-level/projection.ts
+--- a/packages/app/src/tool-calls/detail-level/projection.ts
++++ b/packages/app/src/tool-calls/detail-level/projection.ts
+@@ -24,10 +24,11 @@
+ // Approval UI owns pending plan presentation. Retain the canonical tool in the
+ // stream model so resolving it can reveal a card at its original position.
+ const visibleItemsCache = new WeakMap<StreamItem[], StreamItem[]>();
+-function visibleToolCallItems(items: StreamItem[]): StreamItem[] {
+-  const cached = visibleItemsCache.get(items);
++function visibleToolCallItems(items: StreamItem[], revealedToolCallId?: string): StreamItem[] {
++  const cached = revealedToolCallId ? undefined : visibleItemsCache.get(items);
+   if (cached) return cached;
+   const visible = items.filter((item) => {
++    if (item.id === revealedToolCallId) return true;
+     if (item.kind !== "tool_call" || item.payload.source !== "agent") return true;
+     const data = item.payload.data;
+     return (
+@@ -35,7 +36,7 @@
+     );
+   });
+   const result = visible.length === items.length ? items : visible;
+-  visibleItemsCache.set(items, result);
++  if (!revealedToolCallId) visibleItemsCache.set(items, result);
+   return result;
+ }
+
+@@ -43,6 +44,7 @@
+   level: ToolCallDetailLevel,
+   tail: StreamItem[],
+   autoExpandReasoning = false,
++  revealedToolCallId?: string,
+ ): PreparedToolCallHistory | null {
+   if (level === "detailed") {
+     return null;
+@@ -51,9 +53,10 @@
+     mode: "overview",
+     autoExpandReasoning,
+     grouped: prepareGroupedHistory({
+-      tail: visibleToolCallItems(tail),
++      tail: visibleToolCallItems(tail, revealedToolCallId),
+       buildGroup: buildOverviewGroup,
+       autoExpandReasoning,
++      revealedToolCallId,
+     }),
+   };
+ }
+@@ -64,11 +67,12 @@
+   head: StreamItem[];
+   preparedHistory: PreparedToolCallHistory | null;
+   isTurnActive: boolean;
++  revealedToolCallId?: string;
+ }): ToolCallDetailProjection {
+   if (input.level === "detailed") {
+     return {
+-      tail: visibleToolCallItems(input.tail),
+-      head: visibleToolCallItems(input.head),
++      tail: visibleToolCallItems(input.tail, input.revealedToolCallId),
++      head: visibleToolCallItems(input.head, input.revealedToolCallId),
+       groupsByHostId: EMPTY_TOOL_CALL_GROUPS,
+       historyGroupUpdatesByHostId: EMPTY_TOOL_CALL_GROUPS,
+     };
+@@ -79,8 +83,9 @@
+   return groupLiveToolCalls({
+     history: input.preparedHistory.grouped,
+     autoExpandReasoning: input.preparedHistory.autoExpandReasoning,
+-    head: visibleToolCallItems(input.head),
++    head: visibleToolCallItems(input.head, input.revealedToolCallId),
+     isTurnActive: input.isTurnActive,
++    revealedToolCallId: input.revealedToolCallId,
+     buildGroup: buildOverviewGroup,
+   });
+ }
+diff --git a/packages/app/src/tool-calls/detail-level/projection.test.ts b/packages/app/src/tool-calls/detail-level/projection.test.ts
+--- a/packages/app/src/tool-calls/detail-level/projection.test.ts
++++ b/packages/app/src/tool-calls/detail-level/projection.test.ts
+@@ -85,6 +85,21 @@
+     },
+   );
+
++  it.each(["detailed", "overview"] as const)(
++    "reveals the exact selected approval tool in %s presentation",
++    (level) => {
++      const hidden = ["1", "2"].map((id) =>
++        toolCall(id, { type: "plan", text: "Ship it" }, { name: "ExitPlanMode", status: "running" }),
++      );
++      const revealedToolCallId = hidden[1]!.id;
++      const preparedHistory = prepareToolCallHistory(level, hidden, false, revealedToolCallId);
++      const result = projectToolCallDetailLevel({
++        level, tail: hidden, head: [], preparedHistory, isTurnActive: false, revealedToolCallId,
++      });
++      expect(result.tail).toEqual([hidden[1]]);
++    },
++  );
++
+   it("passes detailed timelines through without grouping work", () => {
+     const tail = [toolCall("1", { type: "shell", command: "one" })];
+     const head = [toolCall("2", { type: "shell", command: "two" })];
+diff --git a/packages/plugin/src/client/contracts.ts b/packages/plugin/src/client/contracts.ts
+--- a/packages/plugin/src/client/contracts.ts
++++ b/packages/plugin/src/client/contracts.ts
+@@ -46,6 +46,21 @@
+   };
+ }
+
++export interface PluginTimelineNavigationTarget {
++  readonly epoch: string;
++  readonly position: number;
++  readonly kind: "message" | "tool";
++  readonly id: string;
++  readonly at: number;
++  readonly turnId?: string;
++}
++
++export interface PluginRevealTimelineItemInput {
++  readonly serverId?: string;
++  readonly agentId: string;
++  readonly target: PluginTimelineNavigationTarget;
++}
++
+ interface PluginNavigableHostProps extends PluginHostProps {
+   /** Client-owned navigation. Undefined on older hosts; hide dependent affordances when absent. */
+   readonly navigation?: {
+@@ -56,6 +71,8 @@
+       readonly serverId?: string;
+     }) => void;
+     readonly openAgent: (input: { readonly agentId: string; readonly serverId?: string }) => void;
++    /** Available on web hosts that can reveal a canonical row in the agent's chat. */
++    readonly revealTimelineItem?: (input: PluginRevealTimelineItemInput) => Promise<void>;
+     readonly openWorkspace: (input: {
+       readonly workspaceId: string;
+       readonly serverId?: string;
+diff --git a/packages/plugin/src/client/index.ts b/packages/plugin/src/client/index.ts
+--- a/packages/plugin/src/client/index.ts
++++ b/packages/plugin/src/client/index.ts
+@@ -9,6 +9,8 @@
+   PluginFilePanelContribution,
+   PluginFilePanelProps,
+   PluginSurfaceProps,
++  PluginTimelineNavigationTarget,
++  PluginRevealTimelineItemInput,
+   PluginScreenProps,
+   PluginPopoverProps,
+   PluginScreenParams,

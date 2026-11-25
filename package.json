@@ -15,6 +15,7 @@
     "dev:watch": "uv run --locked --no-sync python -m ltcook_dev.runtime --root . --watch --bun \"$npm_execpath\" --",
     "check": "\"$npm_execpath\" run format:check && \"$npm_execpath\" run --cwd runtime check && \"$npm_execpath\" run --filter './teams/*' check && tsc -p evals/tsconfig.json",
     "test": "\"$npm_execpath\" test tests/runtime/unit tests/runtime/native tests/runtime/integration tests/teams/contract",
+    "build:paseo-web": "node paseo-patches/build.mjs",
     "test:integration": "\"$npm_execpath\" test tests/runtime/integration",
     "format": "prettier --write \"runtime/src/**/*.{ts,tsx,mjs}\" \"teams/*/src/**/*.ts\" \"tests/{runtime,teams}/**/*.ts\" \"evals/**/*.ts\"",
     "format:check": "prettier --check \"runtime/src/**/*.{ts,tsx,mjs}\" \"teams/*/src/**/*.ts\" \"tests/{runtime,teams}/**/*.ts\" \"evals/**/*.ts\"",

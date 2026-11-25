@@ -725,7 +725,7 @@ for the measured results and coverage gaps.
 `src/ltcook_dev/packaging/package_assets.py` builds the canonical
 `src/ltcook_distr/bundle.zip` from validated production outputs. It contains the
 compiled runtime and all three public entry points, Core rules/skills/references,
-Pi/Paseo plugins, built teams/resources, services, production
+Pi/Paseo plugins, the patched Paseo web UI, built teams/resources, services, production
 manifests/lock and Node selection, but no development dependencies.
 `BuildPy` validates and copies that archive; initialization extracts it into
 private staging while preparing the deployment.
@@ -734,6 +734,10 @@ private staging while preparing the deployment.
 to create the archive. `just build` also builds the wheel and sdist. The ZIP is
 required because AppRC's snapshot cleanup removes every
 new generated `dist` directory, including nested staged package assets.
+
+The pinned source patch and builder live in [paseo-patches](../paseo-patches/README.md).
+Run `bun run build:paseo-web` before the packaged Paseo browser acceptance.
+The runtime serves those assets through Paseo's web UI distribution option.
 
 `just build-native` uses the exact committed tree and `uv.lock`, builds assets
 inside its private export and calls the SDK snapshot/native APIs. It emits
