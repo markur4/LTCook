@@ -25,4 +25,4 @@
 - [x] Pass the generated Markdown approval control at seed 17.
 - [x] Qualify LFM3 on the realistic semantic UAMP fixtures. See [qualification](QUALIFICATION.md#approval-reference-follow-up).
 - [x] Review the combined pass.
-- [ ] Complete final verification and integrate after the follow-up review.
+- [x] Verify the synchronized pass with Traditional Tests, native Pi/Paseo, and the final CPU approval and semantic replays.
