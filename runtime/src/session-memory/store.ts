@@ -63,6 +63,9 @@ const catalogRowSchema = summarySchema
 
 export type StoredMemorySummary = z.infer<typeof summarySchema>;
 export type MemorySummaryCursor = Pick<StoredMemorySummary, 'epoch' | 'position' | 'id'>;
+export type MemorySummaryPassage = Pick<StoredMemorySummary, 'epoch' | 'position'> & {
+  start: number;
+};
 export type MemoryState = { epoch: string; seq: number };
 
 const taskContextSchema = z.object({
@@ -200,7 +203,7 @@ export class MemoryStore {
     through: number,
     before?: MemorySummaryCursor,
     includeContent = true,
-    position?: number,
+    passage?: MemorySummaryPassage,
   ) {
     const pageSize = 8;
     const rows = this.database
@@ -214,7 +217,14 @@ export class MemoryStore {
          FROM memory_summary
          WHERE agent = ? AND epoch = ? AND position <= ?
            AND json_extract(value, '$.complete') = 1
-           ${position === undefined ? '' : 'AND position = ?'}
+           ${
+             passage
+               ? `AND position = ? AND NOT EXISTS (
+             SELECT 1 FROM json_each(memory_summary.value, '$.sources') AS source
+             WHERE json_extract(source.value, '$.seq') NOT BETWEEN ? AND memory_summary.position
+           )`
+               : ''
+           }
            ${before ? 'AND (position, id) < (?, ?)' : ''}
          ORDER BY position DESC, id DESC LIMIT ?`,
       )
@@ -222,7 +232,7 @@ export class MemoryStore {
         agentId,
         epoch,
         through,
-        ...(position === undefined ? [] : [position]),
+        ...(passage ? [passage.position, passage.start] : []),
         ...(before ? [before.position, before.id] : []),
         pageSize + 1,
       );

@@ -3,6 +3,7 @@ import type { PaseoApi } from '@getpaseo/client';
 import type { MemoryCursor, MemorySource } from '../session-memory/service.js';
 import type { MemorySourceMessage } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
+import { readMemoryMessages } from '../paseo-plugin/server/memory-source.js';
 
 const runtimePrefix = 'ltcook-runtime-';
 
@@ -74,7 +75,7 @@ export function createPaseoMemorySource(
         limit: 48,
       });
       if (page.error || !page.agent) throw new Error('Session Memory history is unavailable.');
-      const messages = readMessages(agentId, secret, page.entries);
+      const messages = readMemoryMessages(page.entries, (id) => promptAuthor(id, agentId, secret));
       if (documents) {
         for (const message of messages) {
           if (message.author !== 'user' && message.author !== 'unknown') continue;
@@ -93,136 +94,4 @@ export function createPaseoMemorySource(
       };
     },
   };
-}
-
-type Timeline = Awaited<ReturnType<ReturnType<PaseoApi['agents']['ref']>['timeline']['refetch']>>;
-
-function readMessages(
-  agentId: string,
-  secret: string | undefined,
-  entries: Timeline['entries'],
-): MemorySourceMessage[] {
-  return entries
-    .flatMap(({ seqEnd, turnId, timestamp, item }): MemorySourceMessage[] => {
-      const origin = { seq: seqEnd, turnId, timestamp };
-      switch (item.type) {
-        case 'user_message': {
-          const author = promptAuthor(item.clientMessageId, agentId, secret);
-          const runtimeAssignment =
-            author === 'runtime' &&
-            /^Assignment ID: .+\. Task ID: .+\. Attempt: \d+\.\n/.test(item.text);
-          return [
-            {
-              ...origin,
-              messageId: item.messageId ?? item.clientMessageId,
-              author,
-              ...(runtimeAssignment ? { runtimeAssignment: true as const } : {}),
-              text: item.text,
-            },
-          ];
-        }
-        case 'assistant_message':
-          return [{ ...origin, messageId: item.messageId, author: 'agent', text: item.text }];
-        case 'tool_call': {
-          if (item.status === 'running') return [];
-          // > Paseo displays delivered peer and system prompts as tool cards.
-          if (item.agentMessage)
-            return [
-              {
-                ...origin,
-                messageId: item.callId,
-                author: 'runtime',
-                text: item.agentMessage.text,
-              },
-            ];
-          if (
-            item.name === 'heartbeat' &&
-            item.callId.startsWith('paseo-system:') &&
-            item.detail.type === 'plain_text'
-          )
-            return [
-              {
-                ...origin,
-                messageId: item.callId,
-                author: 'runtime',
-                text: item.detail.text ?? '',
-              },
-            ];
-          const result = toolOutcome(item);
-          return result
-            ? [
-                {
-                  ...origin,
-                  messageId: item.callId,
-                  author: 'tool',
-                  text: result,
-                  tool: {
-                    kind: item.detail.type,
-                    name: item.name,
-                    status: item.status,
-                    exitCode:
-                      item.detail.type === 'shell'
-                        ? (item.detail.exitCode ?? undefined)
-                        : undefined,
-                    filePath:
-                      item.detail.type === 'edit' ||
-                      item.detail.type === 'write' ||
-                      item.detail.type === 'read'
-                        ? item.detail.filePath
-                        : undefined,
-                  },
-                },
-              ]
-            : [];
-        }
-        default:
-          return [];
-      }
-    })
-    .filter(({ text }) => text.trim().length > 0);
-}
-
-/** Preserve typed tool results and verification lines while omitting commands and arbitrary logs. */
-function toolOutcome(
-  item: Extract<Timeline['entries'][number]['item'], { type: 'tool_call' }>,
-): string | undefined {
-  if (item.status === 'running') return undefined;
-  const { detail, status } = item;
-  switch (detail.type) {
-    case 'shell':
-      return [
-        typeof detail.exitCode === 'number'
-          ? `Shell command ${status} with exit code ${detail.exitCode}.`
-          : `Shell command ${status}.`,
-        ...verificationLines(detail.output),
-      ].join('\n');
-    case 'edit':
-    case 'write':
-    case 'read':
-      return `File ${detail.type} ${status} for ${JSON.stringify(detail.filePath)}.`;
-    case 'search':
-      return detail.toolName !== 'web_search' && typeof detail.numMatches === 'number'
-        ? [
-            `Workspace search ${status} with ${detail.numMatches} matches.`,
-            ...(detail.filePaths ?? []),
-          ].join('\n')
-        : undefined;
-    default:
-      return undefined;
-  }
-}
-
-function verificationLines(output?: string): string[] {
-  if (!output) return [];
-  return output
-    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
-    .split(/\r?\n/)
-    .filter((line) => {
-      const result =
-        /^\s*(?:\((?:pass|fail|skip)\)|[✓✗]|\d+\s+(?:passed|failed|skipped)|[A-Z][A-Z0-9_.-]*\s+(?:PASS|FAIL)\b|(?:prefill|generation|benchmark)\b.*\d)/i;
-      return (
-        result.test(line) &&
-        !/\b(?:secret|password|credential|authorization|api[_ -]?key)\b/i.test(line)
-      );
-    });
 }

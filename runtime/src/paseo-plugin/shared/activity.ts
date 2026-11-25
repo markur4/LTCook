@@ -122,7 +122,7 @@ export const memoryDeviceRpc = defineRpc({
 
 const summaryCursor = z.object({ epoch: id, position: count, id });
 export const MEMORY_SUMMARIES_TIMELINE_KIND = 'memory-summaries';
-const summaryPassage = z.object({ epoch: id, position: count });
+const summaryPassage = z.object({ epoch: id, start: count, position: count });
 export const MemorySummariesTimelineSchema = z.object({ passage: summaryPassage.optional() });
 
 export const storedSummariesRpc = defineRpc({

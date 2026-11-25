@@ -22,6 +22,7 @@ import {
   type MemoryDevice,
   type MemoryState,
   type MemorySummaryCursor,
+  type MemorySummaryPassage,
   type MemoryTurn,
   type StoredMemorySummary,
 } from './store.js';
@@ -386,7 +387,7 @@ export class SessionMemory {
     {
       includeContent = true,
       passage,
-    }: { includeContent?: boolean; passage?: Pick<MemorySummaryCursor, 'epoch' | 'position'> } = {},
+    }: { includeContent?: boolean; passage?: MemorySummaryPassage } = {},
   ) {
     const generation = this.activity.get(agentId)?.generation;
     const tail = await this.options.source.read(agentId, undefined, 'tail');
@@ -399,8 +400,10 @@ export class SessionMemory {
       (before && (before.epoch !== tail.epoch || before.position > tail.latest)) ||
       (passage &&
         (passage.epoch !== tail.epoch ||
+          !Number.isSafeInteger(passage.start) ||
           !Number.isSafeInteger(passage.position) ||
-          passage.position < (tail.earliest ?? 1) ||
+          passage.start < (tail.earliest ?? 1) ||
+          passage.start > passage.position ||
           passage.position > tail.latest))
     ) {
       throw new Error('Conversation history changed. Reopen the stored summaries.');
@@ -411,7 +414,7 @@ export class SessionMemory {
       tail.latest,
       before,
       includeContent,
-      passage?.position,
+      passage,
     );
     return {
       ...page,

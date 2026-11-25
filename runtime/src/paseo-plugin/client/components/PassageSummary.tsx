@@ -239,7 +239,7 @@ export function PassageSummary({
   if (!passage) return null;
   return (
     <PassageSummaryCard
-      key={JSON.stringify([host.id, agentId, passage.epoch, passage.position])}
+      key={JSON.stringify([host.id, agentId, passage.epoch, passage.start, passage.position])}
       agentId={agentId}
       passage={passage}
       theme={theme}

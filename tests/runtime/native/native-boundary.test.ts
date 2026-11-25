@@ -298,10 +298,10 @@ describe('native runtime boundary', () => {
       });
       expect(first.storagePath).toBe(databasePath);
       const passage = storedSummariesRpc.output.parse(
-        await (await readPage({ passage: { epoch, position: 5 } })).json(),
+        await (await readPage({ passage: { epoch, start: 5, position: 5 } })).json(),
       );
       expect(passage.summaries.map(({ id }) => id)).toEqual(['summary-5']);
-      const oldPassage = await readPage({ passage: { epoch: 'prior', position: 5 } });
+      const oldPassage = await readPage({ passage: { epoch: 'prior', start: 5, position: 5 } });
       expect(oldPassage.status).toBe(400);
 
       expect(first.summaries[0]).toMatchObject({

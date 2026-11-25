@@ -15,6 +15,7 @@ import {
   storedSummariesRpc,
 } from './shared/activity';
 import { observeActivity, observedTimestamp } from './server/activity';
+import { readPaseoMemoryPassage } from './server/memory-source';
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
 import {
@@ -497,17 +498,9 @@ export default function contribute(server: PluginServerContext) {
           projection: 'canonical',
           limit: 48,
         });
-        if (signal.aborted || page.error || !page.agent || page.agent.archivedAt || page.reset)
-          return;
-        const source = page.entries.findLast(
-          ({ turnId: sourceTurn, item }) =>
-            sourceTurn === turnId &&
-            (item.type === 'assistant_message' ||
-              (item.type === 'tool_call' && item.status !== 'running')),
-        );
-        if (!source) return;
+        const passage = await readPaseoMemoryPassage(timeline, page, turnId, signal);
+        if (signal.aborted || !passage) return;
         const markerId = `${MEMORY_SUMMARIES_TIMELINE_KIND}:${turnId}`;
-        const passage = { epoch: page.epoch, position: source.seqEnd };
         if (
           page.entries.some(({ item }) => {
             if (
@@ -520,6 +513,7 @@ export default function contribute(server: PluginServerContext) {
             return (
               marker.success &&
               marker.data.passage?.epoch === passage.epoch &&
+              marker.data.passage.start === passage.start &&
               marker.data.passage.position === passage.position
             );
           })

@@ -125,6 +125,7 @@ test('anchors summary shortcuts to each completed turn and current timeline epoc
   process.env.LTCOOK_RUNTIME_USER_TOKEN = 'server-secret';
   globalThis.fetch = (async () => Response.json({ memoryEnabled: true })) as typeof fetch;
   let epoch = 'before-rewind';
+  let resetBefore = false;
   const appended: Array<{
     id: string;
     type: string;
@@ -132,20 +133,35 @@ test('anchors summary shortcuts to each completed turn and current timeline epoc
     version: number;
     data: unknown;
   }> = [];
-  const source = [
-    { seqEnd: 8, turnId: 'turn', item: { type: 'assistant_message' } },
-    { seqEnd: 11, turnId: 'another', item: { type: 'assistant_message' } },
+  const earlier = [
+    { seqEnd: 4, turnId: 'previous', item: { type: 'assistant_message', text: 'Earlier' } },
+    { seqEnd: 6, turnId: 'turn', item: { type: 'user_message', text: 'First prompt' } },
+  ];
+  const tail = [
+    { seqEnd: 8, turnId: 'turn', item: { type: 'assistant_message', text: 'First response' } },
+    {
+      seqEnd: 9,
+      turnId: 'turn',
+      item: { type: 'tool_call', status: 'completed', detail: { type: 'unknown' } },
+    },
+    { seqEnd: 10, turnId: 'another', item: { type: 'user_message', text: 'Second prompt' } },
+    { seqEnd: 11, turnId: 'another', item: { type: 'assistant_message', text: 'Second response' } },
+    { seqEnd: 12, turnId: 'another', item: { type: 'assistant_message', text: ' ' } },
   ];
   const timeline = {
     async append(row: (typeof appended)[number]) {
       appended.push(row);
       return { epoch };
     },
-    async refetch() {
+    async refetch({ direction }: { direction: 'tail' | 'before' }) {
+      const before = direction === 'before';
       return {
         epoch,
         agent: { archivedAt: null },
-        entries: [...source, ...appended.map((item) => ({ item }))],
+        startCursor: { epoch, seq: before ? 4 : 8 },
+        hasOlder: !before,
+        reset: before && resetBefore,
+        entries: before ? earlier : [...tail, ...appended.map((item) => ({ item }))],
       };
     },
   };
@@ -177,22 +193,26 @@ test('anchors summary shortcuts to each completed turn and current timeline epoc
       id: 'memory-summaries:turn',
       kind: 'memory-summaries',
       version: 1,
-      data: { passage: { epoch, position: 8 } },
+      data: { passage: { epoch, start: 6, position: 8 } },
     },
     {
       type: 'plugin',
       id: 'memory-summaries:another',
       kind: 'memory-summaries',
       version: 1,
-      data: { passage: { epoch, position: 11 } },
+      data: { passage: { epoch, start: 10, position: 11 } },
     },
   ]);
   epoch = 'after-rewind';
+  resetBefore = true;
+  await hook(turn, context);
+  expect(appended).toHaveLength(2);
+  resetBefore = false;
   await hook(turn, context);
   expect(appended).toHaveLength(3);
   expect(appended[2]).toMatchObject({
     id: 'memory-summaries:turn',
-    data: { passage: { epoch, position: 8 } },
+    data: { passage: { epoch, start: 6, position: 8 } },
   });
 });
 
