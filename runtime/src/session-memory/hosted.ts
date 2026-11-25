@@ -24,7 +24,7 @@ const hostedRequest = z.object({
       ]),
     }),
   ]),
-  reasoning: z.object({ effort: z.literal('none') }),
+  reasoning: z.object({ effort: z.literal('low') }),
   service_tier: z.literal(standardTier),
   store: z.literal(false),
   tools: z.tuple([]).optional(),
@@ -63,9 +63,9 @@ export function createHostedMemorySummarizer(selection: ResolvedModel) {
       prompt: Parameters<typeof summarizeMemory>[1],
       signal: AbortSignal,
     ): Promise<MemorySummaryResult> {
-      if (selection.provider !== 'openai-codex' || selection.reasoning !== 'none')
+      if (selection.provider !== 'openai-codex' || selection.reasoning !== 'low')
         throw new MemorySummaryError(
-          'Hosted Session Memory requires an openai-codex model with reasoning off.',
+          'Hosted Session Memory requires an openai-codex model with low reasoning.',
         );
       const started = performance.now();
       const bounded = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
@@ -96,7 +96,7 @@ export function createHostedMemorySummarizer(selection: ResolvedModel) {
       const options = {
         signal: bounded,
         serviceTier: standardTier,
-        reasoningEffort: 'none',
+        reasoningEffort: selection.reasoning,
         transport: 'sse',
         maxRetries: 0,
         cacheRetention: 'none',
@@ -142,7 +142,7 @@ export function createHostedMemorySummarizer(selection: ResolvedModel) {
         if (bounded.aborted) throw new MemorySummaryError('Hosted Session Memory timed out.');
         if (invalidRequest)
           throw new MemorySummaryError(
-            'Pi could not enforce the isolated prompt, Standard speed, and reasoning off for hosted Session Memory.',
+            'Pi could not enforce the isolated prompt, Standard speed, and low reasoning for hosted Session Memory.',
           );
         if (
           responseStatus === 429 ||
@@ -162,14 +162,9 @@ export function createHostedMemorySummarizer(selection: ResolvedModel) {
           .join('');
         const actual = responseModel ?? answer.responseModel ?? answer.model;
         const thinkingPresent = answer.content.some((item) => item.type === 'thinking');
-        if (
-          actual !== model.id ||
-          thinkingPresent ||
-          (usage.reasoning ?? 0) !== 0 ||
-          (responseTier !== undefined && responseTier !== standardTier)
-        )
+        if (actual !== model.id || (responseTier !== undefined && responseTier !== standardTier))
           throw new MemorySummaryError(
-            'Hosted Session Memory received an unexpected model, speed, or reasoning output.',
+            'Hosted Session Memory received an unexpected model or speed.',
           );
         const result = {
           type,
@@ -178,6 +173,7 @@ export function createHostedMemorySummarizer(selection: ResolvedModel) {
           hosted: {
             model: actual,
             serviceTier: standardTier,
+            reasoning: selection.reasoning,
             providerModelVerified: Boolean(responseModel ?? answer.responseModel),
             ...(responseTier ? { providerTier: responseTier } : {}),
           } as const,

@@ -1,4 +1,5 @@
 import type { PaseoApi } from '@getpaseo/client';
+import { memoryPreview } from '../../session-memory/text.js';
 
 export type MemoryMessage = {
   seq: number;
@@ -265,7 +266,7 @@ export async function readPaseoMemoryEvidence(
             kind: 'tool' as const,
             name: match.name,
             status: match.status,
-            details: JSON.stringify(match.detail, null, 2),
+            details: memoryPreview(toolOutcome(match) ?? '', 600),
           },
         };
       }

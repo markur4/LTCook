@@ -53,6 +53,45 @@ test('opens only the exact canonical entries cited by an authorized execution re
   ]);
 });
 
+test('execution details show shell outcomes without the raw command or output', async () => {
+  const shell: Page['entries'][number] = {
+    ...assistant(18, 'native-id', ''),
+    item: {
+      type: 'tool_call',
+      callId: 'native-id',
+      name: 'shell',
+      status: 'completed',
+      detail: {
+        type: 'shell',
+        command: 'cat fixture.md',
+        output: 'Fixture prose. '.repeat(1_000) + '\nCACHE_GUARD PASS',
+        exitCode: 0,
+      },
+    },
+  };
+  const refetch: Refetch = async (options) =>
+    options?.direction === 'tail' ? canonicalPage('current') : canonicalPage('current', [shell]);
+
+  expect(
+    await readPaseoMemoryEvidence(
+      { refetch },
+      'current',
+      [{ seq: 18, messageId: 'native-id', author: 'tool' }],
+      new AbortController().signal,
+    ),
+  ).toEqual([
+    {
+      seq: 18,
+      source: {
+        kind: 'tool',
+        name: 'shell',
+        status: 'completed',
+        details: 'Shell command completed with exit code 0.\nCACHE_GUARD PASS',
+      },
+    },
+  ]);
+});
+
 test('a replacement after fetching execution details invalidates the entire evidence page', async () => {
   const refetch: Refetch = async (options) =>
     options?.direction === 'tail'

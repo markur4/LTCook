@@ -108,9 +108,11 @@ function EvidenceList({
                   {source.name} · {source.status}
                 </Text>
               )}
-              <Text selectable style={{ color: theme.colors.foreground }}>
-                {source.kind === 'tool' ? source.details : source.text}
-              </Text>
+              {(source.kind === 'agent' || source.details) && (
+                <Text selectable style={{ color: theme.colors.foreground }}>
+                  {source.kind === 'tool' ? source.details : source.text}
+                </Text>
+              )}
             </>
           ) : (
             <Text style={{ color: theme.colors.foregroundMuted }}>

@@ -1317,7 +1317,7 @@ export class SessionMemory {
       try {
         parts = prepareMemorySummaries(unit, history, this.budgets, {
           format,
-          simpleBullets: this.options.contextIndependent,
+          contextIndependent: this.options.contextIndependent,
           skipped,
           originalAnchor,
         });

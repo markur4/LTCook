@@ -360,7 +360,7 @@ async function run(): Promise<void> {
           threshold,
           contextIndependent: true,
           inference: {
-            hosted: { model: hosted?.model ?? 'Unavailable', reasoning: 'off' },
+            hosted: { model: hosted?.model ?? 'Unavailable', reasoning: 'low' },
             local: { model: localModel ?? 'Unavailable', reasoning: 'off' },
           },
           hostedUsage: hostedSummarizer?.usage,
@@ -371,7 +371,7 @@ async function run(): Promise<void> {
             if (mode === 'hosted') {
               if (!hostedSummarizer)
                 throw new MemorySummaryError(
-                  'Hosted Session Memory could not resolve @tiny. Configure LTCOOK_MODEL_SMOL with an openai-codex model that supports reasoning off.',
+                  'Hosted Session Memory could not resolve @tiny. Configure LTCOOK_MODEL_SMOL with an openai-codex model that supports low reasoning.',
                 );
               return hostedSummarizer.summarize(type, prompt, signal);
             }

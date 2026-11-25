@@ -179,7 +179,7 @@ describe('native runtime boundary', () => {
           throw new Error('Selection must not run inference');
         },
         inference: {
-          hosted: { model: 'gpt-6-luna', reasoning: 'off' },
+          hosted: { model: 'gpt-6-luna', reasoning: 'low' },
           local: { model: 'lfm3:1.7b-qad-q4_0', reasoning: 'off' },
         },
       });
@@ -207,7 +207,7 @@ describe('native runtime boundary', () => {
       expect(await result.json()).toEqual({
         mode: 'hosted',
         model: 'gpt-6-luna',
-        reasoning: 'off',
+        reasoning: 'low',
       });
       const restored = new RuntimeApi(undefined, secret, '127.0.0.1:0');
       restored.setActivityPreferences(preferences);

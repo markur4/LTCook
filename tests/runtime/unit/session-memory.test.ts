@@ -1030,12 +1030,13 @@ test('Hosted accepts an isolated Standard request and rejects continuation and t
     instructions: 'Summarize.',
     input: [{ role: 'user', content: [{ type: 'input_text', text: 'Fixture.' }] }],
     service_tier: 'default',
-    reasoning: { effort: 'none' },
+    reasoning: { effort: 'low' },
     store: false,
   };
   const accepts = (candidate: unknown) =>
     validHostedMemoryRequest(candidate, payload.model, payload.instructions, 'Fixture.');
   expect(accepts(payload)).toBe(true);
+  expect(accepts({ ...payload, reasoning: { effort: 'none' } })).toBe(false);
   expect(accepts({ ...payload, previous_response_id: 'earlier' })).toBe(false);
   expect(accepts({ ...payload, tools: [{ type: 'function' }] })).toBe(false);
   expect(accepts({ ...payload, instructions: 'Summarize. More instructions.' })).toBe(false);
@@ -1047,7 +1048,7 @@ test('Hosted Session Memory rejects the separately billed provider before submit
     alias: 'tiny',
     provider: 'openai',
     model: 'gpt-6-luna',
-    reasoning: 'none',
+    reasoning: 'low',
     reasoningSource: 'alias',
   });
   await expect(
@@ -1077,7 +1078,7 @@ test('keeps original Discussion evidence available when the hosted provider fail
     source: timeline(() => ({ epoch: 'one', messages })),
     contextIndependent: true,
     inference: {
-      hosted: { model: 'gpt-6-luna', reasoning: 'off' },
+      hosted: { model: 'gpt-6-luna', reasoning: 'low' },
       local: { model: 'lfm3:1.7b-qad-q4_0', reasoning: 'off' },
     },
     async deviceCatalog() {
@@ -1107,7 +1108,7 @@ test('keeps original Discussion evidence available when the hosted provider fail
     );
     await memory.settled();
     const activity = memory.status(undefined, 'leader');
-    expect(activity.inference).toEqual({ mode: 'hosted', model: 'gpt-6-luna', reasoning: 'off' });
+    expect(activity.inference).toEqual({ mode: 'hosted', model: 'gpt-6-luna', reasoning: 'low' });
     expect(activity.device).toBeNull();
     expect(activity.summarization).toBe('failed');
     expect(activity.lastError?.message).toContain('subscription quota');

@@ -226,9 +226,11 @@ All notable changes to `ltcook` will be documented in this file.
 ### 🛠️ Changed
 
 - **Breaking:** 💥 The shared Spark model alias is now `@local-tiny`. Use that
-  spelling in Team and launch selections. `@tiny` now defaults to reasoning off,
-  and the shared list includes `@local-CPU` and `@local-evals`.
-- Session Memory summarizes only the current Discussion. In Activity, choose
+  spelling in Team and launch selections. The shared list includes `@local-CPU`
+  and `@local-evals`. `@tiny` now defaults to low reasoning, including for
+  Hosted Session Memory.
+- Session Memory summarizes only the current Discussion using structured
+  Markdown headings. In Activity, choose
   Local inference or explicitly enable Hosted inference with GPT-6 Luna through
   the Codex subscription. The card shows the selected model, reasoning, usage,
   and failures independently of the Summarizer switch.
@@ -374,6 +376,9 @@ All notable changes to `ltcook` will be documented in this file.
 <br>
 
 ### 🐛 Fixed
+
+- The Session Memory execution details show compact tool outcomes instead of
+  raw tool payloads.
 
 - Changed files start collapsed when reviewing a linked worktree in Paseo.
 

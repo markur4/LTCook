@@ -1231,6 +1231,10 @@ Production processing, AAB recording and handoff retrieval stayed as configured.
 
 ### Hosted Session Memory qualification
 
+The results below measured the earlier bullets prompt and no reasoning.
+Current qualification uses the structured Markdown prompt and low reasoning.
+Saved runs must match the current prompt and requested reasoning to replay.
+
 From the repository root, regrade the saved asymmetric probe and then run the
 hosted semantic suite. Use the path to the private archive for
 `$SAVED_LUNA_ASYMMETRIC_REPORT`.
@@ -1243,9 +1247,9 @@ bun evals/session-memory-live.ts --qualify-hosted-memory
 The first command grades the saved replies against the original sources and
 recomputes compression without inference. The second requires an authenticated
 Codex ChatGPT session. It uses a disposable Session Memory database, the
-production context-independent prompt and the hosted provider adapter. The
+current production prompt and the hosted provider adapter. The
 `@tiny` alias resolves to `openai-codex/gpt-6-luna` with reasoning set to
-`none`. The report records the request tier, returned model, token usage and
+`low`. The report records the request tier, returned model, token usage and
 facts retained at generation, storage and delegation.
 
 The suite runs realistic skipped Discussions, export discovery, retry

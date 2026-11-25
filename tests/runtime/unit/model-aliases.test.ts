@@ -19,7 +19,7 @@ const environment = {
 
 test.each([
   ['smol', 'openai-codex', 'gpt-6-luna', undefined],
-  ['tiny', 'openai-codex', 'gpt-6-luna', 'none'],
+  ['tiny', 'openai-codex', 'gpt-6-luna', 'low'],
   ['local-CPU', 'ollama', environment.LTCOOK_MODEL_LOCAL_CPU, 'none'],
   ['local-tiny', 'ollama', environment.LTCOOK_MODEL_TINY_LOCAL, 'none'],
   ['local-evals', 'ollama', environment.LTCOOK_MODEL_LOCAL_EVALS, undefined],
@@ -70,7 +70,7 @@ test('catalog evaluates the Team override before the alias preset', () => {
     configurationError: expect.stringContaining('supports none, low, high'),
     reasoningOptions: ['none', 'low', 'high'],
   });
-  expect(invalid.aliases.find(({ alias }) => alias === 'tiny')?.reasoning).toBe('none');
+  expect(invalid.aliases.find(({ alias }) => alias === 'tiny')?.reasoning).toBe('low');
 });
 
 test('saved settings retain the resolved provider, model, and reasoning when settings change', () => {
@@ -134,13 +134,13 @@ test('hosted launcher adapters translate explicit effort and omit unset effort',
     '-c',
     'model_provider="openai"',
     '-c',
-    'model_reasoning_effort="none"',
+    'model_reasoning_effort="low"',
   ]);
   const custom = resolveModel('tiny', { LTCOOK_MODEL_SMOL: 'openrouter/lab/model:free' });
   expect(custom).toMatchObject({
     provider: 'openrouter',
     model: 'lab/model:free',
-    reasoning: 'none',
+    reasoning: 'low',
   });
   expect(modelCommand('pi', custom, environment).args).toContain('lab/model:free');
   expect(() => modelCommand('codex', custom, environment)).toThrow(

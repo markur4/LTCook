@@ -232,7 +232,7 @@ Both switches apply across conversations and persist across runtime restarts.
 The Session Memory card shows the resolved summarization model and reasoning
 setting, including while paused. Select **Hosted** to send the current user
 messages, agent replies, and any included attachment text to OpenAI. Hosted
-uses the Codex subscription sign-in at Standard speed. Authentication, quota,
+uses the Codex subscription sign-in at Standard speed with low reasoning. Authentication, quota,
 and inference failures appear on the card. Hosted usage shows the LTCook
 runtime's own request and token totals since startup.
 
@@ -588,7 +588,7 @@ management commands rather than inventing another configuration editor.
 | Alias | Model | Preset reasoning |
 | --- | --- | --- |
 | `@smol` | GPT-6 Luna | Provider default |
-| `@tiny` | GPT-6 Luna | Off |
+| `@tiny` | GPT-6 Luna | Low |
 | `@local-CPU` | LFM3 1.7B QAD Q4_0 on Ollama | Off |
 | `@local-tiny` | Spark X2.6 4B Q8_0 on Ollama | Off |
 | `@local-evals` | Bonsai 2 27B on Ollama | Provider default |

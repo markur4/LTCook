@@ -459,8 +459,9 @@ input budget are summarized separately under the same UAMP.
 AAB records contain bounded previews, counts, and references to the original
 actions and intermediate messages. Their compact tool projection preserves
 typed outcomes, file paths, exit codes, and recognized verification lines.
-Paseo supplies original details on demand, including tool types that have no
-specialized projection. AABs that span native turns are shown once. Session
+The execution details show compact tool outcomes and cite the original
+Paseo timeline entries. Tools without a specialized projection show their
+name and status. AABs that span native turns are shown once. Session
 Memory continues recording AABs and short UAMPs while generation is paused.
 
 Native user messages remain authoritative for goals and decisions. An opt-in
@@ -471,13 +472,13 @@ Tool outcomes describe historical work. Source references identify the agent,
 conversation epoch, and original sequence. Session Memory search reports
 pending summaries, result truncation, and original-history availability.
 
-The summarizer reads only the current UAMP and writes concise Markdown
-bullets. Earlier Discussions and Task instructions are used by the receiving
+The summarizer reads only the current UAMP and writes concise Markdown under the applicable headings: Intent, Pasted,
+Discoveries, Disagreements, Decisions, and Questions. Earlier Discussions and Task instructions are used by the receiving
 agent through the chronological handoff. The handoff can include original
 messages from intervening short Discussions so the receiver can resolve an
 approval by reference and distinguish it from earlier proposal status.
 In Hosted mode the current UAMP, including any attachment content in the
-prompt, goes to OpenAI through the Codex subscription. Local mode uses Ollama.
+prompt, goes to OpenAI through the Codex subscription with low reasoning. Local mode uses Ollama.
 
 Recognized headings and bullets supply individually retrievable statements.
 The raw Markdown remains available for reading and retrieval when formatting
