@@ -462,6 +462,7 @@ try {
   await inspectStage('new-workspace-desktop');
   await selectLtcook();
   await sendPrompt('GUI desktop launch', 'Create');
+  await browser('wait', '--text', 'tok/s');
   const initial = runtime.listSessions(workspace, 'default-minimal');
   assert.equal(initial.length, 1, 'Native submission creates exactly one LTCook Session');
   const leaderId = initial[0]!.id;
