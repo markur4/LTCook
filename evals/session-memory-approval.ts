@@ -5,10 +5,56 @@ import {
   releaseOllamaModel,
   type OllamaSettings,
 } from '../runtime/src/integrations/ollama.js';
-import { summarizeMemory } from '../runtime/src/session-memory/summarization.js';
+import {
+  prepareMemorySummaries,
+  summarizeMemory,
+} from '../runtime/src/session-memory/summarization.js';
 import { gradeSimplifiedLayer, runSimplifiedMemoryArm } from './session-memory-simplified.js';
 
 const decisionRules = `Determine each current decision from the current user messages. A direct instruction to carry out a proposal approves the referenced action. A rejection rules out that action. A deferral leaves the choice open. Earlier messages can identify the action, but their former pending or approved status does not establish its current status. Keep decisions about different actions separate. If multiple earlier actions could be meant and the current user does not distinguish them, report that the referent is unresolved. Report execution or test outcomes only when the current sources explicitly report them.`;
+
+const minimalPrompt = `Summarize the current Discussion in concise Markdown bullets for future work.
+
+Use previous Discussions only to understand references.
+
+Prioritize the latest user requests, decisions, constraints and corrections. Preserve exact technical names and paths.
+
+Distinguish proposals, approved work and completed work. Never report planned work as completed.
+
+Omit redundant information.`;
+
+const approvalExample = `Example
+Earlier agent: I propose raising the pagination limit to 80.
+Current user: Go ahead with that.
+Summary:
+- User approved raising the pagination limit to 80.`;
+
+export function minimalManifestControls(fixture: MemoryFixture, user: string) {
+  const [proposal, clarification, messages] = fixture.turns;
+  if (!proposal || !clarification || !messages)
+    throw new Error('The manifest diagnostic requires an original proposal and approval.');
+  const [dialogue, extra] = prepareMemorySummaries(
+    { type: 'UAMP', messages, scope: messages[0]?.scope, task: fixture.taskContext },
+    [],
+    undefined,
+    {
+      format: 'markdown',
+      contextStyle: 'dialogue',
+      skipped: [clarification, proposal].map((messages) => ({
+        id: messages[0]!.turnId!,
+        messages,
+      })),
+    },
+  );
+  const task = user.indexOf('\nCurrent Task scope and requirements.');
+  if (!dialogue || extra || task < 0 || !dialogue.prompt[1].content.endsWith(user.slice(task)))
+    throw new Error('Original dialogue must preserve the full current Task and source messages.');
+  return [
+    { name: 'minimal-unchanged-context', system: minimalPrompt, user },
+    { name: 'minimal-example', system: minimalPrompt + '\n\n' + approvalExample, user },
+    { name: 'minimal-original-dialogue', system: minimalPrompt, user: dialogue.prompt[1].content },
+  ];
+}
 
 export function manifestApprovalControls(system: string, user: string) {
   const task = user.indexOf('\nCurrent Task scope and requirements.');
@@ -56,6 +102,7 @@ export async function diagnoseManifestApproval(input: {
   digest: string;
   weightsDigest: string;
   signal: AbortSignal;
+  minimal?: boolean;
   auditOutput?: boolean;
   progress?: (label: string) => void;
 }) {
@@ -64,8 +111,12 @@ export async function diagnoseManifestApproval(input: {
   const endpoint = ollamaEndpoint(settings.endpoint);
   const originals = fixture.turns.flat();
   const approvalFacts = fixture.facts.filter(({ source }) => source === 5);
-  const grade = (summary: string) =>
-    gradeSimplifiedLayer(approvalFacts, [{ seq: 6, sources: [5, 6], text: summary }], originals);
+  const grade = (summary?: string) =>
+    gradeSimplifiedLayer(
+      approvalFacts,
+      summary === undefined ? [] : [{ seq: 6, sources: [5, 6], text: summary }],
+      originals,
+    );
   progress?.('Generate the original manifest proposal and approval.');
   const baseline = await runSimplifiedMemoryArm(fixture, 'deterministic-markdown', {
     settings,
@@ -85,10 +136,10 @@ export async function diagnoseManifestApproval(input: {
     throw new Error('The manifest diagnostic requires two complete CPU baseline requests.');
 
   const cases = [];
-  for (const { name, system, user } of manifestApprovalControls(
-    approval.audit.systemPrompt,
-    approval.audit.prompt,
-  )) {
+  const variants = input.minimal
+    ? minimalManifestControls(fixture, approval.audit.prompt)
+    : manifestApprovalControls(approval.audit.systemPrompt, approval.audit.prompt);
+  for (const { name, system, user } of variants) {
     progress?.(name);
     await releaseOllamaModel(settings, signal);
     const result = await summarizeMemory(
@@ -107,14 +158,28 @@ export async function diagnoseManifestApproval(input: {
     if (
       !loaded?.bytes ||
       loaded.gpuBytes !== 0 ||
-      !result.complete ||
+      (!input.minimal && !result.complete) ||
       result.metrics?.thinkingPresent !== false ||
       (result.metrics.reasoningTokens ?? 0) !== 0
     )
       throw new Error('The manifest diagnostic requires complete CPU inference without reasoning.');
+    const summary = result.complete ? result.text : undefined;
     cases.push({
       name,
-      quality: grade(result.text),
+      quality: grade(summary),
+      ...(input.minimal
+        ? {
+            complete: result.complete,
+            fixtureQuality: gradeSimplifiedLayer(
+              fixture.facts,
+              [
+                { seq: 2, sources: [1, 2], text: proposal.audit.summary },
+                ...(summary === undefined ? [] : [{ seq: 6, sources: [5, 6], text: summary }]),
+              ],
+              originals,
+            ),
+          }
+        : {}),
       usage: result.usage,
       inferenceMs: result.elapsedMs,
       ...(auditOutput ? { system, user, reply: result.text } : {}),

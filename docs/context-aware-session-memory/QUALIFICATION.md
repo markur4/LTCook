@@ -878,3 +878,33 @@ Both checkpoints ran at temperature 0.8 and seed 17 with verified CPU
 inference and no reasoning. Production inference was suspended and restored.
 The qualification gates, prompts, architecture and production LFM3 settings
 are unchanged.
+
+### Minimal approval prompt
+
+Q8_0 ran at temperature 0.8 and seed 17 on CPU with reasoning disabled. All
+three variants replaced the entire system message with the supplied minimal
+Markdown prompt. The example arm added one unrelated pagination example.
+The original-dialogue arm used bounded, attributed user and agent messages
+from the preceding Discussions. The current Task, sources and acceptance
+criteria were identical throughout.
+
+| Variant | Current facts | Full manifest facts | Input / output tokens | CPU request s |
+| --- | ---: | ---: | ---: | ---: |
+| Minimal, unchanged context | 2/3 | 3/4 | 748 / 224 | 3.624 |
+| Minimal, unrelated approval example | 1/3 | 2/4 | 787 / 109 | 2.467 |
+| Minimal, original attributed dialogue | 0/3 | 1/4 | 733 / 2,048 | 26.339 |
+
+The unchanged-context arm kept both constraints and omitted the approved
+implementation. The example arm described an approved manifest refresh in
+bullets and also omitted the implementation name. The original-dialogue arm
+mentioned `reuseExportManifest` in its first line, then repeated material
+until it reached the output cap. It also misstated the fallback. The current
+answer was incomplete, so only the fixed preceding proposal contributed
+to the full fixture score.
+
+The first run stopped when it encountered that incomplete answer. A matched
+replay preserved incomplete output for inspection and graded it as a failed
+current summary. Production inference was restored after both attempts.
+No variant passed the manifest gate, so validation on the remaining fixtures
+and LFM3 was not triggered. Production prompts, processing and thresholds
+stayed frozen.

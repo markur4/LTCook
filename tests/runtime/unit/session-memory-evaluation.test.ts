@@ -1,5 +1,8 @@
 import { candidateScreeningFixtures } from '../../../evals/session-memory-screening.js';
-import { manifestApprovalControls } from '../../../evals/session-memory-approval.js';
+import {
+  manifestApprovalControls,
+  minimalManifestControls,
+} from '../../../evals/session-memory-approval.js';
 import { expect, test } from 'bun:test';
 import { MemoryEditProgress } from '../../../evals/session-memory-edit-progress.js';
 import { semanticMemoryFixtures } from '../../../evals/session-memory-semantic-fixtures.js';
@@ -18,6 +21,7 @@ import {
   matchesMemoryFact,
 } from '../../../runtime/src/evals/session-memory-facts.js';
 import { prepareMemorySummaries } from '../../../runtime/src/session-memory/summarization.js';
+import { estimateMemoryTokens } from '../../../runtime/src/session-memory/text.js';
 import { memoryFixtures } from '../../../runtime/src/evals/session-memory-fixtures.js';
 
 test('manifest approval controls isolate the rendered cue, history and instructions', () => {
@@ -57,6 +61,38 @@ test('manifest approval controls isolate the rendered cue, history and instructi
   expect(reorder!.user).toBe(user.content);
   expect(reorder!.system.indexOf('**Decisions**')).toBeLessThan(
     reorder!.system.indexOf('**Intent**'),
+  );
+});
+
+test('the minimal prompt variants preserve current sources and bound attributed original history', () => {
+  const fixture = semanticMemoryFixtures.find(({ id }) => id === 'semantic-manifest-reference')!;
+  const messages = fixture.turns[2]!;
+  const [rendered] = prepareMemorySummaries(
+    { type: 'UAMP', messages, scope: messages[0]?.scope, task: fixture.taskContext },
+    [{ id: 'proposal', type: 'UAMP', content: 'Generated anchor: reuseExportManifest.' }],
+    undefined,
+    { format: 'markdown' },
+  );
+  const user = rendered!.prompt[1].content;
+  const [minimal, example, dialogue] = minimalManifestControls(fixture, user);
+  expect(minimal!.user).toBe(user);
+  expect(example!.user).toBe(user);
+  expect(example!.system.startsWith(minimal!.system + '\n\nExample\n')).toBe(true);
+  expect(dialogue!.system).toBe(minimal!.system);
+  expect(minimal!.system).not.toContain('**Decisions**');
+  expect(dialogue!.user).toContain('User #1:');
+  expect(dialogue!.user).toContain('Agent #2:');
+  expect(dialogue!.user).toContain('User #3:');
+  expect(dialogue!.user).not.toContain('Generated anchor');
+  const task = user.indexOf('\nCurrent Task scope and requirements.');
+  expect(dialogue!.user.endsWith(user.slice(task))).toBe(true);
+  const history = dialogue!.user.slice(
+    dialogue!.user.indexOf('\n') + 1,
+    dialogue!.user.indexOf('\nCurrent Task scope and requirements.'),
+  );
+  const taskContext = user.slice(task, user.indexOf('\nCurrent original source messages:'));
+  expect(estimateMemoryTokens(history) + estimateMemoryTokens(taskContext)).toBeLessThanOrEqual(
+    512,
   );
 });
 
