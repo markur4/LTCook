@@ -1148,7 +1148,7 @@ def test_evaluation_context_excludes_credentials_and_does_not_write_native_state
     assert context["sharedSkillsDirectory"]
     assert context["guidanceDirectory"]
     assert "webConfiguration" in context
-    assert context["summarization"]["model"] == "hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0"
+    assert context["summarization"]["model"] == "lfm3:1.7b-qad-q4_0"
     assert (
         json.loads(context["summarization"]["generation"])["options"]["num_ctx"] == 4096
     )
