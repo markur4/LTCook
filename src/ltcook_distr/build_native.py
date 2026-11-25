@@ -31,6 +31,7 @@ def _prepare(tree: Path, staging_parent: Path) -> None:
     """
     subprocess.run(("bun", "install", "--frozen-lockfile"), cwd=tree, check=True)
     subprocess.run(("bun", "run", "build"), cwd=tree, check=True)
+    subprocess.run(("bun", "run", "build:paseo-web"), cwd=tree, check=True)
     archive_assets(
         tree,
         tree / "src/ltcook_distr/bundle.zip",

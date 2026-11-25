@@ -7,6 +7,11 @@ import { MEMORY_SUMMARIES_TIMELINE_KIND, MemorySummariesTimelineSchema } from '.
 import { MEMORY_SUMMARIES_PANEL_ID, StoredSummaries } from './client/screens/StoredSummaries';
 import { ActivityPanel } from './client/screens/ActivityPanel';
 import {
+  clearPendingSkillDocuments,
+  SKILL_DOCUMENT_PANEL_ID,
+  SkillDocument,
+} from './client/screens/SkillDocument';
+import {
   ACTIVITY_PANEL_ID,
   TASKS_PANEL_ID,
   TEAM_PANEL_ID,
@@ -69,11 +74,18 @@ export default function contribute(client: PluginClientContext) {
       locations: ['workspace'],
       Component: StoredSummaries,
     }),
+    client.addAgentPanel({
+      id: SKILL_DOCUMENT_PANEL_ID,
+      title: 'Skill',
+      icon: 'BookOpen',
+      locations: ['workspace'],
+      Component: SkillDocument,
+    }),
     client.addTimelineRenderer({
       kind: MEMORY_SUMMARIES_TIMELINE_KIND,
       version: 1,
       schema: MemorySummariesTimelineSchema,
-      Component: PassageSummary,
+      Component: (props) => <PassageSummary {...props} client={client} />,
     }),
     client.addCommandCenterItem({
       id: 'open-activity-panel',
@@ -111,5 +123,8 @@ export default function contribute(client: PluginClientContext) {
       },
     }),
   ];
-  return () => cleanup.forEach((dispose) => dispose());
+  return () => {
+    clearPendingSkillDocuments();
+    cleanup.forEach((dispose) => dispose());
+  };
 }
