@@ -1016,11 +1016,25 @@ export class SessionMemory {
       }
       return false;
     }
-    if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+    const turnIds = new Set(messages.flatMap(({ turnId }) => (turnId ? [turnId] : [])));
+    const latestTurn = messages.findLast(({ turnId }) => turnId !== undefined)?.turnId;
+    const priorOutcome = latestTurn
+      ? this.store.turns(agentId, new Set([latestTurn])).get(latestTurn)?.outcome
+      : undefined;
+    const confirmed = await this.currentHistory(agentId, epoch, latest, signal);
+    if (!confirmed) return true;
+    const turns = this.store.turns(agentId, turnIds);
+    const latestReceipt = latestTurn ? turns.get(latestTurn) : undefined;
+    // > A completion receipt may arrive after the source page was read. Keep the
+    // > prompt in range until that turn's final response is available to pair with it.
+    if (
+      latestReceipt &&
+      latestReceipt.outcome !== 'running' &&
+      (confirmed.latest > latest || latestReceipt.outcome !== priorOutcome)
+    )
+      return true;
     signal.throwIfAborted();
     this.store.savePrompts(agentId, epoch, messages);
-    const turnIds = new Set(messages.flatMap(({ turnId }) => (turnId ? [turnId] : [])));
-    const turns = this.store.turns(agentId, turnIds);
     const outcomes = new Map<string, MemoryTurnOutcome>();
     const lastByTurn = new Map<string, number>();
     for (const message of messages) if (message.turnId) lastByTurn.set(message.turnId, message.seq);
@@ -1108,7 +1122,6 @@ export class SessionMemory {
         .filter(({ type }) => type === 'AAB')
         .flatMap(({ messages }) => messages.map(({ seq }) => seq)),
     ]);
-    const latestTurn = messages.findLast(({ turnId }) => turnId !== undefined)?.turnId;
     for (const message of messages) {
       const pending =
         message.turnId &&

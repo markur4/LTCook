@@ -437,6 +437,46 @@ test('stores the attachment citation from a native turn with only a trailing act
   }
 });
 
+test('pairs a prompt with the reply when the turn completes during a timeline read', async () => {
+  const turnId = 'racing-turn';
+  const messages: MemorySourceMessage[] = [
+    { ...first, turnId },
+    { ...issue, seq: 2, turnId },
+  ];
+  const source = timeline(() => ({ epoch: 'one', messages }));
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: {
+      async read(...args) {
+        const page = await source.read(...args);
+        if (args[2] !== 'tail' && messages.length === 2) {
+          messages.push({ ...longReply, seq: 3, turnId });
+          memory.turn('leader', { turnId, outcome: 'completed' }, false);
+        }
+        return page;
+      },
+    },
+    async summarize(type) {
+      const content = 'The cursor remains valid.';
+      return { type, text: content, content, complete: true, elapsedMs: 1 };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId, outcome: 'running' }, false);
+    await memory.settled();
+    const { summaries } = await memory.readStoredSummaries('leader');
+    expect(summaries).toContainEqual(
+      expect.objectContaining({
+        type: 'UAMP',
+        state: 'summarized',
+        parts: [expect.objectContaining({ sources: [1, 3] })],
+      }),
+    );
+  } finally {
+    await memory.close();
+  }
+});
+
 test('stores chronological summaries, preserves original authority, and removes a dependent suffix', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-'));
   const messages: MemorySourceMessage[] = [
