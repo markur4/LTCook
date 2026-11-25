@@ -3,7 +3,8 @@ import type { MemoryFixture } from '../runtime/src/evals/session-memory-fixtures
 import type { summarizeMemory } from '../runtime/src/session-memory/summarization.js';
 import { gradeSimplifiedLayer, runSimplifiedMemoryArm } from './session-memory-simplified.js';
 
-export const localMemoryArms = ['immediate', 'local-template', 'local-bullets'] as const;
+const comparisonArms = ['immediate', 'local-template', 'local-bullets'] as const;
+export const localMemoryArms = [...comparisonArms, 'local-extractive'] as const;
 type LocalArm = (typeof localMemoryArms)[number];
 type Prompt = Parameters<typeof summarizeMemory>[1];
 type ArmInput = Parameters<typeof runSimplifiedMemoryArm>[2];
@@ -49,12 +50,90 @@ Distinguish proposed, approved and completed work.
 
 Preserve references to earlier discussions without guessing their meaning. Omit redundant information.`;
 
+const localExtractive = `Select the important sentences from the current user-agent exchange.
+
+Retain their original wording and authorship. Preserve requests, decisions, constraints, discoveries and unresolved questions.
+
+Keep exact technical identifiers, paths, numbers, negations and distinctions between planned and completed work.
+
+Omit redundant sentences. Do not paraphrase or invent information.`;
+
+const excerptSource = z.object({
+  seq: z.number(),
+  author: z.string(),
+  text: z.string(),
+  attachment: z.object({ text: z.string().optional() }).optional(),
+});
+const sentences = new Intl.Segmenter('en', { granularity: 'sentence' });
+
+export function inspectExtractiveSummary(prompt: Prompt, text: string) {
+  const sources = prompt[1].content
+    .split('\n')
+    .filter((line) => line.startsWith('{'))
+    .map((line) => {
+      const source = excerptSource.parse(JSON.parse(line));
+      const text = source.attachment?.text ?? source.text;
+      const boundaries = [...sentences.segment(text)]
+        .filter(({ segment }) => segment.trim())
+        .map(({ segment, index }) => ({
+          start: index + segment.length - segment.trimStart().length,
+          end: index + segment.trimEnd().length,
+        }));
+      return {
+        seq: source.seq,
+        author: source.author,
+        text,
+        starts: boundaries.map(({ start }) => start),
+        ends: new Set(boundaries.map(({ end }) => end)),
+      };
+    });
+  const sourceBytes = sources.reduce((total, source) => total + Buffer.byteLength(source.text), 0);
+  const summaryBytes = Buffer.byteLength(text);
+  let attribution: string | undefined;
+  let excerpts = 0;
+  const lines = text.split('\n');
+  for (let index = 0; index < lines.length; index++) {
+    const content = lines[index]!.trimStart().replace(/^(?:[-*+]\s+|#{1,6}\s+)/, '');
+    const labeled = /^(?:\*\*)?(User|Agent|#[0-9]+)(?:\*\*)?(?:\s*:\s*|\s*$)(.*)$/i.exec(content);
+    if (labeled) attribution = labeled[1]!.toLowerCase();
+    const excerpt = labeled ? labeled[2]! : content;
+    if (!excerpt.trim()) continue;
+    let lastMatch = index - 1;
+    for (const source of sources) {
+      if (attribution !== source.author && attribution !== `#${source.seq}`) continue;
+      for (const start of source.starts) {
+        let span = excerpt;
+        for (let last = index; last < lines.length; last++) {
+          if (last > index) span += '\n' + lines[last];
+          const candidate = span.trimEnd();
+          if (!source.text.startsWith(candidate, start)) break;
+          if (source.ends.has(start + candidate.length)) lastMatch = Math.max(lastMatch, last);
+        }
+      }
+    }
+    if (lastMatch < index)
+      return { sourceBytes, summaryBytes, verdict: 'invalid-excerpt' as const };
+    index = lastMatch;
+    excerpts++;
+  }
+  const verdict = !excerpts
+    ? 'invalid-excerpt'
+    : summaryBytes >= sourceBytes
+      ? 'non-compressive'
+      : 'accepted';
+  return { sourceBytes, summaryBytes, verdict };
+}
+
 export function localMemoryPrompt(prompt: Prompt, arm: Exclude<LocalArm, 'immediate'>): Prompt {
   const [system, user] = prompt;
   const start = user.content.indexOf('Current original source messages:\n');
   if (start < 0) throw new Error('Cannot identify the current UAMP sources.');
   return [
-    arm === 'local-bullets' ? { ...system, content: localBullets } : system,
+    arm === 'local-bullets'
+      ? { ...system, content: localBullets }
+      : arm === 'local-extractive'
+        ? { ...system, content: localExtractive }
+        : system,
     {
       ...user,
       content: user.content
@@ -130,7 +209,7 @@ export function localMemoryFacts(fixture: MemoryFixture, arm: LocalArm): MemoryF
 export async function compareLocalMemory(
   fixtures: readonly MemoryFixture[],
   input: ArmInput,
-  arms: readonly LocalArm[] = localMemoryArms,
+  arms: readonly LocalArm[] = comparisonArms,
 ) {
   const results = [];
   for (const fixture of fixtures) {
@@ -164,6 +243,7 @@ export async function compareLocalMemory(
           ...options,
           transformUampPrompt:
             arm === 'immediate' ? undefined : (prompt) => localMemoryPrompt(prompt, arm),
+          inspectExtract: arm === 'local-extractive' ? inspectExtractiveSummary : undefined,
           onHandoff(text, details) {
             observe?.(text, details);
             handoff = text;

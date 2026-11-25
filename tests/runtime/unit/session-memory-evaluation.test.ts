@@ -3,6 +3,7 @@ import {
   screenSessionMemory,
 } from '../../../evals/session-memory-screening.js';
 import {
+  inspectExtractiveSummary,
   localMemoryFacts,
   localMemoryPrompt,
   manifestLocalFacts,
@@ -32,6 +33,65 @@ import {
 import { prepareMemorySummaries } from '../../../runtime/src/session-memory/summarization.js';
 import { estimateMemoryTokens } from '../../../runtime/src/session-memory/text.js';
 import { memoryFixtures } from '../../../runtime/src/evals/session-memory-fixtures.js';
+
+test('extractive summaries require verbatim complete sentences, attribution and compression', () => {
+  const user = 'Keep the three attempts.  Preserve the old messages for review.';
+  const agent = 'I will update the notes. No edits have been made.';
+  const prompt = [
+    { role: 'system' as const, content: '' },
+    {
+      role: 'user' as const,
+      content: [
+        JSON.stringify({ seq: 1, author: 'user', text: user }),
+        JSON.stringify({ seq: 2, author: 'agent', text: agent }),
+      ].join('\n'),
+    },
+  ] as const;
+  expect(inspectExtractiveSummary([...prompt], '- User: Keep the three attempts.').verdict).toBe(
+    'accepted',
+  );
+  for (const text of [
+    '- User: I will update the notes.',
+    '- User: Keep the three attempts. Preserve the old messages for review.',
+    '- Agent: I updated the notes.',
+    '- Agent: edits have been made.',
+  ]) {
+    expect(inspectExtractiveSummary([...prompt], text).verdict).toBe('invalid-excerpt');
+  }
+  expect(inspectExtractiveSummary([...prompt], `User: ${user}\nAgent: ${agent}`).verdict).toBe(
+    'non-compressive',
+  );
+});
+
+test('extractive summaries validate attached material and preserve internal line breaks', () => {
+  const user = 'Review the attached operational notes before changing the existing policy.';
+  const attachment = 'Keep the delay at 45 seconds\n  until the current incident ends.';
+  const prompt = [
+    { role: 'system' as const, content: '' },
+    {
+      role: 'user' as const,
+      content: [
+        JSON.stringify({ seq: 1, author: 'user', text: user }),
+        JSON.stringify({
+          seq: 1,
+          author: 'user',
+          text: '',
+          attachment: { name: 'incident.md', text: attachment },
+        }),
+      ].join('\n'),
+    },
+  ] as const;
+  expect(inspectExtractiveSummary([...prompt], `- #1: ${attachment}`)).toMatchObject({
+    sourceBytes: Buffer.byteLength(user + attachment),
+    verdict: 'accepted',
+  });
+  for (const text of [
+    '- #1: Keep the delay at 45 seconds until the current incident ends.',
+    `- Agent: ${attachment}`,
+  ]) {
+    expect(inspectExtractiveSummary([...prompt], text).verdict).toBe('invalid-excerpt');
+  }
+});
 
 test('MNN-Pocket qualification rejects conflicting evaluation modes before model setup', async () => {
   const conflicts = [

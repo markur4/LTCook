@@ -96,7 +96,8 @@ try {
     const minimalApproval = args.includes('--diagnose-minimal-approval');
     const validateLocal = option('validate-local-memory');
     const localComparison = args.includes('--compare-local-memory') || validateLocal !== undefined;
-    const qualifyMnnLocal = args.includes('--qualify-mnn-local');
+    const extractive = args.includes('--qualify-mnn-extractive');
+    const qualifyMnnLocal = extractive || args.includes('--qualify-mnn-local');
     if (
       (qualifyMnnLocal ||
         localComparison ||
@@ -119,6 +120,7 @@ try {
         approvalDiagnostic: minimalApproval ? 'minimal' : mnnDiagnostic ? 'controls' : undefined,
         localComparison,
         qualifyMnnLocal,
+        extractive,
         localValidation: validateLocal
           ? localValidationArms(JSON.parse(await readFile(validateLocal, 'utf8')))
           : undefined,

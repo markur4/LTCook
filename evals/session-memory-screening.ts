@@ -120,6 +120,7 @@ export async function screenSessionMemory(input: {
   approvalDiagnostic?: 'controls' | 'minimal';
   localComparison?: boolean;
   qualifyMnnLocal?: boolean;
+  extractive?: boolean;
   localValidation?: readonly (typeof localMemoryArms)[number][];
   mnnApprovalFirst?: boolean;
   allowRetry?: boolean;
@@ -368,20 +369,42 @@ export async function screenSessionMemory(input: {
           if (input.qualifyMnnLocal) {
             if (!model.weightsDigest)
               throw new Error('The qualification requires verified weights.');
+            const options = {
+              settings,
+              digest: model.digest,
+              signal,
+              auditOutput,
+              inspectIncompleteFallback: true,
+              screening: { weightsDigest: model.weightsDigest },
+              progress: (label: string) => progress?.(`${profile.name}: ${label}`),
+            };
+            if (input.extractive) {
+              const retry = fixtures.find(({ id }) => id === 'semantic-retry-correction')!;
+              const first = await compareLocalMemory([retry], options, ['local-extractive']);
+              const arms = first[0]?.passed
+                ? [
+                    ...first,
+                    ...(await compareLocalMemory(
+                      [
+                        realisticReferenceFixture(),
+                        ...fixtures.filter(
+                          ({ id }) => id !== retry.id && id !== 'approval-after-skipped-discussion',
+                        ),
+                      ],
+                      options,
+                      ['local-extractive'],
+                    )),
+                  ]
+                : first;
+              localResults.push({ model: verified, arms });
+              break;
+            }
             const arms = await compareLocalMemory(
               [
                 realisticReferenceFixture(),
                 ...fixtures.filter(({ id }) => id !== 'approval-after-skipped-discussion'),
               ],
-              {
-                settings,
-                digest: model.digest,
-                signal,
-                auditOutput,
-                inspectIncompleteFallback: true,
-                screening: { weightsDigest: model.weightsDigest },
-                progress: (label) => progress?.(`${profile.name}: ${label}`),
-              },
+              options,
               ['local-template', 'local-bullets'],
             );
             localResults.push({ model: verified, arms });
