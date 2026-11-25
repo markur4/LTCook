@@ -446,7 +446,7 @@ async function run(): Promise<void> {
             })
         : undefined;
     const workspaceMcp = new WorkspaceMcp(
-      createTools(ried, summarization, web, memory, api.activityColgrep),
+      createTools(ried, summarization, web, memory, api.activityColgrep, api.worktreeTool),
       apiListen,
       web,
       requestRestart,

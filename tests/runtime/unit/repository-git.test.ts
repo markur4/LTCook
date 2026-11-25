@@ -11,9 +11,10 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, normalize } from 'node:path';
+import { delimiter, join, normalize } from 'node:path';
 import { readGit } from '../../../runtime/src/repository/providers/git.js';
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
+import { SessionWorktrees } from '../../../runtime/src/integrations/session-worktrees.js';
 
 const fixtures: string[] = [];
 
@@ -57,6 +58,140 @@ function commitAll(root: string, subject: string) {
 }
 
 const gitPath = process.env.PATH ?? '';
+
+test('session worktrees follow distinct linked checkouts and fall back when one disappears', async () => {
+  const { fixture, root } = createRepository();
+  writeFileSync(join(root, 'tracked.txt'), 'Initial\n');
+  commitAll(root, 'Initial');
+  const first = join(fixture, 'first session');
+  const second = join(fixture, 'second session');
+  git(root, 'worktree', 'add', '-qb', 'feature/first', first);
+  git(root, 'worktree', 'add', '-qb', 'feature/second', second);
+
+  const worktrees = new SessionWorktrees(gitPath);
+  const firstScope = { sessionId: 'session-one', agentId: 'agent-one', workspaceRoot: root };
+  const secondScope = { sessionId: 'session-two', agentId: 'agent-two', workspaceRoot: root };
+  await worktrees.register(firstScope, first);
+  await worktrees.register(secondScope, second);
+
+  const firstState = await worktrees.read(firstScope);
+  expect(firstState.following).toEqual({ path: first, branch: 'feature/first' });
+  expect(firstState.available).toEqual([
+    { path: root, branch: 'trunk' },
+    { path: first, branch: 'feature/first' },
+    { path: second, branch: 'feature/second' },
+  ]);
+  expect((await worktrees.read(secondScope)).following).toEqual({
+    path: second,
+    branch: 'feature/second',
+  });
+  expect(git(root, 'branch', '--show-current')).toBe('trunk');
+
+  git(root, 'worktree', 'remove', first);
+  expect(await worktrees.read(firstScope)).toEqual({
+    following: null,
+    available: [
+      { path: root, branch: 'trunk' },
+      { path: second, branch: 'feature/second' },
+    ],
+  });
+  expect((await worktrees.read(secondScope)).following?.path).toBe(second);
+});
+
+test('session worktrees preserve a replacement when an earlier checkout is released', async () => {
+  const { fixture, root } = createRepository();
+  writeFileSync(join(root, 'tracked.txt'), 'Initial\n');
+  commitAll(root, 'Initial');
+  const first = join(fixture, 'before');
+  const replacement = join(fixture, 'replacement');
+  git(root, 'worktree', 'add', '-qb', 'feature/first', first);
+  git(root, 'worktree', 'add', '-qb', 'feature/replacement', replacement);
+  const scope = { sessionId: 'session', agentId: 'agent', workspaceRoot: root };
+  const worktrees = new SessionWorktrees(gitPath);
+
+  await worktrees.register(scope, first);
+  await worktrees.register(scope, replacement);
+  await worktrees.clear(scope, first);
+  expect((await worktrees.read(scope)).following?.path).toBe(replacement);
+  await expect(worktrees.register(scope, fixture)).rejects.toThrow('session repository');
+  expect((await worktrees.read(scope)).following?.path).toBe(replacement);
+
+  await worktrees.clear(scope, replacement);
+  expect((await worktrees.read(scope)).following).toBeNull();
+});
+
+test('a focused Pass follows its own checkout and falls back even when another Pass has one', async () => {
+  const { fixture, root } = createRepository();
+  writeFileSync(join(root, 'tracked.txt'), 'Initial\n');
+  commitAll(root, 'Initial');
+  const first = join(fixture, 'first pass');
+  const second = join(fixture, 'second pass');
+  git(root, 'worktree', 'add', '-qb', 'feature/first', first);
+  git(root, 'worktree', 'add', '-qb', 'feature/second', second);
+  const scope = { sessionId: 'one-session', agentId: 'one-agent', workspaceRoot: root };
+  const firstPass = { ...scope, passId: 'first-pass' };
+  const secondPass = { ...scope, passId: 'second-pass' };
+  const worktrees = new SessionWorktrees(gitPath);
+
+  await worktrees.register(firstPass, first);
+  expect((await worktrees.read(secondPass)).following).toBeNull();
+  await worktrees.register(secondPass, second);
+  expect((await worktrees.read(firstPass)).following?.path).toBe(first);
+  git(root, 'worktree', 'remove', first);
+  expect((await worktrees.read(firstPass)).following).toBeNull();
+  expect((await worktrees.read(secondPass)).following?.path).toBe(second);
+});
+
+test.skipIf(process.platform === 'win32')(
+  'a Git inventory captured before an agent switches worktrees preserves the new registration',
+  async () => {
+    const { fixture, root } = createRepository();
+    writeFileSync(join(root, 'tracked.txt'), 'Initial\n');
+    commitAll(root, 'Initial');
+    const first = join(fixture, 'first');
+    const second = join(fixture, 'second');
+    git(root, 'worktree', 'add', '-qb', 'feature/first', first);
+    const bin = join(fixture, 'bin');
+    mkdirSync(bin);
+    const wrapper = join(bin, 'git');
+    const actualGit = Bun.which('git');
+    if (!actualGit) throw new Error('Git is required for repository tests.');
+    const executable = `'${actualGit.replaceAll("'", "'\\''")}'`;
+    writeFileSync(
+      wrapper,
+      [
+        '#!/bin/sh',
+        `if mv "$0.capture" "$0.started" 2>/dev/null; then`,
+        `  ${executable} "$@" > "$0.inventory" || exit $?`,
+        '  touch "$0.ready"',
+        '  until test -e "$0.release"; do sleep 0.01; done',
+        '  cat "$0.inventory"',
+        'else',
+        `  exec ${executable} "$@"`,
+        'fi',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const scope = { sessionId: 'session', agentId: 'agent', workspaceRoot: root };
+    const worktrees = new SessionWorktrees([bin, gitPath].join(delimiter));
+    await worktrees.register(scope, first);
+    writeFileSync(`${wrapper}.capture`, '');
+
+    const previous = worktrees.read(scope);
+    try {
+      const deadline = performance.now() + 2000;
+      while (!existsSync(`${wrapper}.ready`) && performance.now() < deadline) await Bun.sleep(10);
+      expect(existsSync(`${wrapper}.ready`)).toBe(true);
+      git(root, 'worktree', 'add', '-qb', 'feature/second', second);
+      await worktrees.register(scope, second);
+    } finally {
+      writeFileSync(`${wrapper}.release`, '');
+      await previous;
+    }
+    expect((await worktrees.read(scope)).following?.path).toBe(second);
+  },
+);
 
 test('Git discovery splits committed base changes from staged, unstaged and untracked files', async () => {
   const { root, fixture } = createRepository();

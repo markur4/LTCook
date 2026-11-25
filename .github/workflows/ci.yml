@@ -47,6 +47,8 @@ jobs:
         run: bun run test
       - name: Build runtime, plugins, and teams
         run: bun run build
+      - name: Build the bundled Paseo web app
+        run: bun run build:paseo-web
       - name: Stage canonical runtime archive
         run: PYTHONPATH=src uv run --locked --no-sync python -m ltcook_dev.packaging.package_assets --root . --destination src/ltcook_distr/bundle.zip
       - name: Install staged Python application and build packages
@@ -131,6 +133,8 @@ jobs:
           uv sync --locked --all-groups --no-install-project
       - name: Run explicit integration checks
         run: PYTHONPATH=src uv run --locked --no-sync pytest -m integration
+      - name: Build the bundled Paseo web app
+        run: bun run build:paseo-web
       - name: Run explicit system checks
         run: PYTHONPATH=src uv run --locked --no-sync pytest -m system
 

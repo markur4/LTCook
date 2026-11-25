@@ -28,8 +28,12 @@ import {
   isRepositoryTool,
   SESSION_MEMORY_TOOL_NAME,
   REPO_SEARCH_TIMEOUT_MS,
+  WORKTREE_TOOL_NAME,
 } from '../paseo-plugin/shared/workspace-tools.js';
 import { isWebTool } from '../tools/web.js';
+import { createSessionWorktreeTool } from '../tools/session-worktree.js';
+import type { ToolContext } from '../tools/types.js';
+import { SessionWorktrees, type WorktreeScope } from './session-worktrees.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
 import { createColgrepProvider } from '../repository/providers/colgrep.js';
 import { validateRiedRequest } from '../repository/requests.js';
@@ -69,6 +73,12 @@ const modelSelectionRequest = ModelCatalogRequestSchema.extend({
   workspaceRoot: z.string().min(1),
   alias: z.string().optional(),
   reasoning: z.string().optional(),
+});
+
+const worktreeRequest = z.object({
+  nativeAgentId: z.string().min(1),
+  workspaceRoot: z.string().min(1),
+  sessionId: z.string().min(1).optional(),
 });
 
 export interface EvaluationExecutionScope {
@@ -142,6 +152,8 @@ export class RuntimeApi {
   private reservingIdleRestart = false;
   private stopping = false;
   private workspaceMcp: WorkspaceMcp | undefined;
+  private readonly sessionWorktrees: SessionWorktrees;
+  readonly worktreeTool: ReturnType<typeof createSessionWorktreeTool>;
   setSessionMemory(memory: SessionMemory, context?: RuntimeApi['memoryContext']): void {
     this.memory = memory;
     memory.setSummarizationEnabled(this.activityPreferences?.enabled('summarizer') ?? true);
@@ -174,6 +186,47 @@ export class RuntimeApi {
     this.memoryDisabled =
       Number(startupEnvironment.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000') === 0;
     this.startupShellEnvironment = captureShellEnvironment(startupEnvironment);
+    this.sessionWorktrees = new SessionWorktrees(startupEnvironment.PATH ?? '');
+    this.worktreeTool = createSessionWorktreeTool(this.sessionWorktrees, (context, passId) =>
+      this.worktreeScope(context, passId),
+    );
+  }
+
+  private worktreeScope(
+    {
+      sessionId,
+      agentId,
+      workspaceRoot,
+    }: Pick<ToolContext, 'sessionId' | 'agentId' | 'workspaceRoot'>,
+    requestedPassId?: string,
+  ): WorktreeScope {
+    if (!sessionId) {
+      if (requestedPassId) throw new Error('This agent has no LTCook Pass.');
+      return { sessionId: agentId, agentId, workspaceRoot };
+    }
+    const snapshot = this.runtime?.snapshot(sessionId);
+    if (
+      !snapshot?.members.some(
+        ({ binding }) => binding?.state === 'bound' && binding.nativeAgentId === agentId,
+      )
+    )
+      throw new Error('The agent is not bound to this session.');
+    if (requestedPassId && !snapshot.passes.some(({ id }) => id === requestedPassId))
+      throw new Error('The Pass does not belong to this session.');
+
+    const running = snapshot.passes.filter(({ status }) => status === 'running');
+    const runningIds = new Set(running.map(({ id }) => id));
+    const focused = new Set(
+      snapshot.assignments.flatMap((assignment) => {
+        if (assignment.nativeAgentId !== agentId || assignment.status === 'reported') return [];
+        const passId = snapshot.tasks.find(({ id }) => id === assignment.taskId)?.passId;
+        return passId && runningIds.has(passId) ? [passId] : [];
+      }),
+    );
+    const passId =
+      requestedPassId ??
+      (focused.size === 1 ? [...focused][0] : running.length === 1 ? running[0]?.id : undefined);
+    return { sessionId, agentId, workspaceRoot: snapshot.session.workspaceRoot, passId };
   }
   setRuntime(runtime: RuntimeController): void {
     this.runtime = runtime;
@@ -319,6 +372,7 @@ export class RuntimeApi {
           '/v1/model/catalog',
           '/v1/model/resolve',
           '/v1/session/list',
+          '/v1/session/worktrees',
           '/v1/session/prepare',
           '/v1/runtime/stop',
           '/v1/tool/authorize',
@@ -462,6 +516,24 @@ export class RuntimeApi {
           : undefined;
       if (!actor) {
         response.writeHead(401).end('{"error":"unauthorized"}');
+        return;
+      }
+      if (request.url === '/v1/session/worktrees') {
+        if (!isUser) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        const { nativeAgentId, ...requestScope } = worktreeRequest.parse(parsed);
+        const scope = this.worktreeScope({ ...requestScope, agentId: nativeAgentId });
+        const worktrees = await this.sessionWorktrees.read(scope, AbortSignal.timeout(3500));
+        response.writeHead(200).end(
+          JSON.stringify({
+            agentId: scope.agentId,
+            sessionId: scope.sessionId,
+            original: scope.workspaceRoot,
+            ...worktrees,
+          }),
+        );
         return;
       }
       if (request.url === '/v1/activity/toggle') {
@@ -858,7 +930,12 @@ export class RuntimeApi {
           actor.kind !== 'agent' ||
           !input.sessionId ||
           !this.workspaceMcp ||
-          !(repositorySearch || isWebTool(toolName) || toolName === SESSION_MEMORY_TOOL_NAME) ||
+          !(
+            repositorySearch ||
+            isWebTool(toolName) ||
+            toolName === SESSION_MEMORY_TOOL_NAME ||
+            toolName === WORKTREE_TOOL_NAME
+          ) ||
           !input.toolArgs ||
           typeof input.toolArgs !== 'object' ||
           Array.isArray(input.toolArgs)

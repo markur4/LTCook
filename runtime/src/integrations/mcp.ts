@@ -13,7 +13,11 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolDefinition, ToolContext } from '../tools/types.js';
-import { isRepositoryTool, WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
+import {
+  isRepositoryTool,
+  WORKSPACE_MCP_SERVER,
+  WORKTREE_TOOL_NAME,
+} from '../paseo-plugin/shared/workspace-tools.js';
 import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
 import type { WebToolService } from '../tools/web.js';
@@ -54,6 +58,10 @@ const RESTART_TOOL: Tool = {
     additionalProperties: false,
   },
 };
+
+function requiresRepositoryAccess(name: string): boolean {
+  return isRepositoryTool(name) || name === WORKTREE_TOOL_NAME;
+}
 
 function directoryIdentity(directory: string): string {
   const stats = statSync(directory, { bigint: true });
@@ -271,7 +279,7 @@ export class WorkspaceMcp {
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       const tools = grant.repositorySearchAccess
         ? this.catalog
-        : this.catalog.filter(({ name }) => !isRepositoryTool(name));
+        : this.catalog.filter(({ name }) => !requiresRepositoryAccess(name));
       return {
         tools:
           this.requestRestart && server.getClientCapabilities()?.elicitation?.form
@@ -287,7 +295,7 @@ export class WorkspaceMcp {
           output = await this.approveRestart(params.arguments ?? {}, connection, requestId, signal);
         } else {
           const tool = this.tools.get(params.name);
-          if (!tool || (isRepositoryTool(params.name) && !grant.repositorySearchAccess))
+          if (!tool || (requiresRepositoryAccess(params.name) && !grant.repositorySearchAccess))
             throw new Error('Unknown LTCook tool.');
           output = await tool.invoke(params.arguments ?? {}, {
             agentId: grant.agentId,

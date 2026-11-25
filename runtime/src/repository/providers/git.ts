@@ -22,6 +22,7 @@ export interface GitWorktree {
   branch?: string;
   detached?: true;
   bare?: true;
+  prunable?: true;
 }
 
 export interface GitDiscovery {
@@ -124,11 +125,67 @@ function parseWorktrees(output: string): GitWorktree[] {
       entry.detached = true;
     } else if (entry && field === 'bare') {
       entry.bare = true;
+    } else if (entry && (field === 'prunable' || field.startsWith('prunable '))) {
+      entry.prunable = true;
     } else if (!field) {
       entry = undefined;
     }
   }
   return entries;
+}
+
+function runGitQuery(
+  git: string,
+  workspace: RepositoryWorkspace,
+  pathValue: string,
+  args: string[],
+  options: GitQueryOptions,
+  signal?: AbortSignal,
+) {
+  const config = [...GIT_CONFIG, ...(options.config ?? [])];
+  return runRepositoryCommand(
+    git,
+    ['--no-pager', ...config.flatMap((value) => ['-c', value]), ...args],
+    workspace,
+    pathValue,
+    {
+      timeoutMs: 3000,
+      signal,
+      maxBytes: options.maxBytes ?? 1024 * 1024,
+      env: {
+        GIT_ATTR_NOSYSTEM: '1',
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: devNull,
+        GIT_OPTIONAL_LOCKS: '0',
+        GIT_NO_LAZY_FETCH: '1',
+        GIT_NO_REPLACE_OBJECTS: '1',
+        GIT_ALLOW_PROTOCOL: '',
+        GIT_TERMINAL_PROMPT: '0',
+      },
+    },
+  );
+}
+
+/** List Git's registered worktrees without reading working-tree status or contents. */
+export async function listGitWorktrees(
+  workspace: RepositoryWorkspace,
+  pathValue: string,
+  signal?: AbortSignal,
+): Promise<GitWorktree[]> {
+  await workspace.assertUnchanged();
+  const git = findRepositoryExecutable('git', pathValue, workspace);
+  if (!git) throw new Error('Git is unavailable outside the workspace');
+  const { code, stdout } = await runGitQuery(
+    git,
+    workspace,
+    pathValue,
+    ['worktree', 'list', '--porcelain', '-z'],
+    {},
+    signal,
+  );
+  if (code !== 0) throw new Error('Git could not list the registered worktrees');
+  await workspace.assertUnchanged();
+  return parseWorktrees(stdout);
 }
 
 function parseBaseChanges(output: string) {
@@ -330,29 +387,8 @@ export async function readGit(
     return result;
   }
   const query: GitQuery = async (operation, args, options = {}) => {
-    const config = [...GIT_CONFIG, ...(options.config ?? [])];
     try {
-      const output = await runRepositoryCommand(
-        git,
-        ['--no-pager', ...config.flatMap((value) => ['-c', value]), ...args],
-        workspace,
-        pathValue,
-        {
-          timeoutMs: 3000,
-          signal,
-          maxBytes: options.maxBytes ?? 1024 * 1024,
-          env: {
-            GIT_ATTR_NOSYSTEM: '1',
-            GIT_CONFIG_NOSYSTEM: '1',
-            GIT_CONFIG_GLOBAL: devNull,
-            GIT_OPTIONAL_LOCKS: '0',
-            GIT_NO_LAZY_FETCH: '1',
-            GIT_NO_REPLACE_OBJECTS: '1',
-            GIT_ALLOW_PROTOCOL: '',
-            GIT_TERMINAL_PROMPT: '0',
-          },
-        },
-      );
+      const output = await runGitQuery(git, workspace, pathValue, args, options, signal);
       if ((options.acceptedExitCodes ?? [0]).includes(output.code)) return output.stdout;
       report(`${operation}-unavailable`, `Git ${operation} is unavailable`);
     } catch (error) {
