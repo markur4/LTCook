@@ -1,7 +1,11 @@
+import { Text } from 'react-native';
 import { SidebarRow } from '@getpaseo/plugin/client/ui';
-import type { PluginClientContext } from '@getpaseo/plugin/client';
+import { useAgent, type PluginClientContext } from '@getpaseo/plugin/client';
 import { TeamsBrowser } from './client/screens/TeamsBrowser';
 import { TeamStatus } from './client/screens/TeamStatus';
+import { ActivityButton } from './client/components/ActivityCard';
+import { MEMORY_SUMMARIES_TIMELINE_KIND, MemorySummariesTimelineSchema } from './shared/activity';
+import { MEMORY_SUMMARIES_PANEL_ID, StoredSummaries } from './client/screens/StoredSummaries';
 import { ActivityPanel } from './client/screens/ActivityPanel';
 import {
   ACTIVITY_PANEL_ID,
@@ -58,6 +62,37 @@ export default function contribute(client: PluginClientContext) {
       icon: 'Activity',
       locations: ['explorer'],
       Component: (props) => <ActivityPanel {...props} client={client} />,
+    }),
+    client.addAgentPanel({
+      id: MEMORY_SUMMARIES_PANEL_ID,
+      title: 'Stored Summaries',
+      icon: 'Brain',
+      locations: ['workspace'],
+      Component: StoredSummaries,
+    }),
+    client.addTimelineRenderer({
+      kind: MEMORY_SUMMARIES_TIMELINE_KIND,
+      version: 1,
+      schema: MemorySummariesTimelineSchema,
+      Component: ({ agentId, theme }) => {
+        const workspaceId = useAgent(agentId, (agent) => agent.workspaceId);
+        if (!workspaceId) return null;
+        return (
+          <ActivityButton
+            theme={theme}
+            label="Show summaries"
+            onPress={() =>
+              client.openPanel(MEMORY_SUMMARIES_PANEL_ID, {
+                agentId,
+                workspaceId,
+                location: 'workspace',
+              })
+            }
+          >
+            <Text style={{ color: theme.colors.foreground }}>Show summaries</Text>
+          </ActivityButton>
+        );
+      },
     }),
     client.addCommandCenterItem({
       id: 'open-activity-panel',

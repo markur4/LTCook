@@ -219,6 +219,20 @@ describe('native runtime boundary', () => {
         type: 'AAB',
         parts: [{ text: 'Stored body 10', sources: [10] }],
       });
+      expect(first.storagePath).toBe(databasePath);
+      expect(first.summaries[0]).toMatchObject({
+        position: 10,
+        originalTokens: null,
+        durationMs: null,
+      });
+      const metadataOnly = storedSummariesRpc.output.parse(
+        await (await readPage({ includeText: false })).json(),
+      );
+      expect(metadataOnly.summaries.map(({ id }) => id)).toEqual(
+        first.summaries.map(({ id }) => id),
+      );
+      expect(metadataOnly.summaries.flatMap(({ parts }) => parts)).toEqual([]);
+      expect(metadataOnly.next).toEqual(first.next);
       expect(first.next).not.toBeNull();
       const second = storedSummariesRpc.output.parse(
         await (await readPage({ before: first.next })).json(),

@@ -81,6 +81,90 @@ export type OllamaChatMetrics = {
   thinkingPresent: boolean;
 };
 
+export type OllamaChatProgress = {
+  elapsedMs: number;
+  countedTokens: number;
+  uncountedText: string;
+  estimated: boolean;
+};
+
+async function readOllamaChatStream(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+  onProgress: (progress: OllamaChatProgress | undefined) => void,
+) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let pending = '';
+  let content = '';
+  let thinking = '';
+  const logprobs: NonNullable<z.infer<typeof result>['logprobs']> = [];
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let reported = false;
+  let lastSample = 0;
+  let countedTokens = 0;
+  let uncountedText = '';
+  let estimated = false;
+
+  const reportProgress = () => {
+    const now = performance.now();
+    if (countedTokens || uncountedText) estimated = Boolean(uncountedText);
+    reported = true;
+    onProgress({ elapsedMs: now - lastSample, countedTokens, uncountedText, estimated });
+    countedTokens = 0;
+    uncountedText = '';
+    lastSample = now;
+  };
+  const stopProgress = () => {
+    clearInterval(timer);
+    timer = undefined;
+    if (reported) {
+      reported = false;
+      onProgress(undefined);
+    }
+  };
+
+  signal.addEventListener('abort', stopProgress, { once: true });
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      signal.throwIfAborted();
+      const lines = (pending + decoder.decode(value, { stream: !done })).split('\n');
+      pending = done ? '' : (lines.pop() ?? '');
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const chunk = result.parse(JSON.parse(line));
+        content += chunk.message.content;
+        thinking += chunk.message.thinking ?? '';
+        if (chunk.logprobs?.length) logprobs.push(...chunk.logprobs);
+        if (chunk.done) {
+          return {
+            ...chunk,
+            message: { content, thinking },
+            logprobs: logprobs.length ? logprobs : undefined,
+          };
+        }
+        const text = chunk.message.content + (chunk.message.thinking ?? '');
+        const tokens = chunk.logprobs?.length ?? 0;
+        if (!text && !tokens) continue;
+        if (tokens) countedTokens += tokens;
+        else uncountedText += text;
+        if (timer === undefined) {
+          // Measure streamed output after Ollama has loaded the model and processed the prompt.
+          lastSample = performance.now();
+          timer = setInterval(reportProgress, 1_000);
+        }
+      }
+      if (done) return undefined;
+    }
+  } finally {
+    signal.removeEventListener('abort', stopProgress);
+    stopProgress();
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
 function chatMetrics(payload: z.infer<typeof result>): OllamaChatMetrics {
   const { message, logprobs, eval_count } = payload;
   const { content, thinking } = message;
@@ -190,6 +274,7 @@ export async function ollamaChat(
   format?: Record<string, unknown>,
   onMetrics?: (metrics: OllamaChatMetrics) => void,
   tokenDiagnostics = Boolean(onMetrics),
+  onProgress?: (progress: OllamaChatProgress | undefined) => void,
 ) {
   const endpoint = ollamaEndpoint(settings.endpoint);
   const generation = summaryGeneration(settings);
@@ -199,9 +284,7 @@ export async function ollamaChat(
       'Configure a summarizer model and a keep-alive value of -1 or nonnegative seconds.',
     );
   const timeout = AbortSignal.timeout(CHAT_TIMEOUT_MS);
-  const bounded = AbortSignal.any([signal, timeout]) as NonNullable<
-    Parameters<typeof fetch>[1]
-  >['signal'];
+  const bounded = AbortSignal.any([signal, timeout]);
   const request = async (think: boolean | undefined) => {
     let response: Response;
     try {
@@ -209,7 +292,7 @@ export async function ollamaChat(
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         redirect: 'error',
-        signal: bounded,
+        signal: bounded as NonNullable<Parameters<typeof fetch>[1]>['signal'],
         body: JSON.stringify({
           model: modelName,
           messages,
@@ -218,7 +301,7 @@ export async function ollamaChat(
           ...(format ? { format } : {}),
           ...(tokenDiagnostics ? { logprobs: true } : {}),
           think,
-          stream: false,
+          stream: Boolean(onProgress),
           keep_alive: settings.keepAlive,
         }),
       });
@@ -235,12 +318,18 @@ export async function ollamaChat(
         );
       throw new Error(`Ollama summarization failed (HTTP ${response.status}).`);
     }
-    const payload = result.safeParse(await response.json().catch(() => undefined));
+    const jsonResponse = /^application\/json(?:\s*;|$)/i.test(
+      response.headers.get('content-type') ?? '',
+    );
+    const payload =
+      onProgress && response.body && !jsonResponse
+        ? await readOllamaChatStream(response.body, bounded, onProgress).catch(() => undefined)
+        : result.safeParse(await response.json().catch(() => undefined)).data;
     signal.throwIfAborted();
     if (timeout.aborted) throw new Error('Ollama summarization timed out.');
-    if (!payload.success) throw new Error('Ollama returned an invalid summarization response.');
-    if (onMetrics) onMetrics(chatMetrics(payload.data));
-    const { model, message, done, done_reason, eval_count, prompt_eval_count } = payload.data;
+    if (!payload) throw new Error('Ollama returned an invalid summarization response.');
+    if (onMetrics) onMetrics(chatMetrics(payload));
+    const { model, message, done, done_reason, eval_count, prompt_eval_count } = payload;
     const incomplete =
       !done ||
       !message.content.trim() ||

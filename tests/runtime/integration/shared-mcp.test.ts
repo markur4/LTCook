@@ -13,6 +13,7 @@ import {
   ollamaChat,
   releaseOllamaModel,
   type OllamaUsage,
+  type OllamaChatProgress,
 } from '../../../runtime/src/integrations/ollama.js';
 import { createTools } from '../../../runtime/src/tools/catalog.js';
 import { RiedService } from '../../../runtime/src/repository/discovery.js';
@@ -26,6 +27,71 @@ async function localAuthority(): Promise<string> {
   if (!address || typeof address === 'string') throw new Error('No fixture port.');
   return `127.0.0.1:${address.port}`;
 }
+
+test('streams Session Memory rates before the final Ollama response', async () => {
+  const model = 'fixture:latest';
+  const encoder = new TextEncoder();
+  const responseRecords = [
+    { model, message: { content: 'Stored ' }, done: false },
+    { model, message: { content: 'summary' }, done: false },
+    {
+      model,
+      message: { content: '' },
+      done: true,
+      done_reason: 'stop',
+      eval_count: 4,
+      eval_duration: 1_200_000_000,
+      prompt_eval_count: 20,
+    },
+  ];
+  const progress: Array<OllamaChatProgress | undefined> = [];
+  const usages: OllamaUsage[] = [];
+  let finish: (() => void) | undefined;
+  const ollama = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(request) {
+      expect(await request.json()).toMatchObject({ stream: true, model });
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const record of responseRecords.slice(0, 2))
+            controller.enqueue(encoder.encode(JSON.stringify(record) + '\n'));
+          finish = () => {
+            controller.enqueue(encoder.encode(JSON.stringify(responseRecords[2]) + '\n'));
+            controller.close();
+          };
+        },
+      });
+      return new Response(stream, { headers: { 'content-type': 'application/x-ndjson' } });
+    },
+  });
+  const abort = new AbortController();
+  const summary = ollamaChat(
+    { endpoint: `http://127.0.0.1:${ollama.port}`, model, keepAlive: 0 },
+    [{ role: 'user', content: 'Summarize this fixture.' }],
+    AbortSignal.any([abort.signal, AbortSignal.timeout(4000)]),
+    (usage) => usages.push(usage),
+    undefined,
+    undefined,
+    false,
+    (rate) => progress.push(rate),
+  );
+  void summary.catch(() => {});
+  try {
+    for (let attempt = 0; attempt < 100 && !progress.length; attempt++) await Bun.sleep(25);
+    expect(progress[0]).toMatchObject({ estimated: true, uncountedText: 'Stored summary' });
+    expect(progress[0]!.elapsedMs).toBeGreaterThanOrEqual(900);
+    expect(usages).toEqual([]);
+    finish?.();
+    expect(await summary).toMatchObject({ summary: 'Stored summary', incomplete: false });
+    expect(usages).toEqual([{ inputTokens: 20, outputTokens: 4 }]);
+    expect(progress.at(-1)).toBeUndefined();
+  } finally {
+    abort.abort();
+    await summary.catch(() => {});
+    await ollama.stop(true);
+  }
+});
 
 test('waits for the unloaded Ollama runner to disappear before reusing the model', async () => {
   const model = LFM3_SUMMARIZER_MODEL;

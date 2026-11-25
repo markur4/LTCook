@@ -18,6 +18,15 @@ const sourceSchema = z.object({
   author: z.enum(['user', 'agent', 'tool', 'runtime', 'unknown']),
 });
 
+const summaryPartSchema = z.object({
+  text: z.string(),
+  sources: z.array(z.number().int().nonnegative()),
+  noUsefulInformation: z.literal(true).optional(),
+  fields: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
+});
+const tokenCountSchema = z.number().int().nonnegative();
+const durationMsSchema = z.number().int().nonnegative();
+
 const summarySchema = z.object({
   id: z.string(),
   agentId: z.string(),
@@ -28,23 +37,29 @@ const summarySchema = z.object({
   sources: z.array(sourceSchema).min(1),
   scope: scopeSchema.optional(),
   createdAt: z.string(),
+  originalTokens: tokenCountSchema.optional(),
+  summaryTokens: tokenCountSchema.optional(),
+  durationMs: durationMsSchema.optional(),
   model: z.string().optional(),
   configuration: z.string().optional(),
   historyHash: z.string(),
-  parts: z.array(
-    z.object({
-      text: z.string(),
-      sources: z.array(z.number().int().nonnegative()),
-      noUsefulInformation: z.literal(true).optional(),
-      fields: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
-    }),
-  ),
+  parts: z.array(summaryPartSchema),
   observedChecks: z
     .array(z.object({ seq: z.number().int().nonnegative(), text: z.string() }))
     .optional(),
   expectedParts: z.number().int().positive(),
   complete: z.boolean(),
 });
+const catalogRowSchema = summarySchema
+  .pick({ id: true, type: true, position: true, createdAt: true })
+  .extend({
+    originalTokens: tokenCountSchema.nullable(),
+    summaryTokens: tokenCountSchema.nullable(),
+    durationMs: durationMsSchema.nullable(),
+    parts: z.string().nullable(),
+  });
+const catalogPartsSchema = z.array(summaryPartSchema.pick({ text: true, sources: true }));
+
 export type StoredMemorySummary = z.infer<typeof summarySchema>;
 export type MemorySummaryCursor = Pick<StoredMemorySummary, 'epoch' | 'position' | 'id'>;
 export type MemoryState = { epoch: string; seq: number };
@@ -151,28 +166,36 @@ export class MemoryStore {
     return rows.map(({ value }) => summarySchema.parse(JSON.parse(value)));
   }
 
-  summaryPage(agentId: string, epoch: string, through: number, before?: MemorySummaryCursor) {
+  summaryPage(
+    agentId: string,
+    epoch: string,
+    through: number,
+    before?: MemorySummaryCursor,
+    includeText = true,
+  ) {
     const pageSize = 8;
     const rows = this.database
       .prepare(
-        `SELECT value FROM memory_summary
+        `SELECT id, position, json_extract(value, '$.type') AS type,
+           json_extract(value, '$.createdAt') AS createdAt,
+           json_extract(value, '$.originalTokens') AS originalTokens,
+           json_extract(value, '$.summaryTokens') AS summaryTokens,
+           json_extract(value, '$.durationMs') AS durationMs,
+           ${includeText ? "json_extract(value, '$.parts')" : 'NULL'} AS parts
+         FROM memory_summary
          WHERE agent = ? AND epoch = ? AND position <= ?
            AND json_extract(value, '$.complete') = 1
            ${before ? 'AND (position, id) < (?, ?)' : ''}
          ORDER BY position DESC, id DESC LIMIT ?`,
       )
-      .all(
-        agentId,
-        epoch,
-        through,
-        ...(before ? [before.position, before.id] : []),
-        pageSize + 1,
-      ) as {
-      value: string;
-    }[];
-    const summaries = rows
-      .slice(0, pageSize)
-      .map(({ value }) => summarySchema.parse(JSON.parse(value)));
+      .all(agentId, epoch, through, ...(before ? [before.position, before.id] : []), pageSize + 1);
+    const summaries = rows.slice(0, pageSize).map((row) => {
+      const { parts, ...metadata } = catalogRowSchema.parse(row);
+      return {
+        ...metadata,
+        parts: parts === null ? [] : catalogPartsSchema.parse(JSON.parse(parts)),
+      };
+    });
     const last = summaries.at(-1);
     return {
       summaries,

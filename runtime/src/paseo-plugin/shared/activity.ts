@@ -53,7 +53,12 @@ const ragStatus = z.object({
   diagnostic: z.string().optional(),
 });
 export const MemoryUnitCountsSchema = z.object({ uamp: count, aab: count });
+export const MemoryRateSchema = z.object({
+  tokensPerSecond: z.number().finite().nonnegative(),
+  estimated: z.boolean(),
+});
 const sessionMemoryStatus = z.object({
+  rate: MemoryRateSchema.nullable(),
   cpuOnly: z.boolean().nullable(),
   lastHandoff: z
     .object({
@@ -103,19 +108,31 @@ export const memoryDeviceRpc = defineRpc({
 });
 
 const summaryCursor = z.object({ epoch: id, position: count, id });
+export const MEMORY_SUMMARIES_TIMELINE_KIND = 'memory-summaries';
+export const MemorySummariesTimelineSchema = z.object({});
+
 export const storedSummariesRpc = defineRpc({
   name: 'ltcook.activity.stored-summaries',
-  input: z.object({ agentId: id, before: summaryCursor.optional() }),
+  input: z.object({
+    agentId: id,
+    before: summaryCursor.optional(),
+    includeText: z.boolean().optional(),
+  }),
   output: z.object({
     summaries: z.array(
       z.object({
         id,
         type: z.enum(['UAMP', 'AAB']),
         createdAt: z.string(),
+        position: count,
+        originalTokens: count.nullable(),
+        summaryTokens: count.nullable(),
+        durationMs: count.nullable(),
         parts: z.array(z.object({ text: z.string(), sources: z.array(count) })),
       }),
     ),
     next: summaryCursor.nullable(),
+    storagePath: z.string().nullable(),
   }),
 });
 

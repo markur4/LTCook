@@ -756,8 +756,15 @@ try {
   memory = new SessionMemory({
     databasePath: path.join(directory, 'activity-memory.sqlite'),
     source: createPaseoMemorySource(host.api, secret),
-    async summarize(type, prompt) {
-      if (JSON.stringify(prompt).includes('Summarize without Activity')) backgroundSummary = true;
+    async summarize(type, prompt, _signal, _cpuOnly, onProgress) {
+      const input = JSON.stringify(prompt);
+      if (input.includes('Summarize without Activity')) backgroundSummary = true;
+      if (input.includes('Measure live summary throughput')) {
+        onProgress?.({ tokensPerSecond: 12.5, estimated: true });
+        await Bun.sleep(2100);
+        onProgress?.({ tokensPerSecond: 19, estimated: true });
+        await Bun.sleep(2100);
+      }
       return { type, text: 'Background summary fixture', complete: true, elapsedMs: 1 };
     },
   });
@@ -779,18 +786,55 @@ try {
   stage = 'native-activity-memory-summaries';
   await browser('wait', '[aria-label^="Session Memory,"][aria-label*="stored"]');
   await browser('click', '[aria-label^="Session Memory,"]');
-  const useGpu = '[role="switch"][aria-label="Use GPU"]';
-  await browser('wait', `${useGpu}[aria-checked="true"]`);
-  await browser('click', useGpu);
-  await browser('wait', `${useGpu}[aria-checked="false"]`);
+  stage = 'native-activity-memory-device';
+  await clickButton('Inference device: GPU (automatic)');
+  await browser('find', 'text', 'CPU', 'click', '--exact');
+  await browser('wait', '[aria-label="Inference device: CPU"]');
   assert.equal(memory.status(undefined, mobileSession.id).cpuOnly, true);
-  await browser('click', useGpu);
-  await browser('wait', `${useGpu}[aria-checked="true"]`);
+  await clickButton('Inference device: CPU');
+  await browser('find', 'text', 'GPU (automatic)', 'click', '--exact');
+  await browser('wait', '[aria-label="Inference device: GPU (automatic)"]');
   assert.equal(memory.status(undefined, mobileSession.id).cpuOnly, false);
+  stage = 'native-activity-memory-live-rate';
+  await host.api.agents
+    .ref(mobileSession.id)
+    .send('Measure live summary throughput', { clientMessageId: randomUUID() });
+  await browser('wait', '--text', '12.5 tokens/s');
+  await browser('wait', '--text', '19 tokens/s');
+  stage = 'native-activity-memory-catalog';
   await browser('wait', '--text', 'Stored for this agent');
   await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
+  await browser('wait', '--text', 'Est. tokens');
+  await browser('wait', '--text', 'Source #');
+  assert(
+    !(await browser('snapshot')).includes('Background summary fixture'),
+    'The narrow Explorer does not render summary bodies',
+  );
+  stage = 'native-activity-memory-json-tab';
+  await clickButton('Open stored summaries');
   await browser('wait', '--text', 'Background summary fixture');
-  await browser('wait', '--text', 'UAMP · User–agent message pair');
+  await browser('wait', '--text', 'activity-memory.sqlite');
+  const jsonDisplay = JSON.parse(
+    await browser(
+      'eval',
+      `(() => {
+        const code = document.querySelector('[data-testid="ltcook-stored-summaries-json"]');
+        const tokens = [...code.querySelectorAll('span')];
+        return { font: getComputedStyle(code).fontFamily, colors: new Set(tokens.map(token => getComputedStyle(token).color)).size };
+      })()`,
+    ),
+  ) as { font: string; colors: number };
+  assert.match(jsonDisplay.font, /monospace/);
+  assert(jsonDisplay.colors > 1, 'The Stored Summaries tab colors JSON syntax');
+  await clickButton('Copy JSON');
+  await browser('wait', '--text', 'Copied stored summaries');
+  await clickButton(mobileLeader.agent.title);
+  await waitForComposer(mobileLeader.agent.title);
+  stage = 'native-activity-memory-chat-shortcut';
+  await clickButton('Show summaries');
+  await browser('wait', '--text', 'Background summary fixture');
+  await clickButton(mobileLeader.agent.title);
+  await waitForComposer(mobileLeader.agent.title);
   await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
   await browser('wait', '--text', 'No acknowledged handoff available for this agent.');
   await browser('click', '[aria-label^="Session Memory,"]');

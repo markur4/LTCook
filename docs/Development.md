@@ -477,10 +477,12 @@ from original history where native receipts establish the boundaries.
 The previous extractive summarizer is limited to the Agent Evals baseline.
 The production default runs local LFM3 QAD Q4 at temperature 0.4 with
 reasoning disabled. Ollama uses GPU acceleration when available and falls
-back to CPU. The Activity sidebar's **Use GPU** switch saves a host-wide
-preference. Turning it off forces CPU inference. Switching back releases the
-CPU runner before the next background request. Memory work is asynchronous
-and starts only when foreground local inference is idle. See the
+back to CPU. The Activity sidebar's **Inference device** menu saves a host-wide
+preference. **CPU** forces CPU inference. Returning to **GPU (automatic)**
+releases the CPU runner before the next background request. Live throughput
+samples come from the background Ollama stream and are estimated when the
+provider omits token counts. Memory work is asynchronous and starts only when
+foreground local inference is idle. See the
 [architecture diagrams](Explanations.md#context-aware-session-memory) and the
 [CPU timing and GPU qualification results](context-aware-session-memory/QUALIFICATION.md#lean-single-seed-qualification).
 

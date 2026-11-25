@@ -54,9 +54,11 @@ All notable changes to `ltcook` will be documented in this file.
   **Activity**, **Team**, and **Tasks** on demand.
   Activity groups repeated tool calls and shows background summaries and
   acknowledged delegation handoffs in the Session Memory card. Select
-  **Stored for this agent** to read the completed summaries and their source
-  sequence numbers. Use the **Use GPU** switch to choose GPU-accelerated or CPU-only
-  summarization for the host.
+  **Stored for this agent** to inspect summary timings, token estimates, and
+  source positions. The **Stored Summaries** tab shows the storage path and
+  syntax-colored JSON with clipboard export. Open it from Activity or the chat's
+  **Show summaries** button. Use **Inference device** to choose CPU or automatic
+  GPU placement, and see live tokens per second during generation.
 
 - `ltcook restart` stops the local runtime and reopens Paseo. On Linux and macOS,
   `--update` applies the registered AppRC update before starting.
