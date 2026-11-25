@@ -64,7 +64,7 @@ diff --git a/packages/app/src/git/diff-pane.tsx b/packages/app/src/git/diff-pane
    );
  
    const handleToggleWrapLines = useCallback(() => {
-@@ -1611,12 +1606,37 @@
+@@ -1611,12 +1606,44 @@
      ignoreWhitespace: preferences.hideWhitespace,
      enabled: enabled !== false,
    });
@@ -82,7 +82,14 @@ diff --git a/packages/app/src/git/diff-pane.tsx b/packages/app/src/git/diff-pane
 +    (paths: string[]) => {
 +      if (readOnly) {
 +        const collapsed = new Set(paths);
-+        setExpandedReviewPaths(new Set(filePaths.filter((path) => !collapsed.has(path))));
++        setExpandedReviewPaths((expanded) => {
++          const next = new Set(expanded);
++          for (const path of filePaths) {
++            if (collapsed.has(path)) next.delete(path);
++            else next.add(path);
++          }
++          return next;
++        });
 +        return;
 +      }
 +      updateState({ ...instanceState, collapsedFilePaths: paths });
@@ -103,7 +110,7 @@ diff --git a/packages/app/src/git/diff-pane.tsx b/packages/app/src/git/diff-pane
    });
    const {
      status: pullRequestStatus,
-@@ -1750,10 +1770,10 @@
+@@ -1750,10 +1777,10 @@
    const workingMode = useMemo(
      () => ({
        kind: "working" as const,
@@ -116,7 +123,7 @@ diff --git a/packages/app/src/git/diff-pane.tsx b/packages/app/src/git/diff-pane
        onOpenFile,
        onOpenToSide,
        onAddToChat,
-@@ -1762,10 +1782,11 @@
+@@ -1762,10 +1789,11 @@
        onReveal: fileManagerTarget ? handleRevealPath : undefined,
        revealTargetName: fileManagerTarget?.label,
        onDownload: handleDownloadPath,
@@ -130,7 +137,7 @@ diff --git a/packages/app/src/git/diff-pane.tsx b/packages/app/src/git/diff-pane
        reviewActions,
        documentFocusRequest?.path,
        documentFocusRequest?.revision,
-@@ -1801,8 +1822,8 @@
+@@ -1801,8 +1829,8 @@
    const allFilesCollapsed =
      hasChanges && files.every((file) => collapsedFilePaths.includes(file.path));
    const handleCollapseAllFiles = useCallback(
@@ -141,7 +148,7 @@ diff --git a/packages/app/src/git/diff-pane.tsx b/packages/app/src/git/diff-pane
    );
    const handleExpandAllFiles = useCallback(
      () => updateCollapsedFilePaths([]),
-@@ -1861,15 +1882,17 @@
+@@ -1861,15 +1889,17 @@
            mode={workingMode}
          />
        </DiffBodyContent>
@@ -168,7 +175,7 @@ diff --git a/packages/app/src/git/diff-pane.tsx b/packages/app/src/git/diff-pane
      </View>
    );
    const bodyContent = (
-@@ -1991,7 +2014,7 @@
+@@ -1991,7 +2021,7 @@
        {isGit ? (
          <ChangesHeader
            compact={isMobile}
@@ -177,7 +184,7 @@ diff --git a/packages/app/src/git/diff-pane.tsx b/packages/app/src/git/diff-pane
            comparison={changesHeaderModel.comparison}
            sidebarSurface={presentation === "tree"}
          />
-@@ -2012,21 +2035,25 @@
+@@ -2012,21 +2042,25 @@
          ) : null}
        </View>
  
@@ -266,9 +273,15 @@ diff --git a/packages/app/src/panels/diff-panel.tsx b/packages/app/src/panels/di
            serverId={serverId}
            workspaceId={workspaceId}
            cwd={cwd}
-@@ -137,9 +147,9 @@
-           focusPath={target.kind === "working_diff" ? target.focusPath : undefined}
-           focusRequestId={target.kind === "working_diff" ? target.focusRequestId : undefined}
+@@ -137,9 +147,13 @@
+-          focusPath={target.kind === "working_diff" ? target.focusPath : undefined}
+-          focusRequestId={target.kind === "working_diff" ? target.focusRequestId : undefined}
++          focusPath={
++            !reviewingWorktree && target.kind === "working_diff" ? target.focusPath : undefined
++          }
++          focusRequestId={
++            !reviewingWorktree && target.kind === "working_diff" ? target.focusRequestId : undefined
++          }
            onSelectDiffFile={isTree ? handleSelectDiffFile : undefined}
 -          onOpenFile={handleOpenFile}
 -          onOpenToSide={isTree && openTargetToSide ? handleOpenDiffToSide : undefined}
