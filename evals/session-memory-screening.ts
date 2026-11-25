@@ -17,6 +17,7 @@ import {
 } from '../runtime/src/session-memory/summarization.js';
 import { semanticMemoryFixtures } from './session-memory-semantic-fixtures.js';
 import { diagnoseManifestApproval } from './session-memory-approval.js';
+import { compareLocalMemory, localMemoryArms } from './session-memory-local.js';
 import {
   referenceFixture,
   runSimplifiedMemoryArm,
@@ -115,6 +116,8 @@ export async function screenSessionMemory(input: {
   auditOutput?: boolean;
   profileId?: string;
   approvalDiagnostic?: 'controls' | 'minimal';
+  localComparison?: boolean;
+  localValidation?: readonly (typeof localMemoryArms)[number][];
   mnnApprovalFirst?: boolean;
   allowRetry?: boolean;
   progress?: (label: string) => void;
@@ -141,6 +144,11 @@ export async function screenSessionMemory(input: {
     throw new Error('--mnn-approval-first selects the MNN-Pocket Q8_0 experiment.');
   if (input.approvalDiagnostic && (input.profileId || input.mnnApprovalFirst))
     throw new Error('The approval diagnostic selects its own MNN-Pocket profiles at 0.8.');
+  if (
+    input.localComparison &&
+    (input.profileId || input.mnnApprovalFirst || input.approvalDiagnostic)
+  )
+    throw new Error('The local memory comparison selects its own model profiles.');
   const qatScreen = input.profileId === mnnQatProfile.id;
   const approvalFirst = input.mnnApprovalFirst || qatScreen;
   const { signal, auditOutput, progress } = input;
@@ -240,11 +248,18 @@ export async function screenSessionMemory(input: {
     profile: (typeof profiles)[number];
     generation: typeof sessionMemoryGeneration;
   })[] = [];
+  const localFixtures = input.localValidation
+    ? fixtures.filter(({ id }) => id !== 'semantic-manifest-reference')
+    : fixtures.filter(({ id }) => id === 'semantic-manifest-reference');
+  const localResults: {
+    model: ModelIdentity;
+    arms: Awaited<ReturnType<typeof compareLocalMemory>>;
+  }[] = [];
   const profileId = input.mnnApprovalFirst ? mnnProfileId : input.profileId;
   const selectedProfiles =
     input.approvalDiagnostic === 'controls'
       ? [...profiles.filter(({ id }) => id === mnnProfileId), mnnQatProfile]
-      : input.approvalDiagnostic === 'minimal'
+      : input.approvalDiagnostic === 'minimal' || input.localComparison
         ? profiles.filter(({ id }) => id === mnnProfileId)
         : qatScreen
           ? [mnnQatProfile]
@@ -320,6 +335,23 @@ export async function screenSessionMemory(input: {
             diagnostics.push({ profile, generation, ...diagnostic });
             break;
           }
+          if (input.localComparison) {
+            if (!model.weightsDigest) throw new Error('The comparison requires verified weights.');
+            const arms = await compareLocalMemory(
+              localFixtures,
+              {
+                settings,
+                digest: model.digest,
+                signal,
+                auditOutput,
+                screening: { weightsDigest: model.weightsDigest },
+                progress: (label) => progress?.(`${profile.name}: ${label}`),
+              },
+              input.localValidation,
+            );
+            localResults.push({ model: verified, arms });
+            break;
+          }
           const result = await run(settings, model, `${profile.name} T=${temperature}`);
           attempts.push({ generation, ...result });
           if (input.allowRetry === false || !result.nearPass || temperature === 0.1) break;
@@ -342,7 +374,7 @@ export async function screenSessionMemory(input: {
     attempts.filter(({ qualified }) => qualified).map((attempt) => ({ profile, attempt })),
   );
   let comparison;
-  if (qualifiers.length && !qatScreen) {
+  if ((qualifiers.length && !qatScreen) || input.localComparison) {
     const source = find(models, sessionMemoryModel);
     if (!source) throw new Error('The pinned LFM3 baseline is missing.');
     const model = await inspectEvaluationModel(input.settings.endpoint, source, signal);
@@ -355,25 +387,47 @@ export async function screenSessionMemory(input: {
         options: { ...sessionMemoryGeneration.options, seed: simplifiedSeed },
       }),
     };
-    const baseline = await runWithCleanup(
-      () => run(settings, model, 'LFM3 baseline'),
-      () => releaseOllamaModel(settings, AbortSignal.timeout(10_000)),
-    );
-    const wallMs = (profile: typeof baseline) =>
-      profile.stages.reduce((sum, stage) => sum + stage.measurements.isolatedCpuWallMs, 0);
-    comparison = {
-      model,
-      baseline,
-      candidates: qualifiers.map(({ profile, attempt }) => ({
-        name: profile.name,
-        temperature: attempt.generation.options.temperature,
-        reduction: baseline.qualified ? 1 - wallMs(attempt) / wallMs(baseline) : null,
-      })),
-    };
+    if (input.localComparison) {
+      if (!model.weightsDigest) throw new Error('The comparison requires verified weights.');
+      const arms = await runWithCleanup(
+        () =>
+          compareLocalMemory(
+            localFixtures,
+            {
+              settings,
+              digest: model.digest,
+              signal,
+              auditOutput,
+              screening: { weightsDigest: model.weightsDigest! },
+              progress: (label) => progress?.(`LFM3: ${label}`),
+            },
+            input.localValidation,
+          ),
+        () => releaseOllamaModel(settings, AbortSignal.timeout(10_000)),
+      );
+      localResults.push({ model, arms });
+    } else {
+      const baseline = await runWithCleanup(
+        () => run(settings, model, 'LFM3 baseline'),
+        () => releaseOllamaModel(settings, AbortSignal.timeout(10_000)),
+      );
+      const wallMs = (profile: typeof baseline) =>
+        profile.stages.reduce((sum, stage) => sum + stage.measurements.isolatedCpuWallMs, 0);
+      comparison = {
+        model,
+        baseline,
+        candidates: qualifiers.map(({ profile, attempt }) => ({
+          name: profile.name,
+          temperature: attempt.generation.options.temperature,
+          reduction: baseline.qualified ? 1 - wallMs(attempt) / wallMs(baseline) : null,
+        })),
+      };
+    }
   }
   const after = await inventory();
   const unchanged =
     results.every(({ identity }) => find(after, identity.name)?.digest === identity.digest) &&
+    localResults.every(({ model }) => find(after, model.name)?.digest === model.digest) &&
     (!comparison || find(after, comparison.model.name)?.digest === comparison.model.digest);
   if (!unchanged) throw new Error('A model identity changed during screening.');
   return {
@@ -382,6 +436,7 @@ export async function screenSessionMemory(input: {
     results,
     comparison,
     ...(input.approvalDiagnostic ? { diagnostics } : {}),
+    ...(input.localComparison ? { localResults } : {}),
     productionSuspended: true,
   };
 }

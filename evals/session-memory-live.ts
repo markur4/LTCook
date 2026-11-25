@@ -30,6 +30,7 @@ import {
   qualifySemanticMemory,
 } from './session-memory-simplified.js';
 import { screenSessionMemory } from './session-memory-screening.js';
+import { localValidationArms } from './session-memory-local.js';
 import { resolveEvaluationContext } from '../runtime/src/evals/setup.js';
 
 const root = path.resolve(import.meta.dir, '..');
@@ -54,7 +55,25 @@ process.once('SIGINT', cancel);
 process.once('SIGTERM', cancel);
 try {
   const fallbackFrom = option('luna-low-from');
-  if (fallbackFrom !== undefined) {
+  const localDelegation = option('check-local-delegation');
+  if (localDelegation !== undefined) {
+    const { evaluateLocalDelegation } = await import('./session-memory-local-delegation.js');
+    const reports = await Promise.all(
+      localDelegation.split(',').map(async (file) => JSON.parse(await readFile(file, 'utf8'))),
+    );
+    console.log(
+      JSON.stringify(
+        await evaluateLocalDelegation(
+          reports,
+          controller.signal,
+          console.error,
+          args.includes('--audit-output'),
+        ),
+        null,
+        2,
+      ),
+    );
+  } else if (fallbackFrom !== undefined) {
     if (!fallbackFrom) throw new Error('Supply a cadence report path for the Luna fallback.');
     const report = await runCadenceLunaFallback(
       JSON.parse(await readFile(fallbackFrom, 'utf8')),
@@ -74,8 +93,11 @@ try {
     const screening = args.includes('--screen-candidates');
     const mnnDiagnostic = args.includes('--diagnose-mnn-approval');
     const minimalApproval = args.includes('--diagnose-minimal-approval');
+    const validateLocal = option('validate-local-memory');
+    const localComparison = args.includes('--compare-local-memory') || validateLocal !== undefined;
     if (
-      (minimalApproval ||
+      (localComparison ||
+        minimalApproval ||
         mnnDiagnostic ||
         screening ||
         diagnostic ||
@@ -86,12 +108,16 @@ try {
       throw new Error(
         'Suspend production inference before this comparison and pass --production-suspended.',
       );
-    if (screening || mnnDiagnostic || minimalApproval) {
+    if (screening || mnnDiagnostic || minimalApproval || localComparison) {
       const report = await screenSessionMemory({
         settings: summarization,
         signal: controller.signal,
         profileId: option('screen-profile'),
         approvalDiagnostic: minimalApproval ? 'minimal' : mnnDiagnostic ? 'controls' : undefined,
+        localComparison,
+        localValidation: validateLocal
+          ? localValidationArms(JSON.parse(await readFile(validateLocal, 'utf8')))
+          : undefined,
         mnnApprovalFirst: args.includes('--mnn-approval-first'),
         allowRetry: !args.includes('--no-screen-retry'),
         auditOutput: args.includes('--audit-output'),
