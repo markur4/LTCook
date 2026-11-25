@@ -1,16 +1,23 @@
 import { useRef, useState } from 'react';
 import { Text, View } from 'react-native';
-import { useRpc, type PluginTimelineItemProps } from '@getpaseo/plugin/client';
-import { Modal } from '@getpaseo/plugin/client/ui';
+import {
+  useAgent,
+  useRpc,
+  type PluginClientContext,
+  type PluginTimelineItemProps,
+} from '@getpaseo/plugin/client';
+import { Modal, useToast } from '@getpaseo/plugin/client/ui';
 import type { z } from 'zod';
 import {
   storedSummariesRpc,
   type MemorySummariesTimelineSchema,
   type StoredSummariesPage,
+  type SkillLoad,
 } from '../../shared/activity';
 import { ActivityButton } from './ActivityCard';
 import type { Theme } from './PanelChrome';
 import { MemoryRecords } from './MemoryRecords';
+import { openSkillDocument, SkillPreview } from '../screens/SkillDocument';
 
 type TimelineData = z.infer<typeof MemorySummariesTimelineSchema>;
 type Passage = NonNullable<TimelineData['passage']>;
@@ -22,15 +29,21 @@ type SummaryRead =
 function PassageSummaryCard({
   agentId,
   passage,
+  skills,
+  onOpenSkill,
   theme,
 }: {
   agentId: string;
-  passage: Passage;
+  passage?: Passage;
+  skills: SkillLoad[];
+  onOpenSkill?: (skill: SkillLoad) => void;
   theme: Theme;
 }) {
   const read = useRpc(storedSummariesRpc);
   const [expanded, setExpanded] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
+  const [selectedSkillId, setSelectedSkillId] = useState<string>();
+  const selectedSkill = skills.find((skill) => skill.id === selectedSkillId);
   const [result, setResult] = useState<SummaryRead>();
   const request = useRef(0);
   const summaries = result?.status === 'ready' ? result.summaries : [];
@@ -38,6 +51,7 @@ function PassageSummaryCard({
   const toggleLabel = expanded ? 'Hide summary' : 'Show summary';
 
   async function loadSummary(older = false) {
+    if (!passage) return;
     const previous = older && result?.status === 'ready' ? result : undefined;
     const current = ++request.current;
     setResult({ status: 'loading' });
@@ -66,16 +80,62 @@ function PassageSummaryCard({
 
   return (
     <View style={{ minWidth: 0, gap: 8 }}>
-      <View style={{ alignItems: 'flex-start' }}>
-        <ActivityButton
-          theme={theme}
-          label={toggleLabel}
-          expanded={expanded}
-          onPress={toggleSummary}
-        >
-          <Text style={{ color: theme.colors.foreground }}>{toggleLabel}</Text>
-        </ActivityButton>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+        {passage && (
+          <ActivityButton
+            theme={theme}
+            label={toggleLabel}
+            expanded={expanded}
+            onPress={toggleSummary}
+          >
+            <Text style={{ color: theme.colors.foreground }}>{toggleLabel}</Text>
+          </ActivityButton>
+        )}
+        {skills.map((skill) => (
+          <ActivityButton
+            key={skill.id}
+            theme={theme}
+            label={`Preview skill ${skill.name}`}
+            expanded={selectedSkill?.id === skill.id}
+            onPress={() =>
+              setSelectedSkillId(selectedSkill?.id === skill.id ? undefined : skill.id)
+            }
+          >
+            <Text style={{ color: theme.colors.foreground }}>{skill.name}</Text>
+          </ActivityButton>
+        ))}
       </View>
+      {selectedSkill && (
+        <View
+          testID="ltcook-passage-skill-preview"
+          style={{
+            gap: 8,
+            padding: 12,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface1,
+          }}
+        >
+          <SkillPreview
+            key={selectedSkill.id}
+            agentId={agentId}
+            skill={selectedSkill}
+            theme={theme}
+          />
+          {selectedSkill.documentAvailable && onOpenSkill && (
+            <View style={{ alignItems: 'flex-start' }}>
+              <ActivityButton
+                theme={theme}
+                label="Open in new tab"
+                onPress={() => onOpenSkill(selectedSkill)}
+              >
+                <Text style={{ color: theme.colors.foreground }}>Open in new tab</Text>
+              </ActivityButton>
+            </View>
+          )}
+        </View>
+      )}
       {expanded && (
         <View
           testID="ltcook-passage-summary-preview"
@@ -159,14 +219,29 @@ export function PassageSummary({
   host,
   item,
   theme,
-}: PluginTimelineItemProps<TimelineData>) {
-  const { passage } = item.data;
-  if (!passage) return null;
+  client,
+}: PluginTimelineItemProps<TimelineData> & { client: Pick<PluginClientContext, 'openPanel'> }) {
+  const { passage, skills = [] } = item.data;
+  const workspaceId = useAgent(agentId, (agent) => agent.workspaceId);
+  const toast = useToast();
+  if (!passage && skills.length === 0) return null;
+
+  function open(skill: SkillLoad) {
+    if (!workspaceId) return;
+    try {
+      openSkillDocument(client, host.id, workspaceId, agentId, skill);
+    } catch {
+      toast.error('Could not open the skill document.');
+    }
+  }
+
   return (
     <PassageSummaryCard
-      key={JSON.stringify([host.id, agentId, passage.epoch, passage.start, passage.position])}
+      key={JSON.stringify([host.id, agentId, passage?.epoch, passage?.start, passage?.position])}
       agentId={agentId}
       passage={passage}
+      skills={skills}
+      onOpenSkill={workspaceId ? open : undefined}
       theme={theme}
     />
   );
