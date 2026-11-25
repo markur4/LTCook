@@ -46,6 +46,10 @@ if (process.argv.includes('--pattern=[')) {
   process.exit(2);
 }
 if (process.argv.includes('blocked index update')) {
+  process.once('SIGINT', async () => {
+    await Bun.write(${JSON.stringify(path.join(root, 'safe-index-checkpoint'))}, 'finished');
+    process.exit(130);
+  });
   await Bun.write(${JSON.stringify(path.join(root, 'active-index-operation'))}, 'started');
   await Bun.sleep(10000);
   console.log('[]');
@@ -195,6 +199,7 @@ if (process.argv.includes('blocked index update')) {
           diagnostics: [{ code: 'indexing-paused' }],
         });
       }
+      expect(await Bun.file(path.join(root, 'safe-index-checkpoint')).text()).toBe('finished');
 
       const workspaceKey = createHash('sha256')
         .update(workspace.root)

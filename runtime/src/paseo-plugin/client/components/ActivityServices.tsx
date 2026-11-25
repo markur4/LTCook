@@ -93,6 +93,7 @@ function ActivitySwitch({
         </ActivityText>
         <Switch
           accessibilityLabel={label}
+          accessibilityHint="Applies to the LTCook runtime for this Paseo host."
           value={enabled === true}
           disabled={pending || enabled === null}
           onValueChange={(value) => void change(value)}

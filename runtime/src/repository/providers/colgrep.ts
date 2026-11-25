@@ -23,6 +23,7 @@ export type { ColgrepStatus } from './colgrep-status.js';
 export const COLGREP_MAX_RESULTS = 20;
 const MAX_STDOUT = 4 * 1024 * 1024;
 const MAX_STDERR = 64 * 1024;
+const PAUSE_GRACE_MS = 2000;
 const REPAIR = 'Repeat LTCook setup with the supported installer or editable registration.';
 const MODEL_FILES = [
   'config.json',
@@ -78,6 +79,12 @@ class ColgrepCommandLimitError extends Error {
 }
 
 class ColgrepPatternError extends Error {}
+
+class ColgrepIndexingPausedError extends Error {
+  constructor(message = 'ColGREP indexing is paused.') {
+    super(message);
+  }
+}
 
 function indexContended(stderr: string): boolean {
   return stderr
@@ -284,11 +291,20 @@ function execute(
     let stderr = '';
     let stdoutBytes = 0;
     let stderrBytes = 0;
+    let forceStop: ReturnType<typeof setTimeout> | undefined;
     const stop = (error: unknown) => {
       if (failure) return;
       failure = error;
-      child.kill('SIGKILL');
+      if (!windows && error instanceof ColgrepIndexingPausedError) {
+        // > ColGREP handles SIGINT at a safe checkpoint instead of stopping mid-write.
+        if (child.kill('SIGINT')) {
+          forceStop = setTimeout(() => child.kill('SIGKILL'), PAUSE_GRACE_MS);
+        }
+      } else {
+        child.kill('SIGKILL');
+      }
     };
+    child.once('exit', () => clearTimeout(forceStop));
     const cancel = () => stop(signal.reason ?? new Error('ColGREP search was cancelled.'));
     signal.addEventListener('abort', cancel, { once: true });
     if (signal.aborted) cancel();
@@ -316,6 +332,7 @@ function execute(
       failure ??= new Error(`Could not launch managed ColGREP. ${REPAIR}`, { cause: error });
     });
     child.once('close', (code) => {
+      clearTimeout(forceStop);
       signal.removeEventListener('abort', cancel);
       if (failure) reject(failure);
       else resolve({ code, stdout, stderr });
@@ -490,12 +507,6 @@ async function normalizeResults(
     }
     result.value.hits.push(evidence);
     result.truncated ||= evidence.excerptTruncated === true;
-  }
-}
-
-class ColgrepIndexingPausedError extends Error {
-  constructor(message = 'ColGREP indexing is paused.') {
-    super(message);
   }
 }
 

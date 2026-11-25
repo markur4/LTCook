@@ -188,15 +188,18 @@ Expand **RAG Index** to see the worktree that the selected conversation is
 authorized to search. Index availability and indexing activity are independent.
 **Checking index** means a ranked query is active and its indexing phase is
 unconfirmed. Opening the panel does not start a search or build. Turn off
-**Index updates** to pause ColGREP indexing for the host. Ranked searches can
-still use a complete existing index, and lexical search remains available.
+**Index updates** to pause ColGREP indexing in the LTCook runtime serving this
+Paseo host. Ranked searches can still use a complete existing index, and lexical
+search remains available. Standalone Pi and independently launched ColGREP
+manage their own index updates.
 
 **Session Memory** shows the selected agent's background summaries and last
 acknowledged delegation handoff. Stored and pending counts describe that
 agent's conversation. Turn off **Summarizer** to pause generation. Existing
 summaries remain available, and pending work resumes when you turn it back on.
-Both switches persist for the host. Select the device next to **Inference device** to open
-the list. **Auto** lets Ollama choose placement. **CPU** forces CPU inference.
+Both switches apply across conversations and persist across runtime restarts.
+Select the device next to **Inference device** to open the list. **Auto** lets
+Ollama choose placement. **CPU** forces CPU inference.
 On supported Ollama hosts, the list also shows named GPUs discovered on the
 host. The picker explains when Ollama's device index is ambiguous or discovery
 is unavailable. LTCook saves the host-wide choice and applies it to the next
