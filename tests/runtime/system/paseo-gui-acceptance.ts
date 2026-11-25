@@ -820,6 +820,7 @@ try {
   );
   await clickButton('Open Adjutant conversation');
   await waitForComposer('Adjutant');
+  await browser('set', 'viewport', '1440', '1000');
   await browser(
     'wait',
     '--fn',
@@ -835,7 +836,6 @@ try {
     '1',
     'Open reuses the Adjutant tab opened earlier',
   );
-  await browser('set', 'viewport', '1440', '1000');
   await clickButton(`Back to ${mobileLeader.agent.title}`);
   await waitForComposer(mobileLeader.agent.title);
   await browser('wait', '--text', 'RAG Index');
