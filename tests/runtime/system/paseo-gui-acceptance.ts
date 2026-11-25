@@ -806,6 +806,8 @@ try {
   await inspectStage('native-activity-tools-and-skills');
   await browser('set', 'viewport', '1440', '1000');
 
+  await browser('wait', '[aria-label="Open Adjutant conversation"]');
+  assert.equal(await browser('get', 'text', '[aria-label="Open Adjutant conversation"]'), 'Open');
   await clickButton('Open Adjutant conversation');
   await waitForComposer('Adjutant');
   await browser(

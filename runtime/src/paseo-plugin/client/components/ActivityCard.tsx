@@ -311,7 +311,9 @@ export function ActivityCard({
             label={`Open ${title} conversation`}
             onPress={onOpenConversation}
           >
-            <Icon name="ArrowUpRight" size={12} color={colors.accent} />
+            <ActivityText theme={theme} tone="running" strong>
+              Open
+            </ActivityText>
           </ActivityButton>
         )}
       </View>
