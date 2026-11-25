@@ -103,11 +103,16 @@ export function catalogFromOllamaProbe(value: unknown): OllamaDeviceCatalog {
     const aliases = new Set<string>();
     for (const backend of ['cuda', 'rocm']) {
       const preferred = groups.get(backend);
-      if (!preferred || unreliable.has(backend)) continue;
+      if (!preferred) continue;
       const hardware = new Set(preferred.map((device) => device.hardware));
       const overlaps = vulkan.filter((device) => hardware.has(device.hardware));
-      if (!overlaps.every((device, offset) => device.hardware === preferred[offset]?.hardware)) {
+      if (!overlaps.length) continue;
+      if (
+        unreliable.has(backend) ||
+        !overlaps.every((device, offset) => device.hardware === preferred[offset]?.hardware)
+      ) {
         unreliable.add(backend);
+        unreliable.add('vulkan');
         continue;
       }
       for (const device of overlaps) aliases.add(device.id);
@@ -120,13 +125,24 @@ export function catalogFromOllamaProbe(value: unknown): OllamaDeviceCatalog {
 
   const devices = [...groups].flatMap(([backend, group]) =>
     group.map(({ id, label, integrated }, index) => {
-      if (unreliable.has(backend)) return { id, label, unavailable: unknownIndex };
+      // > Server-side iGPU admission can shift the index of every device that follows it.
+      if (
+        unreliable.has(backend) ||
+        group.slice(0, index).some((device) => device.integrated !== false)
+      )
+        return { id, label, unavailable: unknownIndex };
+      if (integrated !== false && index < group.length - 1)
+        return { id, label, unavailable: ambiguousIndex };
       // > Other libraries can have the same ordinal. Ollama prefers a discrete GPU in this
-      // > case, but otherwise decides by available memory.
+      // > case, but otherwise decides by available memory. A later discrete peer can also
+      // > take this ordinal if preceding integrated peers are filtered out.
       const ambiguous = [...groups].some(([other, peers]) => {
         if (other === backend) return false;
         if (unreliable.has(other)) return index < (possibleSlots.get(other) ?? 0);
-        return index < peers.length && (integrated !== false || peers[index]?.integrated !== true);
+        return (
+          index < peers.length &&
+          (integrated !== false || peers.slice(index).some((peer) => peer.integrated !== true))
+        );
       });
       if (ambiguous) return { id, label, unavailable: ambiguousIndex };
       return { id, label, mainGpu: index };

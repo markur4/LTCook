@@ -11,6 +11,7 @@ import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import {
   LFM3_SUMMARIZER_MODEL,
   ollamaChat,
+  OllamaSummaryError,
   releaseOllamaModel,
   type OllamaUsage,
 } from '../../../runtime/src/integrations/ollama.js';
@@ -123,6 +124,38 @@ test('keeps a completed Ollama transport response pending when its summary is in
     );
     expect(summary.complete).toBe(false);
     expect(summary).not.toHaveProperty('content');
+  } finally {
+    await ollama.stop(true);
+  }
+});
+
+test('distinguishes a terminal Ollama stream error from invalid summary JSON', async () => {
+  const model = 'fixture:latest';
+  const ollama = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch() {
+      return new Response(
+        [
+          JSON.stringify({ model, message: { content: '{}' }, done: false }),
+          JSON.stringify({ error: 'Private runner detail', status: 503 }),
+          '',
+        ].join('\n'),
+        { headers: { 'content-type': 'application/x-ndjson' } },
+      );
+    },
+  });
+  try {
+    const summary = summarizeMemory(
+      { endpoint: `http://127.0.0.1:${ollama.port}`, model, keepAlive: 0 },
+      [{ role: 'user', content: 'Summarize this fixture.' }],
+      AbortSignal.timeout(3000),
+      'AAB',
+      false,
+      () => {},
+    );
+    await expect(summary).rejects.toBeInstanceOf(OllamaSummaryError);
+    await expect(summary).rejects.toThrow(/^Ollama reported a summarization error \(HTTP 503\)\.$/);
   } finally {
     await ollama.stop(true);
   }

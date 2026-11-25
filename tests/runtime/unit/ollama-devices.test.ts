@@ -48,6 +48,21 @@ test('shows all candidates while retaining only deterministic shared backend ind
   expect(ambiguous.map((entry) => entry.mainGpu)).toEqual([undefined, 1, undefined]);
 });
 
+test('disables GPU selections when server-side iGPU filtering can shift an ordinal', () => {
+  const integrated = { ...device(0, 'AMD-igpu', 'AMD integrated', 'ROCm'), integrated: true };
+  const discrete = device(1, 'AMD-gpu', 'AMD discrete', 'ROCm');
+  const sameBackend = catalogFromOllamaProbe({ devices: [integrated, discrete] }).devices;
+  expect(sameBackend.map(({ mainGpu }) => mainGpu)).toEqual([undefined, undefined]);
+  const mixedBackends = catalogFromOllamaProbe({
+    devices: [rtx5090, integrated, discrete],
+  }).devices;
+  expect(mixedBackends[0]).toMatchObject({
+    label: 'RTX 5090',
+    unavailable: expect.any(String),
+  });
+  expect(mixedBackends[0]?.mainGpu).toBeUndefined();
+});
+
 test('keeps conflicting or unconfirmed backend indices visible without routing', () => {
   const { devices } = catalogFromOllamaProbe({
     devices: [
@@ -78,14 +93,19 @@ test('collapses matching repeated backends and rejects aliases that can reorder 
     ],
   }).devices;
   expect(matching.map((entry) => entry.mainGpu)).toEqual([0, 1]);
+  const independent = device(2, 'GPU-vulkan', 'Independent Vulkan GPU', 'Vulkan');
   const reordered = catalogFromOllamaProbe({
     devices: [
       { ...rtx4070, library: 'Vulkan', index: 0 },
       { ...rtx5090, library: 'Vulkan', index: 1 },
+      independent,
       rtx5090,
       rtx4070,
     ],
   }).devices;
+  expect(reordered.find(({ label }) => label === independent.description)).toMatchObject({
+    unavailable: expect.any(String),
+  });
   expect(reordered.every((entry) => entry.mainGpu === undefined)).toBe(true);
 });
 
