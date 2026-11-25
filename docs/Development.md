@@ -449,6 +449,11 @@ original approval prompt and changes one input at a time. The diagnostic
 reports generated-summary grades only. With `--audit-output`, keep the exact
 rendered system and user messages and generated answers local.
 
+Use `--diagnose-minimal-approval --production-suspended` for the three
+replacement-prompt experiments on Q8_0 alone. The evaluator keeps the current
+source messages, Task context and full manifest acceptance criteria. An
+incomplete answer fails the gate and remains available in the local audit.
+
 For downstream qualification on a host without a usable GPU, use the same
 CPU production pause and the native Pi GPT-6 Luna high-reasoning worker:
 

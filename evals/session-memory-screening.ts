@@ -114,7 +114,7 @@ export async function screenSessionMemory(input: {
   signal: AbortSignal;
   auditOutput?: boolean;
   profileId?: string;
-  approvalDiagnostic?: boolean;
+  approvalDiagnostic?: 'controls' | 'minimal';
   mnnApprovalFirst?: boolean;
   allowRetry?: boolean;
   progress?: (label: string) => void;
@@ -140,7 +140,7 @@ export async function screenSessionMemory(input: {
   if (input.mnnApprovalFirst && input.profileId && input.profileId !== mnnProfileId)
     throw new Error('--mnn-approval-first selects the MNN-Pocket Q8_0 experiment.');
   if (input.approvalDiagnostic && (input.profileId || input.mnnApprovalFirst))
-    throw new Error('The approval diagnostic runs both MNN-Pocket checkpoints at 0.8.');
+    throw new Error('The approval diagnostic selects its own MNN-Pocket profiles at 0.8.');
   const qatScreen = input.profileId === mnnQatProfile.id;
   const approvalFirst = input.mnnApprovalFirst || qatScreen;
   const { signal, auditOutput, progress } = input;
@@ -241,11 +241,14 @@ export async function screenSessionMemory(input: {
     generation: typeof sessionMemoryGeneration;
   })[] = [];
   const profileId = input.mnnApprovalFirst ? mnnProfileId : input.profileId;
-  const selectedProfiles = input.approvalDiagnostic
-    ? [...profiles.filter(({ id }) => id === mnnProfileId), mnnQatProfile]
-    : qatScreen
-      ? [mnnQatProfile]
-      : profiles.filter(({ id }) => !profileId || id === profileId);
+  const selectedProfiles =
+    input.approvalDiagnostic === 'controls'
+      ? [...profiles.filter(({ id }) => id === mnnProfileId), mnnQatProfile]
+      : input.approvalDiagnostic === 'minimal'
+        ? profiles.filter(({ id }) => id === mnnProfileId)
+        : qatScreen
+          ? [mnnQatProfile]
+          : profiles.filter(({ id }) => !profileId || id === profileId);
   if (!selectedProfiles.length) throw new Error('Unknown Session Memory screening profile.');
   for (const profile of selectedProfiles) {
     const source = find(models, profile.model);
@@ -310,6 +313,7 @@ export async function screenSessionMemory(input: {
               digest: model.digest,
               weightsDigest: model.weightsDigest,
               signal,
+              minimal: input.approvalDiagnostic === 'minimal',
               auditOutput,
               progress: (label) => progress?.(`${profile.name}: ${label}`),
             });

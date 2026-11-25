@@ -73,19 +73,25 @@ try {
     const semantic = args.includes('--semantic');
     const screening = args.includes('--screen-candidates');
     const mnnDiagnostic = args.includes('--diagnose-mnn-approval');
+    const minimalApproval = args.includes('--diagnose-minimal-approval');
     if (
-      (mnnDiagnostic || screening || diagnostic || semantic || args.includes('--simplified')) &&
+      (minimalApproval ||
+        mnnDiagnostic ||
+        screening ||
+        diagnostic ||
+        semantic ||
+        args.includes('--simplified')) &&
       !args.includes('--production-suspended')
     )
       throw new Error(
         'Suspend production inference before this comparison and pass --production-suspended.',
       );
-    if (screening || mnnDiagnostic) {
+    if (screening || mnnDiagnostic || minimalApproval) {
       const report = await screenSessionMemory({
         settings: summarization,
         signal: controller.signal,
         profileId: option('screen-profile'),
-        approvalDiagnostic: mnnDiagnostic,
+        approvalDiagnostic: minimalApproval ? 'minimal' : mnnDiagnostic ? 'controls' : undefined,
         mnnApprovalFirst: args.includes('--mnn-approval-first'),
         allowRetry: !args.includes('--no-screen-retry'),
         auditOutput: args.includes('--audit-output'),
