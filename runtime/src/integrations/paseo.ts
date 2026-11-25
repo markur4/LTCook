@@ -158,6 +158,7 @@ export async function startPaseoHost(input: {
         `Use ${REPO_SEARCH_TOOL_NAME} in hybrid mode when you know the behavior but lack the symbol. Discover these tools through tool search if needed. ` +
         'Batch independent symbols with symbols. Open an enclosing source block with Locate location {path, line}, or use follow: true for one local connection. ' +
         'Use native search for quick literal checks. If repository retrieval is unavailable or indexing, use native search and file reads. ' +
+        'When LTCook web tools are available, prefer ltcook_web_search for web searches and ltcook_web_fetch to read sources. Use ltcook_web_content to continue reading stored results. Search reports sources, snippets, and engine issues; check source content and use another available tool when a needed capability is missing or evidence is incomplete. Follow higher-priority tool and source requirements. ' +
         `When you switch to a task worktree or remove it, report the path with ${WORKTREE_TOOL_NAME} so Changes follows your session.` +
         (input.password
           ? ' When the user requests an idle LTCook restart, discover ltcook_restart if available. Paseo asks the user to approve the request.'

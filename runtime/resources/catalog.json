@@ -5,6 +5,11 @@
     "required": true
   },
   {
+    "path": "rules/web-research.md",
+    "kind": "rule",
+    "required": true
+  },
+  {
     "path": "skills/ltcook-planning/SKILL.md",
     "kind": "skill",
     "required": true

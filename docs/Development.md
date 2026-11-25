@@ -146,6 +146,12 @@ existing [Repository Agent Behavior Evaluation](#repository-agent-behavior-evalu
 when comparing tool selection and evidence quality. Compare time to verified
 evidence and total turn time separately.
 
+For web research, agents prefer `ltcook_web_search` and `ltcook_web_fetch` when
+available and use `ltcook_web_content` to continue stored results. Search reports
+engine issues as well as sources; agents should inspect source content and use
+another available tool when evidence is incomplete or a capability is missing.
+Core standing guidance and Paseo's agent instructions both carry this policy.
+
 ---
 
 <br>

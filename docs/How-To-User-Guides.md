@@ -809,6 +809,10 @@ it or the execution guards.
 
 ## Configure research tools
 
+Agents prefer LTCook's web search and fetch tools when available. They can use
+another available tool when a needed capability is missing or search evidence
+is incomplete.
+
 Use the `web` section for `web.searxng_url`, `web.crawl4ai_url`, and
 `web.ssrf_allow_ranges`, and the AppRC setting `web.crawl4ai.api_token` for the
 Crawl4AI credential (`CRAWL4AI_API_TOKEN`). The typed Python bundle exposes that
