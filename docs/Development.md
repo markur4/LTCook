@@ -450,6 +450,11 @@ To diagnose MNN-Pocket's manifest approval failure on CPU, use:
 bun evals/session-memory-live.ts --diagnose-mnn-approval --production-suspended
 ```
 
+To screen MNN-Pocket Q8_0 against the chronological handoff at `bbc9a3`,
+run `bun evals/session-memory-live.ts --qualify-mnn-local --production-suspended`.
+Each local prompt starts with the skipped-Discussions fixture and advances
+only while its summarization and handoff evidence gates pass.
+
 The evaluator uses both MNN-Pocket checkpoints at seed 17, reproduces each
 original approval prompt and changes one input at a time. The diagnostic
 reports generated-summary grades only. With `--audit-output`, keep the exact

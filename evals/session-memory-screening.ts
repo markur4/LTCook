@@ -117,6 +117,7 @@ export async function screenSessionMemory(input: {
   profileId?: string;
   approvalDiagnostic?: 'controls' | 'minimal';
   localComparison?: boolean;
+  qualifyMnnLocal?: boolean;
   localValidation?: readonly (typeof localMemoryArms)[number][];
   mnnApprovalFirst?: boolean;
   allowRetry?: boolean;
@@ -127,7 +128,7 @@ export async function screenSessionMemory(input: {
       'git',
       'diff',
       '--quiet',
-      frozenRevision,
+      input.qualifyMnnLocal ? 'bbc9a3f3a2e79afe70819d59949b49286101e16e' : frozenRevision,
       '--',
       'runtime/src/session-memory',
       'runtime/src/integrations/ollama.ts',
@@ -139,7 +140,7 @@ export async function screenSessionMemory(input: {
     { cwd: new URL('..', import.meta.url).pathname },
   );
   if (frozen.exitCode !== 0)
-    throw new Error('Screening requires the production code and fixtures pinned at e7f1d60.');
+    throw new Error('Screening requires the requested pinned production code and fixtures.');
   if (input.mnnApprovalFirst && input.profileId && input.profileId !== mnnProfileId)
     throw new Error('--mnn-approval-first selects the MNN-Pocket Q8_0 experiment.');
   if (input.approvalDiagnostic && (input.profileId || input.mnnApprovalFirst))
@@ -259,7 +260,7 @@ export async function screenSessionMemory(input: {
   const selectedProfiles =
     input.approvalDiagnostic === 'controls'
       ? [...profiles.filter(({ id }) => id === mnnProfileId), mnnQatProfile]
-      : input.approvalDiagnostic === 'minimal' || input.localComparison
+      : input.approvalDiagnostic === 'minimal' || input.localComparison || input.qualifyMnnLocal
         ? profiles.filter(({ id }) => id === mnnProfileId)
         : qatScreen
           ? [mnnQatProfile]
@@ -352,6 +353,55 @@ export async function screenSessionMemory(input: {
             localResults.push({ model: verified, arms });
             break;
           }
+          if (input.qualifyMnnLocal) {
+            if (!model.weightsDigest)
+              throw new Error('The qualification requires verified weights.');
+            const frozenHandoff = Bun.spawnSync([
+              'git',
+              'diff',
+              '--quiet',
+              'bbc9a3f3a2e79afe70819d59949b49286101e16e',
+              '--',
+              'runtime/src/session-memory/service.ts',
+              'runtime/src/session-memory/handoff.ts',
+            ]);
+            if (frozenHandoff.exitCode !== 0)
+              throw new Error('Qualification requires the chronological handoff from bbc9a3.');
+            const order = [
+              'approval-after-skipped-discussion',
+              'semantic-retry-correction',
+              'semantic-export-header',
+              'semantic-manifest-reference',
+            ];
+            let active: ('local-template' | 'local-bullets')[] = [
+              'local-template',
+              'local-bullets',
+            ];
+            const arms: Awaited<ReturnType<typeof compareLocalMemory>> = [];
+            for (const id of order) {
+              const fixture = fixtures.find((item) => item.id === id);
+              if (!fixture) throw new Error(`Missing fixture ${id}.`);
+              const stage = await compareLocalMemory(
+                [fixture],
+                {
+                  settings,
+                  digest: model.digest,
+                  signal,
+                  auditOutput,
+                  screening: { weightsDigest: model.weightsDigest },
+                  progress: (label) => progress?.(`${profile.name}: ${label}`),
+                },
+                active,
+              );
+              arms.push(...stage);
+              active = active.filter((arm) =>
+                stage.some((item) => item.arm === arm && item.passed),
+              );
+              if (!active.length) break;
+            }
+            localResults.push({ model: verified, arms });
+            break;
+          }
           const result = await run(settings, model, `${profile.name} T=${temperature}`);
           attempts.push({ generation, ...result });
           if (input.allowRetry === false || !result.nearPass || temperature === 0.1) break;
@@ -431,12 +481,14 @@ export async function screenSessionMemory(input: {
     (!comparison || find(after, comparison.model.name)?.digest === comparison.model.digest);
   if (!unchanged) throw new Error('A model identity changed during screening.');
   return {
-    frozenRevision,
+    frozenRevision: input.qualifyMnnLocal
+      ? 'bbc9a3f3a2e79afe70819d59949b49286101e16e'
+      : frozenRevision,
     seed: simplifiedSeed,
     results,
     comparison,
     ...(input.approvalDiagnostic ? { diagnostics } : {}),
-    ...(input.localComparison ? { localResults } : {}),
+    ...(input.localComparison || input.qualifyMnnLocal ? { localResults } : {}),
     productionSuspended: true,
   };
 }

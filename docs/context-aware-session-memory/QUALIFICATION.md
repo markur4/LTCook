@@ -1014,3 +1014,35 @@ the prior record reaches the handoff. The follow-up did not qualify either
 local arm across the fixtures or the two summarizers. Production inference
 was restored, and the Immediate Context implementation and LFM3 stay in
 production.
+
+### MNN-Pocket with chronological handoffs
+
+Q8_0 ran at temperature 0.8 and seed 17 using the chronological handoff at
+`bbc9a3`. Production inference was suspended and restored. Both candidates
+stopped at approval after skipped Discussions. The handoff included all four
+original skipped messages in order. Neither candidate retained the required
+generated proposal and approval summaries, so no receiving-agent or later
+fixture was run.
+
+| Prompt | Generated and stored facts | CPU wall s | Input / output tokens | Prefill / generation s | Peak runner MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Existing Markdown template | 3/5 | 42.011 | 1,505 / 2,489 | 1.512 / 39.693 | 709 |
+| Simple bullets | 0/5 | 4.489 | 1,197 / 240 | 1.395 / 2.567 | 671 |
+
+The template proposal repeated itself until the 2,048-token output limit.
+The bullet proposal produced an empty Markdown fence, and the approval
+summary repeated an unrelated instruction instead of retaining the decision.
+The template's incomplete proposal was not stored as a completed summary.
+Zero reported reasoning tokens and CPU placement were verified for every
+request. Loaded model size was 670 MiB. The handoff had the preceding
+original user message, but the generated-summary gate requires the proposal
+record before any compensatory recovery.
+
+The fixture deliberately repeats the same instruction fourteen times in
+each long exchange. Collapsing those repetitions in a diagnostic copy would
+lower the estimated UAMP sizes from 552 to 93 tokens for the proposal and
+from 529 to 69 for the approval. Both would fall below the existing
+256-token threshold and be retained without inference. This identifies the
+repetition as a concrete stressor, but the transformed inputs would exercise
+the skip path instead of qualifying summarization. The original acceptance
+fixture remains unchanged.
