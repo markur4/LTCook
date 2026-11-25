@@ -1128,3 +1128,53 @@ lost negation and a full copy.
 The existing fallback probe reopened both original messages by their
 saved references and retained all 3/3 critical facts as fallback evidence.
 The incomplete summary stayed failed with zero stored summary bytes.
+
+### Work-status instruction and proportional output cap
+
+Run the prompt screen and the separate cap probe while production
+summarization is suspended:
+
+```shell
+bun evals/session-memory-live.ts --qualify-mnn-work-status --production-suspended
+bun evals/session-memory-live.ts --probe-mnn-output-cap --production-suspended
+```
+
+The prompt screen added only the instruction to retain required, planned,
+in-progress and completed work to the original simple bullets. All four
+rendered user inputs matched the prior run. MNN-Pocket Q8_0 used the same
+weights, native template, sampling, seed 17 and 2,048-token cap. Every
+request used CPU and reported zero reasoning tokens. The production
+summarizer was already suspended and its setting stayed as found.
+
+| Fixture | Generated facts | CPU wall s | Output tokens |
+| --- | ---: | ---: | ---: |
+| Retry correction | 3/3 | 3.960 | 246 |
+| Realistic skipped Discussions | 4/5 | 5.977 | 119 + 250 |
+| Export discovery | 0/4 | 39.886 | 2,048 |
+| Manifest approval | 3/4 | 6.502 | 94 + 250 |
+
+Retry correction preserved the planned notes update and passed the
+contradiction gate. Its stored response copied most of the exchange in
+source JSON and used 1,175 bytes for a 1,138-byte original. The two
+approval fixtures lost the earlier proposal's pending status. Export
+discovery reached the cap while repeating source labels. Its failed
+record used the fallback probe to recover four facts from the originals.
+The prompt retained 10/16 generated facts with zero flagged critical
+contradictions and failed overall qualification.
+
+The cap probe used the original simple bullets with identical rendered
+prompts. It rounded up half of the original UAMP's estimated tokens,
+bounded by the existing 2,048-token ceiling. It used the same
+attachment-aware source count as the short-UAMP gate. The two originals
+estimated at 308 and 289 tokens received caps of 154 and 145. Both
+responses reached their caps and were recorded as incomplete. The
+existing source-reference fallback reopened both exchanges and recovered
+5/5 critical facts separately. The two requests produced zero stored
+summary bytes.
+
+Output dropped from 514 to 299 tokens across the two requests, while
+isolated CPU wall time was 6.829 s compared with 6.294 s in the prior
+single run. The cap bounded generation but truncated both previously
+complete summaries on this fixture. The 50% ratio remains an evaluation
+setting. The probe exercised one request per UAMP and does not establish
+a total cap for UAMPs split across requests.

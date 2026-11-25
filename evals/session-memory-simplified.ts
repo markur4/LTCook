@@ -16,6 +16,7 @@ import { peakRunnerRss, residency } from '../runtime/src/evals/session-memory.js
 import {
   ollamaEndpoint,
   releaseOllamaModel,
+  summaryGeneration,
   type OllamaSettings,
 } from '../runtime/src/integrations/ollama.js';
 import {
@@ -340,6 +341,7 @@ export async function runSimplifiedMemoryArm(
       prompt: Parameters<typeof summarizeMemory>[1],
     ) => Parameters<typeof summarizeMemory>[1];
     inspectIncompleteFallback?: boolean;
+    proportionalOutputCap?: boolean;
     inspectExtract?: (
       prompt: Parameters<typeof summarizeMemory>[1],
       text: string,
@@ -354,6 +356,7 @@ export async function runSimplifiedMemoryArm(
     : contextSettings({ ...input.settings, cpuOnly: true }, simplifiedSeed);
   const endpoint = ollamaEndpoint(settings.endpoint);
   const { messages, prompts } = contextTranscript(fixture);
+  const expectedUnits = identifyMemoryUnits(messages, prompts, 3000, true);
   const original = fixture.turns.flat();
   const processedBySequence = new Map(messages.map((message) => [message.seq, message]));
   let available: readonly MemorySourceMessage[] = messages;
@@ -366,6 +369,7 @@ export async function runSimplifiedMemoryArm(
     loadedBytes?: number;
     peakRssBytes?: number;
     error?: string;
+    budget?: { originalTokens: number; outputCap: number };
     extract?: ReturnType<NonNullable<typeof input.inspectExtract>>;
     audit?: { summary: string; prompt: string; systemPrompt: string };
   }[] = [];
@@ -378,8 +382,26 @@ export async function runSimplifiedMemoryArm(
       const requestSignal = AbortSignal.any([turnSignal, signal, AbortSignal.timeout(120_000)]);
       const start = performance.now();
       try {
+        let requestSettings = settings;
+        let budget: { originalTokens: number; outputCap: number } | undefined;
+        if (type === 'UAMP' && input.proportionalOutputCap) {
+          const firstSource = Number(
+            prompt[1].content.match(/^Summarize current sources only \(#(\d+)/m)?.[1],
+          );
+          const unit = expectedUnits.find(
+            ({ type, messages }) =>
+              type === 'UAMP' && messages.some(({ seq }) => seq === firstSource),
+          );
+          if (!unit) throw new Error('Cannot identify the original UAMP for the output cap.');
+          const originalTokens = originalTokenCount(unit.messages);
+          const generation = summaryGeneration(settings);
+          const outputCap = Math.min(generation.options.num_predict, Math.ceil(originalTokens / 2));
+          generation.options = { ...generation.options, num_predict: outputCap };
+          requestSettings = { ...settings, generation: JSON.stringify(generation) };
+          budget = { originalTokens, outputCap };
+        }
         const result = await summarizeMemory(
-          settings,
+          requestSettings,
           prompt,
           requestSignal,
           type,
@@ -397,6 +419,7 @@ export async function runSimplifiedMemoryArm(
           cpuVerified: !!loaded && loaded.bytes > 0 && loaded.gpuBytes === 0,
           observedMs,
           ...(extract ? { extract } : {}),
+          ...(budget ? { budget } : {}),
           ...(input.screening
             ? {
                 loadedBytes: loaded?.bytes,
@@ -465,7 +488,6 @@ export async function runSimplifiedMemoryArm(
     const stored = records.filter(({ complete }) => complete);
     const generated = stored.filter(({ type, state }) => type === 'UAMP' && state !== 'skipped');
     const deterministic = stored.filter(({ state }) => state === 'recorded');
-    const expectedUnits = identifyMemoryUnits(messages, prompts, 3000, true);
     const semanticFacts = fixture.facts.filter(({ source }) =>
       expectedUnits.some(
         ({ type, messages: unitMessages }) =>
