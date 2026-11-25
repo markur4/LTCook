@@ -493,7 +493,9 @@ tokens. Authoritative instructions can exceed that target, and the available
 space for previous summary text shrinks to protect current sources.
 All completed summaries stay in chronological storage. Retrieval can select
 individual recognized field statements and cite the original sequences used
-by their summary portion. Malformed formatting retains a raw-text fallback.
+by their summary portion. Retrieval also searches the full JSON value when
+those statements omit nested evidence. A response that cannot be parsed as
+JSON leaves its summary portion pending.
 
 Rewind invalidates affected summaries and receipts that were tied to the
 replaced history. The runtime rebuilds from authorized original messages.

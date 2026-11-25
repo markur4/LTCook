@@ -57,8 +57,8 @@ All notable changes to `ltcook` will be documented in this file.
   **Stored for this agent** to inspect summary timings, token estimates, and
   source positions. The **Stored Summaries** tab shows the storage path and
   syntax-colored JSON with clipboard export. Open it from Activity or the chat's
-  **Show summaries** button. Use **Inference device** to choose CPU or automatic
-  GPU placement, and see live tokens per second during generation.
+  **Show summaries** button. The Session Memory card shows live tokens per
+  second during generation.
 
 - `ltcook restart` stops the local runtime and reopens Paseo. On Linux and macOS,
   `--update` applies the registered AppRC update before starting.
@@ -208,6 +208,12 @@ All notable changes to `ltcook` will be documented in this file.
   unchanged, and redirected output stays uncolored.
 
 ### 🛠️ Changed
+
+- **Breaking:** 💥 Session Memory starts a fresh v4 derived database for parsed
+  summary content and device identities. The compact **Inference device** picker
+  shows Ollama-discovered GPUs where supported. **Stored Summaries** and
+  **Copy JSON** expose summary parts as nested JSON. See the
+  [Session Memory storage and reset guidance](docs/Development.md#session-memory-qualification).
 
 - Session Memory uses Immediate Context with current Task instructions and one
   relevant completed UAMP. The production rolling-window budget settings were

@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useRpc } from '@getpaseo/plugin/client';
-import { Icon, SettingsSelect } from '@getpaseo/plugin/client/ui';
+import { Icon, Modal } from '@getpaseo/plugin/client/ui';
 import {
   memoryDeviceRpc,
   type ActivitySnapshot,
@@ -16,7 +16,7 @@ import {
   activityColor,
   statusLabel,
 } from './ActivityCard';
-import type { Theme } from './PanelChrome';
+import { Action, type Theme } from './PanelChrome';
 
 const ragAvailabilityTones = {
   ready: 'success',
@@ -49,10 +49,138 @@ function memoryCounts({ uamp, aab }: MemoryUnitCounts) {
   return `${uamp.toLocaleString()} user–agent ${uamp === 1 ? 'pair' : 'pairs'} · ${aab.toLocaleString()} action ${aab === 1 ? 'batch' : 'batches'}`;
 }
 
-const memoryDevices = [
-  { label: 'CPU', value: 'cpu' },
-  { label: 'GPU (automatic)', value: 'automatic' },
-] as const;
+type MemoryDevice = NonNullable<ActivitySnapshot['memory']['device']>;
+
+function MemoryDevicePicker({
+  theme,
+  device,
+  onDeviceChange,
+}: {
+  theme: Theme;
+  device: MemoryDevice;
+  onDeviceChange: (device: MemoryDevice) => void;
+}) {
+  const callDevice = useRpc(memoryDeviceRpc);
+  const [open, setOpen] = useState(false);
+  const [catalog, setCatalog] = useState<Awaited<ReturnType<typeof callDevice>>>();
+  const [pending, setPending] = useState<'loading' | 'saving' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const request = useRef<symbol | null>(null);
+
+  useEffect(
+    () => () => {
+      request.current = null;
+    },
+    [],
+  );
+
+  async function updateCatalog(deviceId?: string) {
+    if (request.current) return;
+    const operation = Symbol();
+    request.current = operation;
+    setPending(deviceId === undefined ? 'loading' : 'saving');
+    setError(null);
+    try {
+      const next = await callDevice(deviceId === undefined ? {} : { deviceId });
+      if (request.current !== operation) return;
+      setCatalog(next);
+      if (deviceId !== undefined) {
+        onDeviceChange(next.device);
+        setOpen(false);
+      }
+    } catch (cause) {
+      if (request.current !== operation) return;
+      if (deviceId === undefined) setCatalog(undefined);
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : deviceId === undefined
+            ? 'Could not load inference devices.'
+            : 'Could not change inference device.',
+      );
+    } finally {
+      if (request.current === operation) {
+        request.current = null;
+        setPending(null);
+      }
+    }
+  }
+
+  const errorNotice = error && (
+    <ActivityText theme={theme} tone="danger">
+      {error}
+    </ActivityText>
+  );
+
+  return (
+    <>
+      <View
+        testID="ltcook-memory-device-row"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+      >
+        <ActivityText theme={theme} tone="muted" lines={1}>
+          Inference device
+        </ActivityText>
+        <View style={{ flexShrink: 1, minWidth: 0 }}>
+          <ActivityButton
+            theme={theme}
+            label={`Inference device: ${device.label}`}
+            expanded={open}
+            onPress={() => {
+              setOpen(true);
+              void updateCatalog();
+            }}
+          >
+            <ActivityText theme={theme} lines={1}>
+              {device.label}
+            </ActivityText>
+            <Icon name="ChevronDown" size={11} color={theme.colors.foregroundMuted} />
+          </ActivityButton>
+        </View>
+      </View>
+      {!open && errorNotice}
+      <Modal title="Inference device" open={open} onOpenChange={setOpen}>
+        <Modal.Content contentContainerStyle={{ padding: 12, gap: 6 }}>
+          {pending && (
+            <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.foregroundMuted }}>
+              {pending === 'loading' ? 'Checking Ollama devices…' : 'Saving inference device…'}
+            </Text>
+          )}
+          {errorNotice}
+          {catalog?.diagnostic && (
+            <ActivityText theme={theme} tone="warning">
+              {catalog.diagnostic}
+            </ActivityText>
+          )}
+          {catalog && !catalog.devices.some(({ id }) => id === device.id) && (
+            <ActivityText theme={theme} tone="warning">
+              {device.label} is unavailable.
+            </ActivityText>
+          )}
+          {catalog?.devices.map((option) => (
+            <View key={option.id} style={{ gap: 3 }}>
+              <Action
+                theme={theme}
+                title={option.label}
+                selected={option.id === device.id}
+                disabled={pending !== null || option.unavailable !== undefined}
+                onPress={() => {
+                  if (option.id === device.id) setOpen(false);
+                  else void updateCatalog(option.id);
+                }}
+              />
+              {option.unavailable && (
+                <ActivityText theme={theme} tone="muted">
+                  {option.unavailable}
+                </ActivityText>
+              )}
+            </View>
+          ))}
+        </Modal.Content>
+      </Modal>
+    </>
+  );
+}
 
 function StoredSummaryMetadata({
   theme,
@@ -136,34 +264,19 @@ export function ActivityServices({
   agentId,
   rag,
   memory,
-  onCpuOnlyChange,
+  onDeviceChange,
   onOpenSummaries,
   agentWorktree,
 }: Pick<ActivitySnapshot, 'rag' | 'memory'> & {
   theme: Theme;
   agentId: string;
-  onCpuOnlyChange: (cpuOnly: boolean) => void;
+  onDeviceChange: (device: MemoryDevice) => void;
   onOpenSummaries: () => void;
   agentWorktree?: string;
 }) {
   const [ragOpen, setRagOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
-  const [savingDevice, setSavingDevice] = useState(false);
-  const [deviceError, setDeviceError] = useState<string | null>(null);
   const [storedOpen, setStoredOpen] = useState(false);
-  const saveMemoryDevice = useRpc(memoryDeviceRpc);
-  async function changeMemoryDevice(cpuOnly: boolean) {
-    setSavingDevice(true);
-    setDeviceError(null);
-    try {
-      const saved = await saveMemoryDevice({ cpuOnly });
-      onCpuOnlyChange(saved.cpuOnly);
-    } catch (error) {
-      setDeviceError(error instanceof Error ? error.message : 'Could not change inference device.');
-    } finally {
-      setSavingDevice(false);
-    }
-  }
   const ragActivity = statusLabel(rag.activity);
   const ragAvailability = statusLabel(rag.availability);
   const summarization = statusLabel(memory.summarization);
@@ -248,17 +361,11 @@ export function ActivityServices({
         <ActivityText theme={theme} strong>
           Background summaries
         </ActivityText>
-        {memory.cpuOnly !== null && (
-          <SettingsSelect
-            label="Inference device"
-            value={memory.cpuOnly ? 'cpu' : 'automatic'}
-            options={memoryDevices}
-            disabled={savingDevice}
-            onValueChange={(device) => {
-              const cpuOnly = device === 'cpu';
-              if (cpuOnly !== memory.cpuOnly) void changeMemoryDevice(cpuOnly);
-            }}
-            error={deviceError}
+        {memory.device && (
+          <MemoryDevicePicker
+            theme={theme}
+            device={memory.device}
+            onDeviceChange={onDeviceChange}
           />
         )}
         {memory.summarization !== 'disabled' && (

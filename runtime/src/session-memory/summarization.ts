@@ -5,6 +5,12 @@ import {
   type OllamaSettings,
   type OllamaUsage,
 } from '../integrations/ollama.js';
+import {
+  isEmptyMemorySummary,
+  memorySummaryText,
+  parseMemoryJson,
+  type MemoryJson,
+} from './json.js';
 import { estimateMemoryTokens, memoryPreview } from './text.js';
 import type { MemoryScope, MemorySourceMessage, MemoryUnit } from './units.js';
 
@@ -50,76 +56,21 @@ const fields = {
   UAMP: ['intent', 'pasted', 'discoveries', 'disagreements', 'decisions', 'questions'],
   AAB: ['pasted', 'discoveries', 'changes', 'results', 'issues', 'remaining'],
 } as const;
-export type MemorySummary = {
+type MemorySummary = { type: MemoryUnit['type']; content: MemoryJson };
+
+export type MemorySummaryResult = {
   type: MemoryUnit['type'];
   text: string;
-  fields?: Record<string, string | string[]>;
-  noUsefulInformation?: true;
-};
-
-export type MemorySummaryResult = MemorySummary & {
-  complete: boolean;
   elapsedMs: number;
   usage?: OllamaUsage;
   metrics?: OllamaChatMetrics;
-};
+} & (
+  | { complete: true; content: MemoryJson }
+  | { complete: false; content?: MemoryJson; failure?: 'invalid-json' }
+);
 
 /** Rate of streamed output during the latest sample interval. */
 export type MemorySummaryProgress = { tokensPerSecond: number; estimated: boolean };
-
-function hasSummaryContent(value: unknown): boolean {
-  if (typeof value === 'string') return !!value.trim();
-  if (value && typeof value === 'object') return Object.values(value).some(hasSummaryContent);
-  return typeof value === 'number' || typeof value === 'boolean';
-}
-
-export function parseMemorySummary(type: MemoryUnit['type'], text: string): MemorySummary {
-  let parsed: unknown;
-  const clean = text.trim();
-  const output = clean.replace(/^```(?:json)?\s*|\s*```$/gi, '').trim();
-  if (!output) return { type, text: '' };
-  try {
-    parsed = JSON.parse(output);
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      !Array.isArray(parsed) &&
-      Object.keys(parsed).length === 0
-    )
-      return { type, text: clean, noUsefulInformation: true };
-    if (!hasSummaryContent(parsed)) return { type, text: '' };
-  } catch {
-    // Recognize labeled text without making parseability a requirement.
-    const lines = clean.split(/\r?\n/);
-    parsed = Object.fromEntries(
-      lines.flatMap((line) => {
-        const match = /^\s*["*]*([a-z]+)["*]*:\s*([^,].*?)\s*$/i.exec(line);
-        return match ? [[match[1]!.toLowerCase(), match[2]!.trim()]] : [];
-      }),
-    );
-  }
-  const values: Record<string, string | string[]> = {};
-  if (parsed && typeof parsed === 'object') {
-    for (const key of fields[type]) {
-      const value = (parsed as Record<string, unknown>)[key];
-      if (typeof value === 'string' && value.trim()) values[key] = value.trim();
-      if (Array.isArray(value)) {
-        const lines = value.filter(
-          (item): item is string => typeof item === 'string' && !!item.trim(),
-        );
-        if (lines.length) values[key] = lines.map((line) => line.trim());
-      }
-    }
-  }
-  return { type, text: clean, ...(Object.keys(values).length ? { fields: values } : {}) };
-}
-
-function summaryStatements(summary: MemorySummary): { field?: string; text: string }[] {
-  if (summary.noUsefulInformation) return [];
-  return Object.entries(summary.fields ?? {}).flatMap(([field, value]) =>
-    (Array.isArray(value) ? value : [value]).map((text) => ({ field, text })),
-  );
-}
 
 export type MemoryHistoryEntry = MemorySummary & {
   id?: string;
@@ -127,36 +78,33 @@ export type MemoryHistoryEntry = MemorySummary & {
   scope?: MemoryScope;
 };
 
-export function retrievableSummaryStatements(summary: MemorySummary) {
-  if (summary.noUsefulInformation || !summary.text.trim()) return [];
-  const statements = summaryStatements(summary);
-  const fallback = { text: summary.text };
-  if (!statements.length) return [fallback];
-  try {
-    const parsed: unknown = JSON.parse(
-      summary.text.trim().replace(/^```(?:json)?\s*|\s*```$/gi, ''),
+export function retrievableSummaryStatements({
+  type,
+  content,
+}: MemorySummary): { field?: string; text: string }[] {
+  const text = memorySummaryText(content);
+  if (!text.trim() || isEmptyMemorySummary(content)) return [];
+  const fallback = { text };
+  if (content === null || typeof content !== 'object' || Array.isArray(content)) return [fallback];
+  const statements = fields[type].flatMap((field) => {
+    const value = content[field];
+    return (Array.isArray(value) ? value : [value]).flatMap((item) =>
+      typeof item === 'string' && item.trim() ? [{ field, text: item.trim() }] : [],
     );
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      !Array.isArray(parsed) &&
-      Object.entries(parsed).every(([field, value]) =>
-        (Array.isArray(value) ? value : [value]).every(
-          (item) =>
-            item === null ||
-            (typeof item === 'string' &&
-              (!item.trim() ||
-                statements.some(
-                  (statement) => statement.field === field && statement.text === item.trim(),
-                ))),
-        ),
-      )
-    )
-      return statements;
-  } catch {
-    // Preserve the full free-form response alongside recognized statements.
-  }
-  return [...statements, fallback];
+  });
+  if (!statements.length) return [fallback];
+  const fullyRepresented = Object.entries(content).every(([field, value]) =>
+    (Array.isArray(value) ? value : [value]).every(
+      (item) =>
+        item === null ||
+        (typeof item === 'string' &&
+          (!item.trim() ||
+            statements.some(
+              (statement) => statement.field === field && statement.text === item.trim(),
+            ))),
+    ),
+  );
+  return fullyRepresented ? statements : [...statements, fallback];
 }
 
 function immediateContext(portions: readonly MemoryHistoryEntry[], allowance: number) {
@@ -301,11 +249,11 @@ export function prepareMemorySummaries(
   const suitable =
     mode === 'immediate'
       ? history.filter(
-          ({ type, scope, text, noUsefulInformation }) =>
+          ({ type, scope, content }) =>
             type === 'UAMP' &&
             relevantMemoryScope(scope, unit.scope) &&
-            !!text.trim() &&
-            !noUsefulInformation,
+            !isEmptyMemorySummary(content) &&
+            !!memorySummaryText(content).trim(),
         )
       : [];
   const latest = suitable.at(-1);
@@ -367,7 +315,7 @@ export async function summarizeMemory(
     (value) => {
       usage = value;
     },
-    undefined,
+    'json',
     (value) => {
       metrics = value;
     },
@@ -383,12 +331,15 @@ export async function summarizeMemory(
         onProgress({ tokensPerSecond: (tokens * 1_000) / elapsedMs, estimated });
       }),
   );
-  const summary = parseMemorySummary(type, response.summary);
-  return {
-    ...summary,
-    complete: !response.incomplete && !!summary.text,
+  const content = parseMemoryJson(response.summary);
+  const result = {
+    type,
+    text: response.summary,
     elapsedMs: Math.round(performance.now() - start),
     usage,
     metrics,
   };
+  if (response.incomplete) return { ...result, content, complete: false };
+  if (content === undefined) return { ...result, complete: false, failure: 'invalid-json' };
+  return { ...result, content, complete: true };
 }

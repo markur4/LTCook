@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import type { OllamaDeviceCatalog } from '../integrations/ollama-devices.js';
+import { OllamaSummaryError, type OllamaSettings } from '../integrations/ollama.js';
+import { isEmptyMemorySummary, memorySummaryText } from './json.js';
 import {
   budgetMemoryText,
   memoryRelevance,
@@ -14,7 +17,9 @@ import {
   type OriginalHistoryAvailability,
 } from './handoff.js';
 import {
+  automaticMemoryDevice,
   MemoryStore,
+  type MemoryDevice,
   type MemoryState,
   type MemorySummaryCursor,
   type MemoryTurn,
@@ -83,7 +88,7 @@ export type MemoryHandoffObservation = UnitCounts & {
 };
 
 export type SessionMemoryStatus = {
-  cpuOnly: boolean;
+  device: MemoryDevice;
   summarization: SummaryOutcome | 'queued' | 'summarizing';
   rate: MemorySummaryProgress | null;
   lastSuccessfulSummaryAt: string | null;
@@ -112,6 +117,13 @@ type ActiveMemoryInference = {
   rate?: MemorySummaryProgress;
 };
 
+type MemoryPlacement = Pick<OllamaSettings, 'cpuOnly' | 'mainGpu'>;
+type MemoryDeviceOption = MemoryDevice & { unavailable?: string };
+
+const cpuMemoryDevice = { id: 'cpu', label: 'CPU' };
+const unknownDevice = 'The selected GPU is unavailable in Ollama.';
+const unaddressableDevice = 'Ollama cannot select this GPU by a unique index.';
+
 type MemoryOptions = {
   databasePath: string;
   source: MemorySource;
@@ -119,9 +131,10 @@ type MemoryOptions = {
     unit: MemoryUnit['type'],
     request: ReturnType<typeof prepareMemorySummaries>[number]['prompt'],
     signal: AbortSignal,
-    cpuOnly: boolean,
+    placement: MemoryPlacement,
     onProgress?: (rate: MemorySummaryProgress | undefined) => void,
   ): Promise<MemorySummaryResult>;
+  deviceCatalog?(refresh?: boolean): Promise<OllamaDeviceCatalog>;
   releaseCpuModel?(signal: AbortSignal): Promise<void>;
   threshold?: number;
   budgets?: MemoryBudgets;
@@ -192,7 +205,6 @@ function sourceEntry({ seq, text, author, tool }: MemorySourceMessage): SearchEn
 
 function summaryEntries(summary: StoredMemorySummary): SearchEntry[] {
   return summary.parts.flatMap((part, index) => {
-    if (part.noUsefulInformation || !part.text.trim()) return [];
     const entry = {
       kind: summary.type,
       author: 'summary',
@@ -276,8 +288,43 @@ export class SessionMemory {
     this.store = new MemoryStore(options.databasePath);
   }
 
-  setCpuOnly(cpuOnly: boolean): void {
-    this.store.saveDeviceSettings({ ...this.store.deviceSettings(), cpuOnly });
+  private async readDeviceCatalog(refresh = false): Promise<OllamaDeviceCatalog> {
+    try {
+      return (
+        (await this.options.deviceCatalog?.(refresh)) ?? {
+          devices: [],
+          diagnostic: 'Ollama GPU discovery is unavailable.',
+        }
+      );
+    } catch {
+      return { devices: [], diagnostic: 'Ollama GPU discovery failed.' };
+    }
+  }
+
+  async device(deviceId?: string): Promise<{
+    device: MemoryDevice;
+    devices: MemoryDeviceOption[];
+    diagnostic?: string;
+  }> {
+    const catalog = await this.readDeviceCatalog(deviceId === undefined);
+    this.abort.signal.throwIfAborted();
+    const devices: MemoryDeviceOption[] = [
+      { ...automaticMemoryDevice },
+      { ...cpuMemoryDevice },
+      ...catalog.devices.map(({ id, label, mainGpu, unavailable }) => ({
+        id,
+        label,
+        unavailable: unavailable ?? (mainGpu === undefined ? unaddressableDevice : undefined),
+      })),
+    ];
+    const current = this.store.deviceSettings();
+    if (deviceId === undefined)
+      return { device: current.device, devices, diagnostic: catalog.diagnostic };
+    const choice = devices.find(({ id }) => id === deviceId);
+    if (!choice || choice.unavailable) throw new Error(choice?.unavailable ?? unknownDevice);
+    const device = { id: choice.id, label: choice.label };
+    this.store.saveDeviceSettings({ ...current, device });
+    return { device, devices, diagnostic: catalog.diagnostic };
   }
 
   status(sessionId: string | undefined, agentId: string, epoch?: string): SessionMemoryStatus {
@@ -300,7 +347,7 @@ export class SessionMemory {
         ? { ...delivery.value }
         : null;
     return {
-      cpuOnly: this.store.deviceSettings().cpuOnly,
+      device: this.store.deviceSettings().device,
       summarization: mismatched
         ? 'unknown'
         : summarizing
@@ -322,7 +369,7 @@ export class SessionMemory {
   async readStoredSummaries(
     agentId: string,
     before?: MemorySummaryCursor,
-    { includeText = true }: { includeText?: boolean } = {},
+    { includeContent = true }: { includeContent?: boolean } = {},
   ) {
     const generation = this.activity.get(agentId)?.generation;
     const tail = await this.options.source.read(agentId, undefined, 'tail');
@@ -336,7 +383,7 @@ export class SessionMemory {
     ) {
       throw new Error('Conversation history changed. Reopen the stored summaries.');
     }
-    const page = this.store.summaryPage(agentId, tail.epoch, tail.latest, before, includeText);
+    const page = this.store.summaryPage(agentId, tail.epoch, tail.latest, before, includeContent);
     return {
       ...page,
       storagePath: this.options.databasePath === ':memory:' ? null : this.options.databasePath,
@@ -774,7 +821,9 @@ export class SessionMemory {
           summary.position < position &&
           (!latestUamp || summary.position > latestUamp.position) &&
           relevantMemoryScope(summary.scope, unit.scope) &&
-          summary.parts.some(({ text, noUsefulInformation }) => !noUsefulInformation && text.trim())
+          summary.parts.some(
+            ({ content }) => !isEmptyMemorySummary(content) && memorySummaryText(content).trim(),
+          )
         )
           latestUamp = summary;
       }
@@ -830,7 +879,7 @@ export class SessionMemory {
         createdAt: existing?.createdAt ?? new Date().toISOString(),
         originalTokens,
         summaryTokens: retainedParts.reduce(
-          (total, { text }) => total + estimateMemoryTokens(text),
+          (total, { content }) => total + estimateMemoryTokens(JSON.stringify(content)),
           0,
         ),
         // > An older partial summary may have portions with unknown durations.
@@ -861,24 +910,50 @@ export class SessionMemory {
             result,
           });
         try {
-          const { cpuOnly, cpuRunner } = this.store.deviceSettings();
-          if (!cpuOnly && cpuRunner && this.options.releaseCpuModel) {
-            // > Automatic GPU placement can reuse a CPU-only runner until it is unloaded.
+          const { device, cpuRunner } = this.store.deviceSettings();
+          let placement: MemoryPlacement = {};
+          if (device.id === cpuMemoryDevice.id) {
+            placement = { cpuOnly: true };
+          } else if (device.id !== automaticMemoryDevice.id) {
+            const catalog = await this.readDeviceCatalog();
+            this.abort.signal.throwIfAborted();
+            if (
+              this.foreground.size ||
+              this.store.deviceSettings().device.id !== device.id ||
+              activity.generation !== generation
+            )
+              return true;
+            const selected = catalog.devices.find(({ id }) => id === device.id);
+            if (selected?.mainGpu === undefined || selected.unavailable) {
+              this.noteFailure(
+                agentId,
+                selected?.unavailable ?? catalog.diagnostic ?? unknownDevice,
+              );
+              this.options.onFailure?.();
+              break;
+            }
+            placement = { mainGpu: selected.mainGpu };
+          }
+          if (!placement.cpuOnly && cpuRunner && this.options.releaseCpuModel) {
+            // > Ollama can reuse a CPU-only runner until it is unloaded.
             await this.options.releaseCpuModel(this.abort.signal);
+            this.abort.signal.throwIfAborted();
             const current = this.store.deviceSettings();
             this.store.saveDeviceSettings({ ...current, cpuRunner: false });
             if (
               this.foreground.size ||
-              current.cpuOnly !== cpuOnly ||
+              current.device.id !== device.id ||
               activity.generation !== generation
             )
               return true;
           }
-          if (cpuOnly && !cpuRunner) this.store.saveDeviceSettings({ cpuOnly, cpuRunner: true });
+          if (placement.cpuOnly && !cpuRunner)
+            this.store.saveDeviceSettings({ device, cpuRunner: true });
           const inference: ActiveMemoryInference = { agentId, generation };
           this.inference = inference;
+          let ollamaFailure: string | undefined;
           const result = await this.options
-            .summarize(unit.type, part.prompt, this.abort.signal, cpuOnly, (rate) => {
+            .summarize(unit.type, part.prompt, this.abort.signal, placement, (rate) => {
               if (
                 this.inference === inference &&
                 activity.generation === generation &&
@@ -889,8 +964,9 @@ export class SessionMemory {
             .finally(() => {
               this.inference = undefined;
             })
-            .catch((): MemorySummaryResult => {
+            .catch((error: unknown): MemorySummaryResult => {
               this.abort.signal.throwIfAborted();
+              if (error instanceof OllamaSummaryError) ollamaFailure = error.message;
               return {
                 type: unit.type,
                 text: '',
@@ -899,18 +975,20 @@ export class SessionMemory {
               };
             });
           report(result);
-          if (!result.complete || !result.text.trim()) {
-            this.noteFailure(agentId, 'Session Memory returned an incomplete summary.');
+          if (!result.complete) {
+            this.noteFailure(
+              agentId,
+              ollamaFailure ??
+                (result.failure === 'invalid-json'
+                  ? 'Ollama returned invalid JSON for a Session Memory summary.'
+                  : 'Session Memory returned an incomplete summary.'),
+            );
             this.options.onFailure?.();
             break;
           }
-          summary.parts.push({
-            text: result.text,
-            fields: result.fields,
-            sources: part.sources,
-            noUsefulInformation: result.noUsefulInformation,
-          });
-          summary.summaryTokens = (summary.summaryTokens ?? 0) + estimateMemoryTokens(result.text);
+          summary.parts.push({ content: result.content, sources: part.sources });
+          summary.summaryTokens =
+            (summary.summaryTokens ?? 0) + estimateMemoryTokens(JSON.stringify(result.content));
           if (summary.durationMs !== undefined) {
             const durationMs = summary.durationMs + Math.round(result.elapsedMs);
             summary.durationMs =
@@ -927,10 +1005,15 @@ export class SessionMemory {
             if (pendingUnits.delete(id)) pendingCounts[count]--;
             notePending();
           }
-        } catch {
+        } catch (error) {
           this.inference = undefined;
           this.abort.signal.throwIfAborted();
-          this.noteFailure(agentId, 'Session Memory could not complete the summary.');
+          this.noteFailure(
+            agentId,
+            error instanceof OllamaSummaryError
+              ? error.message
+              : 'Session Memory could not complete the summary.',
+          );
           this.options.onFailure?.();
           break;
         }

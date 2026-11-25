@@ -292,24 +292,34 @@ async function eventually(predicate: () => boolean | Promise<boolean>) {
   expect(await predicate()).toBe(true);
 }
 
-test('persists the inference device and releases a CPU runner once before automatic placement', async () => {
+test('persists device identity, resolves its current index, and releases a CPU runner once', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-device-'));
   const messages: MemorySourceMessage[] = [];
-  const requests: string[] = [];
+  const requests: unknown[] = [];
+  const gpu = { id: 'CUDA:gpu', label: 'Fixture GPU', mainGpu: 1 };
   const options = {
     databasePath: path.join(directory, 'memory.sqlite'),
     source: timeline(() => ({ epoch: 'one', messages })),
+    async deviceCatalog() {
+      return { devices: [gpu] };
+    },
     async summarize(
       type: 'UAMP' | 'AAB',
       _prompt: unknown,
       _signal: AbortSignal,
-      cpuOnly: boolean,
+      placement: { cpuOnly?: boolean; mainGpu?: number },
     ) {
-      requests.push(cpuOnly ? 'cpu' : 'automatic');
-      return { type, text: 'Kept the cursor.', complete: true, elapsedMs: 1 };
+      requests.push(placement);
+      return {
+        type,
+        text: 'Kept the cursor.',
+        content: { results: 'Kept the cursor.' },
+        complete: true as const,
+        elapsedMs: 1,
+      };
     },
     async releaseCpuModel() {
-      requests.push('release');
+      requests.push('release CPU');
     },
   };
   let memory = new SessionMemory(options);
@@ -322,19 +332,67 @@ test('persists the inference device and releases a CPU runner once before automa
     await eventually(() => memory.status(undefined, 'leader').stored?.uamp === storedCount);
   }
   try {
-    expect(memory.status(undefined, 'leader').cpuOnly).toBe(false);
-    memory.setCpuOnly(true);
+    expect(memory.status(undefined, 'leader').device.id).toBe('auto');
+    await memory.device('cpu');
     await summarizeTurn('1', 1);
     await memory.close();
     memory = new SessionMemory(options);
-    expect(memory.status(undefined, 'leader').cpuOnly).toBe(true);
-    memory.setCpuOnly(false);
+    expect(memory.status(undefined, 'leader').device.id).toBe('cpu');
+    await memory.device(gpu.id);
     await summarizeTurn('2', 2);
+    await memory.close();
+    gpu.mainGpu = 0;
+    memory = new SessionMemory(options);
+    expect(memory.status(undefined, 'leader').device).toEqual({ id: gpu.id, label: gpu.label });
     await summarizeTurn('3', 3);
-    expect(requests).toEqual(['cpu', 'release', 'automatic', 'automatic']);
+    await memory.device('auto');
+    await summarizeTurn('4', 4);
+    expect(requests).toEqual([
+      { cpuOnly: true },
+      'release CPU',
+      { mainGpu: 1 },
+      { mainGpu: 0 },
+      {},
+    ]);
   } finally {
     await memory.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('keeps the requested GPU and leaves summaries pending when the device disappears', async () => {
+  const messages = [
+    { ...first, turnId: '1' },
+    { ...finding, turnId: '1' },
+  ];
+  const gpu = { id: 'CUDA:removable', label: 'Fixture removable GPU', mainGpu: 0 };
+  let available = true;
+  let requestCount = 0;
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async deviceCatalog() {
+      return { devices: available ? [gpu] : [] };
+    },
+    async summarize() {
+      requestCount++;
+      throw new Error('A missing GPU must not launch inference on a different device.');
+    },
+  });
+  try {
+    await memory.device(gpu.id);
+    available = false;
+    memory.turn('leader', { turnId: '1', outcome: 'completed' }, false);
+    await eventually(() => memory.status(undefined, 'leader').summarization === 'failed');
+    expect(memory.status(undefined, 'leader')).toMatchObject({
+      device: { id: gpu.id, label: gpu.label },
+      lastError: { message: expect.stringMatching(/GPU.*unavailable/) },
+      pendingUamp: 1,
+    });
+    expect(requestCount).toBe(0);
+    expect((await memory.readStoredSummaries('leader')).summaries).toEqual([]);
+  } finally {
+    await memory.close();
   }
 });
 
@@ -358,7 +416,13 @@ test('stores the attachment citation from a native turn with only a trailing act
     async summarize(type, request) {
       expect(type).toBe('AAB');
       expect(request.at(-1)?.content).toContain('Keep ATTACHED_CHECK part of the next run.');
-      return { type, text: 'Reference ATTACHED_CHECK.', complete: true, elapsedMs: 1 };
+      return {
+        type,
+        text: 'Reference ATTACHED_CHECK.',
+        content: 'Reference ATTACHED_CHECK.',
+        complete: true,
+        elapsedMs: 1,
+      };
     },
   });
   try {
@@ -391,10 +455,12 @@ test('stores chronological summaries, preserves original authority, and removes 
     async summarize(type: 'UAMP' | 'AAB', request: { content: string }[]) {
       const prompt = request.at(-1)!.content;
       prompts.push(prompt);
+      const text = prompt.includes(correction.text) ? 'corrected-decision' : 'initial-discovery';
       return {
         type,
-        text: prompt.includes(correction.text) ? 'corrected-decision' : 'initial-discovery',
-        complete: true,
+        text,
+        content: { resolution: { value: text } },
+        complete: true as const,
         elapsedMs: 1,
       };
     },
@@ -413,7 +479,13 @@ test('stores chronological summaries, preserves original authority, and removes 
       lastDelivered: null,
       currentContext: null,
     });
-    const catalog = await memory.readStoredSummaries('leader', undefined, { includeText: false });
+    const fullCatalog = await memory.readStoredSummaries('leader');
+    expect(fullCatalog.summaries[0]?.parts).toEqual([
+      { content: { resolution: { value: 'corrected-decision' } }, sources: [3, 4] },
+    ]);
+    const catalog = await memory.readStoredSummaries('leader', undefined, {
+      includeContent: false,
+    });
     expect(catalog.storagePath).toBe(options.databasePath);
     expect(
       catalog.summaries.map(({ position, durationMs, parts }) => ({ position, durationMs, parts })),
@@ -499,7 +571,13 @@ test('a delayed read cannot invalidate summaries rebuilt for a replacement histo
     },
     async summarize(type) {
       requests++;
-      return { type, text: 'Retained model evidence.', complete: true, elapsedMs: 1 };
+      return {
+        type,
+        text: 'Retained model evidence.',
+        content: 'Retained model evidence.',
+        complete: true,
+        elapsedMs: 1,
+      };
     },
   });
   try {
@@ -545,7 +623,13 @@ test('continues a newer turn when the older provider terminal event was missed',
     source: timeline(() => ({ epoch: 'one', messages })),
     async summarize(type) {
       completed.push(type);
-      return { type, text: 'Observed evidence.', complete: true, elapsedMs: 1 };
+      return {
+        type,
+        text: 'Observed evidence.',
+        content: 'Observed evidence.',
+        complete: true,
+        elapsedMs: 1,
+      };
     },
   });
   try {
@@ -588,6 +672,7 @@ test('preserves checked tool evidence and uses originals for an omitted archived
       return {
         type,
         text: 'Keep runtime/src/old-cache.ts.bak and runtime/src/OLD-cache.ts.',
+        content: 'Keep runtime/src/old-cache.ts.bak and runtime/src/OLD-cache.ts.',
         complete: true,
         elapsedMs: 1,
       };
@@ -670,7 +755,13 @@ test('gives foreground inference priority and exposes originals during a failed 
     source: timeline(() => ({ epoch: 'one', messages })),
     async summarize(type) {
       calls++;
-      return { type, text: 'partial answer', complete: false, elapsedMs: 1 };
+      return {
+        type,
+        text: 'partial answer',
+        complete: false,
+        failure: 'invalid-json',
+        elapsedMs: 1,
+      };
     },
   });
   try {
@@ -679,7 +770,9 @@ test('gives foreground inference priority and exposes originals during a failed 
     expect(await memory.handoff('leader', 'cursor')).toContain(first.text);
     expect(calls).toBe(0);
     memory.foregroundEnded('local-worker');
-    await eventually(() => calls === 1);
+    await eventually(() => memory.status(undefined, 'leader').summarization === 'failed');
+    expect(calls).toBe(1);
+    expect(memory.status(undefined, 'leader').lastError?.message).toContain('invalid JSON');
     expect((await memory.search('leader', '', 'partial answer')).matches).toEqual([]);
     expect((await memory.search('leader', '', 'cobalt')).status.summariesPending).toBe(true);
     expect(await memory.handoff('leader', 'cursor')).toContain(first.text);

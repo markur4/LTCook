@@ -266,6 +266,7 @@ try {
         return {
           type,
           text: 'Observed native conversation evidence.',
+          content: 'Observed native conversation evidence.',
           complete: true,
           elapsedMs: 0,
         };

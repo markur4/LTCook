@@ -16,7 +16,7 @@ function precedes(
   );
 }
 
-export function useStoredSummaries(agentId: string, includeText: boolean) {
+export function useStoredSummaries(agentId: string, includeContent: boolean) {
   const read = useRpc(storedSummariesRpc);
   const [request, setRequest] = useState<ReadRequest>({ previous: null });
   const [result, setResult] = useState<ReadResult>();
@@ -30,7 +30,7 @@ export function useStoredSummaries(agentId: string, includeText: boolean) {
       try {
         do {
           const before = page?.next ?? undefined;
-          const incoming = await read({ agentId, includeText, before });
+          const incoming = await read({ agentId, includeContent, before });
           if (!current) return;
           const first = incoming.summaries[0];
           const last = incoming.summaries.at(-1);
@@ -64,7 +64,7 @@ export function useStoredSummaries(agentId: string, includeText: boolean) {
     return () => {
       current = false;
     };
-  }, [agentId, includeText, read, request]);
+  }, [agentId, includeContent, read, request]);
 
   const current = result?.request === request ? result : undefined;
   const page = current && 'page' in current ? current.page : request.previous;

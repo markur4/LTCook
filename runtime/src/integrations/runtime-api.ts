@@ -381,13 +381,13 @@ export class RuntimeApi {
           response.writeHead(403).end('{}');
           return;
         }
-        const { cpuOnly } = memoryDeviceRpc.input.parse(parsed);
+        const { deviceId } = memoryDeviceRpc.input.parse(parsed);
         if (!this.memory) {
           response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
           return;
         }
-        this.memory.setCpuOnly(cpuOnly);
-        response.writeHead(200).end(JSON.stringify({ cpuOnly }));
+        const device = await this.memory.device(deviceId);
+        response.writeHead(200).end(JSON.stringify(device));
         return;
       }
       if (request.url === '/v1/activity/stored-summaries') {
@@ -395,12 +395,12 @@ export class RuntimeApi {
           response.writeHead(403).end('{}');
           return;
         }
-        const { agentId, before, includeText } = storedSummariesRpc.input.parse(parsed);
+        const { agentId, before, includeContent } = storedSummariesRpc.input.parse(parsed);
         if (!this.memory) {
           response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
           return;
         }
-        const page = await this.memory.readStoredSummaries(agentId, before, { includeText });
+        const page = await this.memory.readStoredSummaries(agentId, before, { includeContent });
         response.writeHead(200).end(JSON.stringify(page));
         return;
       }

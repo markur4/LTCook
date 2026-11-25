@@ -57,9 +57,11 @@ export const MemoryRateSchema = z.object({
   tokensPerSecond: z.number().finite().nonnegative(),
   estimated: z.boolean(),
 });
+export const MemoryDeviceSchema = z.object({ id, label: z.string().min(1) });
+const memoryDeviceOption = MemoryDeviceSchema.extend({ unavailable: z.string().optional() });
 const sessionMemoryStatus = z.object({
   rate: MemoryRateSchema.nullable(),
-  cpuOnly: z.boolean().nullable(),
+  device: MemoryDeviceSchema.nullable(),
   lastHandoff: z
     .object({
       at: timestamp,
@@ -100,11 +102,14 @@ export const activitySubscription = defineSubscription({
   event: ActivitySnapshotSchema,
 });
 
-const memoryDevice = z.object({ cpuOnly: z.boolean() });
 export const memoryDeviceRpc = defineRpc({
   name: 'ltcook.activity.memory-device',
-  input: memoryDevice,
-  output: memoryDevice,
+  input: z.strictObject({ deviceId: id.optional() }),
+  output: z.object({
+    device: MemoryDeviceSchema,
+    devices: z.array(memoryDeviceOption),
+    diagnostic: z.string().optional(),
+  }),
 });
 
 const summaryCursor = z.object({ epoch: id, position: count, id });
@@ -116,7 +121,7 @@ export const storedSummariesRpc = defineRpc({
   input: z.object({
     agentId: id,
     before: summaryCursor.optional(),
-    includeText: z.boolean().optional(),
+    includeContent: z.boolean().optional(),
   }),
   output: z.object({
     summaries: z.array(
@@ -128,7 +133,7 @@ export const storedSummariesRpc = defineRpc({
         originalTokens: count.nullable(),
         summaryTokens: count.nullable(),
         durationMs: count.nullable(),
-        parts: z.array(z.object({ text: z.string(), sources: z.array(count) })),
+        parts: z.array(z.object({ content: z.json(), sources: z.array(count) })),
       }),
     ),
     next: summaryCursor.nullable(),

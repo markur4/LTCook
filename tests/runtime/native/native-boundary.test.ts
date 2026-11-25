@@ -112,8 +112,19 @@ function snapshotFor(
 
 describe('native runtime boundary', () => {
   test('only the user can change the host Session Memory device', async () => {
+    let probes = 0;
+    const gpu = { id: 'CUDA:device-1', label: 'Fixture CUDA GPU', mainGpu: 0 };
+    const ambiguous = {
+      id: 'ROCm:device-2',
+      label: 'Fixture AMD GPU',
+      unavailable: 'Ollama cannot select this device uniquely.',
+    };
     const memory = new SessionMemory({
       databasePath: ':memory:',
+      async deviceCatalog() {
+        probes++;
+        return { devices: [gpu, ambiguous] };
+      },
       source: {
         async read() {
           throw new Error('Changing the inference device must not read conversation history.');
@@ -133,21 +144,34 @@ describe('native runtime boundary', () => {
         body: JSON.stringify(input),
       });
     try {
-      expect((await post('memory-device', { cpuOnly: true })).status).toBe(503);
+      expect((await post('memory-device', { deviceId: 'cpu' })).status).toBe(503);
       api.setSessionMemory(memory);
       const nativeAgentId = 'selected';
-      const rejected = await post(
-        'memory-device',
-        { nativeAgentId, cpuOnly: true },
-        agentBearer(master, nativeAgentId),
-      );
-      expect(rejected.status).toBe(403);
-      expect((await post('memory-device', { cpuOnly: 'cpu' })).status).toBe(400);
-      const updated = await post('memory-device', { cpuOnly: true });
+      for (const input of [{ nativeAgentId }, { nativeAgentId, deviceId: gpu.id }]) {
+        const rejected = await post('memory-device', input, agentBearer(master, nativeAgentId));
+        expect(rejected.status).toBe(403);
+      }
+      expect(probes).toBe(0);
+      expect((await post('memory-device', { deviceId: 0 })).status).toBe(400);
+      const inventory = await post('memory-device', {});
+      expect(inventory.status).toBe(200);
+      expect(await inventory.json()).toMatchObject({
+        device: { id: 'auto', label: 'Auto' },
+        devices: [
+          { id: 'auto', label: 'Auto' },
+          { id: 'cpu', label: 'CPU' },
+          { id: gpu.id, label: gpu.label },
+          ambiguous,
+        ],
+      });
+      const rejected = await post('memory-device', { deviceId: ambiguous.id });
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toMatchObject({ error: ambiguous.unavailable });
+      const updated = await post('memory-device', { deviceId: gpu.id });
       expect(updated.status).toBe(200);
-      expect(await updated.json()).toEqual({ cpuOnly: true });
+      expect(await updated.json()).toMatchObject({ device: { id: gpu.id, label: gpu.label } });
       const snapshot = await post('services', { nativeAgentId: 'another-agent' });
-      expect(await snapshot.json()).toMatchObject({ memory: { cpuOnly: true } });
+      expect(await snapshot.json()).toMatchObject({ memory: { device: { id: gpu.id } } });
     } finally {
       await api.close();
       await memory.close();
@@ -171,7 +195,9 @@ describe('native runtime boundary', () => {
           sources: [{ seq: position, author: 'agent' }],
           createdAt: '2026-01-01T00:00:00Z',
           historyHash: 'fixture',
-          parts: [{ text: `Stored body ${position}`, sources: [position] }],
+          parts: [
+            { content: { findings: [{ detail: `Stored body ${position}` }] }, sources: [position] },
+          ],
           expectedParts: 1,
           complete: position !== 11,
         });
@@ -179,7 +205,7 @@ describe('native runtime boundary', () => {
       store.saveSummary({
         ...store.summaries('selected', 'original')[0]!,
         agentId: 'other-agent',
-        parts: [{ text: 'Other agent summary', sources: [1] }],
+        parts: [{ content: { findings: ['Other agent summary'] }, sources: [1] }],
       });
     } finally {
       store.close();
@@ -217,7 +243,7 @@ describe('native runtime boundary', () => {
       );
       expect(first.summaries[0]).toMatchObject({
         type: 'AAB',
-        parts: [{ text: 'Stored body 10', sources: [10] }],
+        parts: [{ content: { findings: [{ detail: 'Stored body 10' }] }, sources: [10] }],
       });
       expect(first.storagePath).toBe(databasePath);
       expect(first.summaries[0]).toMatchObject({
@@ -226,7 +252,7 @@ describe('native runtime boundary', () => {
         durationMs: null,
       });
       const metadataOnly = storedSummariesRpc.output.parse(
-        await (await readPage({ includeText: false })).json(),
+        await (await readPage({ includeContent: false })).json(),
       );
       expect(metadataOnly.summaries.map(({ id }) => id)).toEqual(
         first.summaries.map(({ id }) => id),
