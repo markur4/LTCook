@@ -805,7 +805,14 @@ try {
   await browser('set', 'media', 'light');
   await inspectStage('native-activity-tools-and-skills');
 
-  await browser('wait', '[aria-label^="Adjutant,"][aria-expanded="false"]');
+  await browser(
+    'wait',
+    '--fn',
+    `(() => {
+      const row = document.querySelector('[aria-label^="Adjutant,"]');
+      return row && row.getAttribute('aria-expanded') !== 'true';
+    })()`,
+  );
   await browser('wait', '[aria-label="Open Adjutant conversation"]');
   assert.equal(await browser('get', 'text', '[aria-label="Open Adjutant conversation"]'), 'Open');
   await clickButton('Open Adjutant conversation');
