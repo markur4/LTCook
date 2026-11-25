@@ -567,9 +567,11 @@ model setting.
 
 The draft previews runtime defaults. Workspace AppRC settings are applied at
 launch. Paseo saves the resolved provider, model, and reasoning with the
-conversation. Reopening it uses the last saved native settings even after an
-alias changes. A live change through Paseo's native controls updates the
-settings shown in the running conversation.
+conversation. Reopening it uses the last saved native settings when you change
+the model an alias points to. If a Session was saved with the retired
+`@tiny-local` alias, start a new Session with `@local-tiny`. A live change
+through Paseo's native controls updates the settings shown in the running
+conversation.
 
 Use the terminal launcher to start a new native conversation:
 

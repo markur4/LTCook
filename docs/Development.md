@@ -316,10 +316,10 @@ to the recommended summarizer, its prompt, generation settings, or preparation
 of input. Include this Agent Eval in the verification plan alongside the
 Traditional Tests and report its qualification verdict separately. Check for
 the configured `@local-cpu` candidate and the prepared `@local-evals` model before
-running it. Get authorization to install any missing models separately from
-authorization to run the evaluation. The evaluation never pulls candidate
-models. If qualification is deferred or blocked, report the candidate as
-unqualified and name the gap.
+running it. Check whether the user has authorized both the evaluation and any
+missing model downloads. One request can authorize both. The evaluation uses
+installed candidate models. If qualification is deferred or blocked, report the
+candidate as unqualified and name the gap.
 
 The report identifies local models by their resolved tags and digests. It includes a code fingerprint, hashes for
 the fixtures and prompts, effective settings, individual results, fixed-fixture
