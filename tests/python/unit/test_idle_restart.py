@@ -139,6 +139,23 @@ def test_queue_rejects_owners_without_the_idle_stop_contract(
     launch.assert_not_called()
 
 
+def test_queue_rejects_owner_from_a_different_build(
+    installation: tuple[dict[str, str], restart._Store, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment, _, launcher = installation
+    monkeypatch.setattr(
+        restart, "probe_runtime", Mock(return_value=_owner(environment, build="other"))
+    )
+    launch = Mock()
+    monkeypatch.setattr(restart, "_launch_worker", launch)
+
+    with pytest.raises(RuntimeClientError, match="differs from the installed build"):
+        restart.queue_restart(environment, launcher, update=False)
+    assert restart.restart_status(environment)["state"] == "idle"
+    launch.assert_not_called()
+
+
 def test_worker_reports_busy_owner_and_cancellation_prevents_stop(
     installation: tuple[dict[str, str], restart._Store, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -188,6 +205,35 @@ def test_worker_never_updates_after_its_authenticated_target_is_replaced(
     status = restart.restart_status(environment)
     assert status["state"] == "failed"
     assert "instance changed" in status["message"]
+    stop.assert_called_once_with(
+        environment, when_idle=True, expected_instance_id="previous"
+    )
+    update.assert_not_called()
+    start.assert_not_called()
+
+
+def test_worker_never_updates_a_registration_replaced_during_shutdown(
+    installation: tuple[dict[str, str], restart._Store, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment, store, launcher = installation
+    _seed(store, update=True)
+    registration = Mock(side_effect=["registered", "replacement"])
+    stop = Mock(return_value=0)
+    update = Mock()
+    start = Mock()
+    monkeypatch.setattr(restart, "_registration", registration)
+    monkeypatch.setattr(restart, "stop_runtime", stop)
+    monkeypatch.setattr(restart, "probe_runtime", Mock(return_value=None))
+    monkeypatch.setattr(restart, "_update", update)
+    monkeypatch.setattr(restart, "_start", start)
+
+    restart._worker(store, "job", launcher)
+
+    status = restart.restart_status(environment)
+    assert status["state"] == "failed"
+    assert "installation changed during shutdown" in status["message"]
+    assert registration.call_count == 2
     stop.assert_called_once_with(
         environment, when_idle=True, expected_instance_id="previous"
     )

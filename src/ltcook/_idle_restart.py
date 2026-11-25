@@ -212,6 +212,7 @@ def _registration(shell: Mapping[str, str], launcher: Path) -> str:
     if (
         record is None
         or inspection.revision is None
+        or inspection.status != "ready"
         or launcher.name != record.command_name
         or not launcher.is_file()
         or not any(
@@ -300,6 +301,10 @@ def queue_restart(
             raise RuntimeClientError(
                 "The running LTCook version does not support idle restart. "
                 "Restart it from a terminal after its work finishes."
+            )
+        if owner.build_fingerprint != _expected_build(environment):
+            raise RuntimeClientError(
+                "The running LTCook runtime differs from the installed build."
             )
         job_id = uuid4().hex
         receipt: _Receipt = {
@@ -474,6 +479,7 @@ def _start(
     shell: Mapping[str, str],
     previous_instance_id: str,
 ) -> RuntimeStatus:
+    expected_build = _expected_build(environment)
     # > The registered command selects the refreshed AppRC runtime after an update.
     # > This foreground launch stays in the transient scope after the worker exits.
     try:
@@ -494,7 +500,7 @@ def _start(
         if isinstance(status, RuntimeStatus):
             if status.instance_id == previous_instance_id:
                 raise RuntimeClientError("The previous runtime is still responding.")
-            if status.build_fingerprint != _expected_build(environment):
+            if status.build_fingerprint != expected_build:
                 raise RuntimeClientError(
                     "The replacement runtime reported a different build."
                 )
@@ -522,6 +528,10 @@ def _restart(store: _Store, job_id: str, launcher: Path) -> None:
     if probe_runtime(environment) is not None:
         raise RuntimeClientError(
             "Another runtime appeared after stop. Idle restart was halted."
+        )
+    if _registration(shell, launcher) != receipt["revision"]:
+        raise RuntimeClientError(
+            "The registered installation changed during shutdown. Idle restart was halted."
         )
 
     update_failure = None

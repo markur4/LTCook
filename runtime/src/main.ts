@@ -394,11 +394,31 @@ async function run(): Promise<void> {
         void telemetry.log('warn', 'session-memory.unavailable', {});
       }
     }
+    const receipt = JSON.parse(
+      await fs
+        .readFile(path.join(canonicalDeploymentRoot, 'runtime.json'), 'utf8')
+        .catch(() => '{}'),
+    ) as {
+      app?: string;
+      browser_available?: boolean;
+      browser_executable?: string;
+      fingerprint?: string;
+    };
+    if (stopping) return;
+    const buildFingerprint =
+      !sourceRuntime &&
+      typeof receipt.app === 'string' &&
+      path.resolve(receipt.app) === appRoot &&
+      typeof receipt.fingerprint === 'string' &&
+      /^[a-f0-9]{64}$/.test(receipt.fingerprint)
+        ? receipt.fingerprint
+        : undefined;
+    const reserveIdleRestart = buildFingerprint ? host.reserveIdleRestart : undefined;
     const requestRestart =
-      host.reserveIdleRestart && process.env.LTCOOK_PASEO_PASSWORD
+      reserveIdleRestart && process.env.LTCOOK_PASEO_PASSWORD
         ? (update: boolean): Promise<Record<string, unknown>> =>
             new Promise((resolve, reject) => {
-              const args = ['-m', 'ltcook', 'restart', '--when-idle', '--json'];
+              const args = ['-I', '-m', 'ltcook', 'restart', '--when-idle', '--json'];
               if (update) args.push('--update', '--yes');
               childProcess.execFile(
                 python,
@@ -432,12 +452,6 @@ async function run(): Promise<void> {
       requestRestart,
     );
     api.setWorkspaceMcp(workspaceMcp);
-    const receipt = JSON.parse(
-      await fs
-        .readFile(path.join(canonicalDeploymentRoot, 'runtime.json'), 'utf8')
-        .catch(() => '{}'),
-    ) as { browser_available?: boolean; browser_executable?: string; fingerprint?: string };
-    if (stopping) return;
     const backend = await createPaseoAgentBackend({
       telemetry,
       api: host.api,
@@ -576,10 +590,10 @@ async function run(): Promise<void> {
         backendLogPath,
         paseoLogPath: host.logPath,
         telemetryLogPath: path.resolve(logs),
-        buildFingerprint: receipt.fingerprint,
+        buildFingerprint,
       },
       () => cleanup('API stop', 0),
-      host.reserveIdleRestart,
+      reserveIdleRestart,
     );
     if (stopping) return;
     const summary = initialSnapshot
