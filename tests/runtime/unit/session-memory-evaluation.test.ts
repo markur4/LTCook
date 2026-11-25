@@ -1,4 +1,6 @@
 import { candidateScreeningFixtures } from '../../../evals/session-memory-screening.js';
+import { localMemoryPrompt, manifestLocalFacts } from '../../../evals/session-memory-local.js';
+import { matchesLocalDecision } from '../../../evals/session-memory-local-delegation.js';
 import {
   manifestApprovalControls,
   minimalManifestControls,
@@ -23,6 +25,76 @@ import {
 import { prepareMemorySummaries } from '../../../runtime/src/session-memory/summarization.js';
 import { estimateMemoryTokens } from '../../../runtime/src/session-memory/text.js';
 import { memoryFixtures } from '../../../runtime/src/evals/session-memory-fixtures.js';
+
+test('the delegation grader preserves exact decisions across equivalent citation shapes', () => {
+  const expected = { symbol: 'reuseExportManifest', originalProposal: 1, userApproval: 5 };
+  expect(
+    matchesLocalDecision({ ...expected, originalProposal: '#1', userApproval: [5] }, expected),
+  ).toBe(true);
+  expect(matchesLocalDecision({ ...expected, userApproval: [5, 7] }, expected)).toBe(false);
+  expect(matchesLocalDecision({ ...expected, userApproval: '#7' }, expected)).toBe(false);
+  expect(matchesLocalDecision({ ...expected, symbol: 'anotherMethod' }, expected)).toBe(false);
+});
+
+test('context-independent requests keep current sources and attachment text only', () => {
+  const [part] = prepareMemorySummaries(
+    {
+      type: 'UAMP',
+      scope: { sessionId: 'test', taskId: 'task' },
+      task: { title: 'Hidden Task context', description: '', acceptance: [] },
+      messages: [
+        {
+          seq: 5,
+          author: 'user',
+          text: 'Implement that proposal.',
+          attachments: [{ name: 'note.txt', text: 'Original attachment evidence.' }],
+        },
+      ],
+    },
+    [
+      {
+        id: 'earlier',
+        type: 'UAMP',
+        scope: { sessionId: 'test', taskId: 'task' },
+        content: 'Earlier proposal',
+      },
+    ],
+    undefined,
+    { format: 'markdown' },
+  );
+  const template = localMemoryPrompt(part!.prompt, 'local-template');
+  const bullets = localMemoryPrompt(part!.prompt, 'local-bullets');
+  expect(template[0]).toEqual(part!.prompt[0]);
+  expect(bullets[0].content).toContain(
+    'Preserve references to earlier discussions without guessing',
+  );
+  expect(bullets[0].content).not.toContain('**Decisions**');
+  expect(template[1]).toEqual(bullets[1]);
+  expect(template[1].content).not.toContain('Earlier proposal');
+  expect(template[1].content).not.toContain('Hidden Task context');
+  expect(template[1].content).toContain('Implement that proposal.');
+  expect(template[1].content).toContain('Original attachment evidence.');
+});
+
+test('local manifest grading credits a current approval and rejects guessed implementations', () => {
+  const fixture = candidateScreeningFixtures().find(
+    ({ id }) => id === 'semantic-manifest-reference',
+  )!;
+  const fact = manifestLocalFacts(fixture, true).find(
+    ({ label }) => label === 'the user approved the earlier manifest proposal',
+  )!;
+  const grade = (text: string) =>
+    gradeSimplifiedLayer([fact], [{ seq: 5, text }], fixture.turns.flat());
+  expect(grade('The user approved the earlier proposal.')).toMatchObject({
+    retained: 1,
+    passed: true,
+  });
+  expect(grade('The user approved the proposal to use reuseExportManifest.')).toMatchObject({
+    retained: 1,
+    passed: false,
+  });
+  expect(grade('The proposal is awaiting a decision.')).toMatchObject({ passed: false });
+});
 
 test('manifest approval controls isolate the rendered cue, history and instructions', () => {
   const fixture = semanticMemoryFixtures.find(({ id }) => id === 'semantic-manifest-reference')!;

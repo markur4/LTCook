@@ -454,6 +454,22 @@ replacement-prompt experiments on Q8_0 alone. The evaluator keeps the current
 source messages, Task context and full manifest acceptance criteria. An
 incomplete answer fails the gate and remains available in the local audit.
 
+Compare Immediate Context with the two context-independent arms on the
+manifest fixture first:
+
+```shell
+bun evals/session-memory-live.ts --compare-local-memory --production-suspended
+```
+
+The report grades local summarization, complete Session Memory records and
+the evidence in an assembled handoff separately. A passing MNN-Pocket arm
+in that report can be replayed alongside the existing baseline on the
+other semantic fixtures with `--validate-local-memory=PATH`. Keep production
+inference suspended for both CPU comparisons. Record both reports using
+`--audit-output` to run `--check-local-delegation=FIRST,SECOND`. The last
+command uses native Pi with GPT-6 Luna high reasoning and checks the worker's
+decisions from passing handoffs. Keep the audit reports local.
+
 For downstream qualification on a host without a usable GPU, use the same
 CPU production pause and the native Pi GPT-6 Luna high-reasoning worker:
 

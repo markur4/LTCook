@@ -297,9 +297,15 @@ export async function runSimplifiedMemoryArm(
     digest: string;
     signal: AbortSignal;
     progress?: (message: string) => void;
-    onHandoff?: (text: string) => void;
+    onHandoff?: (
+      text: string,
+      details: Awaited<ReturnType<SessionMemory['handoffDetails']>>,
+    ) => void;
     auditOutput?: boolean;
     screening?: { weightsDigest: string };
+    transformUampPrompt?: (
+      prompt: Parameters<typeof summarizeMemory>[1],
+    ) => Parameters<typeof summarizeMemory>[1];
   },
 ) {
   const { signal, digest } = input;
@@ -329,6 +335,7 @@ export async function runSimplifiedMemoryArm(
     source,
     processing,
     async summarize(type, prompt, turnSignal, _placement, onProgress, format) {
+      if (type === 'UAMP' && input.transformUampPrompt) prompt = input.transformUampPrompt(prompt);
       const requestSignal = AbortSignal.any([turnSignal, signal, AbortSignal.timeout(120_000)]);
       const start = performance.now();
       try {
@@ -465,7 +472,7 @@ export async function runSimplifiedMemoryArm(
       );
     const withoutRecovery = await assemble(false);
     const handoff = input.screening ? withoutRecovery : await assemble(true);
-    input.onHandoff?.(handoff.text);
+    input.onHandoff?.(handoff.text, handoff);
     const beforeRecovery = gradeSimplifiedLayer(fixture.facts, withoutRecovery.entries, original);
     const delegation = gradeSimplifiedLayer(fixture.facts, handoff.entries, original);
     const recovery = delegation.facts.flatMap(({ label, retained }, index) =>
@@ -524,6 +531,17 @@ export async function runSimplifiedMemoryArm(
         loadMs: total(({ result }) => result.metrics?.loadMs),
         isolatedCpuWallMs: total(({ observedMs }) => observedMs)!,
         storedMemoryBytes: Buffer.byteLength(JSON.stringify(records)),
+        summaryBytes: generated.reduce(
+          (bytes, record) =>
+            bytes +
+            record.parts.reduce(
+              (sum, { content }) =>
+                sum +
+                Buffer.byteLength(typeof content === 'string' ? content : JSON.stringify(content)),
+              0,
+            ),
+          0,
+        ),
         sqliteBytes: (await stat(file)).size,
         handoffBytes: Buffer.byteLength(handoff.text),
         handoffEstimatedTokens: estimateMemoryTokens(handoff.text),

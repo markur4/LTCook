@@ -908,3 +908,103 @@ current summary. Production inference was restored after both attempts.
 No variant passed the manifest gate, so validation on the remaining fixtures
 and LFM3 was not triggered. Production prompts, processing and thresholds
 stayed frozen.
+
+### Context-independent summarization
+
+The experimental arms run through the existing record store and delegation
+assembly. They remove all earlier Discussions and Task text from the model
+request, while preserving the current original messages, attachments and
+the provenance used by storage. One arm keeps the existing Markdown system
+message, and the other uses the supplied local bullet prompt. The control
+uses the frozen Immediate Context behavior. All arms use the same seed,
+CPU isolation, deterministic AAB policy and 256-token skip threshold.
+
+For the manifest and skipped-Discussion fixtures, the current approval is
+graded as a reference to an earlier proposal. The earlier record must still
+retain the exact implementation and the original proposal status. The handoff
+gate separately requires both generated records in sequence and the skipped
+UAMP originals. A neutral delegation query uses the final user request
+without supplying the expected implementation symbol. All handoff evidence
+is graded before compensatory original-source recovery. The native Pi worker
+then receives only the rendered handoff and the evaluation question.
+
+#### Manifest approval
+
+| Model | Arm | Generated / stored / handoff facts | CPU s | Input / output tokens | Summary / handoff bytes |
+| --- | --- | ---: | ---: | ---: | ---: |
+| MNN-Pocket Q8_0 | Immediate Context | 4/4 / 4/4 / 4/4 † | 6.485 | 1,483 / 414 | 2,121 / 4,079 |
+| MNN-Pocket Q8_0 | Local, existing template | 4/4 / 4/4 / 4/4 | 5.695 | 1,054 / 412 | 2,161 / 4,119 |
+| MNN-Pocket Q8_0 | Local, simple bullets | 4/4 / 4/4 / 4/4 | 6.407 | 746 / 507 | 2,503 / 4,455 |
+| LFM3 | Immediate Context | 4/4 / 4/4 / 4/4 | 21.789 | 1,524 / 517 | 2,495 / 4,473 |
+| LFM3 | Local, existing template | 4/4 / 4/4 / 4/4 † | 28.987 | 1,076 / 773 | 3,767 / 5,388 |
+| LFM3 | Local, simple bullets | 4/4 / 4/4 / 4/4 † | 16.278 | 758 / 348 | 1,817 / 3,763 |
+
+† The fact count measures retention. A contradiction still fails the gate.
+MNN-Pocket with Immediate Context repeated the old pending status. LFM3
+with the local template reported execution of an approved refresh. LFM3
+with local bullets attributed today's rebuild to the proposed method.
+The last two contradictions were found by reading the output and added
+to the experimental grader. Neither local LFM3 handoff advanced to the
+manifest worker check.
+
+Both local MNN-Pocket arms preserved the user's approval by reference.
+The existing handoff included the prior named proposal (#1–#2), the skipped
+clarification (#3–#4), and the current approval (#5–#6) in source order.
+Those two passes opened the follow-up with both summarizers.
+
+#### Follow-up fixtures
+
+| Model | Arm | Export discovery | Retry correction | Approval after skips |
+| --- | --- | ---: | ---: | ---: |
+| MNN-Pocket Q8_0 | Immediate Context | 4/4 | 3/3 | 3/5 |
+| MNN-Pocket Q8_0 | Local, existing template | 2/4 | 3/3 | 3/5 |
+| MNN-Pocket Q8_0 | Local, simple bullets | 4/4 | 3/3 | 0/5 |
+| LFM3 | Immediate Context | 4/4 | 3/3 | 5/5 |
+| LFM3 | Local, existing template | 4/4 | 3/3 | 1/5 |
+| LFM3 | Local, simple bullets | 4/4 | 2/3 | 4/5 |
+
+The table shows automated generated-summary retention. For every row the
+stored-record and generated handoff evidence counts matched the summary
+count. Manual inspection found that the MNN-Pocket retry control and local
+bullets described the planned notes distinction as already present.
+
+The skipped-Discussion control stored both short exchanges. The neutral
+Task query omitted them from every rendered handoff. It selected the earlier
+and later summaries where they had relevant terms. Its per-entry relevance
+filter dropped the generic skipped lines, even for LFM3 Immediate Context
+at 5/5. The handoff evidence gate therefore failed for all six arms.
+MNN-Pocket's local template also hit the 2,048-token cap on the proposal.
+Its local bullets omitted the proposal and the current decision. LFM3's
+local template returned an empty current summary. LFM3's local bullets
+preserved the proposal and constraints and weakened the historical reference
+to a generic request to implement a feature.
+
+Across these four fixtures, local bullets cut input tokens by 42% for
+both models. The summed CPU request time fell from 51.80 to 23.17 s for
+MNN-Pocket and from 60.46 to 45.86 s for LFM3. Those totals include failed
+and incomplete summaries. The local-template totals rose to 69.47 and
+70.20 s respectively. Average prompt size alone did not establish qualified
+speed gains.
+
+#### Receiving-agent decisions
+
+Native Pi ran GPT-6 Luna with high reasoning and no tools. It correctly
+named `reuseExportManifest` from both local MNN-Pocket manifest handoffs,
+cited the earlier proposal and current approval, preserved the stable API
+and rejected deletion, and reported that implementation was pending. It
+also resolved the manifest reference from the LFM3 Immediate Context
+handoff. Only the selected handoff and the question went to the receiver.
+
+Eleven of the thirteen initial answers were factually verified. Two used
+equivalent citation shapes that the original checker rejected. The checker
+now accepts the same source sequence as an integer, a `#` citation or a
+single-item array. Two LFM3 export replies did not parse and their raw text
+was unavailable. A focused diagnostic reran only those two handoffs with
+raw output retained. Both returned the exact reader, path and test results.
+No skipped-Discussion handoff was eligible for the receiver check.
+
+The manifest result supports delegation-time reference resolution when
+the prior record reaches the handoff. The follow-up did not qualify either
+local arm across the fixtures or the two summarizers. Production inference
+was restored, and the Immediate Context implementation and LFM3 stay in
+production.
