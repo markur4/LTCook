@@ -12,7 +12,7 @@ import {
   contradictsMemoryFact,
   namedMemoryOutcomes,
 } from '../runtime/src/evals/session-memory-facts.js';
-import { residency } from '../runtime/src/evals/session-memory.js';
+import { peakRunnerRss, residency } from '../runtime/src/evals/session-memory.js';
 import {
   ollamaEndpoint,
   releaseOllamaModel,
@@ -64,7 +64,7 @@ export function simplifiedCorpus() {
   return [...memoryFixtures, memoryAttachmentFixture(), memoryHeldOutFixture];
 }
 
-function referenceFixture(): MemoryFixture {
+export function referenceFixture(): MemoryFixture {
   const fixture = memoryDiscussionReferenceFixture;
   const discussion = { sessionId: 'snapshot', planId: 'snapshot', passId: 'snapshot' };
   const taskScope = { ...discussion, taskId: 'snapshot' };
@@ -299,12 +299,15 @@ export async function runSimplifiedMemoryArm(
     progress?: (message: string) => void;
     onHandoff?: (text: string) => void;
     auditOutput?: boolean;
+    screening?: { weightsDigest: string };
   },
 ) {
   const { signal, digest } = input;
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-simplified-'));
   const file = path.join(directory, 'memory.sqlite');
-  const settings = contextSettings({ ...input.settings, cpuOnly: true }, simplifiedSeed);
+  const settings = input.screening
+    ? { ...input.settings, cpuOnly: true }
+    : contextSettings({ ...input.settings, cpuOnly: true }, simplifiedSeed);
   const endpoint = ollamaEndpoint(settings.endpoint);
   const { messages, prompts } = contextTranscript(fixture);
   const original = fixture.turns.flat();
@@ -316,6 +319,9 @@ export async function runSimplifiedMemoryArm(
     result: Omit<MemorySummaryResult, 'text' | 'content'>;
     cpuVerified: boolean;
     observedMs: number;
+    loadedBytes?: number;
+    peakRssBytes?: number;
+    error?: string;
     audit?: { summary: string; prompt: string };
   }[] = [];
   const memory = new SessionMemory({
@@ -343,6 +349,12 @@ export async function runSimplifiedMemoryArm(
           result: metrics,
           cpuVerified: !!loaded && loaded.bytes > 0 && loaded.gpuBytes === 0,
           observedMs,
+          ...(input.screening
+            ? {
+                loadedBytes: loaded?.bytes,
+                peakRssBytes: await peakRunnerRss(input.screening.weightsDigest),
+              }
+            : {}),
           ...(input.auditOutput
             ? { audit: { summary: result.text, prompt: prompt[1].content } }
             : {}),
@@ -355,6 +367,7 @@ export async function runSimplifiedMemoryArm(
           type,
           cpuVerified: false,
           observedMs,
+          ...(input.screening && error instanceof Error ? { error: error.message } : {}),
           result: { type, complete: false, elapsedMs: observedMs },
         });
         throw error;
@@ -445,17 +458,19 @@ export async function runSimplifiedMemoryArm(
         fixture.turns.at(-1)?.find(({ author }) => author === 'user')?.scope,
       );
     const withoutRecovery = await assemble(false);
-    const handoff = await assemble(true);
+    const handoff = input.screening ? withoutRecovery : await assemble(true);
     input.onHandoff?.(handoff.text);
     const beforeRecovery = gradeSimplifiedLayer(fixture.facts, withoutRecovery.entries, original);
     const delegation = gradeSimplifiedLayer(fixture.facts, handoff.entries, original);
     const recovery = delegation.facts.flatMap(({ label, retained }, index) =>
       retained && !beforeRecovery.facts[index]?.retained ? [label] : [],
     );
-    const search = await memory.search(agentId, '', fixture.focus, agentId, signal, true);
+    const search = input.screening
+      ? undefined
+      : await memory.search(agentId, '', fixture.focus, agentId, signal, true);
     const originalSearch = gradeSimplifiedLayer(
       fixture.facts,
-      search.matches.flatMap(({ entries }) =>
+      (search?.matches ?? []).flatMap(({ entries }) =>
         entries.filter(({ kind }) => kind === 'original-message'),
       ),
       original,
@@ -515,7 +530,7 @@ export async function runSimplifiedMemoryArm(
         beforeRecovery,
         delegation,
         originalSearch,
-        originalSearchStatus: search.status,
+        originalSearchStatus: search?.status,
         recovery,
         recoveredSources: handoff.recoveredSources,
       },

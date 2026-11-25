@@ -29,6 +29,7 @@ import {
   diagnoseApprovalReference,
   qualifySemanticMemory,
 } from './session-memory-simplified.js';
+import { screenSessionMemory } from './session-memory-screening.js';
 import { resolveEvaluationContext } from '../runtime/src/evals/setup.js';
 
 const root = path.resolve(import.meta.dir, '..');
@@ -70,14 +71,25 @@ try {
     if (!summarization) throw new Error('AppRC summarizer settings are unavailable.');
     const diagnostic = args.includes('--diagnose-approval');
     const semantic = args.includes('--semantic');
+    const screening = args.includes('--screen-candidates');
     if (
-      (diagnostic || semantic || args.includes('--simplified')) &&
+      (screening || diagnostic || semantic || args.includes('--simplified')) &&
       !args.includes('--production-suspended')
     )
       throw new Error(
         'Suspend production inference before this comparison and pass --production-suspended.',
       );
-    if (
+    if (screening) {
+      const report = await screenSessionMemory({
+        settings: summarization,
+        signal: controller.signal,
+        profileId: option('screen-profile'),
+        allowRetry: !args.includes('--no-screen-retry'),
+        auditOutput: args.includes('--audit-output'),
+        progress: console.error,
+      });
+      console.log(JSON.stringify(report, null, 2));
+    } else if (
       args.includes('--context-aware') ||
       args.includes('--cpu-sample') ||
       args.includes('--simplified') ||

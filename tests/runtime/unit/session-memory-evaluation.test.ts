@@ -1,3 +1,4 @@
+import { candidateScreeningFixtures } from '../../../evals/session-memory-screening.js';
 import { expect, test } from 'bun:test';
 import { MemoryEditProgress } from '../../../evals/session-memory-edit-progress.js';
 import { semanticMemoryFixtures } from '../../../evals/session-memory-semantic-fixtures.js';
@@ -149,4 +150,22 @@ test('keeps the generated anchor when an original preview would lose its technic
   expect(part?.historyText).toContain('Still a proposal.');
   expect(part?.historyText).not.toContain('Long original prefix.');
   expect(part?.historyEstimatedTokens).toBeLessThanOrEqual(512);
+});
+
+test('screening accepts an equivalent attempt limit and rejects a stale approval status', () => {
+  const fixtures = candidateScreeningFixtures();
+  const limit = fixtures
+    .flatMap(({ facts }) => facts)
+    .find(({ label }) => label === 'retain three attempts')!;
+  expect(matchesMemoryFact(limit, 'The maximum attempts remain at three.')).toBe(true);
+  expect(matchesMemoryFact(limit, 'The maximum attempts remain at ten.')).toBe(false);
+  const approval = fixtures
+    .flatMap(({ facts }) => facts)
+    .find(({ label }) => label === 'the later approval names the proposed implementation')!;
+  expect(
+    contradictsMemoryFact(
+      approval,
+      'Use reuseExportManifest. This is a proposal awaiting your decision.',
+    ),
+  ).toBe(true);
 });
