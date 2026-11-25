@@ -434,6 +434,10 @@ export discovery, retry correction, and approval after skipped Discussions.
 This profile has no retry. A qualifying result runs LFM3 in the same order
 for the CPU comparison.
 
+Use `--screen-profile=mnn-pocket-q4-1` for the official MNN-Pocket Q4_1 QAT
+checkpoint at temperature 0.8. This runs the same manifest-first order at
+seed 17. It stops at the first failed fixture and runs a single profile.
+
 For downstream qualification on a host without a usable GPU, use the same
 CPU production pause and the native Pi GPT-6 Luna high-reasoning worker:
 

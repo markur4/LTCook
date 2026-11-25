@@ -818,3 +818,19 @@ fixtures and the LFM3 comparison did not run. LFM3 remains qualified.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Proposal | 583 / 212 | 597 / 63 | 1.025 | 5.378 | 670 / 661 |
 | Approval | 900 / 202 | 580 / 68 | 0.001 | 4.156 | 670 / 677 |
+
+### MNN-Pocket Q4_1 QAT screen
+
+The official Q4_1 checkpoint at temperature 0.8 scored 0/4 on the automated
+manifest gate. Reading the summary directly, it restated API stability and
+keeping old manifests in wording the grader did not match. The approval
+summary omitted `reuseExportManifest` and described planned checks as
+already performed. The screen stopped after the two manifest requests.
+It used the verified official weights, the native chat template, seed 17,
+and zero reasoning tokens on CPU. Production inference was restored after
+the screen. LFM3 remains in production.
+
+| Request | Input / output tokens | Prefill / generation tok/s | Load s | Wall s | Loaded / peak MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Proposal | 583 / 142 | 632 / 89 | 0.515 | 3.050 | 484 / 475 |
+| Approval | 844 / 182 | 555 / 84 | 0.001 | 3.300 | 484 / 488 |
