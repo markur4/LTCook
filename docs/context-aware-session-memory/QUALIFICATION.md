@@ -834,3 +834,47 @@ the screen. LFM3 remains in production.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Proposal | 583 / 142 | 632 / 89 | 0.515 | 3.050 | 484 / 475 |
 | Approval | 844 / 182 | 555 / 84 | 0.001 | 3.300 | 484 / 488 |
+
+### MNN-Pocket approval controls
+
+The baseline replays reproduced both previous approval inputs and replies
+exactly. The user said “Implement that proposal” in source 5. The current agent
+reply in source 6 acknowledged approval and reported no code changes or checks.
+The Task context also called for implementing the approved refresh. The
+rendered instructions told the model to use the earlier exchange only to
+resolve the referent and to rely on the current user for approval.
+
+In Q8_0, Immediate Context contained the exact `reuseExportManifest` symbol and
+the earlier pending decision. The response attributed the old pending proposal
+to current source 6. In Q4_1 QAT, the anchor changed the symbol to
+`ReuseExportManifest` and also carried the pending decision. The current
+response left out the symbol and reported planned checks as performed. The
+unmodified full fixture again scored 3/4 for Q8_0 and 0/4 for Q4_1 QAT.
+
+| Current approval control | Q8_0 | Q4_1 QAT |
+| --- | ---: | ---: |
+| Original prompt | 2/3 | 0/3 |
+| Remove Immediate Context, keep Task and current sources | 2/3 | 2/3 |
+| Name the implementation in the current user message, keep Immediate Context | 3/3 | 3/3 |
+| Add rules for current and historical decisions | 2/3 | 2/3 |
+| Move Decisions ahead of Intent | 2/3 | 2/3 |
+
+These scores cover the three current-approval facts, one of which requires
+the approved implementation. With Immediate Context removed, both outputs
+acknowledged approval without an implementation name. Both models preserved
+the implementation instruction when it named the method directly, even with
+the older proposal still in the prompt. Both recognized explicit approval in
+the controls. They struggled to bind that approval to its historical
+referent, and the old pending status sometimes carried into the current answer.
+
+Moving Decisions or strengthening its instructions did not resolve the
+reference. Q4_1 QAT even reintroduced a pending decision under the stronger
+instructions. The automatic grader missed that paraphrase, which manual
+review found. Neither template variant passed the current approval gate, so
+no broader MNN-Pocket or LFM3 validation was triggered. The explicit naming
+control supplied the answer to the reference in the current user message.
+
+Both checkpoints ran at temperature 0.8 and seed 17 with verified CPU
+inference and no reasoning. Production inference was suspended and restored.
+The qualification gates, prompts, architecture and production LFM3 settings
+are unchanged.
