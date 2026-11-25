@@ -331,6 +331,7 @@ class AgentTimeline {
       this.recordSkillUse(seq, use);
     }
     const skillId = use?.name ?? prior?.call.skillId;
+    const skillDocumentAvailable = use?.documentAvailable ?? prior?.call.skillDocumentAvailable;
     const startedAt = prior?.call.startedAt ?? at;
     const state =
       item.status === 'completed'
@@ -349,6 +350,7 @@ class AgentTimeline {
         status: state,
         ...(target ? { target } : {}),
         ...(skillId ? { skillId } : {}),
+        ...(skillDocumentAvailable ? { skillDocumentAvailable } : {}),
         ...(state !== 'running'
           ? {
               finishedAt: at,

@@ -496,7 +496,6 @@ export default function contribute(server: PluginServerContext) {
         await observeMemory(agent, { turnId, outcome: outcome.kind }),
       );
       if (
-        outcome.kind !== 'completed' ||
         !turnId ||
         !agent.workspaceId ||
         !['ltcook', 'pi', 'codex'].includes(agent.provider) ||
@@ -516,8 +515,8 @@ export default function contribute(server: PluginServerContext) {
           return;
         }
         const [passage, skills] = await Promise.all([
-          observed.success && observed.data.memoryEnabled
-            ? readPaseoMemoryPassage(timeline, page, turnId, signal)
+          outcome.kind === 'completed' && observed.success && observed.data.memoryEnabled
+            ? readPaseoMemoryPassage(timeline, page, turnId, signal).catch(() => undefined)
             : undefined,
           readTurnSkills(
             page.agent,

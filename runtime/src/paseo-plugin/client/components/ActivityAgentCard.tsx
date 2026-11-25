@@ -282,8 +282,18 @@ export function ActivityAgentCard({
       .slice(0, moreTools ? undefined : runningGroups + RECENT_LIMIT)
       .find((item) => item.name === preview.id);
   const singleCall = tool && tool.calls.length === 1 ? tool.calls[0] : undefined;
-  const toolSkillIds = new Set(tool ? tool.calls.map((call) => call.skillId) : []);
-  const toolSkills = skills.filter((item) => item.documentAvailable && toolSkillIds.has(item.id));
+  const toolSkills = new Map<string, SkillLoad>();
+  for (const { skillId, skillDocumentAvailable, target } of tool ? tool.calls : []) {
+    if (!skillId || !skillDocumentAvailable || !target) continue;
+    const previous = toolSkills.get(skillId)?.occurrences[0];
+    if (previous && previous.position >= target.position) continue;
+    toolSkills.set(skillId, {
+      id: skillId,
+      name: skillId,
+      loadedAt: target.at,
+      occurrences: [target],
+    });
+  }
   const skill =
     preview?.kind === 'skill' &&
     skills.slice(0, moreSkills ? undefined : RECENT_LIMIT).find((item) => item.id === preview.id);
@@ -417,14 +427,14 @@ export function ActivityAgentCard({
           tone={toolTones[tool.status]}
           actions={
             onOpenSkill &&
-            toolSkills.map((item) => (
+            [...toolSkills.values()].map((item) => (
               <OpenSkillButton
                 key={item.id}
                 theme={theme}
                 skill={item}
                 onOpenSkill={onOpenSkill}
                 showName
-                disambiguate={toolSkills.length > 1}
+                disambiguate={toolSkills.size > 1}
               />
             ))
           }

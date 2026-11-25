@@ -36,6 +36,7 @@ const toolCall = z.object({
   status: z.enum(['running', 'success', 'failed', 'cancelled', 'unknown']),
   target: ActivityAnchorSchema.optional(),
   skillId: id.optional(),
+  skillDocumentAvailable: z.boolean().optional(),
 });
 const skillLoad = z.object({
   id,

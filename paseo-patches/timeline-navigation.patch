@@ -654,7 +654,30 @@ diff --git a/packages/app/src/tool-calls/detail-level/grouping.ts b/packages/app
 diff --git a/packages/app/src/tool-calls/detail-level/projection.ts b/packages/app/src/tool-calls/detail-level/projection.ts
 --- a/packages/app/src/tool-calls/detail-level/projection.ts
 +++ b/packages/app/src/tool-calls/detail-level/projection.ts
-@@ -43,6 +43,7 @@
+@@ -24,10 +24,11 @@
+ // Approval UI owns pending plan presentation. Retain the canonical tool in the
+ // stream model so resolving it can reveal a card at its original position.
+ const visibleItemsCache = new WeakMap<StreamItem[], StreamItem[]>();
+-function visibleToolCallItems(items: StreamItem[]): StreamItem[] {
+-  const cached = visibleItemsCache.get(items);
++function visibleToolCallItems(items: StreamItem[], revealedToolCallId?: string): StreamItem[] {
++  const cached = revealedToolCallId ? undefined : visibleItemsCache.get(items);
+   if (cached) return cached;
+   const visible = items.filter((item) => {
++    if (item.id === revealedToolCallId) return true;
+     if (item.kind !== "tool_call" || item.payload.source !== "agent") return true;
+     const data = item.payload.data;
+     return (
+@@ -35,7 +36,7 @@
+     );
+   });
+   const result = visible.length === items.length ? items : visible;
+-  visibleItemsCache.set(items, result);
++  if (!revealedToolCallId) visibleItemsCache.set(items, result);
+   return result;
+ }
+
+@@ -43,6 +44,7 @@
    level: ToolCallDetailLevel,
    tail: StreamItem[],
    autoExpandReasoning = false,
@@ -662,15 +685,19 @@ diff --git a/packages/app/src/tool-calls/detail-level/projection.ts b/packages/a
  ): PreparedToolCallHistory | null {
    if (level === "detailed") {
      return null;
-@@ -54,6 +55,7 @@
-       tail: visibleToolCallItems(tail),
+@@ -51,9 +53,10 @@
+     mode: "overview",
+     autoExpandReasoning,
+     grouped: prepareGroupedHistory({
+-      tail: visibleToolCallItems(tail),
++      tail: visibleToolCallItems(tail, revealedToolCallId),
        buildGroup: buildOverviewGroup,
        autoExpandReasoning,
 +      revealedToolCallId,
      }),
    };
  }
-@@ -64,6 +66,7 @@
+@@ -64,11 +67,12 @@
    head: StreamItem[];
    preparedHistory: PreparedToolCallHistory | null;
    isTurnActive: boolean;
@@ -678,14 +705,49 @@ diff --git a/packages/app/src/tool-calls/detail-level/projection.ts b/packages/a
  }): ToolCallDetailProjection {
    if (input.level === "detailed") {
      return {
-@@ -81,6 +84,7 @@
+-      tail: visibleToolCallItems(input.tail),
+-      head: visibleToolCallItems(input.head),
++      tail: visibleToolCallItems(input.tail, input.revealedToolCallId),
++      head: visibleToolCallItems(input.head, input.revealedToolCallId),
+       groupsByHostId: EMPTY_TOOL_CALL_GROUPS,
+       historyGroupUpdatesByHostId: EMPTY_TOOL_CALL_GROUPS,
+     };
+@@ -79,8 +83,9 @@
+   return groupLiveToolCalls({
+     history: input.preparedHistory.grouped,
      autoExpandReasoning: input.preparedHistory.autoExpandReasoning,
-     head: visibleToolCallItems(input.head),
+-    head: visibleToolCallItems(input.head),
++    head: visibleToolCallItems(input.head, input.revealedToolCallId),
      isTurnActive: input.isTurnActive,
 +    revealedToolCallId: input.revealedToolCallId,
      buildGroup: buildOverviewGroup,
    });
  }
+diff --git a/packages/app/src/tool-calls/detail-level/projection.test.ts b/packages/app/src/tool-calls/detail-level/projection.test.ts
+--- a/packages/app/src/tool-calls/detail-level/projection.test.ts
++++ b/packages/app/src/tool-calls/detail-level/projection.test.ts
+@@ -85,6 +85,21 @@
+     },
+   );
+
++  it.each(["detailed", "overview"] as const)(
++    "reveals the exact selected approval tool in %s presentation",
++    (level) => {
++      const hidden = ["1", "2"].map((id) =>
++        toolCall(id, { type: "plan", text: "Ship it" }, { name: "ExitPlanMode", status: "running" }),
++      );
++      const revealedToolCallId = hidden[1]!.id;
++      const preparedHistory = prepareToolCallHistory(level, hidden, false, revealedToolCallId);
++      const result = projectToolCallDetailLevel({
++        level, tail: hidden, head: [], preparedHistory, isTurnActive: false, revealedToolCallId,
++      });
++      expect(result.tail).toEqual([hidden[1]]);
++    },
++  );
++
+   it("passes detailed timelines through without grouping work", () => {
+     const tail = [toolCall("1", { type: "shell", command: "one" })];
+     const head = [toolCall("2", { type: "shell", command: "two" })];
 diff --git a/packages/plugin/src/client/contracts.ts b/packages/plugin/src/client/contracts.ts
 --- a/packages/plugin/src/client/contracts.ts
 +++ b/packages/plugin/src/client/contracts.ts
