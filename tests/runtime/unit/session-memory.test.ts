@@ -967,13 +967,15 @@ test('pauses active summaries, keeps stored summaries readable, and resumes queu
 });
 
 test('gives foreground inference priority and exposes originals during a failed summary', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-failed-discussion-'));
+  const databasePath = path.join(directory, 'memory.sqlite');
   const messages = [
     { ...first, turnId: '1' },
     { ...longReply, turnId: '1' },
   ];
   let calls = 0;
   const memory = new SessionMemory({
-    databasePath: ':memory:',
+    databasePath,
     source: timeline(() => ({ epoch: 'one', messages })),
     async summarize(type) {
       calls++;
@@ -997,8 +999,20 @@ test('gives foreground inference priority and exposes originals during a failed 
     expect((await memory.search('leader', '', 'partial Markdown')).matches).toEqual([]);
     expect((await memory.search('leader', '', 'cobalt')).status.summariesPending).toBe(true);
     expect(await memory.handoff('leader', 'cursor')).toContain(first.text);
+    await memory.settled();
+    const store = new MemoryStore(databasePath);
+    const failed = store.summaries('leader', 'one').find(({ state }) => state === 'failed')!;
+    store.close();
+    expect(failed.complete).toBe(false);
+    const originals = await memory.recordEntries('leader', 'one', [
+      { ...failed, state: 'skipped', complete: true, parts: [] },
+    ]);
+    expect(originals.map(({ seq, author, text }) => ({ seq, author, text }))).toEqual(
+      messages.map(({ seq, author, text }) => ({ seq, author, text })),
+    );
   } finally {
     await memory.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

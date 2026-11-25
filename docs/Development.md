@@ -457,8 +457,9 @@ rendered system and user messages and generated answers local.
 
 To screen MNN-Pocket Q8_0 against the chronological handoff at `bbc9a3`,
 run `bun evals/session-memory-live.ts --qualify-mnn-local --production-suspended`.
-Each local prompt starts with the skipped-Discussions fixture and advances
-only while its summarization and handoff evidence gates pass.
+The two local prompts run on the realistic skipped-Discussions fixture and
+the remaining semantic fixtures. The report grades original-source fallback
+for incomplete summaries separately when a request fails.
 
 Use `--diagnose-minimal-approval --production-suspended` for the three
 replacement-prompt experiments on Q8_0 alone. The evaluator keeps the current

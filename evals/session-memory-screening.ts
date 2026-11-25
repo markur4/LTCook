@@ -20,6 +20,7 @@ import { diagnoseManifestApproval } from './session-memory-approval.js';
 import { compareLocalMemory, localMemoryArms } from './session-memory-local.js';
 import {
   referenceFixture,
+  realisticReferenceFixture,
   runSimplifiedMemoryArm,
   simplifiedSeed,
 } from './session-memory-simplified.js';
@@ -367,38 +368,22 @@ export async function screenSessionMemory(input: {
           if (input.qualifyMnnLocal) {
             if (!model.weightsDigest)
               throw new Error('The qualification requires verified weights.');
-            const order = [
-              'approval-after-skipped-discussion',
-              'semantic-retry-correction',
-              'semantic-export-header',
-              'semantic-manifest-reference',
-            ];
-            let active: ('local-template' | 'local-bullets')[] = [
-              'local-template',
-              'local-bullets',
-            ];
-            const arms: Awaited<ReturnType<typeof compareLocalMemory>> = [];
-            for (const id of order) {
-              const fixture = fixtures.find((item) => item.id === id);
-              if (!fixture) throw new Error(`Missing fixture ${id}.`);
-              const stage = await compareLocalMemory(
-                [fixture],
-                {
-                  settings,
-                  digest: model.digest,
-                  signal,
-                  auditOutput,
-                  screening: { weightsDigest: model.weightsDigest },
-                  progress: (label) => progress?.(`${profile.name}: ${label}`),
-                },
-                active,
-              );
-              arms.push(...stage);
-              active = active.filter((arm) =>
-                stage.some((item) => item.arm === arm && item.passed),
-              );
-              if (!active.length) break;
-            }
+            const arms = await compareLocalMemory(
+              [
+                realisticReferenceFixture(),
+                ...fixtures.filter(({ id }) => id !== 'approval-after-skipped-discussion'),
+              ],
+              {
+                settings,
+                digest: model.digest,
+                signal,
+                auditOutput,
+                inspectIncompleteFallback: true,
+                screening: { weightsDigest: model.weightsDigest },
+                progress: (label) => progress?.(`${profile.name}: ${label}`),
+              },
+              ['local-template', 'local-bullets'],
+            );
             localResults.push({ model: verified, arms });
             break;
           }
