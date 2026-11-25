@@ -428,6 +428,12 @@ for a fully qualifying profile. Reports include provider timings and token
 counts, model residency and runner peak RSS. The model aliases created during
 the screen are removed after use.
 
+Add `--mnn-approval-first` to test only MNN-Pocket at temperature 0.6. The
+screen starts with manifest approval and, if it passes, continues through
+export discovery, retry correction, and approval after skipped Discussions.
+This profile has no retry. A qualifying result runs LFM3 in the same order
+for the CPU comparison.
+
 For downstream qualification on a host without a usable GPU, use the same
 CPU production pause and the native Pi GPT-6 Luna high-reasoning worker:
 

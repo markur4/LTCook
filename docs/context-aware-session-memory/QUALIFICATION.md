@@ -801,3 +801,20 @@ qualification scores for MNN-Pocket at 0.8.
 | MNN-Pocket-0.3B Q8_0 | 0.8 | manifest-reference 2/2 | 3/4 | 900 / 202 | 968 / 87 | 0.001 | 3.042 | 670 / 677 |
 | MNN-Pocket-0.3B Q8_0 | 0.1 | export-header 1/1 | 2/4 | 555 / 162 | 688 / 77 | 0.524 | 3.429 | 670 / 660 |
 | LFM2.5-350M QAD Q4_0 | 0.4 | export-header 1/1 | 0/4 | 577 / 101 | 1222 / 118 | 0.516 | 1.851 | 505 / 505 |
+
+### MNN-Pocket approval-first follow-up
+
+MNN-Pocket Q8_0 at 0.6 retained 3/4 manifest facts and contradicted the
+explicit approval. It copied the earlier proposal into the approval summary,
+including the pending decision, and failed to name `reuseExportManifest` as
+the approved implementation. Both summaries matched the 0.8 replay exactly.
+The native template and all other profile settings stayed the same, including
+seed 17. Both requests ran on CPU with
+zero reasoning tokens. Production inference was suspended and its prior
+setting was restored. The run stopped at manifest approval, so the other
+fixtures and the LFM3 comparison did not run. LFM3 remains qualified.
+
+| Request | Input / output tokens | Prefill / generation tok/s | Load s | Wall s | Loaded / peak MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Proposal | 583 / 212 | 597 / 63 | 1.025 | 5.378 | 670 / 661 |
+| Approval | 900 / 202 | 580 / 68 | 0.001 | 4.156 | 670 / 677 |
