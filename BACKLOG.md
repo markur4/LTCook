@@ -88,6 +88,18 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 <br>
 
+# 2026-11-25
+
+## P2 / E2 [Question] - *Align the chat diff count with the reviewed worktree*
+
+- **Area:** `paseo-patches/session-worktrees.patch` and Paseo's chat diff count.
+- **Observed while:** Checking linked-worktree diffs in Changes.
+- **Why not fixed now:** Choosing which checkout the chat count represents is separate from the default file collapse behavior.
+- **Evidence:** Changes uses the focused session's worktree selection. The chat count reads `workspace.diffStat` from the original Paseo workspace.
+- **Suggested next step:** Define how the chat count should respond to following and pinning. Verify that its additions and deletions use the same checkout as the Changes view it opens.
+
+<br>
+
 # 2026-11-24
 
 ## P3 / E3 [Tooling] - *Isolate native guidance test fixtures from host skills*
