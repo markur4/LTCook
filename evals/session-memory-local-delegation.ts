@@ -6,7 +6,7 @@ import type { MemoryFixture } from '../runtime/src/evals/session-memory-fixtures
 import { LUNA_EVALUATION } from '../runtime/src/evals/setup.js';
 import { prepareLunaPiEvaluation } from '../runtime/src/evals/summarization-decision.js';
 import { modelTag } from '../runtime/src/evals/summarization-grader.js';
-import { localMemoryArms, manifestLocalFacts } from './session-memory-local.js';
+import { localMemoryArms, localMemoryFacts } from './session-memory-local.js';
 import { candidateScreeningFixtures } from './session-memory-screening.js';
 import { gradeSimplifiedLayer } from './session-memory-simplified.js';
 
@@ -73,12 +73,14 @@ export async function evaluateLocalDelegation(
       arms.flatMap((arm) => {
         const fixture = fixtures.find(({ id }) => id === arm.fixture);
         if (!fixture || !arm.passed || !arm.handoff) return [];
-        if (arm.fixture === 'semantic-manifest-reference') {
-          const entries = arm.requests.flatMap(({ audit }, index) =>
-            audit ? [{ seq: index === 0 ? 1 : 5, text: audit.summary }] : [],
-          );
+        const isManifest = arm.fixture === 'semantic-manifest-reference';
+        if (isManifest || arm.fixture === 'semantic-retry-correction') {
+          const entries = arm.requests.flatMap(({ audit }, index) => {
+            const seq = isManifest && index > 0 ? 5 : 1;
+            return audit ? [{ seq, text: audit.summary }] : [];
+          });
           const quality = gradeSimplifiedLayer(
-            manifestLocalFacts(fixture, arm.arm !== 'immediate'),
+            localMemoryFacts(fixture, arm.arm),
             entries,
             fixture.turns.flat(),
           );

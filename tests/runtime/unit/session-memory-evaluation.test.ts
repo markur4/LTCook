@@ -1,5 +1,9 @@
 import { candidateScreeningFixtures } from '../../../evals/session-memory-screening.js';
-import { localMemoryPrompt, manifestLocalFacts } from '../../../evals/session-memory-local.js';
+import {
+  localMemoryFacts,
+  localMemoryPrompt,
+  manifestLocalFacts,
+} from '../../../evals/session-memory-local.js';
 import { matchesLocalDecision } from '../../../evals/session-memory-local-delegation.js';
 import {
   manifestApprovalControls,
@@ -94,6 +98,23 @@ test('local manifest grading credits a current approval and rejects guessed impl
     passed: false,
   });
   expect(grade('The proposal is awaiting a decision.')).toMatchObject({ passed: false });
+});
+
+test('local retry grading rejects notes described as already updated', () => {
+  const fixture = candidateScreeningFixtures().find(
+    ({ id }) => id === 'semantic-retry-correction',
+  )!;
+  const facts = localMemoryFacts(fixture, 'local-bullets');
+  const decisions =
+    'The approved delay is 45 seconds. Keep three attempts. Reject deleting queued reports. ';
+  const grade = (notes: string) =>
+    gradeSimplifiedLayer(facts, [{ seq: 1, text: decisions + notes }], fixture.turns.flat());
+  expect(
+    grade('Implementation notes should distinguish failed and successful reports.'),
+  ).toMatchObject({ retained: 3, passed: true });
+  expect(
+    grade('Implementation notes now distinguish failed and successful reports.'),
+  ).toMatchObject({ retained: 3, passed: false });
 });
 
 test('manifest approval controls isolate the rendered cue, history and instructions', () => {

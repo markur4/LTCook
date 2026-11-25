@@ -966,7 +966,10 @@ Those two passes opened the follow-up with both summarizers.
 The table shows automated generated-summary retention. For every row the
 stored-record and generated handoff evidence counts matched the summary
 count. Manual inspection found that the MNN-Pocket retry control and local
-bullets described the planned notes distinction as already present.
+bullets described the planned notes distinction as already present. Both
+retained all three facts and fail the contradiction gate. The experimental
+grader now applies this check to fresh comparisons and archived retry
+handoffs.
 
 The skipped-Discussion control stored both short exchanges. The neutral
 Task query omitted them from every rendered handoff. It selected the earlier
@@ -998,10 +1001,13 @@ handoff. Only the selected handoff and the question went to the receiver.
 Eleven of the thirteen initial answers were factually verified. Two used
 equivalent citation shapes that the original checker rejected. The checker
 now accepts the same source sequence as an integer, a `#` citation or a
-single-item array. Two LFM3 export replies did not parse and their raw text
-was unavailable. A focused diagnostic reran only those two handoffs with
-raw output retained. Both returned the exact reader, path and test results.
-No skipped-Discussion handoff was eligible for the receiver check.
+single-item array. The eleven include two correct MNN-Pocket retry answers
+from handoffs whose summaries claimed the notes were already updated. Those
+two receiver runs provide diagnostic evidence only. Two LFM3 export replies
+did not parse and their raw text was unavailable. A focused diagnostic reran
+only those two handoffs with raw output retained. Both returned the exact
+reader, path and test results. No skipped-Discussion handoff was eligible
+for the receiver check.
 
 The manifest result supports delegation-time reference resolution when
 the prior record reaches the handoff. The follow-up did not qualify either

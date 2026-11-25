@@ -95,9 +95,21 @@ export function manifestLocalFacts(fixture: MemoryFixture, local: boolean): Memo
   });
 }
 
-function localFacts(fixture: MemoryFixture, arm: LocalArm): MemoryFixture['facts'] {
+export function localMemoryFacts(fixture: MemoryFixture, arm: LocalArm): MemoryFixture['facts'] {
   if (fixture.id === 'semantic-manifest-reference')
     return manifestLocalFacts(fixture, arm !== 'immediate');
+  if (fixture.id === 'semantic-retry-correction')
+    return fixture.facts.map((fact) =>
+      fact.label === 'corrected delay is 45 seconds'
+        ? {
+            ...fact,
+            contradicts: new RegExp(
+              (fact.contradicts?.source ?? '(?!)') + '|\\bimplementation notes now distinguish\\b',
+              'i',
+            ),
+          }
+        : fact,
+    );
   if (fixture.id !== 'approval-after-skipped-discussion' || arm === 'immediate')
     return fixture.facts;
   return fixture.facts.map((fact) =>
@@ -124,7 +136,7 @@ export async function compareLocalMemory(
   for (const fixture of fixtures) {
     for (const arm of arms) {
       input.progress?.(`${fixture.id} ${arm}`);
-      const facts = localFacts(fixture, arm);
+      const facts = localMemoryFacts(fixture, arm);
       const hasReference =
         fixture.id === 'semantic-manifest-reference' ||
         fixture.id === 'approval-after-skipped-discussion';
