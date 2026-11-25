@@ -5,6 +5,7 @@ import { Icon, Modal } from '@getpaseo/plugin/client/ui';
 import {
   activityToggleRpc,
   memoryDeviceRpc,
+  memoryInferenceRpc,
   type ActivitySnapshot,
   type MemoryUnitCounts,
 } from '../../shared/activity';
@@ -108,7 +109,91 @@ function ActivitySwitch({
   );
 }
 
+type MemoryInference = NonNullable<ActivitySnapshot['memory']['inference']>;
 type MemoryDevice = NonNullable<ActivitySnapshot['memory']['device']>;
+
+const memoryInferenceLabels = {
+  hosted: 'Hosted',
+  local: 'Local',
+} as const;
+const hostedDisclosure = 'Hosted sends current prompts and included attachment text to OpenAI.';
+
+function MemoryInferencePicker({ theme, inference }: { theme: Theme; inference: MemoryInference }) {
+  const select = useRpc(memoryInferenceRpc);
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const saving = useRef(false);
+  const label = memoryInferenceLabels[inference.mode];
+
+  async function change(mode: MemoryInference['mode']) {
+    if (saving.current) return;
+    if (mode === inference.mode) {
+      setOpen(false);
+      return;
+    }
+    saving.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await select({ mode });
+      // > The Activity subscription refreshes mode, device and model together.
+      setOpen(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not change inference mode.');
+    } finally {
+      saving.current = false;
+      setPending(false);
+    }
+  }
+
+  return (
+    <>
+      <ActivityButton
+        theme={theme}
+        label={`Inference mode: ${label}`}
+        expanded={open}
+        onPress={() => setOpen(true)}
+      >
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <ActivityText theme={theme}>Inference mode · {label}</ActivityText>
+        </View>
+        <Icon name="ChevronDown" size={11} color={theme.colors.foregroundMuted} />
+      </ActivityButton>
+      <Modal
+        title="Inference mode"
+        open={open}
+        onOpenChange={(next) => {
+          if (!saving.current) setOpen(next);
+        }}
+      >
+        <Modal.Content contentContainerStyle={{ padding: 12, gap: 6 }}>
+          <ActivityText theme={theme}>{hostedDisclosure}</ActivityText>
+          {pending && (
+            <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.foregroundMuted }}>
+              Saving inference mode…
+            </Text>
+          )}
+          {error && (
+            <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.statusDanger }}>
+              {error}
+            </Text>
+          )}
+          {(['hosted', 'local'] as const).map((mode) => (
+            <Action
+              key={mode}
+              theme={theme}
+              title={memoryInferenceLabels[mode]}
+              selected={mode === inference.mode}
+              disabled={pending}
+              onPress={() => void change(mode)}
+            />
+          ))}
+        </Modal.Content>
+      </Modal>
+    </>
+  );
+}
 
 function MemoryDevicePicker({
   theme,
@@ -345,6 +430,12 @@ export function ActivityServices({
     rag.indexingEnabled === false ? 'Index updates off' : statusLabel(rag.activity);
   const ragAvailability = statusLabel(rag.availability);
   const summarization = statusLabel(memory.summarization);
+  const { inference, hostedUsage } = memory;
+  const inferenceSummary = inference
+    ? `${memoryInferenceLabels[inference.mode]} · ${inference.model} · Reasoning ${inference.reasoning}`
+    : null;
+  const summarizerAvailable =
+    memory.summarization !== 'disabled' && (memory.summarization !== 'unknown' || !!inference);
   const rate = memory.summarization === 'summarizing' ? memory.rate : null;
   const rateLabel = rate
     ? `${rate.tokensPerSecond.toLocaleString(undefined, { maximumFractionDigits: 1 })} tokens/s${rate.estimated ? ' (estimated)' : ''}`
@@ -415,12 +506,17 @@ export function ActivityServices({
           if (memoryOpen) setStoredOpen(false);
           setMemoryOpen(!memoryOpen);
         }}
-        summaryLabel={rateLabel ? `${rateLabel}, ${memorySummary}` : memorySummary}
+        summaryLabel={[rateLabel, inferenceSummary, memorySummary].filter(Boolean).join(', ')}
         summary={
           <>
             {rateLabel && (
               <ActivityText theme={theme} tone="running" size={12} strong>
                 {rateLabel}
+              </ActivityText>
+            )}
+            {!memoryOpen && inferenceSummary && (
+              <ActivityText theme={theme} tone="muted" size={10}>
+                {inferenceSummary}
               </ActivityText>
             )}
             <ActivityText theme={theme} tone="muted" size={10}>
@@ -434,9 +530,12 @@ export function ActivityServices({
             theme={theme}
             feature="summarizer"
             label="Summarizer"
-            enabled={memory.device === null ? null : memory.summarization !== 'paused'}
+            enabled={summarizerAvailable ? memory.summarization !== 'paused' : null}
           />
-          {memory.device && (
+          {inference && summarizerAvailable && (
+            <MemoryInferencePicker theme={theme} inference={inference} />
+          )}
+          {memory.device && inference?.mode !== 'hosted' && (
             <MemoryDevicePicker
               theme={theme}
               device={memory.device}
@@ -444,6 +543,42 @@ export function ActivityServices({
             />
           )}
         </View>
+        {inference && (
+          <>
+            {inference.mode === 'hosted' && (
+              <ActivityText theme={theme} tone="muted">
+                {hostedDisclosure}
+              </ActivityText>
+            )}
+            <ActivityField theme={theme} label="Model">
+              {inference.model}
+            </ActivityField>
+            <ActivityField theme={theme} label="Reasoning">
+              {inference.reasoning}
+            </ActivityField>
+          </>
+        )}
+        {hostedUsage && (
+          <>
+            <ActivityText theme={theme} strong>
+              Hosted usage since runtime start
+            </ActivityText>
+            <ActivityField theme={theme} label="Requests">
+              {hostedUsage.requests.toLocaleString()}
+            </ActivityField>
+            <ActivityField theme={theme} label="Input tokens">
+              {`${hostedUsage.inputTokens.toLocaleString()} (${hostedUsage.cachedInputTokens.toLocaleString()} cached)`}
+            </ActivityField>
+            <ActivityField theme={theme} label="Output tokens">
+              {`${hostedUsage.outputTokens.toLocaleString()} (${hostedUsage.reasoningTokens.toLocaleString()} reasoning)`}
+            </ActivityField>
+            {hostedUsage.lastLatencyMs !== undefined && (
+              <ActivityField theme={theme} label="Last latency">
+                {`${hostedUsage.lastLatencyMs.toLocaleString(undefined, { maximumFractionDigits: 0 })} ms`}
+              </ActivityField>
+            )}
+          </>
+        )}
         {memory.summarization !== 'disabled' && (
           <>
             <ActivityButton

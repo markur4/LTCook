@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import type { MemoryFixture } from '../runtime/src/evals/session-memory-fixtures.js';
-import type { summarizeMemory } from '../runtime/src/session-memory/summarization.js';
+import {
+  simpleMemoryBullets as localBullets,
+  type summarizeMemory,
+} from '../runtime/src/session-memory/summarization.js';
 import { gradeSimplifiedLayer, runSimplifiedMemoryArm } from './session-memory-simplified.js';
 
 const comparisonArms = ['immediate', 'local-template', 'local-bullets'] as const;
@@ -39,16 +42,6 @@ export function localValidationArms(report: unknown): (typeof localMemoryArms)[n
     throw new Error('No local MNN-Pocket arm passed the manifest evidence gate.');
   return ['immediate', ...eligible];
 }
-
-const localBullets = `Summarize this user-agent exchange in concise Markdown bullets.
-
-Preserve requests, constraints, decisions, discoveries and unresolved questions.
-
-Keep exact technical names, paths, numbers and observed outcomes.
-
-Distinguish proposed, approved and completed work.
-
-Preserve references to earlier discussions without guessing their meaning. Omit redundant information.`;
 
 const localWorkStatus = localBullets.replace(
   'Distinguish proposed, approved and completed work.',

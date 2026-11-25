@@ -1228,3 +1228,71 @@ failed. Broader semantic and delegation qualification stopped at this gate.
 The source-retention evidence comes from lookups against fixture
 transcripts. Receiving-agent behavior is outside the scope of this probe.
 Production processing, AAB recording and handoff retrieval stayed as configured.
+
+### Hosted Session Memory qualification
+
+From the repository root, regrade the saved asymmetric probe and then run the
+hosted semantic suite. Use the path to the private archive for
+`$SAVED_LUNA_ASYMMETRIC_REPORT`.
+
+```shell
+bun evals/session-memory-live.ts --regrade-hosted-asymmetric="$SAVED_LUNA_ASYMMETRIC_REPORT"
+bun evals/session-memory-live.ts --qualify-hosted-memory
+```
+
+The first command grades the saved replies against the original sources and
+recomputes compression without inference. The second requires an authenticated
+Codex ChatGPT session. It uses a disposable Session Memory database, the
+production context-independent prompt and the hosted provider adapter. The
+`@tiny` alias resolves to `openai-codex/gpt-6-luna` with reasoning set to
+`none`. The report records the request tier, returned model, token usage and
+facts retained at generation, storage and delegation.
+
+The suite runs realistic skipped Discussions, export discovery, retry
+correction and manifest approval. Each handoff uses the final user request as
+its query. The suite reopens exact originals and grades handoffs before
+compensatory source recovery. Once the skipped-Discussions handoff passes the
+evidence gate, a tool-free GPT-6 Luna high session in Pi receives the rendered
+handoff and a question about the approved work and its source sequences.
+Add `--audit-output` to the hosted command to include rendered prompts,
+summaries, handoffs and the receiving agent's reply. Keep that output local.
+
+If the provider produced a complete audited run, replay the saved responses to
+verify corrections to grading or handoff assembly without sending the summaries
+again. Replay requires the same rendered prompts and verified hosted request and
+response metadata. It can run the receiving agent when the handoff qualifies.
+
+```shell
+bun evals/session-memory-live.ts --replay-hosted-memory="$SAVED_HOSTED_QUALIFICATION_REPORT"
+```
+
+The saved asymmetric probe regraded at 10/10 in each arm with no
+contradictions. Its Pi session added working-directory metadata. The
+production provider call verified the exact system and current-UAMP text
+at the wire boundary.
+
+The hosted suite issued six summary requests, taking 23.588 s combined.
+The provider reported GPT-6 Luna, the Standard tier, 2,193 input tokens,
+zero cached input tokens, 769 output tokens and zero reasoning tokens.
+The outbound preflight rejected a malformed local validator expectation
+before any requests were submitted. No summarizer calls were repeated.
+
+The two approval fixtures contained correct facts in wording the matcher
+missed. The restart summary preserved the signature and response. The
+historical manifest summary described the proposal as unapproved. After
+adding regressions for those forms, replay graded the original outputs
+and rebuilt the stored evidence and handoff without further summarization.
+
+| Hosted fixture | Generated facts | Stored facts | Handoff facts |
+| --- | ---: | ---: | ---: |
+| Realistic skipped Discussions | 5/5 | 5/5 | 5/5 |
+| Export discovery | 4/4 | 4/4 | 4/4 |
+| Retry correction | 3/3 | 3/3 | 3/3 |
+| Manifest approval | 4/4 | 4/4 | 4/4 |
+
+No critical contradictions or additional original-source recovery were
+reported. The skipped-Discussions handoff retained the intervening
+messages in chronological order. The receiving agent resolved
+`selectWorkspaceSnapshot` from proposal #1 and approval #7, preserved the
+API, rejected automatic rebuild and reported no completed work. Its one
+request took 14.950 s. Production wasn't switched during qualification.

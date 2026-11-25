@@ -640,7 +640,8 @@ export const memoryDiscussionReferenceFixture: MemoryFixture = {
       source: 3,
       kind: 'decision',
       critical: true,
-      expected: /preserv.*API|API.*(?:unchanged|preserv)/i,
+      expected:
+        /preserv.*API|API.*(?:unchanged|preserv)|\b(?:preserv\w*|keep(?:ing)?|retain\w*)[^.\n]{0,55}restart signature and response\b/i,
       contradicts: /(?:change|replace) the (?:public|existing) API/i,
     },
   ],

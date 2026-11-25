@@ -225,6 +225,14 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🛠️ Changed
 
+- **Breaking:** 💥 The shared Spark model alias is now `@local-tiny`. Use that
+  spelling in Team and launch selections. `@tiny` now defaults to reasoning off,
+  and the shared list includes `@local-CPU` and `@local-evals`.
+- Session Memory summarizes only the current Discussion. In Activity, choose
+  Local inference or explicitly enable Hosted inference with GPT-6 Luna through
+  the Codex subscription. The card shows the selected model, reasoning, usage,
+  and failures independently of the Summarizer switch.
+
 - Activity can pause Session Memory generation and ColGREP index updates independently.
   The device picker gives the selected device more room on narrow sidebars.
 

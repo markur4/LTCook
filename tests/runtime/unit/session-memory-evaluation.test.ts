@@ -25,11 +25,13 @@ import { identifyMemoryUnits } from '../../../runtime/src/session-memory/units.j
 import { contextTranscript, gradesMemoryFact } from '../../../evals/session-memory-context.js';
 import {
   gradeSimplifiedLayer,
+  realisticReferenceFixture,
   simplifiedCorpus,
 } from '../../../evals/session-memory-simplified.js';
 import {
   contradictsMemoryFact,
   matchesMemoryFact,
+  namedMemoryOutcomes,
 } from '../../../runtime/src/evals/session-memory-facts.js';
 import { prepareMemorySummaries } from '../../../runtime/src/session-memory/summarization.js';
 import { estimateMemoryTokens } from '../../../runtime/src/session-memory/text.js';
@@ -304,6 +306,35 @@ test('grades multiline named results without borrowing the status of another che
   ).toBe(false);
 });
 
+test('grades Markdown and reversed named outcomes without mixing adjacent checks', () => {
+  const fact = memoryFixtures
+    .flatMap(({ facts }) => facts)
+    .find(({ check }) => check === 'PI_REWIND_PROVIDER_ID')!;
+  const mixed = [
+    '- **PASS** — `PI_REWIND_PROVIDER_ID`',
+    '- `PRUNED_CITATION_LOOKUP` — **FAIL**',
+  ].join('\n');
+
+  expect(matchesMemoryFact(fact, mixed)).toBe(true);
+  expect(contradictsMemoryFact(fact, mixed)).toBe(false);
+  expect(namedMemoryOutcomes(mixed)).toContainEqual({
+    name: 'PI_REWIND_PROVIDER_ID',
+    status: 'pass',
+  });
+  expect(namedMemoryOutcomes(mixed)).toContainEqual({
+    name: 'PRUNED_CITATION_LOOKUP',
+    status: 'fail',
+  });
+  expect(matchesMemoryFact(fact, 'case (`PI_REWIND_PROVIDER_ID`): **PASS**')).toBe(true);
+  expect(matchesMemoryFact(fact, '- **FAIL** — `PI_REWIND_PROVIDER_ID`')).toBe(false);
+  expect(contradictsMemoryFact(fact, '- **FAIL** — `PI_REWIND_PROVIDER_ID`')).toBe(true);
+  expect(matchesMemoryFact(fact, 'OTHER_CHECK PASS\nPI_REWIND_PROVIDER_ID')).toBe(false);
+  expect(matchesMemoryFact(fact, 'OTHER_CHECK PASS, PI_REWIND_PROVIDER_ID')).toBe(false);
+  expect(matchesMemoryFact(fact, 'OTHER_CHECK PASS PI_REWIND_PROVIDER_ID')).toBe(false);
+  expect(contradictsMemoryFact(fact, 'OTHER_CHECK FAIL PI_REWIND_PROVIDER_ID PASS')).toBe(false);
+  expect(matchesMemoryFact(fact, 'The same case passes `PI_REWIND_PROVIDER_ID`.')).toBe(true);
+});
+
 test('stops an alternating tool loop and gives changed results room to progress', () => {
   const progress = new MemoryEditProgress();
   const read = (text: string) => progress.record('read', { path: 'a.ts' }, { text });
@@ -477,14 +508,76 @@ test('asymmetric reply grades preserve reported state while detecting unsupporte
   );
   expect(contradictsMemoryFact(queue, 'The production queue was cleared.')).toBe(true);
 
+  const duplicateBatch = planningFacts.find(({ check }) => check === 'IMPORT_DUPLICATE_BATCH')!;
+  const neutralMixedChecks =
+    '- **PASS** — `IMPORT_DUPLICATE_BATCH`\n- `PREVIEW_CROSS_WORKSPACE` — **FAIL**';
+  expect(matchesMemoryFact(duplicateBatch, neutralMixedChecks)).toBe(true);
+  expect(contradictsMemoryFact(duplicateBatch, neutralMixedChecks)).toBe(false);
+  const contradictoryMixedChecks =
+    '- **FAIL** — `IMPORT_DUPLICATE_BATCH`\n- `PREVIEW_CROSS_WORKSPACE` — **PASS**';
+  expect(matchesMemoryFact(duplicateBatch, contradictoryMixedChecks)).toBe(false);
+  expect(contradictsMemoryFact(duplicateBatch, contradictoryMixedChecks)).toBe(true);
+
+  const discoveryFacts = discovery.facts.map((fact) => ({ ...fact, source: 2, critical: true }));
+  const pagination = discoveryFacts.find(
+    ({ label }) => label === 'later pagination assertions did not run',
+  )!;
+  for (const unexecuted of [
+    'Later pagination assertions have no result.',
+    'The later pagination assertions never ran.',
+  ]) {
+    expect(matchesMemoryFact(pagination, unexecuted)).toBe(true);
+    expect(contradictsMemoryFact(pagination, unexecuted)).toBe(false);
+  }
+  expect(matchesMemoryFact(pagination, 'Later pagination assertions passed.')).toBe(false);
+  expect(contradictsMemoryFact(pagination, 'Later pagination assertions passed.')).toBe(true);
+
   const proposed = planningFacts.find(({ label }) => label.startsWith('prepareImportReplay'))!;
+  const stillProposed = 'Proposed, not implemented or approved: Extend prepareImportReplay.';
+  expect(matchesMemoryFact(proposed, stillProposed)).toBe(true);
+  expect(contradictsMemoryFact(proposed, stillProposed)).toBe(false);
+  expect(
+    contradictsMemoryFact(
+      proposed,
+      'Implemented prepareImportReplay in the existing preparation step.',
+    ),
+  ).toBe(true);
+  expect(contradictsMemoryFact(proposed, 'prepareImportReplay is now implemented.')).toBe(true);
+  expect(contradictsMemoryFact(proposed, 'The user approved extending prepareImportReplay.')).toBe(
+    true,
+  );
   const invented =
     'Proposed extending prepareImportReplay. Check implemented in existing preparation step.';
   expect(contradictsMemoryFact(proposed, invented)).toBe(true);
 
-  const discoveryFacts = discovery.facts.map((fact) => ({ ...fact, source: 2, critical: true }));
   const cause = discoveryFacts.find(({ label }) => label.startsWith('keyed by report ID'))!;
   expect(
     contradictsMemoryFact(cause, 'The issue is resolved by using the current workspace reader.'),
   ).toBe(true);
+});
+
+test('local proposal grades recognize precise signature and explicit pending status', () => {
+  const proposal = manifestLocalFacts(
+    semanticMemoryFixtures.find(({ id }) => id === 'semantic-manifest-reference')!,
+    true,
+  ).find(({ source }) => source === 1)!;
+  const pending =
+    '- Assess `reuseExportManifest` when the revision matches.\n- Proposed, not approved or implemented.';
+  expect(matchesMemoryFact(proposal, pending)).toBe(true);
+  expect(contradictsMemoryFact(proposal, pending)).toBe(false);
+  expect(contradictsMemoryFact(proposal, 'reuseExportManifest was approved.')).toBe(true);
+
+  const preserve = realisticReferenceFixture().facts.find(
+    ({ label }) => label === 'approval preserves the API',
+  )!;
+  expect(
+    matchesMemoryFact(
+      preserve,
+      'Implement the proposal while preserving the restart signature and response.',
+    ),
+  ).toBe(true);
+  expect(
+    matchesMemoryFact(preserve, 'Preserve the restart signature, but change the response.'),
+  ).toBe(false);
+  expect(contradictsMemoryFact(preserve, 'Replace the existing API.')).toBe(true);
 });

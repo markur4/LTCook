@@ -162,6 +162,63 @@ describe('native runtime boundary', () => {
     }
   });
 
+  test('only the user can switch and persist the Session Memory backend', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-inference-mode-'));
+    directories.push(directory);
+    const preferences = join(directory, 'activity-settings.json');
+    const secret = 'activity-inference-secret';
+    const createMemory = () =>
+      new SessionMemory({
+        databasePath: ':memory:',
+        source: {
+          async read() {
+            throw new Error('Selection must not read history');
+          },
+        },
+        async summarize() {
+          throw new Error('Selection must not run inference');
+        },
+        inference: {
+          hosted: { model: 'gpt-6-luna', reasoning: 'off' },
+          local: { model: 'lfm3:1.7b-qad-q4_0', reasoning: 'off' },
+        },
+      });
+    const memory = createMemory();
+    const restoredMemory = createMemory();
+    const api = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`);
+    api.setActivityPreferences(preferences);
+    api.setSessionMemory(memory);
+    const endpoint = await api.listen();
+    const select = (token: string, body: object) =>
+      fetch(`${endpoint}/v1/activity/memory-inference`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    try {
+      expect(
+        (await select(agentBearer(secret, 'worker'), { nativeAgentId: 'worker', mode: 'hosted' }))
+          .status,
+      ).toBe(403);
+      expect(memory.inferenceSelection()?.mode).toBe('local');
+      expect((await select(secret, { mode: 'automatic' })).status).toBe(400);
+      const result = await select(secret, { mode: 'hosted' });
+      expect(result.status).toBe(200);
+      expect(await result.json()).toEqual({
+        mode: 'hosted',
+        model: 'gpt-6-luna',
+        reasoning: 'off',
+      });
+      const restored = new RuntimeApi(undefined, secret, '127.0.0.1:0');
+      restored.setActivityPreferences(preferences);
+      restored.setSessionMemory(restoredMemory);
+      expect(restoredMemory.inferenceSelection()?.mode).toBe('hosted');
+    } finally {
+      await api.close();
+      await Promise.all([memory.close(), restoredMemory.close()]);
+    }
+  });
+
   test('only the user can change the host Session Memory device', async () => {
     let probes = 0;
     const gpu = { id: 'CUDA:device-1', label: 'Fixture CUDA GPU', mainGpu: 0 };

@@ -10,8 +10,11 @@ import {
   activityToggleRpc,
   memoryDeviceRpc,
   memoryEvidenceRpc,
+  memoryInferenceRpc,
   MemoryEvidenceReferencesSchema,
   MemoryDeviceSchema,
+  MemoryHostedUsageSchema,
+  MemoryInferenceSchema,
   MemoryRateSchema,
   MEMORY_SUMMARIES_TIMELINE_KIND,
   MemorySummariesTimelineSchema,
@@ -303,7 +306,9 @@ const activityServices = z.object({
   memoryDisabled: z.boolean().optional(),
   memory: z
     .object({
-      device: MemoryDeviceSchema,
+      device: MemoryDeviceSchema.nullable(),
+      inference: MemoryInferenceSchema.optional(),
+      hostedUsage: MemoryHostedUsageSchema.optional(),
       rate: MemoryRateSchema.nullable(),
       summarization: z.enum([
         'paused',
@@ -346,6 +351,9 @@ const activityServices = z.object({
 export default function contribute(server: PluginServerContext) {
   server.handle(activityToggleRpc, async (input) =>
     activityToggleRpc.output.parse(await runtimeJson('/v1/activity/toggle', input)),
+  );
+  server.handle(memoryInferenceRpc, async (input) =>
+    memoryInferenceRpc.output.parse(await runtimeJson('/v1/activity/memory-inference', input)),
   );
   server.handle(memoryDeviceRpc, async (input) =>
     memoryDeviceRpc.output.parse(
@@ -474,6 +482,8 @@ export default function contribute(server: PluginServerContext) {
           },
           memory: {
             device: memory?.device ?? null,
+            ...(memory?.inference && { inference: memory.inference }),
+            ...(memory?.hostedUsage && { hostedUsage: memory.hostedUsage }),
             rate: memory?.rate ?? null,
             summarization: services?.memoryDisabled
               ? 'disabled'

@@ -21,6 +21,7 @@ import { ActivityPreferences } from './activity-preferences.js';
 import {
   activityToggleRpc,
   memoryDeviceRpc,
+  memoryInferenceRpc,
   memoryEvidenceRpc,
   storedSummariesRpc,
 } from '../paseo-plugin/shared/activity.js';
@@ -111,6 +112,8 @@ export class RuntimeApi {
     this.activityPreferences = preferences;
     this.activityColgrep.setIndexingEnabled(preferences.enabled('rag-index'));
     this.memory?.setSummarizationEnabled(preferences.enabled('summarizer'));
+    const mode = preferences.memoryInferenceMode();
+    if (mode) this.memory?.setInferenceMode(mode);
   }
   private providerSubagents?: PaseoHost['listProviderSubagents'];
 
@@ -157,6 +160,8 @@ export class RuntimeApi {
   setSessionMemory(memory: SessionMemory, context?: RuntimeApi['memoryContext']): void {
     this.memory = memory;
     memory.setSummarizationEnabled(this.activityPreferences?.enabled('summarizer') ?? true);
+    const mode = this.activityPreferences?.memoryInferenceMode();
+    if (mode) memory.setInferenceMode(mode);
     this.memoryContext = context;
   }
   setPastedDocuments(documents: PastedDocuments): void {
@@ -384,6 +389,7 @@ export class RuntimeApi {
           '/v1/activity/toggle',
           '/v1/activity/memory-evidence',
           '/v1/activity/memory-device',
+          '/v1/activity/memory-inference',
           '/v1/activity/stored-summaries',
           '/v1/mcp/grant',
           '/v1/mcp/revoke',
@@ -552,6 +558,21 @@ export class RuntimeApi {
         response.writeHead(200).end(JSON.stringify({ enabled }));
         return;
       }
+      if (request.url === '/v1/activity/memory-inference') {
+        if (!isUser) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        const { mode } = memoryInferenceRpc.input.parse(parsed);
+        const memory = this.memory;
+        if (!this.activityPreferences || !memory?.inferenceSelection()) {
+          response.writeHead(503).end('{"error":"Session Memory inference is unavailable."}');
+          return;
+        }
+        this.activityPreferences.setMemoryInferenceMode(mode);
+        response.writeHead(200).end(JSON.stringify(memory.setInferenceMode(mode)));
+        return;
+      }
       if (request.url === '/v1/activity/memory-device') {
         if (!isUser) {
           response.writeHead(403).end('{}');
@@ -560,6 +581,12 @@ export class RuntimeApi {
         const { deviceId } = memoryDeviceRpc.input.parse(parsed);
         if (!this.memory) {
           response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
+          return;
+        }
+        if (this.memory.inferenceSelection()?.mode === 'hosted') {
+          response
+            .writeHead(409)
+            .end('{"error":"Device selection is available for Local Session Memory."}');
           return;
         }
         const device = await this.memory.device(deviceId);

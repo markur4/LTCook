@@ -85,8 +85,12 @@ export async function prepareLunaPiEvaluation(
   directory: string,
   signal: AbortSignal,
   reasoning: 'low' | 'high' = LUNA_EVALUATION.reasoning,
+  options?: { subscriptionOnly: boolean },
 ) {
   const { authMethod } = await codexAuthorization(signal);
+  if (options?.subscriptionOnly && authMethod === 'apikey')
+    throw new Error('This Luna evaluation requires the Codex subscription sign-in.');
+
   const provider = authMethod === 'apikey' ? 'openai' : 'openai-codex';
   const modelRuntime = useCodexOpenAiAuth(
     await ModelRuntime.create({

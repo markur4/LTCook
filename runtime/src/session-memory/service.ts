@@ -93,8 +93,23 @@ export type MemoryHandoffObservation = UnitCounts & {
   sourceGeneration: symbol;
 };
 
+export type MemoryInferenceMode = 'hosted' | 'local';
+type MemoryInferenceModel = { model: string; reasoning: string };
+export type MemoryInferenceSelection = MemoryInferenceModel & { mode: MemoryInferenceMode };
+export type HostedMemoryUsage = {
+  requests: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  lastLatencyMs?: number;
+};
+export class MemorySummaryError extends Error {}
+
 export type SessionMemoryStatus = {
-  device: MemoryDevice;
+  device: MemoryDevice | null;
+  inference?: MemoryInferenceSelection;
+  hostedUsage?: HostedMemoryUsage;
   summarization: SummaryOutcome | 'paused' | 'queued' | 'summarizing';
   rate: MemorySummaryProgress | null;
   lastSuccessfulSummaryAt: string | null;
@@ -134,6 +149,9 @@ export type MemoryProcessing = 'legacy-json' | 'deterministic-json' | 'determini
 
 type MemoryOptions = {
   processing?: MemoryProcessing;
+  contextIndependent?: boolean;
+  inference?: Record<MemoryInferenceMode, MemoryInferenceModel>;
+  hostedUsage?(): HostedMemoryUsage;
   databasePath: string;
   source: MemorySource;
   summarize(
@@ -143,6 +161,7 @@ type MemoryOptions = {
     placement: MemoryPlacement,
     onProgress?: (rate: MemorySummaryProgress | undefined) => void,
     format?: MemorySummaryFormat,
+    mode?: MemoryInferenceMode,
   ): Promise<MemorySummaryResult>;
   deviceCatalog?(refresh?: boolean): Promise<OllamaDeviceCatalog>;
   releaseCpuModel?(signal: AbortSignal): Promise<void>;
@@ -162,6 +181,7 @@ type MemoryOptions = {
     prefixHash: string;
     type: MemoryUnit['type'];
     queueMs: number;
+    inference?: MemoryInferenceSelection;
     result: MemorySummaryResult;
   }): void;
 };
@@ -402,6 +422,8 @@ export class SessionMemory {
   private readonly watchers = new Map<string, () => void>();
   private readonly abort = new AbortController();
   private summarizationAbort = new AbortController();
+  private inferenceMode: MemoryInferenceMode = 'local';
+  private inferenceModeAbort = new AbortController();
   private readonly activity = new Map<string, AgentMemoryActivity>();
   private readonly deliveries = new Map<
     string,
@@ -467,6 +489,30 @@ export class SessionMemory {
     return { device, devices, diagnostic: catalog.diagnostic };
   }
 
+  inferenceSelection(): MemoryInferenceSelection | undefined {
+    const model = this.options.inference?.[this.inferenceMode];
+    return model && { mode: this.inferenceMode, ...model };
+  }
+
+  setInferenceMode(mode: MemoryInferenceMode): MemoryInferenceSelection | undefined {
+    if (!this.options.inference) return undefined;
+    if (mode !== this.inferenceMode) {
+      this.inferenceMode = mode;
+      this.inferenceModeAbort.abort();
+      this.inferenceModeAbort = new AbortController();
+      this.inference = undefined;
+      for (const [agentId, activity] of this.activity) {
+        if (activity.outcome === 'failed') {
+          activity.outcome = 'unknown';
+          activity.lastError = undefined;
+          this.observe(agentId);
+        }
+      }
+      this.resumeInference();
+    }
+    return this.inferenceSelection();
+  }
+
   setSummarizationEnabled(enabled: boolean): void {
     if (enabled === !this.summarizationAbort.signal.aborted) return;
     if (enabled) {
@@ -497,8 +543,11 @@ export class SessionMemory {
       this.activity.get(delivery.value.sourceAgentId)?.generation === delivery.sourceGeneration
         ? { ...delivery.value }
         : null;
+    const selection = this.inferenceSelection();
     return {
-      device: this.store.deviceSettings().device,
+      device: selection?.mode === 'hosted' ? null : this.store.deviceSettings().device,
+      ...(selection ? { inference: selection } : {}),
+      ...(this.options.hostedUsage ? { hostedUsage: this.options.hostedUsage() } : {}),
       summarization: this.summarizationAbort.signal.aborted
         ? 'paused'
         : mismatched
@@ -1199,69 +1248,76 @@ export class SessionMemory {
         }
         continue;
       }
-      const prior = [...summaries.values()]
-        .filter(
-          (candidate) =>
-            candidate.type === 'UAMP' &&
-            candidate.complete &&
-            candidate.position < position &&
-            (legacy ? relevantMemoryScope : relevantDiscussionScope)(candidate.scope, unit.scope) &&
-            (candidate.state === 'skipped' ||
-              candidate.parts.some(
-                ({ content }) =>
-                  !isEmptyMemorySummary(content) && memorySummaryText(content).trim(),
-              )),
-        )
-        .sort((a, b) => b.position - a.position);
-      const anchor = prior.find(({ state }) => state !== 'skipped');
-      const history = anchor
-        ? anchor.parts.map((part, index) => ({
-            ...part,
-            type: anchor.type,
-            scope: unit.scope,
-            unitId: anchor.id,
-            id: `${anchor.id}/${index + 1}`,
-          }))
-        : [];
-      const historyGeneration = activity.generation;
-      const resolveDiscussion = (summary: StoredMemorySummary) =>
-        this.referencedMessages(
-          agentId,
-          epoch,
-          summary.sources,
-          signal,
-          messages,
-          undefined,
-          latest,
-        );
-      const confirmHistory = async () =>
-        (await this.currentHistory(agentId, epoch, latest, signal)) &&
-        activity.generation === historyGeneration;
-      const skipped = [];
-      let skippedTokens = 0;
-      for (const candidate of prior) {
-        if (candidate.state !== 'skipped' || skippedTokens >= 512) break;
-        const { messages: originals, originalHistory } = await resolveDiscussion(candidate);
-        if (activity.generation !== historyGeneration) return true;
-        if (originalHistory === 'unavailable') {
-          if (!(await confirmHistory())) return true;
-          break;
-        }
-        if (originals.length) skipped.push({ id: candidate.id, messages: originals });
-        skippedTokens += Math.max(32, candidate.originalTokens ?? 32);
-      }
+      let history: Parameters<typeof prepareMemorySummaries>[1] = [];
+      const skipped: { id: string; messages: MemorySourceMessage[] }[] = [];
       let originalAnchor: string | undefined;
-      if (format === 'markdown' && anchor && skipped.length) {
-        // > A short exchange can refer to an earlier proposal.
-        const { messages: originals, originalHistory } = await resolveDiscussion(anchor);
-        if (activity.generation !== historyGeneration) return true;
-        if (originalHistory === 'unavailable' && !(await confirmHistory())) return true;
-        if (originalHistory === 'available') originalAnchor = originalUampDialogue(originals);
+      if (!this.options.contextIndependent) {
+        const prior = [...summaries.values()]
+          .filter(
+            (candidate) =>
+              candidate.type === 'UAMP' &&
+              candidate.complete &&
+              candidate.position < position &&
+              (legacy ? relevantMemoryScope : relevantDiscussionScope)(
+                candidate.scope,
+                unit.scope,
+              ) &&
+              (candidate.state === 'skipped' ||
+                candidate.parts.some(
+                  ({ content }) =>
+                    !isEmptyMemorySummary(content) && memorySummaryText(content).trim(),
+                )),
+          )
+          .sort((a, b) => b.position - a.position);
+        const anchor = prior.find(({ state }) => state !== 'skipped');
+        history = anchor
+          ? anchor.parts.map((part, index) => ({
+              ...part,
+              type: anchor.type,
+              scope: unit.scope,
+              unitId: anchor.id,
+              id: `${anchor.id}/${index + 1}`,
+            }))
+          : [];
+        const historyGeneration = activity.generation;
+        const resolveDiscussion = (summary: StoredMemorySummary) =>
+          this.referencedMessages(
+            agentId,
+            epoch,
+            summary.sources,
+            signal,
+            messages,
+            undefined,
+            latest,
+          );
+        const confirmHistory = async () =>
+          (await this.currentHistory(agentId, epoch, latest, signal)) &&
+          activity.generation === historyGeneration;
+        let skippedTokens = 0;
+        for (const candidate of prior) {
+          if (candidate.state !== 'skipped' || skippedTokens >= 512) break;
+          const { messages: originals, originalHistory } = await resolveDiscussion(candidate);
+          if (activity.generation !== historyGeneration) return true;
+          if (originalHistory === 'unavailable') {
+            if (!(await confirmHistory())) return true;
+            break;
+          }
+          if (originals.length) skipped.push({ id: candidate.id, messages: originals });
+          skippedTokens += Math.max(32, candidate.originalTokens ?? 32);
+        }
+        if (format === 'markdown' && anchor && skipped.length) {
+          // > A short exchange can refer to an earlier proposal.
+          const { messages: originals, originalHistory } = await resolveDiscussion(anchor);
+          if (activity.generation !== historyGeneration) return true;
+          if (originalHistory === 'unavailable' && !(await confirmHistory())) return true;
+          if (originalHistory === 'available') originalAnchor = originalUampDialogue(originals);
+        }
       }
       let parts: ReturnType<typeof prepareMemorySummaries>;
       try {
         parts = prepareMemorySummaries(unit, history, this.budgets, {
           format,
+          simpleBullets: this.options.contextIndependent,
           skipped,
           originalAnchor,
         });
@@ -1279,8 +1335,19 @@ export class SessionMemory {
       const historyHash = createHash('sha256')
         .update(JSON.stringify(parts.map(({ prompt }) => prompt)))
         .digest('hex');
+      const selection = this.inferenceSelection();
+      const model = selection?.model ?? this.options.model;
+      const configuration = selection
+        ? JSON.stringify({
+            ...selection,
+            generation: selection.mode === 'local' ? this.options.configuration : undefined,
+          })
+        : this.options.configuration;
       const reusable =
-        existing?.historyHash === historyHash && existing.expectedParts === parts.length
+        existing?.historyHash === historyHash &&
+        existing.expectedParts === parts.length &&
+        existing.model === model &&
+        existing.configuration === configuration
           ? existing
           : undefined;
       const retainedParts = reusable?.parts ?? [];
@@ -1293,8 +1360,8 @@ export class SessionMemory {
         ),
         // > An older partial summary may have portions with unknown durations.
         durationMs: retainedParts.length ? reusable?.durationMs : 0,
-        model: this.options.model,
-        configuration: this.options.configuration,
+        model,
+        configuration,
         historyHash,
         parts: retainedParts,
         observedChecks: unit.type === 'AAB' ? observedMemoryChecks(unit.messages) : undefined,
@@ -1302,7 +1369,7 @@ export class SessionMemory {
       };
       const inferenceSignal = legacy
         ? signal
-        : AbortSignal.any([signal, this.summarizationAbort.signal]);
+        : AbortSignal.any([signal, this.summarizationAbort.signal, this.inferenceModeAbort.signal]);
       let failure = false;
       if (!legacy && !existing) {
         if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
@@ -1324,48 +1391,51 @@ export class SessionMemory {
             unitId: id,
             portion: summary.parts.length + 1,
             queueMs,
+            inference: selection,
             historyIds: part.historyIds,
             authoritativeEstimatedTokens: part.authoritativeEstimatedTokens,
             prefixHash: part.prefixHash,
             result,
           });
         try {
-          const { device, cpuRunner } = this.store.deviceSettings();
           let placement: MemoryPlacement = {};
-          if (device.id === cpuMemoryDevice.id) {
-            placement = { cpuOnly: true };
-          } else if (device.id !== automaticMemoryDevice.id) {
-            const catalog = await this.readDeviceCatalog();
-            inferenceSignal.throwIfAborted();
-            if (
-              this.store.deviceSettings().device.id !== device.id ||
-              activity.generation !== generation
-            )
-              return true;
-            const selected = catalog.devices.find(({ id }) => id === device.id);
-            if (selected?.mainGpu === undefined || selected.unavailable) {
-              this.noteFailure(
-                agentId,
-                selected?.unavailable ?? catalog.diagnostic ?? unknownDevice,
-              );
-              failure = true;
-              this.options.onFailure?.();
-              break;
+          if (selection?.mode !== 'hosted') {
+            const { device, cpuRunner } = this.store.deviceSettings();
+            if (device.id === cpuMemoryDevice.id) {
+              placement = { cpuOnly: true };
+            } else if (device.id !== automaticMemoryDevice.id) {
+              const catalog = await this.readDeviceCatalog();
+              inferenceSignal.throwIfAborted();
+              if (
+                this.store.deviceSettings().device.id !== device.id ||
+                activity.generation !== generation
+              )
+                return true;
+              const selected = catalog.devices.find(({ id }) => id === device.id);
+              if (selected?.mainGpu === undefined || selected.unavailable) {
+                this.noteFailure(
+                  agentId,
+                  selected?.unavailable ?? catalog.diagnostic ?? unknownDevice,
+                );
+                failure = true;
+                this.options.onFailure?.();
+                break;
+              }
+              placement = { mainGpu: selected.mainGpu };
             }
-            placement = { mainGpu: selected.mainGpu };
-          }
-          if (!placement.cpuOnly && cpuRunner && this.options.releaseCpuModel) {
-            // > Ollama can reuse a CPU-only runner until it is unloaded.
-            await this.options.releaseCpuModel(inferenceSignal);
-            inferenceSignal.throwIfAborted();
-            const current = this.store.deviceSettings();
-            this.store.saveDeviceSettings({ ...current, cpuRunner: false });
-            if (
-              this.foreground.size ||
-              current.device.id !== device.id ||
-              activity.generation !== generation
-            )
-              return true;
+            if (!placement.cpuOnly && cpuRunner && this.options.releaseCpuModel) {
+              // > Ollama can reuse a CPU-only runner until it is unloaded.
+              await this.options.releaseCpuModel(inferenceSignal);
+              inferenceSignal.throwIfAborted();
+              const current = this.store.deviceSettings();
+              this.store.saveDeviceSettings({ ...current, cpuRunner: false });
+              if (
+                this.foreground.size ||
+                current.device.id !== device.id ||
+                activity.generation !== generation
+              )
+                return true;
+            }
           }
           if (this.foreground.size) {
             if (legacy) return true;
@@ -1373,11 +1443,13 @@ export class SessionMemory {
             break;
           }
           inferenceSignal.throwIfAborted();
-          if (placement.cpuOnly && !cpuRunner)
-            this.store.saveDeviceSettings({ device, cpuRunner: true });
+          if (placement.cpuOnly) {
+            const current = this.store.deviceSettings();
+            if (!current.cpuRunner) this.store.saveDeviceSettings({ ...current, cpuRunner: true });
+          }
           const inference: ActiveMemoryInference = { agentId, generation };
           this.inference = inference;
-          let ollamaFailure: string | undefined;
+          let providerFailure: string | undefined;
           const result = await this.options
             .summarize(
               unit.type,
@@ -1393,13 +1465,15 @@ export class SessionMemory {
                   inference.rate = rate;
               },
               format,
+              selection?.mode,
             )
             .finally(() => {
               this.inference = undefined;
             })
             .catch((error: unknown): MemorySummaryResult => {
               inferenceSignal.throwIfAborted();
-              if (error instanceof OllamaSummaryError) ollamaFailure = error.message;
+              if (error instanceof OllamaSummaryError || error instanceof MemorySummaryError)
+                providerFailure = error.message;
               return {
                 type: unit.type,
                 text: '',
@@ -1412,7 +1486,7 @@ export class SessionMemory {
           if (!result.complete) {
             this.noteFailure(
               agentId,
-              ollamaFailure ??
+              providerFailure ??
                 (result.failure === 'invalid-json'
                   ? 'Ollama returned invalid JSON for a Session Memory summary.'
                   : 'Session Memory returned an incomplete summary.'),

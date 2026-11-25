@@ -229,13 +229,18 @@ agent's conversation. Turn off **Summarizer** to pause generation. Existing
 summaries remain available. Session Memory still records actions and short
 Discussions. Pending generation resumes when you turn it back on.
 Both switches apply across conversations and persist across runtime restarts.
-Select the device next to **Inference device** to open the list. **Auto** lets
-Ollama choose placement. **CPU** forces CPU inference.
-On supported Ollama hosts, the list also shows named GPUs discovered on the
-host. The picker explains when Ollama's device index is ambiguous or discovery
-is unavailable. LTCook saves the host-wide choice and applies it to the next
-summary request. While a summary is generating, the panel updates tokens per
-second once a second and labels estimated rates.
+The Session Memory card shows the resolved summarization model and reasoning
+setting, including while paused. Select **Hosted** to send the current user
+messages, agent replies, and any included attachment text to OpenAI. Hosted
+uses the Codex subscription sign-in at Standard speed. Authentication, quota,
+and inference failures appear on the card. Hosted usage shows the LTCook
+runtime's own request and token totals since startup.
+
+Select **Local** to summarize through Ollama. Use **Inference device** to
+choose Auto, CPU, or an available GPU. The saved backend choice applies
+across conversations. Original messages and deterministic execution records
+remain available while summaries are paused or the selected provider is
+unavailable.
 
 Expand **Stored for this agent** to open the record viewer. It shows Markdown
 summaries, a notice when a short Discussion skipped generation, and execution
@@ -301,7 +306,7 @@ and shells use their harness permissions for operations in other checkouts.
   focus tells the summarizer what to emphasize. Check consequential details
   such as identifiers and negated actions against the source.
 
-The summarizer uses `@tiny-local`, which defaults to Spark X2.6 4B Q8_0 with
+The summarizer uses `@local-tiny`, which defaults to Spark X2.6 4B Q8_0 with
 reasoning off. Pull it on the configured Ollama instance before the first
 summary. Setup checks readiness without downloading Spark.
 
@@ -332,10 +337,10 @@ cannot be verified. Search lists it as `unattributed-prompt`. Follow the latest
 cited user instruction when it differs from a summary.
 
 Automatic enrichment is opt-in. Set `LTCOOK_SESSION_MEMORY_DELEGATION=true`
-in global AppRC and make `lfm3:1.7b-qad-q4_0` available on the configured
-Ollama instance. Restart LTCook to apply the
-[settings](References.md#environment-variables). Agent work can proceed
-with original messages while a summary is pending.
+in global AppRC and restart LTCook. The receiving agent uses chronological
+handoff evidence to resolve references to earlier Discussions. Agent work can
+proceed with original messages while a summary is pending.
+See the [Session Memory settings](References.md#environment-variables).
 
 ### Attach pasted text
 
@@ -583,8 +588,10 @@ management commands rather than inventing another configuration editor.
 | Alias | Model | Preset reasoning |
 | --- | --- | --- |
 | `@smol` | GPT-6 Luna | Provider default |
-| `@tiny` | GPT-6 Luna | Low |
-| `@tiny-local` | Spark X2.6 4B Q8_0 on Ollama | Off |
+| `@tiny` | GPT-6 Luna | Off |
+| `@local-CPU` | LFM3 1.7B QAD Q4_0 on Ollama | Off |
+| `@local-tiny` | Spark X2.6 4B Q8_0 on Ollama | Off |
+| `@local-evals` | Bonsai 2 27B on Ollama | Provider default |
 | `@smart` | GPT-6.2 Sol | Provider default |
 | `@plan` | GPT-6.2 Sol | Xhigh |
 | `@expensive` | GPT-6 Astra | Provider default |
@@ -608,7 +615,7 @@ Use the terminal launcher to start a new native conversation:
 ```shell
 ltcook launch model pi @plan
 ltcook launch model codex @tiny
-ltcook launch model pi @tiny-local --reasoning high
+ltcook launch model pi @local-tiny --reasoning high
 ```
 
 Pi uses the configured provider and the native Pi login. Codex uses its installed
@@ -623,8 +630,10 @@ can generate.
 Change the physical model slots in
 [AppRC](References.md#environment-variables). For hosted slots enter
 `provider/model` and set effort through the Team or session. Drop any previous
-`:effort` suffix. `@plan` shares the smart slot. The tiny-local slot accepts the
-Ollama model tag, including its quantization suffix.
+`:effort` suffix. `@plan` shares the smart slot and `@tiny` shares the smol
+slot. Local slots accept Ollama tags including quantization suffixes. Pull
+the configured tag if it is missing from your Ollama instance. Ollama can
+use available GPU acceleration with any local alias, including `@local-CPU`.
 
 ## Authenticate with Pi
 

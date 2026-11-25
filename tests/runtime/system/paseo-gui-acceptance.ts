@@ -331,6 +331,8 @@ const environment = {
   LTCOOK_MODEL_SMOL: 'fixture/test',
   LTCOOK_MODEL_EXPENSIVE: 'fixture/test',
   LTCOOK_MODEL_TINY_LOCAL: 'fixture-model',
+  LTCOOK_MODEL_LOCAL_CPU: 'fixture-cpu',
+  LTCOOK_MODEL_LOCAL_EVALS: 'fixture-evals',
   LTCOOK_GUIDANCE_DIR: path.join(directory, 'guidance'),
   LTCOOK_BROWSER_ENABLED: 'false',
   LTCOOK_CODESEARCH_ENABLED: 'false',
@@ -868,6 +870,18 @@ try {
   memory = new SessionMemory({
     databasePath: path.join(directory, 'activity-memory.sqlite'),
     source: createPaseoMemorySource(host.api, secret),
+    inference: {
+      hosted: { model: 'gpt-6-luna', reasoning: 'high' },
+      local: { model: 'fixture-local-memory', reasoning: 'none' },
+    },
+    hostedUsage: () => ({
+      requests: 1,
+      inputTokens: 321,
+      cachedInputTokens: 32,
+      outputTokens: 123,
+      reasoningTokens: 12,
+      lastLatencyMs: 250,
+    }),
     async deviceCatalog() {
       deviceProbes++;
       return {
@@ -992,11 +1006,58 @@ try {
       return button.contains(hit);
     })()`,
   );
-  assert.equal(memory.status(undefined, mobileSession.id).device.id, 'cpu');
+  assert.equal(memory.status(undefined, mobileSession.id).device?.id, 'cpu');
   await clickButton('Inference device: CPU');
   await clickButton(selectedGpu.label);
   await browser('wait', '[aria-label="Inference device: RTX 4070 Ti SUPER"]');
-  assert.equal(memory.status(undefined, mobileSession.id).device.id, selectedGpu.id);
+  assert.equal(memory.status(undefined, mobileSession.id).device?.id, selectedGpu.id);
+  stage = 'native-activity-memory-inference';
+  await browser(
+    'wait',
+    '--fn',
+    `(() => {
+      const button = document.querySelector('[aria-label="Inference mode: Local"]');
+      if (!button) return false;
+      const bounds = button.getBoundingClientRect();
+      return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+    })()`,
+  );
+  await clickButton('Inference mode: Local');
+  await browser(
+    'wait',
+    '--text',
+    'Hosted sends current prompts and included attachment text to OpenAI.',
+  );
+  await clickButton('Hosted');
+  await browser('wait', '[aria-label="Inference mode: Hosted"]');
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector('[data-testid="ltcook-memory-device-row"]') === null`,
+  );
+  await browser('wait', '--text', 'gpt-6-luna');
+  await browser('wait', '--text', '321 (32 cached)');
+  await browser('wait', '--text', '123 (12 reasoning)');
+  await browser('click', summarizerSwitch);
+  const pausedHostedMemory =
+    '[aria-label^="Session Memory,"][aria-label*="gpt-6-luna · Reasoning high"][aria-label$="Paused"]';
+  await browser('wait', pausedHostedMemory);
+  await browser('click', pausedHostedMemory);
+  await browser('wait', '--text', 'Hosted · gpt-6-luna · Reasoning high');
+  await browser('click', pausedHostedMemory);
+  await clickButton('Inference mode: Hosted');
+  await clickButton('Local');
+  await browser(
+    'wait',
+    '[aria-label^="Session Memory,"][aria-label*="fixture-local-memory"][aria-label$="Paused"]',
+  );
+  await browser('wait', '[aria-label="Inference device: RTX 4070 Ti SUPER"]');
+  await browser('click', summarizerSwitch);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector(${JSON.stringify(summarizerSwitch)})?.checked === true`,
+  );
   stage = 'native-activity-memory-live-rate';
   await host.api.agents
     .ref(mobileSession.id)

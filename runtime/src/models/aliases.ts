@@ -3,7 +3,9 @@ import { z } from 'zod';
 export const MODEL_ALIASES = [
   'smol',
   'tiny',
-  'tiny-local',
+  'local-CPU',
+  'local-tiny',
+  'local-evals',
   'smart',
   'plan',
   'expensive',
@@ -37,10 +39,14 @@ export const ResolvedModelSchema = z.object({
 });
 export type ResolvedModel = z.infer<typeof ResolvedModelSchema>;
 
-const aliases: Readonly<Record<ModelAlias, { setting: string; preset?: ReasoningEffort }>> = {
+const aliases: Readonly<
+  Record<ModelAlias, { setting: string; preset?: ReasoningEffort; provider?: 'ollama' }>
+> = {
   smol: { setting: 'LTCOOK_MODEL_SMOL' },
-  tiny: { setting: 'LTCOOK_MODEL_SMOL', preset: 'low' },
-  'tiny-local': { setting: 'LTCOOK_MODEL_TINY_LOCAL', preset: 'none' },
+  tiny: { setting: 'LTCOOK_MODEL_SMOL', preset: 'none' },
+  'local-CPU': { setting: 'LTCOOK_MODEL_LOCAL_CPU', preset: 'none', provider: 'ollama' },
+  'local-tiny': { setting: 'LTCOOK_MODEL_TINY_LOCAL', preset: 'none', provider: 'ollama' },
+  'local-evals': { setting: 'LTCOOK_MODEL_LOCAL_EVALS', provider: 'ollama' },
   smart: { setting: 'LTCOOK_MODEL_SMART' },
   plan: { setting: 'LTCOOK_MODEL_SMART', preset: 'xhigh' },
   expensive: { setting: 'LTCOOK_MODEL_EXPENSIVE' },
@@ -53,11 +59,10 @@ const ollamaReasoning = ['none', 'low', 'high'] as const;
 
 /** Reasoning levels that can retain their meaning across the supported adapters. */
 export function reasoningOptions({
-  alias,
   provider,
   model,
 }: Pick<ResolvedModel, 'alias' | 'provider' | 'model'>): readonly ReasoningEffort[] {
-  if (alias === 'tiny-local' || provider === 'ollama') return ollamaReasoning;
+  if (provider === 'ollama') return ollamaReasoning;
   if (provider === 'openai' || provider === 'openai-codex') {
     if (model === 'gpt-6-luna') return lunaReasoning;
     if (['gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6-astra'].includes(model)) return hostedReasoning;
@@ -91,14 +96,14 @@ function aliasModel(requestedAlias: unknown, environment: Record<string, string 
       `Choose a model alias: ${MODEL_ALIASES.map((alias) => `@${alias}`).join(', ')}.`,
     );
   const alias = parsedAlias.data;
-  const { setting, preset } = aliases[alias];
+  const { setting, preset, provider: fixedProvider } = aliases[alias];
   const configured = environment[setting]?.trim();
   if (!configured) throw new Error(`Set ${setting} in AppRC to use @${alias}.`);
 
   const separator = configured.indexOf('/');
-  const provider = alias === 'tiny-local' ? 'ollama' : configured.slice(0, separator);
-  const model = alias === 'tiny-local' ? configured : configured.slice(separator + 1);
-  if (alias === 'tiny-local') {
+  const provider = fixedProvider ?? configured.slice(0, separator);
+  const model = fixedProvider ? configured : configured.slice(separator + 1);
+  if (fixedProvider) {
     if (!modelId.test(model)) throw new Error(`${setting} must contain an Ollama model ID.`);
   } else {
     if (separator < 1 || !providerId.test(provider) || !modelId.test(model))
