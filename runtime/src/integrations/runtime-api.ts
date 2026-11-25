@@ -322,6 +322,7 @@ export class RuntimeApi {
           '/v1/model/catalog',
           '/v1/model/resolve',
           '/v1/session/list',
+          '/v1/session/worktrees',
           '/v1/session/prepare',
           '/v1/runtime/stop',
           '/v1/tool/authorize',
