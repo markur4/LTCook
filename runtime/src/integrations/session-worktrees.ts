@@ -58,13 +58,24 @@ export class SessionWorktrees {
 
   async read(scope: WorktreeScope, signal?: AbortSignal) {
     const worktrees = this.sessions.get(scope.sessionId);
-    if (!worktrees?.size) return { following: null, worktrees: [] };
-
     const source = await openRepositoryWorkspace(scope.workspaceRoot);
-    const entries = await listGitWorktrees(source, this.gitPath, signal);
+    const entries = await listGitWorktrees(source, this.gitPath, signal).catch((error: unknown) => {
+      signal?.throwIfAborted();
+      if (worktrees?.size) throw error;
+      return [];
+    });
+    const available = entries
+      .filter((entry) => this.isAvailable(entry))
+      .map(({ path, branch }) => ({
+        path,
+        ...(branch ? { branch } : {}),
+      }));
+    if (!worktrees?.size) return { following: null, available };
+
+    const byPath = new Map(available.map((item) => [item.path, item]));
     const registered = new Map<string, SessionWorktree>();
     for (const [key, binding] of [...worktrees]) {
-      const entry = entries.find((item) => this.isAvailable(item) && item.path === binding.path);
+      const entry = byPath.get(binding.path);
       const checkout =
         entry && (await openRepositoryWorkspace(binding.path).catch(() => undefined));
       if (worktrees.get(key) !== binding) continue;
@@ -77,20 +88,16 @@ export class SessionWorktrees {
         worktrees.delete(key);
         continue;
       }
-      registered.set(key, {
-        path: binding.path,
-        ...(entry.branch ? { branch: entry.branch } : {}),
-      });
+      registered.set(key, entry);
     }
     if (!worktrees.size && this.sessions.get(scope.sessionId) === worktrees)
       this.sessions.delete(scope.sessionId);
-    const choices = [
-      ...new Map([...registered.values()].map((item) => [item.path, item])).values(),
-    ];
+    const paths = new Set([...registered.values()].map(({ path }) => path));
     const following = registered.get(scopeKey(scope)) ?? registered.get(`agent:${scope.agentId}`);
     return {
-      following: following ?? (choices.length === 1 ? (choices[0] ?? null) : null),
-      worktrees: choices,
+      following:
+        following ?? (paths.size === 1 ? (registered.values().next().value ?? null) : null),
+      available,
     };
   }
 

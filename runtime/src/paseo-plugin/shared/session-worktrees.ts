@@ -8,7 +8,7 @@ export const SessionWorktreesSchema = z.object({
   sessionId: z.string().min(1),
   original: z.string().min(1),
   following: worktree.nullable(),
-  worktrees: z.array(worktree),
+  available: z.array(worktree),
 });
 
 export const sessionWorktreesSubscription = defineSubscription({
