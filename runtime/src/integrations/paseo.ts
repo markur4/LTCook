@@ -19,6 +19,7 @@ import { piThinking } from '../models/adapters.js';
 import { RESOLVED_MODEL_METADATA_KEY } from '../paseo-plugin/shared/models.js';
 import {
   REPO_LOCATE_TOOL_NAME,
+  WORKTREE_TOOL_NAME,
   REPO_SEARCH_TOOL_NAME,
 } from '../paseo-plugin/shared/workspace-tools.js';
 import { agentEnvironment } from './native-policy.js';
@@ -147,7 +148,8 @@ export async function startPaseoHost(input: {
         'For multi-file investigations, call Locate trace with the question and up to four independent leads, such as behaviors, symbols, routes, or settings. Use its numbered evidence and check only specific gaps. ' +
         `Use ${REPO_SEARCH_TOOL_NAME} in hybrid mode when you know the behavior but lack the symbol. Discover these tools through tool search if needed. ` +
         'Batch independent symbols with symbols. Open an enclosing source block with Locate location {path, line}, or use follow: true for one local connection. ' +
-        'Use native search for quick literal checks. If repository retrieval is unavailable or indexing, use native search and file reads.',
+        'Use native search for quick literal checks. If repository retrieval is unavailable or indexing, use native search and file reads. ' +
+        `When you switch to a task worktree or remove it, report the path with ${WORKTREE_TOOL_NAME} so Changes follows your session.`,
       mcp: { enabled: false, injectIntoAgents: false },
       ...(input.password ? { auth: { password: hashDaemonPassword(input.password) } } : {}),
     },

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { PaseoApi } from '@getpaseo/client';
 import { z } from 'zod';
 import { defineRpc, PluginAttachmentItemSchema } from '@getpaseo/plugin';
@@ -17,6 +18,7 @@ import {
 import { observeActivity, observedTimestamp } from './server/activity';
 import { readPaseoMemoryPassage } from './server/memory-source';
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
+import { SessionWorktreesSchema, sessionWorktreesSubscription } from './shared/session-worktrees';
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
 import {
   ModelCatalogRequestSchema,
@@ -312,6 +314,35 @@ export default function contribute(server: PluginServerContext) {
     return storedSummariesRpc.output.parse(
       await runtimeJson('/v1/activity/stored-summaries', input),
     );
+  });
+  server.handle(sessionWorktreesSubscription, async ({ agentId }, { paseo, signal, push }) => {
+    const reference = paseo.agents.ref(agentId);
+    let previous: string | undefined;
+    while (!signal.aborted) {
+      const agent = (await reference.refresh())?.agent;
+      if (!agent?.cwd || agent.archivedAt)
+        throw new Error('The Changes conversation is unavailable.');
+      if (signal.aborted) return;
+      const sessionId = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
+      const state = SessionWorktreesSchema.parse(
+        await runtimeJson(
+          '/v1/session/worktrees',
+          {
+            nativeAgentId: agentId,
+            workspaceRoot: agent.cwd,
+            sessionId,
+          },
+          signal,
+        ),
+      );
+      const current = JSON.stringify(state);
+      if (signal.aborted) return;
+      if (current !== previous) {
+        previous = current;
+        await push(state);
+      }
+      await delay(1000, undefined, { signal }).catch(() => undefined);
+    }
   });
   server.handle(activitySubscription, ({ agentId }, { paseo, signal, push }) =>
     observeActivity(

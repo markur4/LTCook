@@ -18,8 +18,11 @@ import {
   REPO_LOCATE_TOOL_NAME,
   REPO_SEARCH_TIMEOUT_MS,
   SESSION_MEMORY_TOOL_NAME,
+  WORKTREE_TOOL_DESCRIPTION,
+  WORKTREE_TOOL_NAME,
 } from '../paseo-plugin/shared/workspace-tools.js';
 import { sessionMemoryDescription, sessionMemoryInput } from '../tools/session-memory.js';
+import { worktreeToolInput } from '../tools/session-worktree.js';
 import { isWebTool, webDefinitions } from '../tools/web.js';
 import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
@@ -537,6 +540,23 @@ export default async function activate(
         );
       }
       return result;
+    });
+  }
+  if (!evaluation) {
+    pi.registerTool({
+      name: WORKTREE_TOOL_NAME,
+      label: 'Report session worktree',
+      description: WORKTREE_TOOL_DESCRIPTION,
+      parameters: worktreeToolInput,
+      async execute(_id, input, signal) {
+        const response = await invokeWorkspaceTool(WORKTREE_TOOL_NAME, input, signal, 5000);
+        const result: unknown = await response.json();
+        if (!response.ok) {
+          const message = result && typeof result === 'object' && 'error' in result && result.error;
+          throw new Error(typeof message === 'string' ? message : 'Could not report the worktree.');
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
+      },
     });
   }
   for (const definition of webDefinitions) {
