@@ -13,10 +13,15 @@ import {
   type MemoryEntry,
   type MemoryMessage,
 } from '../../../runtime/src/evals/session-memory-extractive.js';
-import { SessionMemory, type MemorySource } from '../../../runtime/src/session-memory/service.js';
+import {
+  MemorySummaryError,
+  SessionMemory,
+  type MemorySource,
+} from '../../../runtime/src/session-memory/service.js';
 import { MemoryStore } from '../../../runtime/src/session-memory/store.js';
 import { referenceFixture } from '../../../evals/session-memory-simplified.js';
 import type { MemorySourceMessage } from '../../../runtime/src/session-memory/units.js';
+import { createHostedMemorySummarizer } from '../../../runtime/src/session-memory/hosted.js';
 import { PastedDocuments } from '../../../runtime/src/session-memory/pasted-documents.js';
 import { readFile, readdir } from 'node:fs/promises';
 
@@ -1013,6 +1018,92 @@ test('gives foreground inference priority and exposes originals during a failed 
   } finally {
     await memory.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Hosted Session Memory rejects the separately billed provider before submitting', async () => {
+  const hosted = createHostedMemorySummarizer({
+    alias: 'tiny',
+    provider: 'openai',
+    model: 'gpt-6-luna',
+    reasoning: 'none',
+    reasoningSource: 'alias',
+  });
+  await expect(
+    hosted.summarize(
+      'UAMP',
+      [
+        { role: 'system', content: 'Summarize.' },
+        { role: 'user', content: 'Fixture.' },
+      ],
+      new AbortController().signal,
+    ),
+  ).rejects.toThrow('requires an openai-codex model');
+  expect(hosted.usage().requests).toBe(0);
+});
+
+test('keeps original Discussion evidence available when the hosted provider fails', async () => {
+  const fixture = referenceFixture();
+  const failedTurn = fixture.turns[0]!;
+  const messages = failedTurn.map((message) => ({
+    ...message,
+    turnId: 'hosted',
+    text: message.author === 'agent' ? message.text + longReply.text : message.text,
+  }));
+  const original = messages.at(-1)!;
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: timeline(() => ({ epoch: 'one', messages })),
+    contextIndependent: true,
+    inference: {
+      hosted: { model: 'gpt-6-luna', reasoning: 'off' },
+      local: { model: 'lfm3:1.7b-qad-q4_0', reasoning: 'off' },
+    },
+    async deviceCatalog() {
+      throw new Error('Hosted mode must not probe Ollama.');
+    },
+    async summarize(_type, prompt, _signal, placement, _progress, _format, mode) {
+      expect(mode).toBe('hosted');
+      expect(placement).toEqual({});
+      expect(prompt[1].content).not.toContain('ADDITIONAL_TASK_CONTEXT');
+      expect(prompt[1].content).toStartWith('Current original source messages:');
+      throw new MemorySummaryError(
+        'Hosted Session Memory reached a subscription quota or rate limit.',
+      );
+    },
+  });
+  try {
+    memory.setInferenceMode('hosted');
+    memory.turn(
+      'leader',
+      {
+        turnId: 'hosted',
+        outcome: 'completed',
+        scope: { sessionId: 'snapshot', taskId: 'restart' },
+        task: { title: 'ADDITIONAL_TASK_CONTEXT', description: '', acceptance: [] },
+      },
+      false,
+    );
+    await memory.settled();
+    const activity = memory.status(undefined, 'leader');
+    expect(activity.inference).toEqual({ mode: 'hosted', model: 'gpt-6-luna', reasoning: 'off' });
+    expect(activity.device).toBeNull();
+    expect(activity.summarization).toBe('failed');
+    expect(activity.lastError?.message).toContain('subscription quota');
+    const source = await memory.sourceMessage('leader', '', {
+      agentId: 'leader',
+      epoch: 'one',
+      seq: original.seq,
+    });
+    expect(source.lookup).toBe('found');
+    if (source.lookup === 'found') expect(source.source.text).toBe(original.text);
+    expect(await memory.handoff('leader', 'selectWorkspaceSnapshot')).toContain(
+      'selectWorkspaceSnapshot',
+    );
+    memory.setSummarizationEnabled(false);
+    expect(memory.status(undefined, 'leader').inference?.model).toBe('gpt-6-luna');
+  } finally {
+    await memory.close();
   }
 });
 

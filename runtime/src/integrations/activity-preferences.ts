@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
 
-const preferencesSchema = z.strictObject({ summarizer: z.boolean(), 'rag-index': z.boolean() });
+const preferencesSchema = z.strictObject({
+  summarizer: z.boolean(),
+  'rag-index': z.boolean(),
+  sessionMemoryMode: z.enum(['hosted', 'local']).optional(),
+});
 type Preferences = z.infer<typeof preferencesSchema>;
 
 export class ActivityPreferences {
@@ -17,13 +21,25 @@ export class ActivityPreferences {
     }
   }
 
-  enabled(feature: keyof Preferences): boolean {
+  enabled(feature: 'summarizer' | 'rag-index'): boolean {
     return this.values[feature];
   }
 
-  set(feature: keyof Preferences, enabled: boolean): void {
+  memoryInferenceMode() {
+    return this.values.sessionMemoryMode;
+  }
+
+  setMemoryInferenceMode(mode: NonNullable<Preferences['sessionMemoryMode']>): void {
+    if (mode !== this.values.sessionMemoryMode)
+      this.save({ ...this.values, sessionMemoryMode: mode });
+  }
+
+  set(feature: 'summarizer' | 'rag-index', enabled: boolean): void {
     if (this.enabled(feature) === enabled) return;
-    const next = { ...this.values, [feature]: enabled };
+    this.save({ ...this.values, [feature]: enabled });
+  }
+
+  private save(next: Preferences): void {
     const temporary = `${this.file}.${randomUUID()}.tmp`;
     try {
       writeFileSync(temporary, JSON.stringify(next), { mode: 0o600, flag: 'wx' });

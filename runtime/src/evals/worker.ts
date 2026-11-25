@@ -223,6 +223,8 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       LTCOOK_MODEL_SMOL: `ollama/${EVAL_MODEL}`,
       LTCOOK_MODEL_EXPENSIVE: `ollama/${EVAL_MODEL}`,
       LTCOOK_MODEL_TINY_LOCAL: EVAL_MODEL,
+      LTCOOK_MODEL_LOCAL_CPU: EVAL_MODEL,
+      LTCOOK_MODEL_LOCAL_EVALS: EVAL_MODEL,
       LTCOOK_BROWSER_ENABLED: 'false',
       LTCOOK_CODESEARCH_ENABLED: 'false',
       LTCOOK_CONTEXT7_ENABLED: 'false',

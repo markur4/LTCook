@@ -28,6 +28,12 @@ class RuntimeSettings(rc.Config):
     tiny_local_model: str = rc.field(
         "LTCOOK_MODEL_TINY_LOCAL", default="hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0"
     )
+    local_cpu_model: str = rc.field(
+        "LTCOOK_MODEL_LOCAL_CPU", default="lfm3:1.7b-qad-q4_0"
+    )
+    local_evals_model: str = rc.field(
+        "LTCOOK_MODEL_LOCAL_EVALS", default="bonsai-2:27b"
+    )
     logs: str = rc.field("LTCOOK_LOGS", default="")
     traces: str = rc.field("LTCOOK_TRACES", default="")
     browser_enabled: bool = rc.field("LTCOOK_BROWSER_ENABLED", default=True)
@@ -46,6 +52,7 @@ class RuntimeSettings(rc.Config):
         "LTCOOK_SESSION_MEMORY_THRESHOLD", default=3000
     )
     session_memory_model: str = rc.field("LTCOOK_SESSION_MEMORY_MODEL", default="")
+    session_memory_mode: str = rc.field("LTCOOK_SESSION_MEMORY_MODE", default="")
     session_memory_input_tokens: int = rc.field(
         "LTCOOK_SESSION_MEMORY_INPUT_TOKENS", default=8000
     )

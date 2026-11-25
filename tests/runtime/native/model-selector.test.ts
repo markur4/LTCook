@@ -9,7 +9,7 @@ import {
 describe('Paseo model selection contract', () => {
   test('accepts a resolved model with session reasoning and rejects incomplete settings', () => {
     const resolved = {
-      alias: 'tiny-local',
+      alias: 'local-tiny',
       provider: 'ollama',
       model: 'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
       reasoning: 'none',
@@ -37,7 +37,7 @@ describe('Paseo model selection contract', () => {
           reasoningSource: 'alias',
         },
         {
-          alias: 'tiny-local',
+          alias: 'local-tiny',
           provider: 'ollama',
           model: 'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
           reasoning: 'none',
@@ -64,7 +64,7 @@ describe('Paseo model selection contract', () => {
       ModelCatalogResponseSchema.safeParse({
         ...response,
         aliases: response.aliases.map((item) =>
-          item.alias === 'tiny-local' ? { ...item, reasoningOptions: ['unsupported'] } : item,
+          item.alias === 'local-tiny' ? { ...item, reasoningOptions: ['unsupported'] } : item,
         ),
       }).success,
     ).toBe(false);

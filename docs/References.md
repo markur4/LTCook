@@ -217,14 +217,17 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_RIED_CACHE_DIR` | Launch-derived `<AppRC cache>/projects`, holding the single versioned RIED cache. |
 | `LTCOOK_COLGREP_CACHE_DIR` | Launch-derived `<AppRC cache>/colgrep`, holding workspace-scoped ColGREP indexes. |
 | `LTCOOK_COLGREP_DEPLOYMENT` | Launch-derived `<global AppRC appdata>/deployment/colgrep`, holding the verified ColGREP executable, ONNX Runtime, and model snapshot. |
-| `LTCOOK_OLLAMA_ENDPOINT` | Global `runtime.ollama_endpoint`. Ollama loopback HTTP URL with a port, default `http://127.0.0.1:11434`. Used by the tiny-local adapters, summarization, and readiness. |
-| `LTCOOK_MODEL_TINY_LOCAL` | Global `runtime.tiny_local_model`. Ollama tag for `@tiny-local` and `ltcook_summarize`. Defaults to `hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0`. Pull it explicitly. |
+| `LTCOOK_OLLAMA_ENDPOINT` | Global `runtime.ollama_endpoint`. Ollama loopback HTTP URL with a port, default `http://127.0.0.1:11434`. Used by local model launchers, summarization, and summarizer readiness. |
+| `LTCOOK_MODEL_TINY_LOCAL` | Global `runtime.tiny_local_model`. Ollama tag for `@local-tiny` and `ltcook_summarize`. Defaults to `hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0`. Pull it explicitly. |
+| `LTCOOK_MODEL_LOCAL_CPU` | Global `runtime.local_cpu_model`. Ollama tag for `@local-CPU`. Defaults to `lfm3:1.7b-qad-q4_0`. |
+| `LTCOOK_MODEL_LOCAL_EVALS` | Global `runtime.local_evals_model`. Ollama tag for `@local-evals`. Defaults to `bonsai-2:27b`. |
 | `LTCOOK_SUMMARIZER_KEEP_ALIVE` | Global `runtime.summarizer_keep_alive`. Default `-1` keeps the loaded model resident. Use `0` to unload or a positive number of seconds. |
 | `LTCOOK_SUMMARIZER_GENERATION` | Global `runtime.summarizer_generation`. Optional JSON object with `options` containing `num_ctx`, `num_predict`, and `temperature`. Supports optional `think`, `top_k`, and `repeat_penalty` (the latter two inside `options`). Streaming is disabled. The default Spark profile uses reasoning off, a 32,768-token context, a 512-token generation limit, and temperature 0.1. An explicit generation profile is used as supplied. A smaller context reduces the supported source byte limit. |
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
 | `LTCOOK_SESSION_MEMORY_THRESHOLD` | Global `runtime.session_memory_threshold`. Default 3,000 estimated Agent Action tokens per AAB. Use an integer from 1 to 6,500. Set 0 to disable capture and the tool. |
-| `LTCOOK_SESSION_MEMORY_MODEL` | Global `runtime.session_memory_model`. An empty value uses `lfm3:1.7b-qad-q4_0`. A configured value selects an installed Ollama model for Session Memory with reasoning disabled. Ollama uses GPU acceleration when available and falls back to CPU. |
-| `LTCOOK_SESSION_MEMORY_INPUT_TOKENS` | Global `runtime.session_memory_input_tokens`. Total input target including history, instructions and source text. Defaults to 8,000 estimated tokens. |
+| `LTCOOK_SESSION_MEMORY_MODE` | Global `runtime.session_memory_mode`. Set `hosted` to enable OpenAI subscription inference or `local` to use Ollama. An empty value starts in Local mode until Hosted is selected explicitly in Activity. The saved Activity choice takes precedence. |
+| `LTCOOK_SESSION_MEMORY_MODEL` | Global `runtime.session_memory_model` selects the Local model. An empty value uses `@local-CPU`. You can supply an Ollama alias or an installed Ollama model tag. Hosted uses `@tiny` and requires an `openai-codex` model with reasoning off. |
+| `LTCOOK_SESSION_MEMORY_INPUT_TOKENS` | Global `runtime.session_memory_input_tokens`. Total input target including instructions and current UAMP source text. Defaults to 8,000 estimated tokens. |
 | `LTCOOK_SESSION_MEMORY_DELEGATION` | Global `runtime.session_memory_delegation`. Set to `true` to add automatic supplemental context on Core assignments. Default `false`. Search and source retrieval remain available when capture is enabled. |
 | `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |
@@ -233,7 +236,7 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_WORKSPACE` | Project path supplied for an explicit project launch; absent for idle server startup. |
 | `LTCOOK_DEPLOYMENT_DIR` | LTCook-owned deployment location, normally beneath AppRC appdata. |
 | `LTCOOK_MODEL_SMART` | `runtime.smart_model` sets `@smart` and `@plan`. Defaults to `openai-codex/gpt-6.2-sol`. |
-| `LTCOOK_MODEL_SMOL` | `runtime.smol_model` sets `@smol` and `@tiny`. Defaults to `openai-codex/gpt-6-luna`. |
+| `LTCOOK_MODEL_SMOL` | `runtime.smol_model` sets `@smol` and `@tiny`. Defaults to `openai-codex/gpt-6-luna`. The `@tiny` preset turns reasoning off. |
 | `LTCOOK_MODEL_EXPENSIVE` | `runtime.expensive_model` sets `@expensive` and `@review-art`. Defaults to `openai-codex/gpt-6-astra`. |
 | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Optional provider credentials declared as secrets. |
 | `OPENAI_API_KEY` | Optional AppRC secret for custom child tooling. Managed LTCook OpenAI models use the Codex sign-in. |

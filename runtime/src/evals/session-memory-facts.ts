@@ -3,19 +3,44 @@ import { memoryIdentifierMatches } from '../session-memory/text.js';
 
 type CheckStatus = NonNullable<MemoryFact['checkStatus']>;
 
+const checkStatusPattern = '(pass(?:ed)?|success|fail(?:ed)?|skip(?:ped)?)';
+const outcomeFormatting = '[ \\t`"*_~)\\]}]*';
+
 function checkStatus(status: string): CheckStatus | undefined {
   if (/^(?:pass(?:ed)?|success)$/i.test(status)) return 'pass';
   if (/^fail(?:ed)?$/i.test(status)) return 'fail';
   if (/^skip(?:ped)?$/i.test(status)) return 'skip';
 }
 
-function hasNamedOutcome(text: string, identifier: string, expected: CheckStatus) {
+function namedOutcomePatterns(name: string) {
+  const between = `${outcomeFormatting}(?:[:=|–—-]${outcomeFormatting})?`;
+  const forwardBetween = `${outcomeFormatting}(?:[:=|–—-]${outcomeFormatting}(?:\\r?\\n${outcomeFormatting})?)?`;
+  return [
+    new RegExp(`(?<![\\w.-])(${name})${forwardBetween}${checkStatusPattern}\\b`, 'giu'),
+    new RegExp(
+      `(?<![\\w.-])${checkStatusPattern}\\b${between}(${name})(?![\\w-]|\\.[\\w-])`,
+      'giu',
+    ),
+  ];
+}
+
+function namedStringOutcome(value: string, identifier: string, expected: CheckStatus) {
   const exact = identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const name = '(?<![\\w.-])' + exact + '(?![\\w-]|\\.[\\w-])';
-  const pair = new RegExp(name + '[`"\\])]*\\s*(?:[:=–-]\\s*)?([A-Za-z]+)\\b', 'gu');
+  const [forward, reverse] = namedOutcomePatterns(exact);
+  return (
+    [...value.matchAll(forward!)].some(
+      ([, name, status]) => name === identifier && checkStatus(status!) === expected,
+    ) ||
+    [...value.matchAll(reverse!)].some(
+      ([, status, name]) => name === identifier && checkStatus(status!) === expected,
+    )
+  );
+}
+
+function hasNamedOutcome(text: string, identifier: string, expected: CheckStatus) {
   function visit(value: unknown): boolean {
     if (typeof value === 'string') {
-      return [...value.matchAll(pair)].some(([, status]) => checkStatus(status!) === expected);
+      return namedStringOutcome(value, identifier, expected);
     }
     if (Array.isArray(value)) return value.some(visit);
     if (!value || typeof value !== 'object') return false;
@@ -70,10 +95,14 @@ export function namedMemoryOutcomes(text: string) {
   }
   function visit(value: unknown): void {
     if (typeof value === 'string') {
-      for (const [, name, status] of value.matchAll(
-        /(?<![\w.-])([A-Z][A-Z0-9]*(?:[_-][A-Z0-9]+)+)[`"\])]*\s*(?:[:=–-]\s*)?([A-Za-z]+)\b/gu,
-      ))
-        add(name!, status!);
+      const name = '[A-Z][A-Z0-9]*(?:[_-][A-Z0-9]+)+';
+      for (const [index, pattern] of namedOutcomePatterns(name).entries()) {
+        for (const [, first, second] of value.matchAll(pattern)) {
+          const outcomeName = index === 0 ? first! : second!;
+          const status = index === 0 ? second! : first!;
+          add(outcomeName, status);
+        }
+      }
     } else if (Array.isArray(value)) {
       value.forEach(visit);
     } else if (value && typeof value === 'object') {

@@ -174,6 +174,8 @@ const environment = {
   LTCOOK_MODEL_SMOL: 'fixture/test',
   LTCOOK_MODEL_EXPENSIVE: 'fixture/test',
   LTCOOK_MODEL_TINY_LOCAL: 'fixture-model',
+  LTCOOK_MODEL_LOCAL_CPU: 'fixture-cpu',
+  LTCOOK_MODEL_LOCAL_EVALS: 'fixture-evals',
   LTCOOK_GUIDANCE_DIR: path.join(directory, 'guidance'),
   LTCOOK_BROWSER_ENABLED: 'false',
   LTCOOK_CODESEARCH_ENABLED: 'false',

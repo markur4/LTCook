@@ -130,6 +130,7 @@ def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
         f"LTCOOK_TEAM=global-team\nLTCOOK_PI_AUTH_DIR={global_auth}\n"
         "LTCOOK_SESSION_MEMORY_THRESHOLD=1500\n"
         "LTCOOK_SESSION_MEMORY_MODEL=fixture-memory-model\n"
+        "LTCOOK_SESSION_MEMORY_MODE=local\n"
         "LTCOOK_SESSION_MEMORY_DELEGATION=false\n",
         encoding="utf-8",
     )
@@ -144,6 +145,9 @@ def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
         global_launch.environment["LTCOOK_SESSION_MEMORY_MODEL"]
         == "fixture-memory-model"
     )
+    assert global_launch.environment["LTCOOK_SESSION_MEMORY_MODE"] == "local"
+    assert global_launch.environment["LTCOOK_MODEL_LOCAL_CPU"] == "lfm3:1.7b-qad-q4_0"
+    assert global_launch.environment["LTCOOK_MODEL_LOCAL_EVALS"] == "bonsai-2:27b"
     assert global_launch.environment["LTCOOK_SESSION_MEMORY_DELEGATION"] == "false"
     assert global_launch.environment["LTCOOK_SHARED_SKILLS_DIR"] == str(
         (user_home / ".agents" / "skills").resolve()
@@ -229,6 +233,8 @@ def _native_config():
             paseo_password="secret-value",
             ollama_endpoint="http://localhost:11435/",
             tiny_local_model="hf.co/Test/model:Q8_0",
+            local_cpu_model="lfm3:1.7b-qad-q4_0",
+            local_evals_model="bonsai-2:27b",
         ),
         crawl4ai=SimpleNamespace(api_token="secret-value"),
         searxng=SimpleNamespace(secret="secret-value"),
@@ -261,17 +267,25 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
             deployment="",
         ),
         runtime=Section(
-            {"LTCOOK_MODEL_SMOL": "workspace-model", "LTCOOK_TEAM": "workspace-team"},
+            {
+                "LTCOOK_MODEL_SMOL": "workspace-model",
+                "LTCOOK_MODEL_LOCAL_CPU": "workspace-cpu-model",
+                "LTCOOK_MODEL_LOCAL_EVALS": "workspace-evals-model",
+                "LTCOOK_TEAM": "workspace-team",
+            },
             pi_auth_dir="~/.pi/agent",
             state_dir="",
             guidance_dir="",
             database="",
             ollama_endpoint="http://127.0.0.1:11434",
             tiny_local_model="fixture-model",
+            local_cpu_model="global-cpu-model",
+            local_evals_model="global-evals-model",
             summarizer_keep_alive=-1,
             summarizer_generation="",
             session_memory_threshold=3000,
             session_memory_model="",
+            session_memory_mode="",
             session_memory_input_tokens=8000,
             session_memory_delegation=False,
         ),
@@ -306,6 +320,9 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
     )
     assert result.environment["LTCOOK_MODEL_SMOL"] == "workspace-model"
     assert result.environment["LTCOOK_MODEL_TINY_LOCAL"] == "fixture-model"
+    assert result.environment["LTCOOK_MODEL_LOCAL_CPU"] == "global-cpu-model"
+    assert result.environment["LTCOOK_MODEL_LOCAL_EVALS"] == "global-evals-model"
+    assert result.environment["LTCOOK_SESSION_MEMORY_MODE"] == ""
     assert result.environment["SHELL_ONLY"] == "preserved"
     assert "LTCOOK_SHELL_PROVENANCE" not in result.environment
     next_launch = launch.resolve_launch(
@@ -340,10 +357,13 @@ def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_p
             database="",
             ollama_endpoint="http://127.0.0.1:11434",
             tiny_local_model="fixture-model",
+            local_cpu_model="fixture-cpu-model",
+            local_evals_model="fixture-evals-model",
             summarizer_keep_alive=-1,
             summarizer_generation="",
             session_memory_threshold=3000,
             session_memory_model="",
+            session_memory_mode="",
             session_memory_input_tokens=8000,
             session_memory_delegation=False,
         ),
@@ -441,6 +461,13 @@ def test_pi_documents_keep_secrets_out_of_json_and_write_private_files(tmp_path)
         "xhigh": None,
         "max": None,
     }
+    local_models = {model["id"]: model for model in providers["ollama"]["models"]}
+    for ollama_tag in (
+        config.runtime.local_cpu_model,
+        config.runtime.local_evals_model,
+    ):
+        assert local_models[ollama_tag]["baseUrl"] == "http://localhost:11435/v1"
+        assert local_models[ollama_tag]["thinkingLevelMap"]["off"] == "none"
     for provider, api in (
         ("openai", "openai-responses"),
         ("openai-codex", "openai-codex-responses"),
@@ -499,7 +526,7 @@ def test_pi_writer_retains_the_prior_local_model_after_alias_edit(tmp_path):
     models = {model["id"]: model for model in providers["ollama"]["models"]}
     assert models["hf.co/Test/model:Q8_0"]["baseUrl"] == "http://localhost:11435/v1"
     assert models["hf.co/Other/model:Q8_0"]["baseUrl"] == "http://127.0.0.1:11436/v1"
-    assert len(providers["ollama"]["models"]) == 3
+    assert len(providers["ollama"]["models"]) == 5
 
 
 @pytest.mark.parametrize("harness", ["pi", "codex"])

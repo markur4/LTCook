@@ -250,7 +250,7 @@ test('launches a standalone Pi alias with a normalized managed model', () => {
   const launch = (id: string, effort: string) =>
     spawnSync(
       process.execPath,
-      [launcher, 'model-launch', 'pi', '@tiny-local', effort, '--', '--list-models', 'Spark'],
+      [launcher, 'model-launch', 'pi', '@local-tiny', effort, '--', '--list-models', 'Spark'],
       {
         cwd: root,
         encoding: 'utf8',

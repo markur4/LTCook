@@ -74,9 +74,25 @@ export const MemoryRateSchema = z.object({
 });
 export const MemoryDeviceSchema = z.object({ id, label: z.string().min(1) });
 const memoryDeviceOption = MemoryDeviceSchema.extend({ unavailable: z.string().optional() });
+const memoryInferenceMode = z.enum(['hosted', 'local']);
+export const MemoryInferenceSchema = z.object({
+  mode: memoryInferenceMode,
+  model: id,
+  reasoning: id,
+});
+export const MemoryHostedUsageSchema = z.object({
+  requests: count,
+  inputTokens: count,
+  cachedInputTokens: count,
+  outputTokens: count,
+  reasoningTokens: count,
+  lastLatencyMs: z.number().finite().nonnegative().optional(),
+});
 const sessionMemoryStatus = z.object({
   rate: MemoryRateSchema.nullable(),
   device: MemoryDeviceSchema.nullable(),
+  inference: MemoryInferenceSchema.optional(),
+  hostedUsage: MemoryHostedUsageSchema.optional(),
   lastHandoff: z
     .object({
       at: timestamp,
@@ -122,6 +138,12 @@ export const activityToggleRpc = defineRpc({
   name: 'ltcook.activity.toggle',
   input: z.strictObject({ feature: z.enum(['summarizer', 'rag-index']), enabled: z.boolean() }),
   output: z.object({ enabled: z.boolean() }),
+});
+
+export const memoryInferenceRpc = defineRpc({
+  name: 'ltcook.activity.memory-inference',
+  input: z.strictObject({ mode: memoryInferenceMode }),
+  output: MemoryInferenceSchema,
 });
 
 export const memoryDeviceRpc = defineRpc({

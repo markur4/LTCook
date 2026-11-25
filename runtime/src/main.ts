@@ -16,10 +16,10 @@ import { createPaseoMemorySource } from './integrations/paseo-memory.js';
 import { releaseOllamaModel } from './integrations/ollama.js';
 import { createOllamaDeviceCatalog } from './integrations/ollama-devices.js';
 import { SessionMemory } from './session-memory/service.js';
+import { createHostedMemorySummarizer } from './session-memory/hosted.js';
 import {
   defaultMemoryBudgets,
   sessionMemoryGeneration,
-  sessionMemoryModel,
   summarizeMemory,
 } from './session-memory/summarization.js';
 import { PastedDocuments } from './session-memory/pasted-documents.js';
@@ -232,7 +232,7 @@ async function run(): Promise<void> {
         'AppRC did not resolve required native runtime paths; launch through `ltcook launch runtime`.',
       );
     }
-    const summarizer = resolveModel('tiny-local', process.env);
+    const summarizer = resolveModel('local-tiny', process.env);
     const summarization = {
       endpoint: process.env.LTCOOK_OLLAMA_ENDPOINT ?? '',
       model: summarizer.model,
@@ -325,28 +325,46 @@ async function run(): Promise<void> {
     api.setPastedDocuments(pastedDocuments);
     if (threshold !== 0) {
       try {
+        const configuredLocal = process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || '@local-CPU';
+        const local = configuredLocal.startsWith('@')
+          ? resolveModel(configuredLocal, process.env)
+          : { provider: 'ollama', model: configuredLocal };
+        if (local.provider !== 'ollama')
+          throw new Error('The Local Session Memory model must resolve to an Ollama model.');
+        const hosted = resolveModel('tiny', process.env);
+        const hostedSummarizer = createHostedMemorySummarizer(hosted);
+        const mode = z
+          .enum(['hosted', 'local'])
+          .parse(process.env.LTCOOK_SESSION_MEMORY_MODE?.trim() || 'local');
         const memorySettings = {
           ...summarization,
-          model: process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || sessionMemoryModel,
+          model: local.model,
           generation: JSON.stringify(sessionMemoryGeneration),
         };
         memory = new SessionMemory({
           databasePath: path.join(stateDirectory, 'session-memory-v5.sqlite'),
           source: createPaseoMemorySource(host.api, apiToken, pastedDocuments),
           threshold,
+          contextIndependent: true,
+          inference: {
+            hosted: { model: hosted.model, reasoning: 'off' },
+            local: { model: local.model, reasoning: 'off' },
+          },
+          hostedUsage: hostedSummarizer.usage,
           deviceCatalog: createOllamaDeviceCatalog(memorySettings.endpoint),
-          summarize: (type, prompt, signal, placement, onProgress, format) =>
-            summarizeMemory(
-              { ...memorySettings, ...placement },
-              prompt,
-              signal,
-              type,
-              false,
-              onProgress,
-              format,
-            ),
+          summarize: (type, prompt, signal, placement, onProgress, format, mode) =>
+            mode === 'hosted'
+              ? hostedSummarizer.summarize(type, prompt, signal)
+              : summarizeMemory(
+                  { ...memorySettings, ...placement },
+                  prompt,
+                  signal,
+                  type,
+                  false,
+                  onProgress,
+                  format,
+                ),
           releaseCpuModel: (signal) => releaseOllamaModel(memorySettings, signal),
-          model: memorySettings.model,
           configuration: memorySettings.generation,
           budgets: {
             input: Number(
@@ -365,6 +383,8 @@ async function run(): Promise<void> {
               prefillMs: result.metrics?.prefillMs,
               generationMs: result.metrics?.generationMs,
               thinkingPresent: result.metrics?.thinkingPresent,
+              reasoningCount: result.metrics?.reasoningTokens,
+              hosted: result.hosted,
             });
           },
           onDispatch: (data) => {
@@ -378,6 +398,7 @@ async function run(): Promise<void> {
             void telemetry.log('warn', 'session-memory.update_failed', {});
           },
         });
+        memory.setInferenceMode(mode);
         api.setSessionMemory(memory, (id) => runtime?.memoryContext(id));
         const activeMemory = memory;
         void host.api.agents

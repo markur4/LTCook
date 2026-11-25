@@ -178,6 +178,8 @@ def resolve_launch(
     )
     environment["LTCOOK_OLLAMA_ENDPOINT"] = global_config.runtime.ollama_endpoint
     environment["LTCOOK_MODEL_TINY_LOCAL"] = global_config.runtime.tiny_local_model
+    environment["LTCOOK_MODEL_LOCAL_CPU"] = global_config.runtime.local_cpu_model
+    environment["LTCOOK_MODEL_LOCAL_EVALS"] = global_config.runtime.local_evals_model
     environment["LTCOOK_SUMMARIZER_KEEP_ALIVE"] = str(
         global_config.runtime.summarizer_keep_alive
     )
@@ -189,6 +191,9 @@ def resolve_launch(
     )
     environment["LTCOOK_SESSION_MEMORY_MODEL"] = (
         global_config.runtime.session_memory_model
+    )
+    environment["LTCOOK_SESSION_MEMORY_MODE"] = (
+        global_config.runtime.session_memory_mode
     )
     environment["LTCOOK_SESSION_MEMORY_INPUT_TOKENS"] = str(
         global_config.runtime.session_memory_input_tokens

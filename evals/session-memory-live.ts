@@ -54,9 +54,26 @@ const cancel = () => controller.abort();
 process.once('SIGINT', cancel);
 process.once('SIGTERM', cancel);
 try {
+  const asymmetricArchive = option('regrade-hosted-asymmetric');
   const fallbackFrom = option('luna-low-from');
   const localDelegation = option('check-local-delegation');
-  if (localDelegation !== undefined) {
+  if (asymmetricArchive !== undefined) {
+    if (!asymmetricArchive) throw new Error('Supply the saved hosted asymmetric report path.');
+    const { regradeHostedAsymmetric } = await import('./session-memory-hosted.js');
+    const saved: unknown = JSON.parse(await readFile(asymmetricArchive, 'utf8'));
+    const report = regradeHostedAsymmetric(saved);
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.passed) process.exitCode = 1;
+  } else if (args.includes('--qualify-hosted-memory')) {
+    const { qualifyHostedMemory } = await import('./session-memory-hosted.js');
+    const report = await qualifyHostedMemory({
+      signal: controller.signal,
+      auditOutput: args.includes('--audit-output'),
+      progress: console.error,
+    });
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.passed) process.exitCode = 1;
+  } else if (localDelegation !== undefined) {
     const { evaluateLocalDelegation } = await import('./session-memory-local-delegation.js');
     const reports = await Promise.all(
       localDelegation.split(',').map(async (file) => JSON.parse(await readFile(file, 'utf8'))),

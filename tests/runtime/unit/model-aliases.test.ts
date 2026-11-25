@@ -10,6 +10,8 @@ import { modelCommand } from '../../../runtime/src/models/adapters.js';
 const environment = {
   LTCOOK_MODEL_SMOL: 'openai-codex/gpt-6-luna',
   LTCOOK_MODEL_TINY_LOCAL: 'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
+  LTCOOK_MODEL_LOCAL_CPU: 'lfm3:1.7b-qad-q4_0',
+  LTCOOK_MODEL_LOCAL_EVALS: 'bonsai-2:27b',
   LTCOOK_MODEL_SMART: 'openai-codex/gpt-6.2-sol',
   LTCOOK_MODEL_EXPENSIVE: 'openai-codex/gpt-6-astra',
   LTCOOK_OLLAMA_ENDPOINT: 'http://127.0.0.1:21434/',
@@ -17,8 +19,10 @@ const environment = {
 
 test.each([
   ['smol', 'openai-codex', 'gpt-6-luna', undefined],
-  ['tiny', 'openai-codex', 'gpt-6-luna', 'low'],
-  ['tiny-local', 'ollama', environment.LTCOOK_MODEL_TINY_LOCAL, 'none'],
+  ['tiny', 'openai-codex', 'gpt-6-luna', 'none'],
+  ['local-CPU', 'ollama', environment.LTCOOK_MODEL_LOCAL_CPU, 'none'],
+  ['local-tiny', 'ollama', environment.LTCOOK_MODEL_TINY_LOCAL, 'none'],
+  ['local-evals', 'ollama', environment.LTCOOK_MODEL_LOCAL_EVALS, undefined],
   ['smart', 'openai-codex', 'gpt-6.2-sol', undefined],
   ['plan', 'openai-codex', 'gpt-6.2-sol', 'xhigh'],
   ['expensive', 'openai-codex', 'gpt-6-astra', undefined],
@@ -66,7 +70,7 @@ test('catalog evaluates the Team override before the alias preset', () => {
     configurationError: expect.stringContaining('supports none, low, high'),
     reasoningOptions: ['none', 'low', 'high'],
   });
-  expect(invalid.aliases.find(({ alias }) => alias === 'tiny')?.reasoning).toBe('low');
+  expect(invalid.aliases.find(({ alias }) => alias === 'tiny')?.reasoning).toBe('none');
 });
 
 test('saved settings retain the resolved provider, model, and reasoning when settings change', () => {
@@ -90,15 +94,19 @@ test('saved settings retain the resolved provider, model, and reasoning when set
 
 test('validates the selected AppRC setting and the effective reasoning level', () => {
   expect(() => resolveModel('@missing', environment)).toThrow('Choose a model alias');
+  expect(() => resolveModel('@tiny-local', environment)).toThrow('Choose a model alias');
   expect(() => resolveModel('plan', {})).toThrow('LTCOOK_MODEL_SMART');
   expect(() => resolveModel('plan', { LTCOOK_MODEL_SMART: 'bare-id' })).toThrow('provider/model');
   expect(() => resolveModel('plan', { LTCOOK_MODEL_SMART: 'openai/gpt-6.1-sol:high' })).toThrow(
     'Set reasoning in the Session or Team member',
   );
-  expect(() => resolveModel('tiny-local', { LTCOOK_MODEL_TINY_LOCAL: ' ' })).toThrow(
+  expect(() => resolveModel('local-tiny', { LTCOOK_MODEL_TINY_LOCAL: ' ' })).toThrow(
     'LTCOOK_MODEL_TINY_LOCAL',
   );
-  expect(() => resolveModel('tiny-local', environment, { sessionReasoning: 'medium' })).toThrow(
+  expect(() => resolveModel('local-CPU', { LTCOOK_MODEL_LOCAL_CPU: 'invalid tag' })).toThrow(
+    'LTCOOK_MODEL_LOCAL_CPU must contain an Ollama model ID',
+  );
+  expect(() => resolveModel('local-tiny', environment, { sessionReasoning: 'medium' })).toThrow(
     'supports none, low, high reasoning',
   );
   expect(() => resolveModel('review-art', environment, { sessionReasoning: 'none' })).toThrow(
@@ -126,9 +134,14 @@ test('hosted launcher adapters translate explicit effort and omit unset effort',
     '-c',
     'model_provider="openai"',
     '-c',
-    'model_reasoning_effort="low"',
+    'model_reasoning_effort="none"',
   ]);
-  const custom = resolveModel('smol', { LTCOOK_MODEL_SMOL: 'openrouter/lab/model:free' });
+  const custom = resolveModel('tiny', { LTCOOK_MODEL_SMOL: 'openrouter/lab/model:free' });
+  expect(custom).toMatchObject({
+    provider: 'openrouter',
+    model: 'lab/model:free',
+    reasoning: 'none',
+  });
   expect(modelCommand('pi', custom, environment).args).toContain('lab/model:free');
   expect(() => modelCommand('codex', custom, environment)).toThrow(
     'Codex cannot use the configured provider',
@@ -140,7 +153,7 @@ test.each([
   ['low', 'low'],
   ['high', 'high'],
 ])('preserves Spark reasoning %s across launchers', (effort, piEffort) => {
-  const selected = resolveModel('tiny-local', environment, { sessionReasoning: effort });
+  const selected = resolveModel('local-tiny', environment, { sessionReasoning: effort });
   expect(modelCommand('pi', selected, environment).args).toEqual([
     '--provider',
     'ollama',

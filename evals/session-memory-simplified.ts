@@ -1,6 +1,7 @@
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import {
   memoryAttachmentFixture,
   memoryDiscussionReferenceFixture,
@@ -323,44 +324,83 @@ export function gradeSimplifiedLayer(
   };
 }
 
-export async function runSimplifiedMemoryArm(
+type ArmOptions = {
+  signal: AbortSignal;
+  onHandoff?: (text: string, details: Awaited<ReturnType<SessionMemory['handoffDetails']>>) => void;
+  auditOutput?: boolean;
+};
+
+type LocalArmOptions = ArmOptions & {
+  settings: OllamaSettings;
+  digest: string;
+  progress?: (message: string) => void;
+  screening?: { weightsDigest: string };
+  transformUampPrompt?: (
+    prompt: Parameters<typeof summarizeMemory>[1],
+  ) => Parameters<typeof summarizeMemory>[1];
+  inspectIncompleteFallback?: boolean;
+  proportionalOutputCap?: boolean;
+  inspectExtract?: (
+    prompt: Parameters<typeof summarizeMemory>[1],
+    text: string,
+  ) => { sourceBytes: number; summaryBytes: number; verdict: string };
+};
+
+type HostedArmOptions = ArmOptions & {
+  hosted: {
+    summarize(
+      type: MemoryUnit['type'],
+      prompt: Parameters<typeof summarizeMemory>[1],
+      signal: AbortSignal,
+    ): Promise<MemorySummaryResult>;
+    inference: NonNullable<ConstructorParameters<typeof SessionMemory>[0]['inference']>;
+  };
+};
+
+export function runSimplifiedMemoryArm(
   fixture: MemoryFixture,
   processing: Processing,
-  input: {
-    settings: OllamaSettings;
-    digest: string;
-    signal: AbortSignal;
-    progress?: (message: string) => void;
-    onHandoff?: (
-      text: string,
-      details: Awaited<ReturnType<SessionMemory['handoffDetails']>>,
-    ) => void;
-    auditOutput?: boolean;
-    screening?: { weightsDigest: string };
-    transformUampPrompt?: (
-      prompt: Parameters<typeof summarizeMemory>[1],
-    ) => Parameters<typeof summarizeMemory>[1];
-    inspectIncompleteFallback?: boolean;
-    proportionalOutputCap?: boolean;
-    inspectExtract?: (
-      prompt: Parameters<typeof summarizeMemory>[1],
-      text: string,
-    ) => { sourceBytes: number; summaryBytes: number; verdict: string };
-  },
+  input: LocalArmOptions,
 ) {
-  const { signal, digest } = input;
+  return runMemoryArm(fixture, processing, input);
+}
+
+export async function runHostedMemoryArm(fixture: MemoryFixture, input: HostedArmOptions) {
+  const { measurements, requests, ...result } = await runMemoryArm(
+    fixture,
+    'deterministic-markdown',
+    input,
+  );
+  const { isolatedCpuWallMs: inferenceWallMs, ...usage } = measurements;
+  return {
+    ...result,
+    requests: requests.map(({ cpuVerified: _cpuVerified, ...request }) => request),
+    measurements: { ...usage, inferenceWallMs },
+  };
+}
+
+async function runMemoryArm(
+  fixture: MemoryFixture,
+  processing: Processing,
+  input: LocalArmOptions | HostedArmOptions,
+) {
+  const { signal } = input;
+  const local = 'hosted' in input ? undefined : input;
+  const hosted = 'hosted' in input ? input.hosted : undefined;
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-simplified-'));
   const file = path.join(directory, 'memory.sqlite');
-  const settings = input.screening
-    ? { ...input.settings, cpuOnly: true }
-    : contextSettings({ ...input.settings, cpuOnly: true }, simplifiedSeed);
-  const endpoint = ollamaEndpoint(settings.endpoint);
+  const settings =
+    local &&
+    (local.screening
+      ? { ...local.settings, cpuOnly: true }
+      : contextSettings({ ...local.settings, cpuOnly: true }, simplifiedSeed));
   const { messages, prompts } = contextTranscript(fixture);
   const expectedUnits = identifyMemoryUnits(messages, prompts, 3000, true);
   const original = fixture.turns.flat();
   const processedBySequence = new Map(messages.map((message) => [message.seq, message]));
   let available: readonly MemorySourceMessage[] = messages;
   const source = transcriptSource(() => available, epoch);
+  const generatedOutput: Evidence[] = [];
   const requests: {
     type: MemorySummaryResult['type'];
     result: Omit<MemorySummaryResult, 'text' | 'content'>;
@@ -370,21 +410,69 @@ export async function runSimplifiedMemoryArm(
     peakRssBytes?: number;
     error?: string;
     budget?: { originalTokens: number; outputCap: number };
-    extract?: ReturnType<NonNullable<typeof input.inspectExtract>>;
+    extract?: ReturnType<NonNullable<LocalArmOptions['inspectExtract']>>;
+    currentSources?: number[];
+    currentOnly?: boolean;
     audit?: { summary: string; prompt: string; systemPrompt: string };
   }[] = [];
   const memory = new SessionMemory({
     databasePath: file,
     source,
     processing,
-    async summarize(type, prompt, turnSignal, _placement, onProgress, format) {
-      if (type === 'UAMP' && input.transformUampPrompt) prompt = input.transformUampPrompt(prompt);
+    ...(hosted ? { contextIndependent: true, inference: hosted.inference } : {}),
+    async summarize(type, prompt, turnSignal, _placement, onProgress, format, mode) {
+      if (type === 'UAMP' && local?.transformUampPrompt) prompt = local.transformUampPrompt(prompt);
       const requestSignal = AbortSignal.any([turnSignal, signal, AbortSignal.timeout(120_000)]);
       const start = performance.now();
+      const audit = (summary: string) => ({
+        summary,
+        prompt: prompt[1].content,
+        systemPrompt: prompt[0].content,
+      });
       try {
+        if (hosted) {
+          if (mode !== 'hosted' || type !== 'UAMP' || format !== 'markdown')
+            throw new Error('Session Memory did not select hosted Discussion inference.');
+          const sources = /^Summarize current sources only \(#(\d+) to #(\d+)\)\.$/m.exec(
+            prompt[1].content,
+          );
+          const unit = expectedUnits.find(
+            ({ messages }) =>
+              messages[0]?.seq === Number(sources?.[1]) &&
+              messages.at(-1)?.seq === Number(sources?.[2]),
+          );
+          const sourceLines = unit?.messages.map(({ seq, author, text, tool }) =>
+            JSON.stringify({ seq, author, text, tool }),
+          );
+          if (
+            !unit ||
+            !prompt[1].content.startsWith(
+              'Current original source messages:\n' + sourceLines?.join('\n') + '\n\n',
+            )
+          )
+            throw new Error(
+              'The hosted prompt did not contain just the current original exchange.',
+            );
+          const currentSources = unit.messages.map(({ seq }) => seq);
+          const result = await hosted.summarize(type, prompt, requestSignal);
+          const { text, content: _content, ...metrics } = result;
+          if (result.complete)
+            generatedOutput.push({ seq: currentSources.at(-1)!, sources: currentSources, text });
+          requests.push({
+            type,
+            result: metrics,
+            cpuVerified: false,
+            observedMs: performance.now() - start,
+            currentOnly: true,
+            currentSources,
+            ...(input.auditOutput ? { audit: audit(text) } : {}),
+          });
+          return result;
+        }
+        if (!local || !settings) throw new Error('Local Session Memory settings are unavailable.');
         let requestSettings = settings;
         let budget: { originalTokens: number; outputCap: number } | undefined;
-        if (type === 'UAMP' && input.proportionalOutputCap) {
+        if (type === 'UAMP' && local.proportionalOutputCap) {
           const firstSource = Number(
             prompt[1].content.match(/^Summarize current sources only \(#(\d+)/m)?.[1],
           );
@@ -410,9 +498,9 @@ export async function runSimplifiedMemoryArm(
           format,
         );
         const observedMs = performance.now() - start;
-        const loaded = await residency(endpoint, digest, signal);
-        const { text: _text, content: _content, ...metrics } = result;
-        const extract = input.inspectExtract?.(prompt, result.text);
+        const loaded = await residency(ollamaEndpoint(settings.endpoint), local.digest, signal);
+        const { text, content: _content, ...metrics } = result;
+        const extract = local.inspectExtract?.(prompt, text);
         requests.push({
           type,
           result: metrics,
@@ -420,21 +508,13 @@ export async function runSimplifiedMemoryArm(
           observedMs,
           ...(extract ? { extract } : {}),
           ...(budget ? { budget } : {}),
-          ...(input.screening
+          ...(local.screening
             ? {
                 loadedBytes: loaded?.bytes,
-                peakRssBytes: await peakRunnerRss(input.screening.weightsDigest),
+                peakRssBytes: await peakRunnerRss(local.screening.weightsDigest),
               }
             : {}),
-          ...(input.auditOutput
-            ? {
-                audit: {
-                  summary: result.text,
-                  prompt: prompt[1].content,
-                  systemPrompt: prompt[0].content,
-                },
-              }
-            : {}),
+          ...(input.auditOutput ? { audit: audit(text) } : {}),
         });
         return extract && extract.verdict !== 'accepted' ? { ...result, complete: false } : result;
       } catch (error) {
@@ -444,7 +524,9 @@ export async function runSimplifiedMemoryArm(
           type,
           cpuVerified: false,
           observedMs,
-          ...(input.screening && error instanceof Error ? { error: error.message } : {}),
+          ...((hosted || local?.screening) && error instanceof Error
+            ? { error: error.message }
+            : {}),
           result: { type, complete: false, elapsedMs: observedMs },
         });
         throw error;
@@ -453,8 +535,9 @@ export async function runSimplifiedMemoryArm(
   });
   try {
     signal.throwIfAborted();
+    const inference = hosted ? memory.setInferenceMode('hosted') : undefined;
     // > Start each arm with the same model residency and no previous prompt cache.
-    await releaseOllamaModel(settings, signal);
+    if (settings) await releaseOllamaModel(settings, signal);
     const unhold = memory.holdForeground();
     try {
       for (const [turnId, outcome] of prompts) {
@@ -514,7 +597,7 @@ export async function runSimplifiedMemoryArm(
     const allEvidence = await readRecords(stored);
     const summarization = gradeSimplifiedLayer(
       semanticFacts,
-      await readRecords(generated),
+      hosted ? generatedOutput : await readRecords(generated),
       original,
     );
     const deterministicExecution = gradeSimplifiedLayer(
@@ -523,7 +606,7 @@ export async function runSimplifiedMemoryArm(
       original,
     );
     const sessionMemory = gradeSimplifiedLayer(fixture.facts, allEvidence, original);
-    const incompleteFallbacks = input.inspectIncompleteFallback
+    const incompleteFallbacks = local?.inspectIncompleteFallback
       ? await Promise.all(
           records
             .filter(({ type, state }) => type === 'UAMP' && state === 'failed')
@@ -557,16 +640,17 @@ export async function runSimplifiedMemoryArm(
         fixture.turns.at(-1)?.find(({ author }) => author === 'user')?.scope,
       );
     const withoutRecovery = await assemble(false);
-    const handoff = input.screening ? withoutRecovery : await assemble(true);
+    const handoff = hosted || local?.screening ? withoutRecovery : await assemble(true);
     input.onHandoff?.(handoff.text, handoff);
     const beforeRecovery = gradeSimplifiedLayer(fixture.facts, withoutRecovery.entries, original);
     const delegation = gradeSimplifiedLayer(fixture.facts, handoff.entries, original);
     const recovery = delegation.facts.flatMap(({ label, retained }, index) =>
       retained && !beforeRecovery.facts[index]?.retained ? [label] : [],
     );
-    const search = input.screening
-      ? undefined
-      : await memory.search(agentId, '', fixture.focus, agentId, signal, true);
+    const search =
+      hosted || local?.screening
+        ? undefined
+        : await memory.search(agentId, '', fixture.focus, agentId, signal, true);
     const originalSearch = gradeSimplifiedLayer(
       fixture.facts,
       (search?.matches ?? []).flatMap(({ entries }) =>
@@ -586,8 +670,48 @@ export async function runSimplifiedMemoryArm(
           originalTokens === undefined ||
           originalTokens < 256 === (state === 'skipped'),
       );
+    let sourcePreservation;
+    if (hosted) {
+      const recordReferences = records.map(({ type, state, complete, sources }) => ({
+        type,
+        state,
+        complete,
+        sources: sources.map(({ seq }) => seq),
+      }));
+      const expectedReferences = expectedUnits.map(({ type, messages }) => ({
+        type,
+        state:
+          type === 'AAB'
+            ? 'recorded'
+            : originalTokenCount(messages) < shortDiscussionTokens
+              ? 'skipped'
+              : 'summarized',
+        complete: true,
+        sources: messages.map(({ seq }) => seq),
+      }));
+      const originals = await Promise.all(
+        available.map(async (message) => {
+          const lookup = await memory.sourceMessage(agentId, '', {
+            agentId,
+            epoch,
+            seq: message.seq,
+          });
+          if (lookup.lookup !== 'found') return { seq: message.seq, exact: false };
+          const { agentId: _agentId, epoch: _epoch, ...source } = lookup.source;
+          return { seq: message.seq, exact: isDeepStrictEqual(source, message) };
+        }),
+      );
+      sourcePreservation = {
+        records: recordReferences,
+        originals,
+        passed:
+          isDeepStrictEqual(recordReferences, expectedReferences) &&
+          originals.every(({ exact }) => exact),
+      };
+    }
     const validRequests = requests.every(
-      ({ result, cpuVerified }) => result.complete && cpuVerified,
+      ({ result, cpuVerified, currentOnly }) =>
+        result.complete && (hosted ? currentOnly === true : cpuVerified),
     );
     const inferencePolicy =
       processing === 'legacy-json' || (skipPolicy && requests.every(({ type }) => type !== 'AAB'));
@@ -605,6 +729,7 @@ export async function runSimplifiedMemoryArm(
     return {
       fixture: fixture.id,
       processing,
+      ...(hosted ? { inference, sourcePreservation } : {}),
       ...(incompleteFallbacks ? { incompleteFallbacks } : {}),
       requests,
       measurements: {

@@ -122,9 +122,6 @@ def pi_documents(
     ollama_endpoint = local_ollama_endpoint(
         effective.get("LTCOOK_OLLAMA_ENDPOINT", config.runtime.ollama_endpoint)
     )
-    tiny_local_model = effective.get(
-        "LTCOOK_MODEL_TINY_LOCAL", config.runtime.tiny_local_model
-    ).strip()
     ollama_models: list[dict[str, object]] = [
         {
             "id": EVAL_MODEL,
@@ -135,12 +132,22 @@ def pi_documents(
             "thinkingLevelMap": {"off": "none", "low": "low", "high": "high"},
         }
     ]
-    if tiny_local_model and tiny_local_model != EVAL_MODEL:
+    configured_models = (
+        ("LTCOOK_MODEL_TINY_LOCAL", config.runtime.tiny_local_model, 32768),
+        ("LTCOOK_MODEL_LOCAL_CPU", config.runtime.local_cpu_model, 16384),
+        ("LTCOOK_MODEL_LOCAL_EVALS", config.runtime.local_evals_model, 32768),
+    )
+    registered_ids = {EVAL_MODEL}
+    for setting, configured_model, context_window in configured_models:
+        model = effective.get(setting, configured_model).strip()
+        if not model or model in registered_ids:
+            continue
+        registered_ids.add(model)
         ollama_models.append(
             {
-                "id": tiny_local_model,
+                "id": model,
                 "baseUrl": f"{ollama_endpoint}/v1",
-                "contextWindow": 32768,
+                "contextWindow": context_window,
                 "maxTokens": 4096,
                 "reasoning": True,
                 "compat": {"supportsReasoningEffort": True},
