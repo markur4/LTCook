@@ -28,8 +28,24 @@ const hostedRequest = z.object({
   service_tier: z.literal(standardTier),
   store: z.literal(false),
   tools: z.tuple([]).optional(),
-  previous_response_id: z.undefined(),
+  previous_response_id: z.never().optional(),
 });
+
+/** Check the provider payload before it leaves the process. */
+export function validHostedMemoryRequest(
+  payload: unknown,
+  model: string,
+  system: string,
+  user: string,
+) {
+  const parsed = hostedRequest.safeParse(payload);
+  return (
+    parsed.success &&
+    parsed.data.model === model &&
+    parsed.data.instructions === system &&
+    parsed.data.input[0].content[0].text === user
+  );
+}
 
 export function createHostedMemorySummarizer(selection: ResolvedModel) {
   let runtime: Promise<ModelRuntime> | undefined;
@@ -86,13 +102,7 @@ export function createHostedMemorySummarizer(selection: ResolvedModel) {
         cacheRetention: 'none',
         toolChoice: 'none',
         onPayload(payload: unknown) {
-          const parsed = hostedRequest.safeParse(payload);
-          if (
-            !parsed.success ||
-            parsed.data.model !== model.id ||
-            parsed.data.instructions !== system.content ||
-            parsed.data.input[0].content[0].text !== user.content
-          ) {
+          if (!validHostedMemoryRequest(payload, model.id, system.content, user.content)) {
             invalidRequest = true;
             throw new Error('Hosted Session Memory request policy mismatch.');
           }

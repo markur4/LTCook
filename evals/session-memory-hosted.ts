@@ -182,7 +182,7 @@ async function receiveSnapshotTask(
       directory,
       signal,
       LUNA_EVALUATION.reasoning,
-      true,
+      { subscriptionOnly: true },
     );
     const { session } = await openSession({
       directory,

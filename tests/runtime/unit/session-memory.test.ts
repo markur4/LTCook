@@ -21,7 +21,10 @@ import {
 import { MemoryStore } from '../../../runtime/src/session-memory/store.js';
 import { referenceFixture } from '../../../evals/session-memory-simplified.js';
 import type { MemorySourceMessage } from '../../../runtime/src/session-memory/units.js';
-import { createHostedMemorySummarizer } from '../../../runtime/src/session-memory/hosted.js';
+import {
+  createHostedMemorySummarizer,
+  validHostedMemoryRequest,
+} from '../../../runtime/src/session-memory/hosted.js';
 import { PastedDocuments } from '../../../runtime/src/session-memory/pasted-documents.js';
 import { readFile, readdir } from 'node:fs/promises';
 
@@ -1019,6 +1022,24 @@ test('gives foreground inference priority and exposes originals during a failed 
     await memory.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('Hosted accepts an isolated Standard request and rejects continuation and tools', () => {
+  const payload = {
+    model: 'gpt-6-luna',
+    instructions: 'Summarize.',
+    input: [{ role: 'user', content: [{ type: 'input_text', text: 'Fixture.' }] }],
+    service_tier: 'default',
+    reasoning: { effort: 'none' },
+    store: false,
+  };
+  const accepts = (candidate: unknown) =>
+    validHostedMemoryRequest(candidate, payload.model, payload.instructions, 'Fixture.');
+  expect(accepts(payload)).toBe(true);
+  expect(accepts({ ...payload, previous_response_id: 'earlier' })).toBe(false);
+  expect(accepts({ ...payload, tools: [{ type: 'function' }] })).toBe(false);
+  expect(accepts({ ...payload, instructions: 'Summarize. More instructions.' })).toBe(false);
+  expect(accepts({ ...payload, service_tier: 'priority' })).toBe(false);
 });
 
 test('Hosted Session Memory rejects the separately billed provider before submitting', async () => {
