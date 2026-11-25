@@ -15,6 +15,7 @@ import {
   sessionMemoryGeneration,
   sessionMemoryModel,
 } from '../runtime/src/session-memory/summarization.js';
+import { compareAsymmetricMemory } from './session-memory-asymmetric.js';
 import { semanticMemoryFixtures } from './session-memory-semantic-fixtures.js';
 import { diagnoseManifestApproval } from './session-memory-approval.js';
 import { compareLocalMemory, localMemoryArms } from './session-memory-local.js';
@@ -123,13 +124,15 @@ export async function screenSessionMemory(input: {
   extractive?: boolean;
   workStatus?: boolean;
   proportionalOutputCap?: boolean;
+  asymmetric?: boolean;
   localValidation?: readonly (typeof localMemoryArms)[number][];
   mnnApprovalFirst?: boolean;
   allowRetry?: boolean;
   progress?: (label: string) => void;
 }) {
+  const qualifyMnnLocal = input.qualifyMnnLocal || input.asymmetric;
   if (
-    input.qualifyMnnLocal &&
+    qualifyMnnLocal &&
     (input.profileId ||
       input.approvalDiagnostic ||
       input.localComparison ||
@@ -137,9 +140,13 @@ export async function screenSessionMemory(input: {
       input.mnnApprovalFirst)
   )
     throw new Error('--qualify-mnn-local cannot be combined with other model or screening modes.');
-  if ([input.extractive, input.workStatus, input.proportionalOutputCap].filter(Boolean).length > 1)
+  if (
+    [input.extractive, input.workStatus, input.proportionalOutputCap, input.asymmetric].filter(
+      Boolean,
+    ).length > 1
+  )
     throw new Error('Choose one MNN-Pocket qualification experiment at a time.');
-  const revision = input.qualifyMnnLocal ? chronologicalHandoffRevision : frozenRevision;
+  const revision = qualifyMnnLocal ? chronologicalHandoffRevision : frozenRevision;
   const frozen = Bun.spawnSync(
     [
       'git',
@@ -273,11 +280,12 @@ export async function screenSessionMemory(input: {
     model: ModelIdentity;
     arms: Awaited<ReturnType<typeof compareLocalMemory>>;
   }[] = [];
+  let asymmetricResult: Awaited<ReturnType<typeof compareAsymmetricMemory>> | undefined;
   const profileId = input.mnnApprovalFirst ? mnnProfileId : input.profileId;
   const selectedProfiles =
     input.approvalDiagnostic === 'controls'
       ? [...profiles.filter(({ id }) => id === mnnProfileId), mnnQatProfile]
-      : input.approvalDiagnostic === 'minimal' || input.localComparison || input.qualifyMnnLocal
+      : input.approvalDiagnostic === 'minimal' || input.localComparison || qualifyMnnLocal
         ? profiles.filter(({ id }) => id === mnnProfileId)
         : qatScreen
           ? [mnnQatProfile]
@@ -370,7 +378,7 @@ export async function screenSessionMemory(input: {
             localResults.push({ model: verified, arms });
             break;
           }
-          if (input.qualifyMnnLocal) {
+          if (qualifyMnnLocal) {
             if (!model.weightsDigest)
               throw new Error('The qualification requires verified weights.');
             const options = {
@@ -382,6 +390,13 @@ export async function screenSessionMemory(input: {
               screening: { weightsDigest: model.weightsDigest },
               progress: (label: string) => progress?.(`${profile.name}: ${label}`),
             };
+            if (input.asymmetric) {
+              asymmetricResult = await compareAsymmetricMemory({
+                ...options,
+                weightsDigest: model.weightsDigest,
+              });
+              break;
+            }
             if (input.proportionalOutputCap) {
               const arms = await compareLocalMemory(
                 [realisticReferenceFixture()],
@@ -508,7 +523,8 @@ export async function screenSessionMemory(input: {
     results,
     comparison,
     ...(input.approvalDiagnostic ? { diagnostics } : {}),
-    ...(input.localComparison || input.qualifyMnnLocal ? { localResults } : {}),
+    ...(input.localComparison || qualifyMnnLocal ? { localResults } : {}),
+    ...(asymmetricResult ? { asymmetric: asymmetricResult } : {}),
     productionSuspended: true,
   };
 }
