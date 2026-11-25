@@ -9,6 +9,7 @@ export type MemoryFact = {
   contextSource?: number;
   attachment?: true;
   check?: string;
+  checkStatus?: 'pass' | 'fail' | 'skip';
   kind: Exclude<MemoryEntry['kind'], 'user'>;
   critical?: boolean;
   contradicts?: RegExp;

@@ -154,7 +154,11 @@ export function retrievableSummaryStatements({
   return fullyRepresented ? statements : [...statements, fallback];
 }
 
-function immediateContext(portions: readonly MemoryHistoryEntry[], allowance: number) {
+function immediateContext(
+  portions: readonly MemoryHistoryEntry[],
+  allowance: number,
+  dialogue: boolean,
+) {
   const statements = portions.flatMap((portion) => {
     const available = retrievableSummaryStatements(portion);
     if (portion.format !== 'markdown') return available;
@@ -163,7 +167,11 @@ function immediateContext(portions: readonly MemoryHistoryEntry[], allowance: nu
     );
     return referents.length ? referents : available;
   });
-  const lines = new Set(statements.map((statement) => JSON.stringify(statement) + '\n'));
+  const lines = new Set(
+    statements.map(({ field, text }) =>
+      dialogue ? `${field ? field + ': ' : ''}${text}\n` : JSON.stringify({ field, text }) + '\n',
+    ),
+  );
   let context = '';
   for (const line of lines) {
     if (estimateMemoryTokens(context + line) <= allowance) context += line;
@@ -200,6 +208,17 @@ function sourceLine({ seq, author, text, tool, attachment }: PromptSource): stri
   return JSON.stringify({ seq, author, text, tool, attachment }) + '\n';
 }
 
+export function originalUampDialogue(messages: readonly MemorySourceMessage[]) {
+  return messages
+    .flatMap(({ author, seq, text, attachments }) => [
+      `${author === 'user' ? 'User' : 'Agent'} #${seq}: ${text}`,
+      ...(attachments ?? []).map(
+        (attachment) => `Attachment to #${seq} (${attachment.name}): ${attachment.text}`,
+      ),
+    ])
+    .join('\n');
+}
+
 /** Split source material by rendered input cost without dropping content. */
 export function prepareMemorySummaries(
   unit: MemoryUnit,
@@ -208,15 +227,19 @@ export function prepareMemorySummaries(
   policy: {
     mode?: MemoryContextMode;
     format?: MemorySummaryFormat;
+    contextStyle?: 'dialogue';
     skipped?: readonly { id: string; messages: readonly MemorySourceMessage[] }[];
   } = {},
 ) {
   const mode = policy.mode ?? 'immediate';
+  const dialogue = policy.contextStyle === 'dialogue';
   const markdown = policy.format === 'markdown';
   const directionsFormat = markdown ? markdownInstructions : instructions;
-  const header = policy.skipped?.length
-    ? 'Previous context (summaries and labeled original messages). Use it only to understand the current sources:\n'
-    : 'Previous generated context. Use it only to understand the current sources:\n';
+  const header = dialogue
+    ? 'Earlier Discussion, in order. Use this background to resolve references in the current exchange:\n'
+    : policy.skipped?.length
+      ? 'Previous context (summaries and labeled original messages). Use it only to understand the current sources:\n'
+      : 'Previous generated context. Use it only to understand the current sources:\n';
   const authoritative =
     unit.task || unit.scope || unit.instructions?.length
       ? (markdown
@@ -345,12 +368,14 @@ export function prepareMemorySummaries(
       let remaining = allowance;
       for (const pair of policy.skipped ?? []) {
         const lines = pair.messages.flatMap((message) => [
-          sourceLine(message),
+          dialogue
+            ? `${message.author === 'user' ? 'User' : 'Agent'} #${message.seq}: ${message.text}\n`
+            : sourceLine(message),
           ...(message.attachments ?? []).map((attachment) =>
             sourceLine({ ...message, text: '', attachment }),
           ),
         ]);
-        const raw = 'Original UAMP (skipped):\n' + lines.join('');
+        const raw = (dialogue ? '' : 'Original UAMP (skipped):\n') + lines.join('');
         const availableForOriginal = remaining - (latest ? Math.ceil(allowance / 2) : 0);
         if (availableForOriginal <= 0) break;
         const excerpt = raw.length ? memoryPreview(raw, availableForOriginal) : '';
@@ -359,12 +384,18 @@ export function prepareMemorySummaries(
         remaining -= estimateMemoryTokens(excerpt);
       }
       if (latest) {
-        historyText = immediateContext(previousPortions, remaining);
+        const label = dialogue ? 'Earlier exchange summary:\n' : '';
+        const summary = immediateContext(
+          previousPortions,
+          remaining - estimateMemoryTokens(label),
+          dialogue,
+        );
+        if (summary) historyText = label + summary;
         const historyId = latest.unitId ?? latest.id;
         if (historyText && historyId) historyIds.push(historyId);
       }
       for (const original of originals) {
-        historyText += original.text;
+        historyText += original.text + (dialogue && !original.text.endsWith('\n') ? '\n' : '');
         historyIds.push(original.id);
       }
     }
@@ -381,6 +412,7 @@ export function prepareMemorySummaries(
     return {
       ...part,
       historyIds,
+      historyText,
       prefixHash: createHash('sha256')
         .update(directionsFormat + directions + header + historyText)
         .digest('hex'),

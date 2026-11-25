@@ -27,13 +27,18 @@ import {
 } from '../runtime/src/session-memory/service.js';
 import { MemoryStore } from '../runtime/src/session-memory/store.js';
 import {
+  prepareMemorySummaries,
+  originalUampDialogue,
   summarizeMemory,
+  type MemoryHistoryEntry,
+  type MemorySummaryFormat,
   type MemorySummaryResult,
 } from '../runtime/src/session-memory/summarization.js';
 import { estimateMemoryTokens } from '../runtime/src/session-memory/text.js';
 import {
   identifyMemoryUnits,
   type MemorySourceMessage,
+  type MemoryUnit,
 } from '../runtime/src/session-memory/units.js';
 import {
   contextSettings,
@@ -41,6 +46,8 @@ import {
   gradesMemoryFact,
   transcriptSource,
 } from './session-memory-context.js';
+
+import { semanticMemoryFixtures } from './session-memory-semantic-fixtures.js';
 
 export const simplifiedArms = [
   'legacy-json',
@@ -518,6 +525,144 @@ export async function runSimplifiedMemoryArm(
     await memory.close();
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+export async function qualifySemanticMemory(
+  input: Parameters<typeof runSimplifiedMemoryArm>[2] & { fixtureId?: string },
+) {
+  const fixtures = semanticMemoryFixtures.filter(
+    ({ id }) => !input.fixtureId || id === input.fixtureId,
+  );
+  if (!fixtures.length) throw new Error('Unknown semantic Session Memory fixture.');
+  const cases = [];
+  for (const fixture of fixtures) {
+    input.progress?.(`Semantic qualification: ${fixture.id}`);
+    const result = await runSimplifiedMemoryArm(fixture, 'deterministic-markdown', input);
+    const { required } = result.quality.summarization;
+    cases.push({
+      ...result,
+      passed: result.passed && required > 0 && result.requests.length > 0,
+    });
+  }
+  return { seed: simplifiedSeed, cases, passed: cases.every(({ passed }) => passed) };
+}
+
+export async function diagnoseApprovalReference(input: {
+  settings: OllamaSettings;
+  digest: string;
+  signal: AbortSignal;
+  auditOutput: boolean;
+  progress?: (label: string) => void;
+}) {
+  const { signal, digest } = input;
+  const settings = contextSettings({ ...input.settings, cpuOnly: true }, simplifiedSeed);
+  const endpoint = ollamaEndpoint(settings.endpoint);
+  const fixture = referenceFixture();
+  const [proposal, firstSkipped, secondSkipped, approval] = fixture.turns;
+  const prior: MemoryUnit = { type: 'UAMP', messages: proposal!, scope: proposal![0]?.scope };
+  const current: MemoryUnit = {
+    type: 'UAMP',
+    messages: approval!,
+    scope: approval![0]?.scope,
+    task: fixture.taskContext,
+  };
+  const skipped = [secondSkipped!, firstSkipped!].map((messages) => ({
+    id: messages[0]!.turnId!,
+    messages,
+  }));
+  const run = async (
+    prompt: ReturnType<typeof prepareMemorySummaries>[number]['prompt'],
+    format: MemorySummaryFormat,
+  ) => {
+    await releaseOllamaModel(settings, signal);
+    const result = await summarizeMemory(settings, prompt, signal, 'UAMP', true, () => {}, format);
+    const loaded = await residency(endpoint, digest, signal);
+    const cpuVerified = !!loaded && loaded.bytes > 0 && loaded.gpuBytes === 0;
+    if (!cpuVerified) throw new Error('Approval diagnostic requires verified CPU inference.');
+    return result;
+  };
+  input.progress?.('Generate one preceding Markdown UAMP for the matched approval replays.');
+  const anchorPrompt = prepareMemorySummaries(prior, [], undefined, { format: 'markdown' })[0]!
+    .prompt;
+  const anchor = await run(anchorPrompt, 'markdown');
+  if (!anchor.complete) throw new Error('The preceding UAMP generation was incomplete.');
+  const generated: MemoryHistoryEntry = {
+    id: 'UAMP:1:2',
+    type: 'UAMP',
+    scope: current.scope,
+    content: anchor.content,
+    format: 'markdown',
+  };
+  const original: MemoryHistoryEntry = {
+    ...generated,
+    format: undefined,
+    content: originalUampDialogue(proposal!),
+  };
+  const symbol = 'selectWorkspaceSnapshot';
+  const variants = [
+    { name: 'generated-records', anchor: generated },
+    { name: 'original-records', anchor: original },
+    { name: 'generated-dialogue', anchor: generated, contextStyle: 'dialogue' as const },
+  ];
+  const originals = fixture.turns.flat();
+  const anchorQuality = gradeSimplifiedLayer(
+    fixture.facts.filter(({ source }) => source <= 2),
+    [{ seq: 2, sources: [1, 2], text: anchor.text }],
+    originals,
+  );
+  const results = [];
+  for (const variant of variants) {
+    const policy = { skipped, contextStyle: variant.contextStyle };
+    const markdown = prepareMemorySummaries(current, [variant.anchor], undefined, {
+      ...policy,
+      format: 'markdown',
+    })[0]!;
+    const json = prepareMemorySummaries(current, [variant.anchor], undefined, {
+      ...policy,
+      format: 'json',
+    })[0]!;
+    for (const format of ['json', 'markdown'] as const) {
+      input.progress?.(`${variant.name} ${format}`);
+      const prompt = [
+        format === 'json' ? json.prompt[0]! : markdown.prompt[0]!,
+        {
+          role: 'user' as const,
+          content:
+            format === 'json'
+              ? markdown.prompt[1]!.content.replace(
+                  'Reply with the Markdown summary only.',
+                  'Reply with the compact JSON only.',
+                )
+              : markdown.prompt[1]!.content,
+        },
+      ];
+      const result = await run(prompt, format);
+      const quality = gradeSimplifiedLayer(
+        fixture.facts.filter(({ source }) => source >= 7),
+        result.complete ? [{ seq: 8, sources: markdown.sources, text: result.text }] : [],
+        originals,
+      );
+      results.push({
+        variant: variant.name,
+        format,
+        quality,
+        complete: result.complete,
+        contextTokens: markdown.historyEstimatedTokens,
+        referentInPrompt: markdown.historyText.includes(symbol),
+        referentInAnswer: result.text.includes(symbol),
+        inferenceMs: result.elapsedMs,
+        usage: result.usage,
+        ...(input.auditOutput ? { prompt, reply: result.text } : {}),
+      });
+    }
+  }
+  return {
+    seed: simplifiedSeed,
+    anchorQuality,
+    referentInGeneratedAnchor: anchor.text.includes(symbol),
+    ...(input.auditOutput ? { anchorPrompt, anchor: anchor.text } : {}),
+    results,
+  };
 }
 
 export async function compareSimplifiedMemory(

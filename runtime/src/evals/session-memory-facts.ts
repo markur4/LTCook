@@ -1,7 +1,7 @@
 import type { MemoryFact } from './session-memory-fixtures.js';
 import { memoryIdentifierMatches } from '../session-memory/text.js';
 
-type CheckStatus = 'pass' | 'fail' | 'skip';
+type CheckStatus = NonNullable<MemoryFact['checkStatus']>;
 
 function checkStatus(status: string): CheckStatus | undefined {
   if (/^(?:pass(?:ed)?|success)$/i.test(status)) return 'pass';
@@ -43,13 +43,18 @@ export function matchesMemoryFact(fact: MemoryFact, text: string) {
   return (
     (!fact.identifiers ||
       memoryIdentifierMatches(text, fact.identifiers).size === fact.identifiers.length) &&
-    (fact.check ? hasNamedOutcome(text, fact.check, 'pass') : fact.expected.test(text))
+    (fact.check
+      ? hasNamedOutcome(text, fact.check, fact.checkStatus ?? 'pass')
+      : fact.expected.test(text))
   );
 }
 
 export function contradictsMemoryFact(fact: MemoryFact, text: string) {
   return fact.check
-    ? hasNamedOutcome(text, fact.check, 'fail')
+    ? (['pass', 'fail', 'skip'] as const).some(
+        (status) =>
+          status !== (fact.checkStatus ?? 'pass') && hasNamedOutcome(text, fact.check!, status),
+      )
     : !!fact.contradicts?.test(text) &&
         (!fact.identifiers ||
           memoryIdentifierMatches(text, fact.identifiers).size === fact.identifiers.length);

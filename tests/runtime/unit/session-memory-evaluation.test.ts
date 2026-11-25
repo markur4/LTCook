@@ -1,6 +1,12 @@
 import { expect, test } from 'bun:test';
 import { MemoryEditProgress } from '../../../evals/session-memory-edit-progress.js';
-import { gradesMemoryFact } from '../../../evals/session-memory-context.js';
+import { semanticMemoryFixtures } from '../../../evals/session-memory-semantic-fixtures.js';
+import {
+  originalTokenCount,
+  shortDiscussionTokens,
+} from '../../../runtime/src/session-memory/service.js';
+import { identifyMemoryUnits } from '../../../runtime/src/session-memory/units.js';
+import { contextTranscript, gradesMemoryFact } from '../../../evals/session-memory-context.js';
 import {
   gradeSimplifiedLayer,
   simplifiedCorpus,
@@ -82,4 +88,37 @@ test('records recovery separately and rejects attributed reversals and invented 
     retained: 3,
     passed: false,
   });
+});
+
+test('semantic fixtures actually generate UAMP summaries and carry critical labels', () => {
+  for (const fixture of semanticMemoryFixtures) {
+    const { messages, prompts } = contextTranscript(fixture);
+    const units = identifyMemoryUnits(messages, prompts, 3000, true);
+    const generated = units.filter(
+      ({ type, messages }) =>
+        type === 'UAMP' && originalTokenCount(messages) >= shortDiscussionTokens,
+    );
+    expect(generated.length).toBeGreaterThan(0);
+    for (const fact of fixture.facts.filter(({ critical }) => critical)) {
+      expect(
+        generated.some(({ messages }) => messages.some(({ seq }) => seq === fact.source)),
+      ).toBe(true);
+    }
+  }
+});
+
+test('semantic grading accepts the named failure and reads a nonbreaking retry hyphen', () => {
+  const [preview, retry] = semanticMemoryFixtures;
+  const failure = preview!.facts.find(({ check }) => check === 'EXPORT_MISSING_HEADER')!;
+  expect(matchesMemoryFact(failure, 'EXPORT_QUOTED_ROW PASS. EXPORT_MISSING_HEADER FAIL.')).toBe(
+    true,
+  );
+  expect(
+    contradictsMemoryFact(failure, 'EXPORT_QUOTED_ROW PASS. EXPORT_MISSING_HEADER FAIL.'),
+  ).toBe(false);
+  expect(contradictsMemoryFact(failure, 'EXPORT_MISSING_HEADER PASS.')).toBe(true);
+  expect(matchesMemoryFact(retry!.facts[0]!, 'Approved a 45‑second reporting retry delay.')).toBe(
+    true,
+  );
+  expect(contradictsMemoryFact(retry!.facts[0]!, 'Approved a 10‑second delay.')).toBe(true);
 });

@@ -946,6 +946,54 @@ test('records actions and short Discussions without inference while paused, acro
   }
 });
 
+test('reopens the preceding original Discussion after a short reference crosses into a Task', async () => {
+  const discussion = { sessionId: 'session' };
+  const task = { ...discussion, taskId: 'task' };
+  const proposal = 'Consider reusing selectWorkspaceSnapshot on compatible caches.';
+  const messages: MemorySourceMessage[] = [
+    { seq: 1, turnId: 'proposal', author: 'user', scope: discussion, text: proposal },
+    { ...longReply, seq: 2, turnId: 'proposal', scope: discussion },
+    {
+      seq: 3,
+      turnId: 'clarification',
+      author: 'user',
+      scope: discussion,
+      text: 'Keep that option open.',
+    },
+    {
+      seq: 4,
+      turnId: 'clarification',
+      author: 'agent',
+      scope: discussion,
+      text: 'It remains a proposal.',
+    },
+    { seq: 5, turnId: 'approval', author: 'user', scope: task, text: 'Implement that.' },
+    { ...longReply, seq: 6, turnId: 'approval', scope: task },
+  ];
+  const prompts: string[] = [];
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type, prompt) {
+      prompts.push(prompt[1].content);
+      const text = 'The previous Discussion considered a cache change.';
+      return { type, complete: true, text, content: text, elapsedMs: 0 };
+    },
+  });
+  try {
+    for (const turnId of ['proposal', 'clarification', 'approval'])
+      memory.turn('leader', { turnId, outcome: 'completed' }, false);
+    await memory.settled();
+    expect(prompts).toHaveLength(2);
+    const context = prompts[1]!.split('Current Task scope')[0]!;
+    expect(context).toContain('User #1: ' + proposal);
+    expect(context).toContain('Keep that option open.');
+    expect(context).not.toContain('The previous Discussion considered a cache change.');
+  } finally {
+    await memory.close();
+  }
+});
+
 test('includes supplied attachment bytes in the short Discussion threshold once', async () => {
   const prompts: string[] = [];
   const messages: MemorySourceMessage[] = [];

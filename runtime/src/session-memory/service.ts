@@ -33,6 +33,7 @@ import {
   relevantMemoryScope,
   retrievableSummaryStatements,
   prepareMemorySummaries,
+  originalUampDialogue,
   type MemoryBudgets,
   type MemorySummaryProgress,
   type MemorySummaryResult,
@@ -1211,7 +1212,7 @@ export class SessionMemory {
         )
         .sort((a, b) => b.position - a.position);
       const anchor = prior.find(({ state }) => state !== 'skipped');
-      const history = anchor
+      let history = anchor
         ? anchor.parts.map((part, index) => ({
             ...part,
             type: anchor.type,
@@ -1233,6 +1234,29 @@ export class SessionMemory {
         );
         if (originals.length) skipped.push({ id: candidate.id, messages: originals });
         skippedTokens += Math.max(32, candidate.originalTokens ?? 32);
+      }
+      if (format === 'markdown' && anchor && skipped.length) {
+        // > A short exchange can refer to an earlier proposal. Use that pair's original wording when available.
+        const { messages: originals } = await this.referencedMessages(
+          agentId,
+          epoch,
+          anchor.sources,
+          signal,
+          messages,
+        );
+        if (originals.length === anchor.sources.length) {
+          history = [
+            {
+              id: anchor.id,
+              unitId: anchor.id,
+              scope: unit.scope,
+              type: 'UAMP',
+              content: originalUampDialogue(originals),
+              sources: anchor.sources.map(({ seq }) => seq),
+              format: undefined,
+            },
+          ];
+        }
       }
       let parts: ReturnType<typeof prepareMemorySummaries>;
       try {
