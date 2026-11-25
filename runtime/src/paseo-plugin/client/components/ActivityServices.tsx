@@ -97,7 +97,7 @@ function StoredSummaryMetadata({
               Summary {summary.summaryTokens?.toLocaleString() ?? 'unknown'}
             </ActivityText>
             <ActivityText theme={theme} tone="muted" size={10}>
-              {duration}
+              {duration} · Source #{summary.position}
             </ActivityText>
           </View>
         );

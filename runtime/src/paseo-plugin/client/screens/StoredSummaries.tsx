@@ -129,6 +129,7 @@ function SummaryReader({ params, theme, layout }: PluginAgentPanelProps) {
             contentContainerStyle={{ padding: 12 }}
           >
             <Text
+              testID="ltcook-stored-summaries-json"
               selectable
               style={{
                 color: colors.foreground,
