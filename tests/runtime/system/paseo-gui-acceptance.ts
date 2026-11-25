@@ -663,6 +663,31 @@ try {
     '--fn',
     `Boolean(document.querySelector('[aria-label="Close activity-fixture preview"]'))`,
   );
+  const skillDocument = '[data-testid="ltcook-skill-document"]';
+  const skillPreview = '[data-testid="ltcook-passage-skill-preview"]';
+  stage = 'native-activity-skill-document';
+  await clickButton('Open skill in new tab');
+  await browser('wait', skillDocument);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector(${JSON.stringify(skillDocument)})?.textContent.includes('Read the fixture.')`,
+  );
+  await clickButton(mobileLeader.agent.title);
+  await waitForComposer(mobileLeader.agent.title);
+  stage = 'native-chat-skill-preview';
+  await clickButton('Preview skill activity-fixture');
+  await browser('wait', skillPreview);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector(${JSON.stringify(skillPreview)})?.textContent.includes('Read the fixture.')`,
+  );
+  await clickButton('Open in new tab');
+  await browser('wait', skillDocument);
+  await clickButton(mobileLeader.agent.title);
+  await waitForComposer(mobileLeader.agent.title);
+
   await browser(
     'wait',
     '--fn',
@@ -674,6 +699,38 @@ try {
     '--fn',
     `document.querySelectorAll('[aria-label^="read call, Success,"]').length === 8`,
   );
+  stage = 'native-activity-show-in-chat';
+  await browser('wait', '[aria-label^="Show in Chat, read 1 of 8 at"]');
+  const turn = await host.api.agents.ref(mobileSession.id).timeline.refetch({
+    direction: 'tail',
+    projection: 'canonical',
+    limit: 40,
+  });
+  const calls = turn.entries
+    .filter((entry) => entry.item.type === 'tool_call' && entry.item.name === 'read')
+    .map(({ item, turnId, timestamp, seqEnd }) => {
+      assert(item.type === 'tool_call');
+      assert(turnId);
+      return { id: item.callId, turnId, time: Date.parse(timestamp), seqEnd };
+    })
+    .sort((a, b) => b.time - a.time || a.id.localeCompare(b.id));
+  assert.equal(calls.length, 8);
+  for (const index of [0, 7]) {
+    const call = calls[index]!;
+    const nativeId = `agent_tool_turn:${encodeURIComponent(call.turnId)}/${encodeURIComponent(call.id)}`;
+    await browser('click', `[aria-label^="Show in Chat, read ${index + 1} of 8 at"]`);
+    await browser(
+      'wait',
+      '--fn',
+      `(() => {
+        const row = [...document.querySelectorAll('[data-message-id]')]
+          .find(node => node.getAttribute('data-message-id') === ${JSON.stringify(nativeId)});
+        if (!row) return false;
+        const bounds = row.getBoundingClientRect();
+        return bounds.height > 0 && bounds.bottom > 0 && bounds.top < window.innerHeight;
+      })()`,
+    );
+  }
   await clickButton('Close read preview');
   await browser(
     'wait',

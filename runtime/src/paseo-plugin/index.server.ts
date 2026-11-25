@@ -1,9 +1,10 @@
 import path from 'node:path';
-import type { PaseoApi } from '@getpaseo/client';
+import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import { z } from 'zod';
 import { defineRpc, PluginAttachmentItemSchema } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
 import {
+  activitySkillDocumentRpc,
   activitySubscription,
   activityToggleRpc,
   memoryDeviceRpc,
@@ -15,6 +16,8 @@ import {
   storedSummariesRpc,
 } from './shared/activity';
 import { observeActivity, observedTimestamp } from './server/activity';
+import { readTurnSkills, type RegisteredSkill } from './server/activity-uses';
+import { readSkillDocument } from './server/skill-documents';
 import { readPaseoMemoryPassage } from './server/memory-source';
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
@@ -130,6 +133,46 @@ async function runtimeRequest(
     }
   }
   return { response, detail, payload };
+}
+
+async function registeredSkills(
+  agent: PaseoAgent,
+  observerSignal: AbortSignal,
+): Promise<RegisteredSkill[] | undefined> {
+  const sessionId = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
+  if (!sessionId) return undefined;
+  const { value: reports } = z
+    .object({
+      value: z.array(
+        z.object({
+          id: z.string(),
+          inspection: z.object({
+            diagnostics: z.array(z.unknown()),
+            resources: z.array(
+              z.object({
+                name: z.string(),
+                path: z.string(),
+                kind: z.enum(['skill', 'rule']),
+                applicable: z.boolean(),
+                loaded: z.boolean(),
+              }),
+            ),
+          }),
+        }),
+      ),
+    })
+    .parse(
+      await runtimeJson(
+        '/v1/command',
+        { sessionId, command: { type: 'guidance.inspect', nativeAgentId: agent.id } },
+        observerSignal,
+      ),
+    );
+  return reports
+    .find((report) => report.id === agent.id && !report.inspection.diagnostics.length)
+    ?.inspection.resources.filter(
+      (resource) => resource.kind === 'skill' && resource.applicable && resource.loaded,
+    );
 }
 
 const preparedSession = z.object({
@@ -313,6 +356,11 @@ export default function contribute(server: PluginServerContext) {
       await runtimeJson('/v1/activity/stored-summaries', input),
     );
   });
+  server.handle(activitySkillDocumentRpc, ({ agentId, ...input }, { paseo }) =>
+    readSkillDocument(paseo.agents.ref(agentId), input, (agent) =>
+      registeredSkills(agent, AbortSignal.timeout(5000)),
+    ),
+  );
   server.handle(activitySubscription, ({ agentId }, { paseo, signal, push }) =>
     observeActivity(
       paseo,
@@ -405,42 +453,7 @@ export default function contribute(server: PluginServerContext) {
           },
         };
       },
-      async (agent, observerSignal) => {
-        const sessionId = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
-        if (!sessionId) return undefined;
-        const { value: reports } = z
-          .object({
-            value: z.array(
-              z.object({
-                id: z.string(),
-                inspection: z.object({
-                  diagnostics: z.array(z.unknown()),
-                  resources: z.array(
-                    z.object({
-                      name: z.string(),
-                      path: z.string(),
-                      kind: z.enum(['skill', 'rule']),
-                      applicable: z.boolean(),
-                      loaded: z.boolean(),
-                    }),
-                  ),
-                }),
-              }),
-            ),
-          })
-          .parse(
-            await runtimeJson(
-              '/v1/command',
-              { sessionId, command: { type: 'guidance.inspect', nativeAgentId: agent.id } },
-              observerSignal,
-            ),
-          );
-        return reports
-          .find((report) => report.id === agent.id && !report.inspection.diagnostics.length)
-          ?.inspection.resources.filter(
-            (resource) => resource.kind === 'skill' && resource.applicable && resource.loaded,
-          );
-      },
+      registeredSkills,
     ),
   );
 
@@ -486,48 +499,61 @@ export default function contribute(server: PluginServerContext) {
         outcome.kind !== 'completed' ||
         !turnId ||
         !agent.workspaceId ||
-        !observed.success ||
-        !observed.data.memoryEnabled ||
+        !['ltcook', 'pi', 'codex'].includes(agent.provider) ||
         signal.aborted
-      )
+      ) {
         return;
+      }
       try {
-        const timeline = paseo.agents.ref(agent.id).timeline;
+        const handle = paseo.agents.ref(agent.id);
+        const timeline = handle.timeline;
         const page = await timeline.refetch({
           direction: 'tail',
           projection: 'canonical',
           limit: 48,
         });
-        const passage = await readPaseoMemoryPassage(timeline, page, turnId, signal);
-        if (signal.aborted || !passage) return;
+        if (!page.agent || page.agent.archivedAt || page.error || page.reset || signal.aborted) {
+          return;
+        }
+        const [passage, skills] = await Promise.all([
+          observed.success && observed.data.memoryEnabled
+            ? readPaseoMemoryPassage(timeline, page, turnId, signal)
+            : undefined,
+          readTurnSkills(
+            page.agent,
+            handle,
+            { epoch: page.epoch, turnId, tail: page },
+            signal,
+            registeredSkills,
+          ).catch(() => []),
+        ]);
+        if (signal.aborted || (!passage && !skills.length)) return;
         const markerId = `${MEMORY_SUMMARIES_TIMELINE_KIND}:${turnId}`;
+        const data = { ...(passage && { passage }), ...(skills.length && { skills }) };
         if (
           page.entries.some(({ item }) => {
             if (
               item.type !== 'plugin' ||
               item.id !== markerId ||
               item.kind !== MEMORY_SUMMARIES_TIMELINE_KIND
-            )
+            ) {
               return false;
+            }
             const marker = MemorySummariesTimelineSchema.safeParse(item.data);
-            return (
-              marker.success &&
-              marker.data.passage?.epoch === passage.epoch &&
-              marker.data.passage.start === passage.start &&
-              marker.data.passage.position === passage.position
-            );
+            return marker.success && JSON.stringify(marker.data) === JSON.stringify(data);
           })
-        )
+        ) {
           return;
+        }
         await timeline.append({
           type: 'plugin',
           id: markerId,
           kind: MEMORY_SUMMARIES_TIMELINE_KIND,
           version: 1,
-          data: { passage },
+          data,
         });
       } catch {
-        // > An unavailable timeline leaves the passage unmarked.
+        // > An unavailable timeline leaves the turn unmarked.
       }
     }),
     server.addHook('agent.close.after', async ({ agent }) => {

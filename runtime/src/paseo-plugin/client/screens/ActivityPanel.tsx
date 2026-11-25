@@ -8,16 +8,31 @@ import {
   type PluginClientContext,
 } from '@getpaseo/plugin/client';
 import { ScrollView, useToast } from '@getpaseo/plugin/client/ui';
-import { activitySubscription, type ActivitySnapshot } from '../../shared/activity';
+import {
+  activitySubscription,
+  type ActivityAnchor,
+  type ActivitySnapshot,
+  type AgentActivity,
+  type SkillLoad,
+} from '../../shared/activity';
 import { ActivityStatus, ActivityText } from '../components/ActivityCard';
 import { ActivityAgentCard } from '../components/ActivityAgentCard';
 import { ActivityServices } from '../components/ActivityServices';
 import type { Theme } from '../components/PanelChrome';
 import { useFocusedAgent } from '../explorer-panels';
+import { openSkillDocument } from './SkillDocument';
 import { MEMORY_SUMMARIES_PANEL_ID } from './StoredSummaries';
 
 type ActivityPanelProps = PluginWorkspacePanelProps & {
   client: Pick<PluginClientContext, 'composers' | 'openPanel'>;
+};
+
+type ActivityNavigation = NonNullable<PluginWorkspacePanelProps['navigation']> & {
+  revealTimelineItem?: (input: {
+    serverId: string;
+    agentId: string;
+    target: ActivityAnchor;
+  }) => Promise<void>;
 };
 
 type ViewportObserver = new (
@@ -79,6 +94,24 @@ function ObservedActivity(
     ? (agentId: string) => navigation.openAgent({ agentId, serverId: host.id })
     : undefined;
 
+  const revealTimelineItem = (navigation as ActivityNavigation | undefined)?.revealTimelineItem;
+  const showInChat = revealTimelineItem
+    ? (agentId: string, target: ActivityAnchor) => {
+        void revealTimelineItem({ serverId: host.id, agentId, target }).catch(() =>
+          toast.error('This occurrence could not be found in chat.'),
+        );
+      }
+    : undefined;
+
+  function openSkill(agent: AgentActivity, workspaceId: string | undefined, skill: SkillLoad) {
+    try {
+      if (!workspaceId) throw new Error('Workspace unavailable');
+      openSkillDocument(client, host.id, workspaceId, agent.id, skill);
+    } catch {
+      toast.error('Could not open the skill document.');
+    }
+  }
+
   function openStoredSummaries() {
     try {
       client.openPanel(MEMORY_SUMMARIES_PANEL_ID, {
@@ -120,7 +153,13 @@ function ObservedActivity(
             agentWorktree={snapshot.agent.worktree?.path}
           />
           <Section theme={theme} title="Agent" />
-          <ActivityAgentCard theme={theme} agent={snapshot.agent} selected />
+          <ActivityAgentCard
+            theme={theme}
+            agent={snapshot.agent}
+            selected
+            onShowInChat={showInChat && ((target) => showInChat(snapshot.agent.id, target))}
+            onOpenSkill={(skill) => openSkill(snapshot.agent, selectedWorkspaceId, skill)}
+          />
           <Section
             theme={theme}
             title={subagents ? `Subagents ${subagents.length}` : 'Subagents'}
@@ -140,6 +179,12 @@ function ObservedActivity(
               theme={theme}
               agent={agent}
               onOpenConversation={openConversation}
+              onShowInChat={showInChat && ((target) => showInChat(agent.id, target))}
+              onOpenSkill={
+                agent.canOpenConversation
+                  ? (skill) => openSkill(agent, agent.worktree?.id, skill)
+                  : undefined
+              }
             />
           ))}
           {!subagents?.length && (

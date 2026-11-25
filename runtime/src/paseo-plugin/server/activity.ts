@@ -1,9 +1,23 @@
 import path from 'node:path';
 import type { PaseoAgent, PaseoAgentHandle, PaseoApi } from '@getpaseo/client';
-import type { ActivitySnapshot, AgentActivity, SkillLoad, ToolCall } from '../shared/activity';
+import type { ActivitySnapshot, AgentActivity, ToolCall } from '../shared/activity';
+import {
+  activeTurnPageLimit,
+  activityHistoryLimit,
+  listedSkillCommands,
+  observeSkillUse,
+  recentSkillLoads,
+  registeredSkillFiles,
+  timelineAnchor,
+  timelinePageSize,
+  timelineTime,
+  type RegisteredSkill,
+  type SkillUse,
+  type Timeline,
+  type TimelineItem,
+} from './activity-uses';
+import { isSkillDocumentCandidate } from './skill-paths';
 
-type Timeline = Awaited<ReturnType<PaseoAgentHandle['timeline']['refetch']>>;
-type TimelineItem = Timeline['entries'][number]['item'];
 type AgentEvents = Pick<AgentActivity, 'tools' | 'skills'> & {
   epoch?: string;
   generation: number;
@@ -13,22 +27,11 @@ type Services = Pick<ActivitySnapshot, 'rag' | 'memory'> & {
   providerSubagents: AgentActivity[];
   task?: string;
 };
-type RegisteredSkill = { name: string; path: string };
 
-export function observedTimestamp(value: string): number {
-  return time(value);
-}
+export const observedTimestamp = timelineTime;
 
-const recentLimit = 32;
-const timelinePageSize = 160;
-const activeTurnPageLimit = 8;
 const parentLabel = 'paseo.parent-agent-id';
 let revision = 0;
-
-function time(value: string): number {
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
-}
 
 function status(agent: PaseoAgent): AgentActivity['status'] {
   if (agent.providerUnavailable) return 'unknown';
@@ -38,23 +41,8 @@ function status(agent: PaseoAgent): AgentActivity['status'] {
   return agent.status === 'initializing' ? 'waiting' : agent.status;
 }
 
-function codexSkillRead(command: string, output?: string): string | undefined {
-  // > Codex reports file reads as shell calls. Require a direct read and the returned front matter.
-  const reader =
-    /^(?:cat|head(?:[ \t]+(?:-n[ \t]*|-)\d+)?|sed[ \t]+-n[ \t]+(['"]?)1,\d+p\1)[ \t]+(?:--[ \t]+)?(.+)$/;
-  const operand = reader.exec(command.trim())?.[2];
-  if (!operand || !output) return undefined;
-  const token = /^(?:"([^"]+)"|'([^']+)'|([^\s<>&|;$*?]+))$/.exec(operand);
-  const file = token?.[1] ?? token?.[2] ?? token?.[3];
-  if (!file || path.basename(file) !== 'SKILL.md') return undefined;
-  const header = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(
-    output.slice(0, 4096),
-  )?.[1];
-  return header ? /^name:[ \t]*(['"]?)([\w.-]+)\1[ \t]*(?:#.*)?$/m.exec(header)?.[2] : undefined;
-}
-
 export function nativeActivity(agent: PaseoAgent, events?: AgentEvents): AgentActivity {
-  const updatedAt = time(agent.updatedAt);
+  const updatedAt = timelineTime(agent.updatedAt);
   const usedTokens = agent.lastUsage?.contextWindowUsedTokens;
   const budgetTokens = agent.lastUsage?.contextWindowMaxTokens;
   const context =
@@ -91,7 +79,7 @@ class AgentTimeline {
   private loaded = false;
   private toolsPartial = false;
   private readonly calls = new Map<string, { seq: number; call: ToolCall }>();
-  private readonly loadedSkills = new Map<string, SkillLoad>();
+  private readonly skillUses = new Map<number, SkillUse>();
   private readonly skills = new Map<string, string>();
   private readonly skillFiles = new Map<string, string>();
   private skillFilesKnown = false;
@@ -115,7 +103,7 @@ class AgentTimeline {
               if (this.epoch && update.epoch !== this.epoch) this.reset(update.epoch);
               this.epoch = update.epoch;
             }
-            this.accept(event.item, update.seq, time(update.timestamp));
+            this.accept(event.item, update.seq, update.timestamp, event.turnId);
             this.prune();
           }
           break;
@@ -155,7 +143,10 @@ class AgentTimeline {
     }
     return (this.pending ?? Promise.resolve()).then(() => ({
       tools: this.loaded ? [...this.calls.values()].map(({ call }) => call) : null,
-      skills: this.skillsKnown || this.skillFilesKnown ? [...this.loadedSkills.values()] : null,
+      skills:
+        this.skillsKnown || (this.provider !== 'codex' && this.skillFilesKnown)
+          ? recentSkillLoads(this.skillUses)
+          : null,
       epoch: this.epoch,
       generation: this.timelineGeneration,
       toolsPartial: this.toolsPartial,
@@ -172,7 +163,7 @@ class AgentTimeline {
     this.epoch = epoch;
     this.timelineGeneration++;
     this.calls.clear();
-    this.loadedSkills.clear();
+    this.skillUses.clear();
     this.loaded = false;
     this.toolsPartial = false;
     this.refetchRequired = true;
@@ -192,8 +183,8 @@ class AgentTimeline {
       if (this.signal.aborted || generation !== this.timelineGeneration) return;
       if (tail.error) throw new Error('Timeline unavailable.');
       const turn = tail.agent ? tail.agent.activeTurn : activeTurn;
-      const startedAt = turn?.startedAt ? time(turn.startedAt) : 0;
-      const olderTools: Timeline['entries'][] = [];
+      const startedAt = turn?.startedAt ? timelineTime(turn.startedAt) : 0;
+      const olderEvents: Timeline['entries'][] = [];
       let page = tail;
       let toolsPartial = tail.gap;
       while (turn && page.hasOlder) {
@@ -202,12 +193,12 @@ class AgentTimeline {
           earliest &&
           startedAt &&
           earliest.turnId !== turn.turnId &&
-          time(earliest.timestamp) < startedAt
+          timelineTime(earliest.timestamp) < startedAt
         ) {
           break;
         }
         const cursor = page.startCursor;
-        if (!cursor || olderTools.length >= activeTurnPageLimit) {
+        if (!cursor || olderEvents.length >= activeTurnPageLimit) {
           toolsPartial = true;
           break;
         }
@@ -232,14 +223,26 @@ class AgentTimeline {
           toolsPartial = true;
           break;
         }
-        // > Keep tool lifecycle events from the active-turn lookback, without copying its transcript.
-        olderTools.push(older.entries.filter(({ item }) => item.type === 'tool_call'));
+        // > Retain only entries that can contain an observed skill use or tool event.
+        olderEvents.push(
+          older.entries.filter(
+            ({ item }) => item.type === 'tool_call' || item.type === 'user_message',
+          ),
+        );
         page = older;
       }
       if (this.epoch && this.epoch !== tail.epoch) this.reset(tail.epoch);
       this.epoch = tail.epoch;
-      for (const entries of [...olderTools.reverse(), tail.entries]) {
-        for (const entry of entries) this.accept(entry.item, entry.seqEnd, time(entry.timestamp));
+      for (const entries of [...olderEvents.reverse(), tail.entries]) {
+        for (const entry of entries) {
+          this.accept(
+            entry.item,
+            entry.seqEnd,
+            entry.timestamp,
+            entry.turnId,
+            entry.sourceSeqRanges,
+          );
+        }
       }
       this.loaded = true;
       this.toolsPartial = toolsPartial;
@@ -255,81 +258,80 @@ class AgentTimeline {
   ): Promise<void> {
     if (this.signal.aborted) return;
     const generation = this.timelineGeneration;
-    if (this.provider !== 'codex' && !this.skillFilesKnown) {
+    if (!this.skillFilesKnown) {
       const resolved = await files().catch(() => undefined);
       if (this.signal.aborted || generation !== this.timelineGeneration) return;
       if (resolved) {
-        for (const skill of resolved) this.skillFiles.set(path.normalize(skill.path), skill.name);
+        for (const [file, name] of registeredSkillFiles(resolved)) this.skillFiles.set(file, name);
         this.skillFilesKnown = true;
         this.refetchRequired = true;
       }
     }
-    if (
-      this.skillsKnown ||
-      agent.providerUnavailable ||
-      (this.provider === 'codex' ? agent.status === 'initializing' : !agent.activeTurn)
-    )
-      return;
-    try {
-      const commands = await this.agent.commands();
-      if (commands.error || this.signal.aborted || generation !== this.timelineGeneration) return;
-      for (const command of commands.commands) {
-        if (command.kind === 'skill')
-          this.skills.set(command.name.replace(/^\/?skill:/, ''), command.description);
-      }
-      this.skillsKnown = true;
-      this.refetchRequired = true;
-    } catch {
-      // > The provider may only report commands once its session is open.
-    }
+    if (this.skillsKnown || agent.providerUnavailable || agent.status === 'initializing') return;
+    const commands = await listedSkillCommands(this.agent);
+    if (!commands || this.signal.aborted || generation !== this.timelineGeneration) return;
+    for (const [name, description] of commands) this.skills.set(name, description);
+    this.skillsKnown = true;
+    this.refetchRequired = true;
   }
 
-  private accept(item: TimelineItem, seq: number, timestamp: number): void {
-    if (item.type === 'user_message') {
-      if (this.provider !== 'pi' && this.provider !== 'ltcook') return;
-      const skill = /^<skill name="([^"]+)" location="([^"]+)">\n/.exec(item.text);
-      if (skill) {
-        const [, name, location] = skill;
-        if (
-          name &&
-          location &&
-          (this.skillFiles.get(path.normalize(location)) === name || this.skills.has(name))
-        )
-          this.loadSkill(name, timestamp);
+  private accept(
+    item: TimelineItem,
+    seq: number,
+    value: string,
+    turnId?: string,
+    sourceRanges?: Timeline['entries'][number]['sourceSeqRanges'],
+  ): void {
+    const at = timelineTime(value);
+    const target = timelineAnchor(item, this.epoch, seq, at, turnId);
+    const use = observeSkillUse(
+      { provider: this.provider, cwd: this.agent.cwd },
+      {
+        commands: this.skills,
+        files: this.skillFiles,
+        canReadDocument: (file) => isSkillDocumentCandidate({ cwd: this.agent.cwd ?? '' }, file),
+      },
+      item,
+      at,
+      target,
+    );
+    if (item.type !== 'tool_call') {
+      if (use) this.recordSkillUse(seq, use);
+      return;
+    }
+
+    const key = JSON.stringify([turnId || null, item.callId]);
+    const unscopedKey = JSON.stringify([null, item.callId]);
+    const unscoped = turnId ? this.calls.get(unscopedKey) : undefined;
+    // > A projected row can carry earlier live events for the same native call.
+    const sameCall =
+      unscoped &&
+      (unscoped.seq === seq ||
+        sourceRanges?.some(
+          ({ startSeq, endSeq }) => startSeq <= unscoped.seq && unscoped.seq <= endSeq,
+        ));
+    if (sameCall) this.calls.delete(unscopedKey);
+    const prior = this.calls.get(key) ?? (sameCall ? unscoped : undefined);
+    if (prior && prior.seq > seq) {
+      if (item.status === 'running' && at < prior.call.startedAt) {
+        const { finishedAt } = prior.call;
+        this.calls.set(key, {
+          ...prior,
+          call: {
+            ...prior.call,
+            startedAt: at,
+            ...(finishedAt === undefined ? {} : { durationMs: Math.max(0, finishedAt - at) }),
+          },
+        });
       }
       return;
     }
-    if (item.type !== 'tool_call') return;
-    if (item.status === 'completed' && item.detail.type === 'read') {
-      const cwd = this.agent.cwd;
-      const candidate = item.detail.filePath;
-      const location = path.isAbsolute(candidate)
-        ? path.normalize(candidate)
-        : cwd
-          ? path.resolve(cwd, candidate)
-          : undefined;
-      const name = location && this.skillFiles.get(location);
-      if (name) this.loadSkill(name, timestamp);
+    if (use) {
+      if (prior?.call.skillId && prior.seq !== seq) this.skillUses.delete(prior.seq);
+      this.recordSkillUse(seq, use);
     }
-    if (
-      this.provider === 'codex' &&
-      item.status === 'completed' &&
-      item.detail.type === 'shell' &&
-      (item.detail.exitCode == null || item.detail.exitCode === 0)
-    ) {
-      const name = codexSkillRead(item.detail.command, item.detail.output);
-      if (name && this.skills.has(name)) this.loadSkill(name, timestamp);
-    }
-    const prior = this.calls.get(item.callId);
-    if (prior && prior.seq >= seq) {
-      if (seq < prior.seq && item.status === 'running' && timestamp < prior.call.startedAt) {
-        prior.call.startedAt = timestamp;
-        if (prior.call.finishedAt !== undefined)
-          prior.call.durationMs = Math.max(0, prior.call.finishedAt - timestamp);
-      }
-      return;
-    }
-    const startedAt = prior?.call.startedAt ?? timestamp;
+    const skillId = use?.name ?? prior?.call.skillId;
+    const startedAt = prior?.call.startedAt ?? at;
     const state =
       item.status === 'completed'
         ? 'success'
@@ -337,19 +339,19 @@ class AgentTimeline {
           ? 'cancelled'
           : item.status;
     const durationMs =
-      prior?.call.status === 'running'
-        ? Math.max(0, timestamp - startedAt)
-        : prior?.call.durationMs;
-    this.calls.set(item.callId, {
+      prior?.call.status === 'running' ? Math.max(0, at - startedAt) : prior?.call.durationMs;
+    this.calls.set(key, {
       seq,
       call: {
         id: item.callId,
         name: item.name,
         startedAt,
         status: state,
+        ...(target ? { target } : {}),
+        ...(skillId ? { skillId } : {}),
         ...(state !== 'running'
           ? {
-              finishedAt: timestamp,
+              finishedAt: at,
               ...(durationMs === undefined ? {} : { durationMs }),
             }
           : {}),
@@ -357,21 +359,18 @@ class AgentTimeline {
     });
   }
 
-  private loadSkill(name: string, timestamp: number): void {
-    if ((this.loadedSkills.get(name)?.loadedAt ?? -1) > timestamp) return;
-    const description = this.skills.get(name);
-    this.loadedSkills.set(name, {
-      id: name,
-      name,
-      loadedAt: timestamp,
-      ...(description ? { description } : {}),
-    });
+  private recordSkillUse(seq: number, use: SkillUse): void {
+    if (this.skillUses.get(seq)?.anchor?.turnId && !use.anchor?.turnId) return;
+    const { name, description, documentAvailable, at, anchor } = use;
+    this.skillUses.set(seq, { name, description, documentAvailable, at, anchor });
   }
 
   private prune(): void {
     const finished = [...this.calls.entries()].filter(([, { call }]) => call.status !== 'running');
     finished.sort((left, right) => right[1].seq - left[1].seq);
-    for (const [id] of finished.slice(recentLimit)) this.calls.delete(id);
+    for (const [id] of finished.slice(activityHistoryLimit)) this.calls.delete(id);
+    const occurrences = [...this.skillUses.keys()].sort((left, right) => right - left);
+    for (const seq of occurrences.slice(activityHistoryLimit)) this.skillUses.delete(seq);
   }
 }
 

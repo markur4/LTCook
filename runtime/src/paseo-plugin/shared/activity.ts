@@ -16,6 +16,15 @@ const worktree = z.object({
   name: z.string(),
   path: z.string(),
 });
+export const ActivityAnchorSchema = z.object({
+  epoch: id,
+  position: count,
+  kind: z.enum(['message', 'tool']),
+  id,
+  at: timestamp,
+  turnId: id.optional(),
+});
+
 const toolCall = z.object({
   id,
   name: z.string(),
@@ -25,6 +34,8 @@ const toolCall = z.object({
   finishedAt: timestamp.optional(),
   durationMs: z.number().nonnegative().optional(),
   status: z.enum(['running', 'success', 'failed', 'cancelled', 'unknown']),
+  target: ActivityAnchorSchema.optional(),
+  skillId: id.optional(),
 });
 const skillLoad = z.object({
   id,
@@ -32,6 +43,8 @@ const skillLoad = z.object({
   description: z.string().optional(),
   preview: z.string().optional(),
   loadedAt: timestamp,
+  occurrences: z.array(ActivityAnchorSchema).default([]),
+  documentAvailable: z.boolean().optional(),
 });
 const agentActivity = z.object({
   id,
@@ -123,7 +136,21 @@ export const memoryDeviceRpc = defineRpc({
 const summaryCursor = z.object({ epoch: id, position: count, id });
 export const MEMORY_SUMMARIES_TIMELINE_KIND = 'memory-summaries';
 const summaryPassage = z.object({ epoch: id, start: count, position: count });
-export const MemorySummariesTimelineSchema = z.object({ passage: summaryPassage.optional() });
+export const MemorySummariesTimelineSchema = z.object({
+  passage: summaryPassage.optional(),
+  skills: z.array(skillLoad).optional(),
+});
+
+export const activitySkillDocumentRpc = defineRpc({
+  name: 'ltcook.activity.skill-document',
+  input: z.object({
+    agentId: id,
+    skillId: id,
+    occurrence: ActivityAnchorSchema.optional(),
+    view: z.enum(['preview', 'full']),
+  }),
+  output: z.object({ name: id, markdown: z.string() }),
+});
 
 export const storedSummariesRpc = defineRpc({
   name: 'ltcook.activity.stored-summaries',
@@ -158,5 +185,6 @@ export type ContextUsage = z.infer<typeof contextUsage>;
 export type RagStatus = z.infer<typeof ragStatus>;
 export type MemoryUnitCounts = z.infer<typeof MemoryUnitCountsSchema>;
 export type SessionMemoryStatus = z.infer<typeof sessionMemoryStatus>;
+export type ActivityAnchor = z.infer<typeof ActivityAnchorSchema>;
 export type ToolCall = z.infer<typeof toolCall>;
 export type SkillLoad = z.infer<typeof skillLoad>;
