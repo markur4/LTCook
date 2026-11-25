@@ -2,7 +2,6 @@ import { expect, test } from 'bun:test';
 import {
   defaultMemoryBudgets,
   MemoryInputBudgetError,
-  parseMemorySummary,
   prepareMemorySummaries,
   retrievableSummaryStatements,
 } from '../../../runtime/src/session-memory/summarization.js';
@@ -12,6 +11,7 @@ import {
   type MemoryTurnOutcome,
 } from '../../../runtime/src/session-memory/units.js';
 import { estimateMemoryTokens } from '../../../runtime/src/session-memory/text.js';
+import { isEmptyMemorySummary, parseMemoryJson } from '../../../runtime/src/session-memory/json.js';
 
 test('uses native outcomes and preserves steering while treating an assignment as runtime input', () => {
   const messages: MemorySourceMessage[] = [
@@ -108,9 +108,9 @@ test('supplies attached evidence to an action batch without a completed Discussi
   expect(request?.attachmentSources).toEqual([1]);
   expect(request?.sources).toEqual([1, 2, 3]);
   expect(request?.text).toContain('The exact reference is RETAIN_CACHE.');
-  expect(parseMemorySummary('AAB', '{"pasted":"Reference RETAIN_CACHE."}').fields).toEqual({
-    pasted: 'Reference RETAIN_CACHE.',
-  });
+  expect(
+    retrievableSummaryStatements({ type: 'AAB', content: { pasted: 'Reference RETAIN_CACHE.' } }),
+  ).toEqual([{ field: 'pasted', text: 'Reference RETAIN_CACHE.' }]);
 });
 
 test('uses the signed runtime assignment for context and ignores peer and heartbeat prompts', () => {
@@ -131,33 +131,29 @@ test('uses the signed runtime assignment for context and ignores peer and heartb
   expect(unit?.instructions?.map(({ seq }) => seq)).toEqual([1, 4]);
 });
 
-test('keeps free-form summaries and reads recognizable fields opportunistically', () => {
-  expect(parseMemorySummary('UAMP', 'intent: Keep CACHE_GUARD.\nSome deliberate prose.')).toEqual({
-    type: 'UAMP',
-    text: 'intent: Keep CACHE_GUARD.\nSome deliberate prose.',
-    fields: { intent: 'Keep CACHE_GUARD.' },
+test('parses the final response as JSON without requiring particular fields', () => {
+  expect(parseMemoryJson('{"other":{"notes":[null,"evidence",true,0]}}')).toEqual({
+    other: { notes: [null, 'evidence', true, 0] },
   });
-  expect(parseMemorySummary('AAB', 'A usable unstructured result.').text).toBe(
-    'A usable unstructured result.',
-  );
-  const mixed = '{"results":"CACHE_GUARD passed","issues":{"detail":"CACHE_FALLBACK failed"}}';
-  expect(retrievableSummaryStatements(parseMemorySummary('AAB', mixed))).toEqual([
-    { field: 'results', text: 'CACHE_GUARD passed' },
-    { text: mixed },
-  ]);
+  expect(parseMemoryJson(' null ')).toBeNull();
+  expect(parseMemoryJson('""')).toBe('');
+  expect(parseMemoryJson('false')).toBe(false);
+  for (const output of ['', 'intent: free-form', '{"results":"incomplete"', '```json\n{}\n```'])
+    expect(parseMemoryJson(output)).toBeUndefined();
 });
 
-test('separates semantically empty output from usable malformed formatting', () => {
-  expect(parseMemorySummary('AAB', '{}')).toEqual({
-    type: 'AAB',
-    text: '{}',
-    noUsefulInformation: true,
-  });
-  for (const output of ['null', '{"results": [" "]}', '```json\n\n```'])
-    expect(parseMemorySummary('AAB', output).text).toBe('');
-  expect(parseMemorySummary('AAB', '{"results": "CACHE_GUARD passed"').text).toContain(
-    'CACHE_GUARD passed',
-  );
+test('uses JSON content in retrieval without hiding nested facts', () => {
+  expect(
+    retrievableSummaryStatements({ type: 'AAB', content: 'An unquoted summary for search.' }),
+  ).toEqual([{ text: 'An unquoted summary for search.' }]);
+  const content = { results: 'CACHE_GUARD passed', issues: { detail: 'CACHE_FALLBACK failed' } };
+  expect(retrievableSummaryStatements({ type: 'AAB', content })).toEqual([
+    { field: 'results', text: 'CACHE_GUARD passed' },
+    { text: JSON.stringify(content) },
+  ]);
+  expect(isEmptyMemorySummary({})).toBe(true);
+  expect(retrievableSummaryStatements({ type: 'AAB', content: {} })).toEqual([]);
+  expect(isEmptyMemorySummary({ results: [' '] })).toBe(false);
 });
 
 test('uses only the latest relevant completed UAMP for Immediate Context', () => {
@@ -177,17 +173,20 @@ test('uses only the latest relevant completed UAMP for Immediate Context', () =>
   const history = [
     {
       id: 'older',
-      ...parseMemorySummary('UAMP', '{"intent":"Older details"}'),
+      type: 'UAMP' as const,
+      content: { intent: 'Older details' },
       scope: { taskId: 'cache' },
     },
     {
       id: 'latest',
-      ...parseMemorySummary('UAMP', '{"intent":"Latest cache details"}'),
+      type: 'UAMP' as const,
+      content: { intent: 'Latest cache details' },
       scope: { taskId: 'cache' },
     },
     {
       id: 'independent',
-      ...parseMemorySummary('UAMP', '{"intent":"Independent docs details"}'),
+      type: 'UAMP' as const,
+      content: { intent: 'Independent docs details' },
       scope: { taskId: 'docs' },
     },
   ];
@@ -233,7 +232,7 @@ test('preserves complete oversized source text across identical bounded portions
   const text = '✍️"\n'.repeat(8000);
   const parts = prepareMemorySummaries(
     { type: 'UAMP', messages: [{ seq: 1, author: 'user', text }] },
-    [{ type: 'UAMP', text: 'Prior context'.repeat(500) }],
+    [{ type: 'UAMP', content: 'Prior context'.repeat(500) }],
   );
   expect(parts.length).toBeGreaterThan(1);
   expect(

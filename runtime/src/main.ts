@@ -13,6 +13,7 @@ import { EvalRunService } from './evals/service.js';
 import { createEvalEngine } from './evals/engine.js';
 import { createPaseoMemorySource } from './integrations/paseo-memory.js';
 import { releaseOllamaModel } from './integrations/ollama.js';
+import { createOllamaDeviceCatalog } from './integrations/ollama-devices.js';
 import { SessionMemory } from './session-memory/service.js';
 import {
   defaultMemoryBudgets,
@@ -327,12 +328,13 @@ async function run(): Promise<void> {
           generation: JSON.stringify(sessionMemoryGeneration),
         };
         memory = new SessionMemory({
-          databasePath: path.join(stateDirectory, 'session-memory-v3.sqlite'),
+          databasePath: path.join(stateDirectory, 'session-memory-v4.sqlite'),
           source: createPaseoMemorySource(host.api, apiToken, pastedDocuments),
           threshold,
-          summarize: (type, prompt, signal, cpuOnly, onProgress) =>
+          deviceCatalog: createOllamaDeviceCatalog(memorySettings.endpoint),
+          summarize: (type, prompt, signal, placement, onProgress) =>
             summarizeMemory(
-              { ...memorySettings, cpuOnly },
+              { ...memorySettings, ...placement },
               prompt,
               signal,
               type,

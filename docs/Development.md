@@ -467,22 +467,30 @@ against the latest confirmed decisions and records tool calls and usage. See the
 
 The production runtime stores chronological UAMP and AAB summaries, native turn
 outcomes, original user prompts, and the Paseo checkpoint in
-`session-memory-v3.sqlite` under runtime state. Original conversation search
-reads authorized canonical pages from Paseo. The memory provider accepts
-complete useful responses with imperfect JSON and leaves failed portions
-pending. The backend rejects input truncation. Rewind invalidates the affected
-summary suffix, including history-dependent responses. A new epoch rebuilds
-from original history where native receipts establish the boundaries.
+`session-memory-v4.sqlite` under runtime state. The v4 format starts a fresh
+derived store. To reset incompatible v4 data, stop the LTCook instance and
+remove this Session Memory database and its SQLite sidecars from that instance's
+runtime state, then start the instance again. Original conversation search
+reads authorized canonical pages from Paseo.
+
+Session Memory requests Ollama JSON mode and parses each finished response
+using the same parser as the context Agent Eval. Successful portions persist
+parsed values and source references. Malformed or truncated responses leave
+their portions pending. Rewind invalidates the affected summary suffix. A new
+epoch rebuilds from original history where native receipts establish the
+boundaries.
 
 The previous extractive summarizer is limited to the Agent Evals baseline.
 The production default runs local LFM3 QAD Q4 at temperature 0.4 with
-reasoning disabled. Ollama uses GPU acceleration when available and falls
-back to CPU. The Activity sidebar's **Inference device** menu saves a host-wide
-preference. **CPU** forces CPU inference. Returning to **GPU (automatic)**
-releases the CPU runner before the next background request. Live throughput
-samples come from the background Ollama stream and are estimated when the
-provider omits token counts. Memory work is asynchronous and starts only when
-foreground local inference is idle. See the
+reasoning disabled. In Activity, **Auto** delegates placement to Ollama.
+**CPU** forces CPU inference. Named selections use Ollama's `main_gpu` option
+where the device identity can be mapped to a usable index for the configured
+server. The picker requests discovery from the host's Ollama installation
+when opened. A server started with different device visibility settings can
+see a different inventory. The host stores identity and resolves the index
+for inference. Live throughput samples come from the
+background Ollama stream and are estimated when the provider omits token
+counts. Memory work starts when foreground local inference is idle. See the
 [architecture diagrams](Explanations.md#context-aware-session-memory) and the
 [CPU timing and GPU qualification results](context-aware-session-memory/QUALIFICATION.md#lean-single-seed-qualification).
 

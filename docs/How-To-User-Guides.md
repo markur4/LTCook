@@ -191,20 +191,22 @@ unconfirmed. Opening the panel does not start a search or build.
 
 **Session Memory** shows the selected agent's background summaries and last
 acknowledged delegation handoff. Stored and pending counts describe that
-agent's conversation. Use **Inference device** to choose **CPU** or
-**GPU (automatic)**. Automatic placement is the default and lets Ollama use a
-GPU when available, with CPU fallback. LTCook saves the choice for the host and
-applies it to the next summary request. While a summary is generating, the panel
-updates tokens per second once a second and labels estimated rates.
+agent's conversation. Select the device next to **Inference device** to open
+the list. **Auto** lets Ollama choose placement. **CPU** forces CPU inference.
+On supported Ollama hosts, the list also shows named GPUs discovered on the
+host. The picker explains when Ollama's device index is ambiguous or discovery
+is unavailable. LTCook saves the host-wide choice and applies it to the next
+summary request. While a summary is generating, the panel updates tokens per
+second once a second and labels estimated rates.
 
 Expand **Stored for this agent** for a newest-first list with creation time,
 source position, estimated original and summary tokens, and elapsed inference
 time. Older entries can have unknown metrics. Use **Reload stored summaries**
 to refresh the list after new summaries finish. **Open stored summaries** or the
 **Show summaries** button in the conversation opens the **Stored Summaries**
-tab. The tab shows the storage path and syntax-colored JSON. Use **Load all
-summaries** if older pages are available, then **Copy JSON** to export the
-complete list to the clipboard.
+tab. The tab shows the storage path and syntax-colored JSON with the parsed
+contents of each summary part. Use **Load all summaries** if older pages are
+available, then **Copy JSON** to export the complete nested JSON to the clipboard.
 
 The handoff shows the sending agent, receipt time, payload size, and the number
 of summaries represented. A handoff can also carry original user instructions

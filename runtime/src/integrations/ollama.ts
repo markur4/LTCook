@@ -7,7 +7,10 @@ export interface OllamaSettings {
   keepAlive: number;
   generation?: string;
   cpuOnly?: boolean;
+  mainGpu?: number;
 }
+
+export class OllamaSummaryError extends Error {}
 
 export const LFM3_SUMMARIZER_MODEL = 'lfm3:1.7b-q8_0';
 
@@ -271,13 +274,21 @@ export async function ollamaChat(
   messages: { role: 'system' | 'user'; content: string }[],
   signal: AbortSignal,
   onUsage?: (usage: OllamaUsage) => void,
-  format?: Record<string, unknown>,
+  format?: 'json' | Record<string, unknown>,
   onMetrics?: (metrics: OllamaChatMetrics) => void,
   tokenDiagnostics = Boolean(onMetrics),
   onProgress?: (progress: OllamaChatProgress | undefined) => void,
 ) {
   const endpoint = ollamaEndpoint(settings.endpoint);
   const generation = summaryGeneration(settings);
+  const options = {
+    ...generation.options,
+    ...(settings.cpuOnly
+      ? { num_gpu: 0 }
+      : settings.mainGpu === undefined
+        ? {}
+        : { main_gpu: settings.mainGpu }),
+  };
   const modelName = settings.model.trim();
   if (!modelName || !Number.isSafeInteger(settings.keepAlive) || settings.keepAlive < -1)
     throw new Error(
@@ -297,7 +308,7 @@ export async function ollamaChat(
           model: modelName,
           messages,
           ...generation,
-          ...(settings.cpuOnly ? { options: { ...generation.options, num_gpu: 0 } } : {}),
+          options,
           ...(format ? { format } : {}),
           ...(tokenDiagnostics ? { logprobs: true } : {}),
           think,
@@ -307,16 +318,16 @@ export async function ollamaChat(
       });
     } catch {
       signal.throwIfAborted();
-      if (timeout.aborted) throw new Error('Ollama summarization timed out.');
-      throw new Error('The configured local Ollama service is unavailable.');
+      if (timeout.aborted) throw new OllamaSummaryError('Ollama summarization timed out.');
+      throw new OllamaSummaryError('The configured local Ollama service is unavailable.');
     }
     if (!response.ok) {
       await response.body?.cancel();
       if (response.status === 404)
-        throw new Error(
+        throw new OllamaSummaryError(
           `Ollama summarizer model "${modelName}" is unavailable. Run ollama pull ${modelName} on the configured Ollama instance.`,
         );
-      throw new Error(`Ollama summarization failed (HTTP ${response.status}).`);
+      throw new OllamaSummaryError(`Ollama summarization failed (HTTP ${response.status}).`);
     }
     const jsonResponse = /^application\/json(?:\s*;|$)/i.test(
       response.headers.get('content-type') ?? '',
@@ -326,8 +337,9 @@ export async function ollamaChat(
         ? await readOllamaChatStream(response.body, bounded, onProgress).catch(() => undefined)
         : result.safeParse(await response.json().catch(() => undefined)).data;
     signal.throwIfAborted();
-    if (timeout.aborted) throw new Error('Ollama summarization timed out.');
-    if (!payload) throw new Error('Ollama returned an invalid summarization response.');
+    if (timeout.aborted) throw new OllamaSummaryError('Ollama summarization timed out.');
+    if (!payload)
+      throw new OllamaSummaryError('Ollama returned an invalid summarization response.');
     if (onMetrics) onMetrics(chatMetrics(payload));
     const { model, message, done, done_reason, eval_count, prompt_eval_count } = payload;
     const incomplete =

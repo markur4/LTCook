@@ -111,9 +111,9 @@ function ObservedActivity(
             agentId={selectedAgentId}
             rag={snapshot.rag}
             memory={snapshot.memory}
-            onCpuOnlyChange={(cpuOnly) =>
+            onDeviceChange={(device) =>
               setSnapshot((current) =>
-                current ? { ...current, memory: { ...current.memory, cpuOnly } } : current,
+                current ? { ...current, memory: { ...current.memory, device } } : current,
               )
             }
             onOpenSummaries={openStoredSummaries}

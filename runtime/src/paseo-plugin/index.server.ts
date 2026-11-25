@@ -6,6 +6,7 @@ import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
 import {
   activitySubscription,
   memoryDeviceRpc,
+  MemoryDeviceSchema,
   MemoryRateSchema,
   MEMORY_SUMMARIES_TIMELINE_KIND,
   MemoryUnitCountsSchema,
@@ -97,8 +98,9 @@ async function runtimeRequest(
   path: string,
   body: unknown,
   signal?: AbortSignal,
+  timeoutMs = 5000,
 ) {
-  const timeout = AbortSignal.timeout(5000);
+  const timeout = AbortSignal.timeout(timeoutMs);
   const response = await fetch(`${endpoint}${path}`, {
     method: 'POST',
     signal: (signal ? AbortSignal.any([signal, timeout]) : timeout) as NonNullable<
@@ -141,9 +143,16 @@ const preparedSession = z.object({
     .optional(),
 });
 
-async function runtimeJson(path: string, body: unknown, signal?: AbortSignal) {
+async function runtimeJson(path: string, body: unknown, signal?: AbortSignal, timeoutMs?: number) {
   const { endpoint, headers } = runtimeConfig();
-  const { response, detail } = await runtimeRequest(endpoint, headers, path, body, signal);
+  const { response, detail } = await runtimeRequest(
+    endpoint,
+    headers,
+    path,
+    body,
+    signal,
+    timeoutMs,
+  );
   if (!response.ok) throw new Error(`LTCook request failed (${response.status})${detail}`);
   return response.json();
 }
@@ -243,7 +252,7 @@ const activityServices = z.object({
   memoryDisabled: z.boolean().optional(),
   memory: z
     .object({
-      cpuOnly: z.boolean(),
+      device: MemoryDeviceSchema,
       rate: MemoryRateSchema.nullable(),
       summarization: z.enum([
         'summarizing',
@@ -284,7 +293,9 @@ const activityServices = z.object({
 
 export default function contribute(server: PluginServerContext) {
   server.handle(memoryDeviceRpc, async (input) =>
-    memoryDeviceRpc.output.parse(await runtimeJson('/v1/activity/memory-device', input)),
+    memoryDeviceRpc.output.parse(
+      await runtimeJson('/v1/activity/memory-device', input, undefined, 20_000),
+    ),
   );
   server.handle(storedSummariesRpc, async (input, { paseo }) => {
     const entry = await paseo.agents.ref(input.agentId).refresh();
@@ -360,7 +371,7 @@ export default function contribute(server: PluginServerContext) {
             ...(services?.rag.diagnostic ? { diagnostic: services.rag.diagnostic } : {}),
           },
           memory: {
-            cpuOnly: memory?.cpuOnly ?? null,
+            device: memory?.device ?? null,
             rate: memory?.rate ?? null,
             summarization: services?.memoryDisabled
               ? 'disabled'

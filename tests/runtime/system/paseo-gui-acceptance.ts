@@ -753,19 +753,41 @@ try {
   await waitForComposer(mobileLeader.agent.title);
   await browser('wait', '--text', 'RAG Index');
 
+  const selectedGpu = { id: 'CUDA:fixture-4070', label: 'RTX 4070 Ti SUPER', mainGpu: 1 };
+  const summaryContent = { findings: [{ detail: 'Background summary fixture', confirmed: true }] };
+  const ambiguousReason = 'Ollama cannot select this device uniquely.';
+  let deviceProbes = 0;
+  const livePlacements: Array<{ cpuOnly?: boolean; mainGpu?: number }> = [];
   memory = new SessionMemory({
     databasePath: path.join(directory, 'activity-memory.sqlite'),
     source: createPaseoMemorySource(host.api, secret),
-    async summarize(type, prompt, _signal, _cpuOnly, onProgress) {
+    async deviceCatalog() {
+      deviceProbes++;
+      return {
+        devices: [
+          { id: 'CUDA:fixture-5090', label: 'RTX 5090', mainGpu: 0 },
+          selectedGpu,
+          { id: 'ROCm:fixture-igpu', label: 'AMD integrated GPU', unavailable: ambiguousReason },
+        ],
+      };
+    },
+    async summarize(type, prompt, _signal, placement, onProgress) {
       const input = JSON.stringify(prompt);
       if (input.includes('Summarize without Activity')) backgroundSummary = true;
       if (input.includes('Measure live summary throughput')) {
+        livePlacements.push(placement);
         onProgress?.({ tokensPerSecond: 12.5, estimated: true });
         await Bun.sleep(2100);
         onProgress?.({ tokensPerSecond: 19, estimated: true });
         await Bun.sleep(2100);
       }
-      return { type, text: 'Background summary fixture', complete: true, elapsedMs: 1 };
+      return {
+        type,
+        text: JSON.stringify(summaryContent),
+        content: summaryContent,
+        complete: true,
+        elapsedMs: 1,
+      };
     },
   });
   api.setSessionMemory(memory, () => ({ sessionId: mobileSession.id }));
@@ -787,20 +809,47 @@ try {
   await browser('wait', '[aria-label^="Session Memory,"][aria-label*="stored"]');
   await browser('click', '[aria-label^="Session Memory,"]');
   stage = 'native-activity-memory-device';
-  await clickButton('Inference device: GPU (automatic)');
-  await browser('find', 'text', 'CPU', 'click', '--exact');
+  await browser('wait', '[aria-label="Inference device: Auto"]');
+  assert.equal(deviceProbes, 0, 'Opening the Activity card does not probe GPUs');
+  const deviceRow = JSON.parse(
+    await browser(
+      'eval',
+      `(() => {
+        const row = document.querySelector('[data-testid="ltcook-memory-device-row"]');
+        const trigger = row.querySelector('[aria-label="Inference device: Auto"]');
+        const label = [...row.querySelectorAll('div, span')].find(node => node.textContent === 'Inference device');
+        const key = label.getBoundingClientRect();
+        const value = trigger.getBoundingClientRect();
+        return {
+          rowHeight: row.getBoundingClientRect().height,
+          sameLine: key.right <= value.left + 1 && Math.abs(key.top + key.height / 2 - value.top - value.height / 2) <= 2,
+        };
+      })()`,
+    ),
+  ) as { rowHeight: number; sameLine: boolean };
+  assert(
+    deviceRow.sameLine && deviceRow.rowHeight < 48,
+    'The device label and control share one compact row',
+  );
+  await clickButton('Inference device: Auto');
+  await browser('wait', '--text', 'RTX 5090');
+  await browser('wait', '--text', 'RTX 4070 Ti SUPER');
+  await browser('wait', '--text', ambiguousReason);
+  assert(deviceProbes > 0, 'Opening the device list probes Ollama');
+  await clickButton('CPU');
   await browser('wait', '[aria-label="Inference device: CPU"]');
-  assert.equal(memory.status(undefined, mobileSession.id).cpuOnly, true);
+  assert.equal(memory.status(undefined, mobileSession.id).device.id, 'cpu');
   await clickButton('Inference device: CPU');
-  await browser('find', 'text', 'GPU (automatic)', 'click', '--exact');
-  await browser('wait', '[aria-label="Inference device: GPU (automatic)"]');
-  assert.equal(memory.status(undefined, mobileSession.id).cpuOnly, false);
+  await clickButton(selectedGpu.label);
+  await browser('wait', '[aria-label="Inference device: RTX 4070 Ti SUPER"]');
+  assert.equal(memory.status(undefined, mobileSession.id).device.id, selectedGpu.id);
   stage = 'native-activity-memory-live-rate';
   await host.api.agents
     .ref(mobileSession.id)
     .send('Measure live summary throughput', { clientMessageId: randomUUID() });
   await browser('wait', '--text', '12.5 tokens/s');
   await browser('wait', '--text', '19 tokens/s');
+  assert.deepEqual(livePlacements[0], { mainGpu: 1 });
   stage = 'native-activity-memory-catalog';
   await browser('wait', '--text', 'Stored for this agent');
   await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
@@ -820,14 +869,24 @@ try {
       `(() => {
         const code = document.querySelector('[data-testid="ltcook-stored-summaries-json"]');
         const tokens = [...code.querySelectorAll('span')];
-        return { font: getComputedStyle(code).fontFamily, colors: new Set(tokens.map(token => getComputedStyle(token).color)).size };
+        return {
+          font: getComputedStyle(code).fontFamily,
+          colors: new Set(tokens.map(token => getComputedStyle(token).color)).size,
+          summaries: JSON.parse(code.textContent),
+        };
       })()`,
     ),
-  ) as { font: string; colors: number };
+  ) as {
+    font: string;
+    colors: number;
+    summaries: Array<{ parts: Array<{ content: unknown }> }>;
+  };
   assert.match(jsonDisplay.font, /monospace/);
   assert(jsonDisplay.colors > 1, 'The Stored Summaries tab colors JSON syntax');
+  assert.deepEqual(jsonDisplay.summaries[0]?.parts[0]?.content, summaryContent);
   await clickButton('Copy JSON');
   await browser('wait', '--text', 'Copied stored summaries');
+  assert.deepEqual(JSON.parse(await browser('clipboard', 'read')), jsonDisplay.summaries);
   await clickButton(mobileLeader.agent.title);
   await waitForComposer(mobileLeader.agent.title);
   stage = 'native-activity-memory-chat-shortcut';

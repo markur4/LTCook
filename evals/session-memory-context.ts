@@ -22,6 +22,7 @@ import {
   type MemorySearchEntry,
 } from '../runtime/src/session-memory/service.js';
 import { MemoryStore, type StoredMemorySummary } from '../runtime/src/session-memory/store.js';
+import { isEmptyMemorySummary, memorySummaryText } from '../runtime/src/session-memory/json.js';
 import {
   memoryHandoffHeader,
   type MemoryHandoffSelection,
@@ -30,6 +31,7 @@ import {
   defaultMemoryBudgets,
   type MemoryHistoryEntry,
   prepareMemorySummaries,
+  retrievableSummaryStatements,
   sessionMemoryGeneration,
   sessionMemoryModel,
   summarizeMemory,
@@ -419,11 +421,14 @@ export async function compareContextMemory(
             return undefined;
           });
           if (!result) continue;
-          let json = false;
-          try {
-            JSON.parse(result.text.replace(/^```(?:json)?\s*|\s*```$/gi, ''));
-            json = true;
-          } catch {}
+          const fields = new Set<string>();
+          if (result.content !== undefined) {
+            const statements = retrievableSummaryStatements({
+              type: result.type,
+              content: result.content,
+            });
+            for (const { field } of statements) if (field) fields.add(field);
+          }
           requests.push({
             kind: unit.type,
             first: part.sources[0]!,
@@ -440,20 +445,17 @@ export async function compareContextMemory(
             usage: result.usage,
             metrics: result.metrics,
             complete: result.complete,
-            json,
-            fields: Object.keys(result.fields ?? {}),
+            json: result.content !== undefined,
+            fields: [...fields],
           });
-          if (result.complete)
-            output.push({
-              text: result.text,
-              fields: result.fields,
-              sources: part.sources,
-              noUsefulInformation: result.noUsefulInformation,
-            });
+          if (result.complete) output.push({ content: result.content, sources: part.sources });
         }
         const complete = parts.length > 0 && output.length === parts.length;
         if (parts.length) save(unit, output, complete, parts.length);
-        if (complete) evidence.push(...output.filter((part) => !part.noUsefulInformation));
+        if (complete)
+          for (const { content, sources } of output)
+            if (!isEmptyMemorySummary(content))
+              evidence.push({ sources, text: memorySummaryText(content) });
       }
     }
     const assembled = await withProductionMemory(

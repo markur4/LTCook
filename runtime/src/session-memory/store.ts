@@ -11,6 +11,10 @@ const scopeSchema = z.object({
   stepId: z.string().optional(),
 });
 
+const schemaVersion = 4;
+export const automaticMemoryDevice = { id: 'auto', label: 'Auto' };
+export type MemoryDevice = { id: string; label: string };
+
 const sourceSchema = z.object({
   seq: z.number().int().nonnegative(),
   messageId: z.string().optional(),
@@ -19,10 +23,8 @@ const sourceSchema = z.object({
 });
 
 const summaryPartSchema = z.object({
-  text: z.string(),
+  content: z.json(),
   sources: z.array(z.number().int().nonnegative()),
-  noUsefulInformation: z.literal(true).optional(),
-  fields: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
 });
 const tokenCountSchema = z.number().int().nonnegative();
 const durationMsSchema = z.number().int().nonnegative();
@@ -58,7 +60,6 @@ const catalogRowSchema = summarySchema
     durationMs: durationMsSchema.nullable(),
     parts: z.string().nullable(),
   });
-const catalogPartsSchema = z.array(summaryPartSchema.pick({ text: true, sources: true }));
 
 export type StoredMemorySummary = z.infer<typeof summarySchema>;
 export type MemorySummaryCursor = Pick<StoredMemorySummary, 'epoch' | 'position' | 'id'>;
@@ -94,33 +95,60 @@ export class MemoryStore {
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath);
-    if (databasePath !== ':memory:' && process.platform !== 'win32') chmodSync(databasePath, 0o600);
-    this.database.exec(`
-      CREATE TABLE IF NOT EXISTS memory_cursor (agent TEXT PRIMARY KEY, epoch TEXT NOT NULL, seq INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS memory_turn (agent TEXT NOT NULL, turn TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(agent, turn));
-      CREATE TABLE IF NOT EXISTS memory_summary (agent TEXT NOT NULL, epoch TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(agent, epoch, id));
-      CREATE INDEX IF NOT EXISTS memory_summary_order ON memory_summary(agent, epoch, position);
-      CREATE TABLE IF NOT EXISTS memory_prompt (agent TEXT NOT NULL, epoch TEXT NOT NULL, seq INTEGER NOT NULL, text TEXT NOT NULL, PRIMARY KEY(agent, epoch, seq));
-      CREATE TABLE IF NOT EXISTS memory_device (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        cpu_only INTEGER NOT NULL CHECK (cpu_only IN (0, 1)),
-        cpu_runner INTEGER NOT NULL CHECK (cpu_runner IN (0, 1))
-      );
-    `);
+    try {
+      this.database
+        .transaction(() => {
+          const { user_version: version } = this.database.prepare('PRAGMA user_version').get() as {
+            user_version: number;
+          };
+          if (version === schemaVersion) return;
+          const existingTable = this.database
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' LIMIT 1")
+            .get();
+          if (version !== 0 || existingTable)
+            throw new Error(
+              'Incompatible Session Memory store. Stop LTCook and reset the Session Memory database before restarting.',
+            );
+          this.database.exec(`
+          CREATE TABLE memory_cursor (agent TEXT PRIMARY KEY, epoch TEXT NOT NULL, seq INTEGER NOT NULL);
+          CREATE TABLE memory_turn (agent TEXT NOT NULL, turn TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(agent, turn));
+          CREATE TABLE memory_summary (agent TEXT NOT NULL, epoch TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(agent, epoch, id));
+          CREATE INDEX memory_summary_order ON memory_summary(agent, epoch, position);
+          CREATE TABLE memory_prompt (agent TEXT NOT NULL, epoch TEXT NOT NULL, seq INTEGER NOT NULL, text TEXT NOT NULL, PRIMARY KEY(agent, epoch, seq));
+          CREATE TABLE memory_device (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            device_id TEXT NOT NULL,
+            device_label TEXT NOT NULL,
+            cpu_runner INTEGER NOT NULL CHECK (cpu_runner IN (0, 1))
+          );
+          PRAGMA user_version = ${schemaVersion};
+        `);
+        })
+        .immediate();
+      if (databasePath !== ':memory:' && process.platform !== 'win32')
+        chmodSync(databasePath, 0o600);
+    } catch (error) {
+      this.database.close();
+      throw error;
+    }
   }
 
-  deviceSettings() {
-    const row = this.database.prepare('SELECT cpu_only, cpu_runner FROM memory_device').get() as
-      { cpu_only: 0 | 1; cpu_runner: 0 | 1 } | undefined;
-    return { cpuOnly: row?.cpu_only === 1, cpuRunner: row?.cpu_runner === 1 };
+  deviceSettings(): { device: MemoryDevice; cpuRunner: boolean } {
+    const row = this.database
+      .prepare('SELECT device_id, device_label, cpu_runner FROM memory_device')
+      .get() as { device_id: string; device_label: string; cpu_runner: 0 | 1 } | undefined;
+    return {
+      device: row ? { id: row.device_id, label: row.device_label } : { ...automaticMemoryDevice },
+      cpuRunner: row?.cpu_runner === 1,
+    };
   }
 
-  saveDeviceSettings({ cpuOnly, cpuRunner }: ReturnType<MemoryStore['deviceSettings']>) {
+  saveDeviceSettings({ device, cpuRunner }: ReturnType<MemoryStore['deviceSettings']>) {
     this.database
       .prepare(
-        'INSERT INTO memory_device VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET cpu_only = excluded.cpu_only, cpu_runner = excluded.cpu_runner',
+        'INSERT INTO memory_device VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET device_id = excluded.device_id, device_label = excluded.device_label, cpu_runner = excluded.cpu_runner',
       )
-      .run(Number(cpuOnly), Number(cpuRunner));
+      .run(device.id, device.label, Number(cpuRunner));
   }
 
   state(agentId: string) {
@@ -171,7 +199,7 @@ export class MemoryStore {
     epoch: string,
     through: number,
     before?: MemorySummaryCursor,
-    includeText = true,
+    includeContent = true,
   ) {
     const pageSize = 8;
     const rows = this.database
@@ -181,7 +209,7 @@ export class MemoryStore {
            json_extract(value, '$.originalTokens') AS originalTokens,
            json_extract(value, '$.summaryTokens') AS summaryTokens,
            json_extract(value, '$.durationMs') AS durationMs,
-           ${includeText ? "json_extract(value, '$.parts')" : 'NULL'} AS parts
+           ${includeContent ? "json_extract(value, '$.parts')" : 'NULL'} AS parts
          FROM memory_summary
          WHERE agent = ? AND epoch = ? AND position <= ?
            AND json_extract(value, '$.complete') = 1
@@ -193,7 +221,7 @@ export class MemoryStore {
       const { parts, ...metadata } = catalogRowSchema.parse(row);
       return {
         ...metadata,
-        parts: parts === null ? [] : catalogPartsSchema.parse(JSON.parse(parts)),
+        parts: parts === null ? [] : summarySchema.shape.parts.parse(JSON.parse(parts)),
       };
     });
     const last = summaries.at(-1);
