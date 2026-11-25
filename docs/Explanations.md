@@ -471,16 +471,13 @@ Tool outcomes describe historical work. Source references identify the agent,
 conversation epoch, and original sequence. Session Memory search reports
 pending summaries, result truncation, and original-history availability.
 
-Immediate Context supplies the current Task objective and acceptance criteria.
-It uses up to 512 estimated supplementary tokens for Task context and relevant
-preceding Discussion when the current material leaves room. The current
-summary can resolve a reference using one preceding UAMP and original
-messages from subsequent skipped UAMPs. When there are skipped exchanges
-after a summarized UAMP, Markdown summarization uses that preceding UAMP’s
-original messages when available. Its generated summary remains the fallback. The runtime can use
-Discussion from the same Session and compatible Plan and Pass when work enters
-a Task. Prior context helps resolve references. Approval and execution claims
-must come from the current sources.
+The summarizer reads only the current UAMP and writes concise Markdown
+bullets. Earlier Discussions and Task instructions are used by the receiving
+agent through the chronological handoff. The handoff can include original
+messages from intervening short Discussions so the receiver can resolve an
+approval by reference and distinguish it from earlier proposal status.
+In Hosted mode the current UAMP, including any attachment content in the
+prompt, goes to OpenAI through the Codex subscription. Local mode uses Ollama.
 
 Recognized headings and bullets supply individually retrievable statements.
 The raw Markdown remains available for reading and retrieval when formatting

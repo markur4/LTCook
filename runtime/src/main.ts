@@ -15,7 +15,7 @@ import { createEvalEngine } from './evals/engine.js';
 import { createPaseoMemorySource } from './integrations/paseo-memory.js';
 import { releaseOllamaModel } from './integrations/ollama.js';
 import { createOllamaDeviceCatalog } from './integrations/ollama-devices.js';
-import { SessionMemory } from './session-memory/service.js';
+import { MemorySummaryError, SessionMemory } from './session-memory/service.js';
 import { createHostedMemorySummarizer } from './session-memory/hosted.js';
 import {
   defaultMemoryBudgets,
@@ -326,46 +326,70 @@ async function run(): Promise<void> {
     if (threshold !== 0) {
       try {
         const configuredLocal = process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || '@local-CPU';
-        const local = configuredLocal.startsWith('@')
-          ? resolveModel(configuredLocal, process.env)
-          : { provider: 'ollama', model: configuredLocal };
-        if (local.provider !== 'ollama')
-          throw new Error('The Local Session Memory model must resolve to an Ollama model.');
-        const hosted = resolveModel('tiny', process.env);
-        const hostedSummarizer = createHostedMemorySummarizer(hosted);
+        const localModelError =
+          'Local Session Memory could not resolve its Ollama model. Configure LTCOOK_SESSION_MEMORY_MODEL with an Ollama alias or model tag.';
+        let localModel: string | undefined;
+        try {
+          const local = configuredLocal.startsWith('@')
+            ? resolveModel(configuredLocal, process.env)
+            : { provider: 'ollama', model: configuredLocal };
+          if (local.provider === 'ollama') localModel = local.model;
+        } catch {
+          // > Local model configuration is independent of Hosted inference and history.
+        }
+        let hosted: ReturnType<typeof resolveModel> | undefined;
+        try {
+          hosted = resolveModel('tiny', process.env);
+        } catch {
+          // > Hosted model configuration is independent of Local inference and history.
+        }
+        const hostedSummarizer = hosted && createHostedMemorySummarizer(hosted);
         const mode = z
           .enum(['hosted', 'local'])
           .parse(process.env.LTCOOK_SESSION_MEMORY_MODE?.trim() || 'local');
-        const memorySettings = {
-          ...summarization,
-          model: local.model,
-          generation: JSON.stringify(sessionMemoryGeneration),
-        };
+        const memorySettings = localModel
+          ? {
+              ...summarization,
+              model: localModel,
+              generation: JSON.stringify(sessionMemoryGeneration),
+            }
+          : undefined;
         memory = new SessionMemory({
           databasePath: path.join(stateDirectory, 'session-memory-v5.sqlite'),
           source: createPaseoMemorySource(host.api, apiToken, pastedDocuments),
           threshold,
           contextIndependent: true,
           inference: {
-            hosted: { model: hosted.model, reasoning: 'off' },
-            local: { model: local.model, reasoning: 'off' },
+            hosted: { model: hosted?.model ?? 'Unavailable', reasoning: 'off' },
+            local: { model: localModel ?? 'Unavailable', reasoning: 'off' },
           },
-          hostedUsage: hostedSummarizer.usage,
-          deviceCatalog: createOllamaDeviceCatalog(memorySettings.endpoint),
-          summarize: (type, prompt, signal, placement, onProgress, format, mode) =>
-            mode === 'hosted'
-              ? hostedSummarizer.summarize(type, prompt, signal)
-              : summarizeMemory(
-                  { ...memorySettings, ...placement },
-                  prompt,
-                  signal,
-                  type,
-                  false,
-                  onProgress,
-                  format,
-                ),
-          releaseCpuModel: (signal) => releaseOllamaModel(memorySettings, signal),
-          configuration: memorySettings.generation,
+          hostedUsage: hostedSummarizer?.usage,
+          deviceCatalog: memorySettings
+            ? createOllamaDeviceCatalog(memorySettings.endpoint)
+            : async () => ({ devices: [], diagnostic: localModelError }),
+          async summarize(type, prompt, signal, placement, onProgress, format, mode) {
+            if (mode === 'hosted') {
+              if (!hostedSummarizer)
+                throw new MemorySummaryError(
+                  'Hosted Session Memory could not resolve @tiny. Configure LTCOOK_MODEL_SMOL with an openai-codex model that supports reasoning off.',
+                );
+              return hostedSummarizer.summarize(type, prompt, signal);
+            }
+            if (!memorySettings) throw new MemorySummaryError(localModelError);
+            return summarizeMemory(
+              { ...memorySettings, ...placement },
+              prompt,
+              signal,
+              type,
+              false,
+              onProgress,
+              format,
+            );
+          },
+          releaseCpuModel: memorySettings
+            ? (signal) => releaseOllamaModel(memorySettings, signal)
+            : undefined,
+          configuration: memorySettings?.generation,
           budgets: {
             input: Number(
               process.env.LTCOOK_SESSION_MEMORY_INPUT_TOKENS ?? defaultMemoryBudgets.input,
