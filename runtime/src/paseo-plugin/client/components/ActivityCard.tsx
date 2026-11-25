@@ -177,6 +177,7 @@ export function ActivityButton({
   expanded,
   selected,
   header,
+  compact,
 }: {
   theme: Theme;
   label: string;
@@ -185,6 +186,7 @@ export function ActivityButton({
   expanded?: boolean;
   selected?: boolean;
   header?: boolean;
+  compact?: boolean;
 }) {
   const [focused, setFocused] = useState(false);
   return (
@@ -202,7 +204,7 @@ export function ActivityButton({
         flexDirection: 'row',
         alignItems: 'center',
         gap: header ? 7 : 4,
-        paddingVertical: header ? 8 : 4,
+        paddingVertical: header ? 8 : compact ? 2 : 4,
         paddingHorizontal: header ? 7 : 6,
         borderRadius: 4,
         borderWidth: 1,

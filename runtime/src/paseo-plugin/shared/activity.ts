@@ -46,6 +46,7 @@ const agentActivity = z.object({
   canOpenConversation: z.boolean(),
 });
 const ragStatus = z.object({
+  indexingEnabled: z.boolean().nullable(),
   worktree: worktree.nullable(),
   provider: z.string(),
   availability: z.enum(['ready', 'not-ready', 'unavailable', 'unknown']),
@@ -71,6 +72,7 @@ const sessionMemoryStatus = z.object({
     })
     .nullable(),
   summarization: z.enum([
+    'paused',
     'summarizing',
     'queued',
     'up-to-date',
@@ -100,6 +102,12 @@ export const activitySubscription = defineSubscription({
   name: 'ltcook.activity',
   input: z.object({ agentId: id }),
   event: ActivitySnapshotSchema,
+});
+
+export const activityToggleRpc = defineRpc({
+  name: 'ltcook.activity.toggle',
+  input: z.strictObject({ feature: z.enum(['summarizer', 'rag-index']), enabled: z.boolean() }),
+  output: z.object({ enabled: z.boolean() }),
 });
 
 export const memoryDeviceRpc = defineRpc({

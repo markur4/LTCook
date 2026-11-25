@@ -254,7 +254,7 @@ function execute(
   args: string[],
   indices: string,
   signal: AbortSignal,
-  onProcess: (pid: number | undefined) => void,
+  onProcess?: (pid: number | undefined) => void,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   signal.throwIfAborted();
   const windows = process.platform === 'win32';
@@ -275,8 +275,10 @@ function execute(
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
-    child.once('spawn', () => onProcess(child.pid));
-    child.once('exit', () => onProcess(undefined));
+    if (onProcess) {
+      child.once('spawn', () => onProcess(child.pid));
+      child.once('exit', () => onProcess(undefined));
+    }
     let failure: unknown;
     let stdout = '';
     let stderr = '';
@@ -491,13 +493,34 @@ async function normalizeResults(
   }
 }
 
+class ColgrepIndexingPausedError extends Error {
+  constructor(message = 'ColGREP indexing is paused.') {
+    super(message);
+  }
+}
+
 /** Search an authorized workspace, opening and refreshing its isolated index on demand. */
 export function createColgrepProvider(options: ColgrepOptions = {}) {
   const verifiedFiles = new Map<string, VerifiedFile>();
   const deployment = options.deploymentDirectory ?? process.env.LTCOOK_COLGREP_DEPLOYMENT;
   const cache = options.cacheDirectory ?? process.env.LTCOOK_COLGREP_CACHE_DIR;
   const timeoutMs = options.timeoutMs ?? REPO_SEARCH_TIMEOUT_MS;
+  let indexing: AbortController | undefined = new AbortController();
   return {
+    isIndexingEnabled(): boolean {
+      return indexing !== undefined;
+    },
+
+    setIndexingEnabled(enabled: boolean): void {
+      if (enabled) {
+        indexing ??= new AbortController();
+      } else if (indexing) {
+        const previous = indexing;
+        indexing = undefined;
+        previous.abort(new ColgrepIndexingPausedError());
+      }
+    },
+
     /** Read status for a caller-authorized workspace without running native ColGREP. */
     async readStatus(workspace: RepositoryWorkspace): Promise<ColgrepStatus> {
       let failure = 'The authorized workspace is unavailable.';
@@ -521,9 +544,16 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
 
     /** Build the same native index without searching and return the native command's elapsed time. */
     async buildIndex(workspace: RepositoryWorkspace, callerSignal: AbortSignal): Promise<number> {
-      const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(timeoutMs)]);
+      callerSignal.throwIfAborted();
+      if (!indexing) throw new ColgrepIndexingPausedError();
+      const signal = AbortSignal.any([
+        callerSignal,
+        AbortSignal.timeout(timeoutMs),
+        indexing.signal,
+      ]);
       signal.throwIfAborted();
       const assets = await loadAssets(deployment, verifiedFiles, signal);
+      signal.throwIfAborted();
       const indices = await getIndexDirectory(cache, workspace, true);
       await workspace.assertUnchanged();
       const started = performance.now();
@@ -548,6 +578,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       source = new RepositorySourceReader(workspace),
     ): Promise<RepositoryRetrieval> {
       callerSignal.throwIfAborted();
+      const indexUpdates = indexing?.signal;
       if (!input.query.trim() || input.query.includes('\0') || input.pattern?.includes('\0')) {
         throw new Error('ColGREP queries and regular expressions must be nonempty text.');
       }
@@ -563,17 +594,33 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > COLGREP_MAX_RESULTS)
         throw new Error('ColGREP result limit is outside the supported range.');
       const timeout = AbortSignal.timeout(timeoutMs);
-      const signal = AbortSignal.any([callerSignal, timeout]);
+      const signal = AbortSignal.any(
+        indexUpdates ? [callerSignal, timeout, indexUpdates] : [callerSignal, timeout],
+      );
       const outcome = rankedResult();
       try {
         // > ColGREP also matches globs below the root. Verify exact literal scope on every hit.
         const filters = paths.some(({ filter }) => !filter) ? [] : paths;
         const candidateLimit = (filters.length ? COLGREP_MAX_RESULTS : limit) + 1;
         const assets = await loadAssets(deployment, verifiedFiles, signal);
-        const indices = await getIndexDirectory(cache, workspace, true);
+        signal.throwIfAborted();
+        const indices = indexUpdates
+          ? await getIndexDirectory(cache, workspace, true)
+          : await getIndexDirectory(cache, workspace, false);
+        if (
+          !indices ||
+          (!indexUpdates &&
+            (await inspectColgrepIndex(indices, assets.model, assets.binding, workspace))
+              .availability !== 'ready')
+        ) {
+          throw new ColgrepIndexingPausedError(
+            'ColGREP indexing is paused and there is no complete index. Enable indexing or use a lexical search.',
+          );
+        }
         const args = [
           'search',
           '--json',
+          ...(!indexUpdates ? ['--no-update'] : []),
           '--model',
           assets.model,
           '--results',
@@ -586,14 +633,10 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
           workspace.root,
         ];
         await workspace.assertUnchanged();
-        const result = await runIndexOperation(
-          assets,
-          workspace,
-          indices,
-          args,
-          signal,
-          input.pattern,
-        );
+        const result = indexUpdates
+          ? await runIndexOperation(assets, workspace, indices, args, signal, input.pattern)
+          : await execute(assets, args, indices, signal);
+        signal.throwIfAborted();
         if (result.code !== 0) {
           if (indexContended(result.stderr)) {
             outcome.value.status = 'indexing';
@@ -630,12 +673,18 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         if (limitError) outcome.truncated = true;
         report(
           outcome,
-          timeout.aborted ? 'timeout' : (limitError?.code ?? 'unavailable'),
-          timeout.aborted
-            ? 'ColGREP exceeded its time limit. Retry the search.'
-            : error instanceof Error
-              ? error.message
-              : 'ColGREP search failed.',
+          error instanceof ColgrepIndexingPausedError
+            ? 'indexing-paused'
+            : timeout.aborted
+              ? 'timeout'
+              : (limitError?.code ?? 'unavailable'),
+          error instanceof ColgrepIndexingPausedError
+            ? error.message
+            : timeout.aborted
+              ? 'ColGREP exceeded its time limit. Retry the search.'
+              : error instanceof Error
+                ? error.message
+                : 'ColGREP search failed.',
         );
       }
       await workspace.assertUnchanged();

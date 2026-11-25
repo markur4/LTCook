@@ -89,7 +89,7 @@ export type MemoryHandoffObservation = UnitCounts & {
 
 export type SessionMemoryStatus = {
   device: MemoryDevice;
-  summarization: SummaryOutcome | 'queued' | 'summarizing';
+  summarization: SummaryOutcome | 'paused' | 'queued' | 'summarizing';
   rate: MemorySummaryProgress | null;
   lastSuccessfulSummaryAt: string | null;
   lastError: MemoryError | null;
@@ -263,6 +263,7 @@ export class SessionMemory {
   private readonly activeTurns = new Map<string, string>();
   private readonly watchers = new Map<string, () => void>();
   private readonly abort = new AbortController();
+  private summarizationAbort = new AbortController();
   private readonly activity = new Map<string, AgentMemoryActivity>();
   private readonly deliveries = new Map<
     string,
@@ -327,6 +328,17 @@ export class SessionMemory {
     return { device, devices, diagnostic: catalog.diagnostic };
   }
 
+  setSummarizationEnabled(enabled: boolean): void {
+    if (enabled === !this.summarizationAbort.signal.aborted) return;
+    if (enabled) {
+      this.summarizationAbort = new AbortController();
+      this.startDrain();
+    } else {
+      this.inference = undefined;
+      this.summarizationAbort.abort();
+    }
+  }
+
   status(sessionId: string | undefined, agentId: string, epoch?: string): SessionMemoryStatus {
     const recorded = this.activity.get(agentId);
     const mismatched =
@@ -348,13 +360,15 @@ export class SessionMemory {
         : null;
     return {
       device: this.store.deviceSettings().device,
-      summarization: mismatched
-        ? 'unknown'
-        : summarizing
-          ? 'summarizing'
-          : this.pending.has(agentId)
-            ? 'queued'
-            : (activity?.outcome ?? 'unknown'),
+      summarization: this.summarizationAbort.signal.aborted
+        ? 'paused'
+        : mismatched
+          ? 'unknown'
+          : summarizing
+            ? 'summarizing'
+            : this.pending.has(agentId)
+              ? 'queued'
+              : (activity?.outcome ?? 'unknown'),
       rate: summarizing && inference.rate ? { ...inference.rate } : null,
       lastSuccessfulSummaryAt: activity?.lastSuccessfulSummaryAt ?? null,
       lastError: activity?.lastError ? { ...activity.lastError } : null,
@@ -579,10 +593,12 @@ export class SessionMemory {
   }
 
   private startDrain(): void {
-    if (this.foreground.size || !this.pending.size || this.abort.signal.aborted) return;
-    this.drain ??= Promise.resolve().then(async () => {
+    if (this.drain || this.foreground.size || !this.pending.size) return;
+    const signal = AbortSignal.any([this.abort.signal, this.summarizationAbort.signal]);
+    if (signal.aborted) return;
+    this.drain = Promise.resolve().then(async () => {
       try {
-        await this.runPending();
+        await this.runPending(signal);
       } finally {
         this.drain = undefined;
         this.startDrain();
@@ -598,37 +614,47 @@ export class SessionMemory {
     for (const id of agentIds) this.observe(id, this.store.state(id) !== undefined);
   }
 
-  private async runPending(): Promise<void> {
-    while (this.pending.size && !this.foreground.size && !this.abort.signal.aborted) {
+  private async runPending(signal: AbortSignal): Promise<void> {
+    while (this.pending.size && !this.foreground.size && !signal.aborted) {
       const [agentId, pending] = this.pending.entries().next().value!;
       this.pending.delete(agentId);
       const activity = this.agentActivity(agentId);
       activity.outcome = 'unknown';
       activity.pending = undefined;
+      let retry: boolean;
       try {
-        if (await this.update(agentId, pending.force, pending.queuedAt)) {
-          const next = this.pending.get(agentId);
-          this.pending.set(agentId, {
-            force: pending.force || !!next?.force,
-            queuedAt: pending.queuedAt,
-          });
-        }
+        retry = await this.update(agentId, pending.force, pending.queuedAt, signal);
       } catch {
-        if (!this.abort.signal.aborted) {
+        retry = signal.aborted;
+        if (!retry) {
           this.noteFailure(agentId, 'Session Memory update failed.');
           this.options.onFailure?.();
         }
       }
+      if (retry && !this.abort.signal.aborted) {
+        const next = this.pending.get(agentId);
+        this.pending.set(agentId, {
+          force: pending.force || !!next?.force,
+          queuedAt: pending.queuedAt,
+        });
+      }
     }
   }
 
-  private async readOutstanding(agentId: string, state?: MemoryState) {
+  private async readOutstanding(
+    agentId: string,
+    state: MemoryState | undefined,
+    signal: AbortSignal,
+  ) {
     const cursor = state && state.seq >= 0 ? state : undefined;
     let page = await this.options.source.read(agentId, cursor);
+    signal.throwIfAborted();
     if (state && (page.epoch !== state.epoch || page.reset || state.seq > page.latest)) {
       const from = page.epoch === state.epoch && !page.reset ? page.latest + 1 : undefined;
       await this.invalidate(agentId, state.epoch, from);
+      signal.throwIfAborted();
       page = await this.options.source.read(agentId);
+      signal.throwIfAborted();
       state = undefined;
     }
     this.noteTimeline(agentId, page);
@@ -640,6 +666,7 @@ export class SessionMemory {
       through = Math.min(page.through, latest);
       if (through >= latest) break;
       page = await this.options.source.read(agentId, { epoch, seq: through });
+      signal.throwIfAborted();
     }
     if (page.reset || page.epoch !== epoch) {
       this.noteTimeline(agentId, page);
@@ -648,9 +675,9 @@ export class SessionMemory {
     return { epoch, latest, through, messages, previous: state?.seq ?? -1 };
   }
 
-  private async currentHistory(agentId: string, epoch: string, last: number) {
+  private async currentHistory(agentId: string, epoch: string, last: number, signal: AbortSignal) {
     const tail = await this.options.source.read(agentId, undefined, 'tail');
-    this.abort.signal.throwIfAborted();
+    signal.throwIfAborted();
     if (tail.reset || tail.epoch !== epoch || tail.latest < last) {
       await this.invalidate(
         agentId,
@@ -672,8 +699,14 @@ export class SessionMemory {
     await this.options.source.invalidateAttachments?.(agentId, epoch, from);
   }
 
-  private async update(agentId: string, force: boolean, queuedAt: number): Promise<boolean> {
-    const input = await this.readOutstanding(agentId, this.store.state(agentId));
+  private async update(
+    agentId: string,
+    force: boolean,
+    queuedAt: number,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const input = await this.readOutstanding(agentId, this.store.state(agentId), signal);
+    signal.throwIfAborted();
     if (!input) return false;
     const { epoch, latest, through, messages, previous } = input;
     const activity = this.agentActivity(agentId);
@@ -688,7 +721,8 @@ export class SessionMemory {
       }
       return false;
     }
-    if (!(await this.currentHistory(agentId, epoch, latest))) return true;
+    if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+    signal.throwIfAborted();
     this.store.savePrompts(agentId, epoch, messages);
     const turnIds = new Set(messages.flatMap(({ turnId }) => (turnId ? [turnId] : [])));
     const turns = this.store.turns(agentId, turnIds);
@@ -916,7 +950,7 @@ export class SessionMemory {
             placement = { cpuOnly: true };
           } else if (device.id !== automaticMemoryDevice.id) {
             const catalog = await this.readDeviceCatalog();
-            this.abort.signal.throwIfAborted();
+            signal.throwIfAborted();
             if (
               this.foreground.size ||
               this.store.deviceSettings().device.id !== device.id ||
@@ -936,8 +970,8 @@ export class SessionMemory {
           }
           if (!placement.cpuOnly && cpuRunner && this.options.releaseCpuModel) {
             // > Ollama can reuse a CPU-only runner until it is unloaded.
-            await this.options.releaseCpuModel(this.abort.signal);
-            this.abort.signal.throwIfAborted();
+            await this.options.releaseCpuModel(signal);
+            signal.throwIfAborted();
             const current = this.store.deviceSettings();
             this.store.saveDeviceSettings({ ...current, cpuRunner: false });
             if (
@@ -953,11 +987,11 @@ export class SessionMemory {
           this.inference = inference;
           let ollamaFailure: string | undefined;
           const result = await this.options
-            .summarize(unit.type, part.prompt, this.abort.signal, placement, (rate) => {
+            .summarize(unit.type, part.prompt, signal, placement, (rate) => {
               if (
                 this.inference === inference &&
                 activity.generation === generation &&
-                !this.abort.signal.aborted
+                !signal.aborted
               )
                 inference.rate = rate;
             })
@@ -965,7 +999,7 @@ export class SessionMemory {
               this.inference = undefined;
             })
             .catch((error: unknown): MemorySummaryResult => {
-              this.abort.signal.throwIfAborted();
+              signal.throwIfAborted();
               if (error instanceof OllamaSummaryError) ollamaFailure = error.message;
               return {
                 type: unit.type,
@@ -974,6 +1008,7 @@ export class SessionMemory {
                 elapsedMs: performance.now() - started,
               };
             });
+          signal.throwIfAborted();
           report(result);
           if (!result.complete) {
             this.noteFailure(
@@ -995,7 +1030,8 @@ export class SessionMemory {
               result.elapsedMs >= 0 && Number.isSafeInteger(durationMs) ? durationMs : undefined;
           }
           summary.complete = summary.parts.length === parts.length;
-          if (!(await this.currentHistory(agentId, epoch, latest))) return true;
+          if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+          signal.throwIfAborted();
           this.store.saveSummary(summary);
           if (summary.complete) {
             activity.lastSuccessfulSummaryAt = new Date().toISOString();
@@ -1007,7 +1043,7 @@ export class SessionMemory {
           }
         } catch (error) {
           this.inference = undefined;
-          this.abort.signal.throwIfAborted();
+          signal.throwIfAborted();
           this.noteFailure(
             agentId,
             error instanceof OllamaSummaryError
@@ -1020,12 +1056,14 @@ export class SessionMemory {
       }
       if (!summary.complete) {
         retainCoverage(unit);
-        if (!(await this.currentHistory(agentId, epoch, latest))) return true;
+        if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+        signal.throwIfAborted();
         this.store.saveSummary(summary);
       }
       summaries.set(id, summary);
     }
-    const tail = await this.currentHistory(agentId, epoch, latest);
+    const tail = await this.currentHistory(agentId, epoch, latest, signal);
+    signal.throwIfAborted();
     if (!tail) return true;
     const seq = Math.max(previous, checkpoint);
     this.store.saveState(agentId, { epoch, seq });

@@ -744,6 +744,70 @@ test('stops fetching older originals when the delegation deadline expires', asyn
   }
 });
 
+test('pauses active summaries, keeps stored summaries readable, and resumes queued turns', async () => {
+  const messages: MemorySourceMessage[] = [];
+  let calls = 0;
+  let interrupted = false;
+  let failures = 0;
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type, _prompt, signal, _placement, onProgress) {
+      calls++;
+      if (calls === 2) {
+        onProgress?.({ tokensPerSecond: 12, estimated: false });
+        await new Promise<void>((resolve) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              interrupted = true;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+      }
+      return {
+        type,
+        text: 'Retained summary.',
+        content: { resolution: 'Retained summary.' },
+        complete: true,
+        elapsedMs: 1,
+      };
+    },
+    onFailure() {
+      failures++;
+    },
+  });
+  function completeTurn(turnId: string) {
+    messages.push(
+      { ...first, seq: messages.length + 1, turnId },
+      { ...finding, seq: messages.length + 2, turnId },
+    );
+    memory.turn('leader', { turnId, outcome: 'completed' }, false);
+  }
+  try {
+    const status = () => memory.status(undefined, 'leader');
+    completeTurn('one');
+    await eventually(() => status().stored?.uamp === 1);
+    completeTurn('two');
+    await eventually(() => status().rate?.tokensPerSecond === 12);
+    memory.setSummarizationEnabled(false);
+    expect(interrupted).toBe(true);
+    completeTurn('three');
+    expect(status()).toMatchObject({ summarization: 'paused', rate: null, lastError: null });
+    expect((await memory.readStoredSummaries('leader')).summaries).toHaveLength(1);
+    expect(calls).toBe(2);
+    memory.setSummarizationEnabled(true);
+    await eventually(() => status().stored?.uamp === 3);
+    expect(calls).toBe(4);
+    expect(failures).toBe(0);
+    expect((await memory.readStoredSummaries('leader')).summaries).toHaveLength(3);
+  } finally {
+    await memory.close();
+  }
+});
+
 test('gives foreground inference priority and exposes originals during a failed summary', async () => {
   const messages = [
     { ...first, turnId: '1' },

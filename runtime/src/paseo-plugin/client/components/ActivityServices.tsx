@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Switch, Text, View } from 'react-native';
 import { useRpc } from '@getpaseo/plugin/client';
 import { Icon, Modal } from '@getpaseo/plugin/client/ui';
 import {
+  activityToggleRpc,
   memoryDeviceRpc,
   type ActivitySnapshot,
   type MemoryUnitCounts,
@@ -42,11 +43,68 @@ const memoryTones = {
   'below-threshold': 'muted',
   failed: 'danger',
   disabled: 'muted',
+  paused: 'muted',
   unknown: 'muted',
 } as const;
 
 function memoryCounts({ uamp, aab }: MemoryUnitCounts) {
   return `${uamp.toLocaleString()} user–agent ${uamp === 1 ? 'pair' : 'pairs'} · ${aab.toLocaleString()} action ${aab === 1 ? 'batch' : 'batches'}`;
+}
+
+function ActivitySwitch({
+  theme,
+  feature,
+  label,
+  enabled,
+}: {
+  theme: Theme;
+  feature: 'summarizer' | 'rag-index';
+  label: string;
+  enabled: boolean | null;
+}) {
+  const toggle = useRpc(activityToggleRpc);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function change(next: boolean) {
+    setPending(true);
+    setError(null);
+    try {
+      await toggle({ feature, enabled: next });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save this setting.');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 6,
+        }}
+      >
+        <ActivityText theme={theme} strong>
+          {label}
+        </ActivityText>
+        <Switch
+          accessibilityLabel={label}
+          value={enabled === true}
+          disabled={pending || enabled === null}
+          onValueChange={(value) => void change(value)}
+        />
+      </View>
+      {error && (
+        <ActivityText theme={theme} tone="danger">
+          {error}
+        </ActivityText>
+      )}
+    </>
+  );
 }
 
 type MemoryDevice = NonNullable<ActivitySnapshot['memory']['device']>;
@@ -118,22 +176,27 @@ function MemoryDevicePicker({
         testID="ltcook-memory-device-row"
         style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
       >
-        <ActivityText theme={theme} tone="muted" lines={1}>
-          Inference device
-        </ActivityText>
         <View style={{ flexShrink: 1, minWidth: 0 }}>
+          <ActivityText theme={theme} tone="muted" lines={1}>
+            Inference device
+          </ActivityText>
+        </View>
+        <View style={{ flexGrow: 1, flexShrink: 0, flexBasis: '56%', minWidth: 0 }}>
           <ActivityButton
             theme={theme}
             label={`Inference device: ${device.label}`}
             expanded={open}
+            compact
             onPress={() => {
               setOpen(true);
               void updateCatalog();
             }}
           >
-            <ActivityText theme={theme} lines={1}>
-              {device.label}
-            </ActivityText>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <ActivityText theme={theme} lines={1}>
+                {device.label}
+              </ActivityText>
+            </View>
             <Icon name="ChevronDown" size={11} color={theme.colors.foregroundMuted} />
           </ActivityButton>
         </View>
@@ -277,7 +340,8 @@ export function ActivityServices({
   const [ragOpen, setRagOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [storedOpen, setStoredOpen] = useState(false);
-  const ragActivity = statusLabel(rag.activity);
+  const ragActivity =
+    rag.indexingEnabled === false ? 'Index updates off' : statusLabel(rag.activity);
   const ragAvailability = statusLabel(rag.availability);
   const summarization = statusLabel(memory.summarization);
   const rate = memory.summarization === 'summarizing' ? memory.rate : null;
@@ -313,6 +377,12 @@ export function ActivityServices({
           </Text>
         }
       >
+        <ActivitySwitch
+          theme={theme}
+          feature="rag-index"
+          label="Index updates"
+          enabled={rag.indexingEnabled}
+        />
         <ActivityField theme={theme} label="Index worktree">
           {rag.worktree?.path ?? 'Unavailable'}
         </ActivityField>
@@ -358,16 +428,21 @@ export function ActivityServices({
           </>
         }
       >
-        <ActivityText theme={theme} strong>
-          Background summaries
-        </ActivityText>
-        {memory.device && (
-          <MemoryDevicePicker
+        <View style={{ gap: 2 }}>
+          <ActivitySwitch
             theme={theme}
-            device={memory.device}
-            onDeviceChange={onDeviceChange}
+            feature="summarizer"
+            label="Summarizer"
+            enabled={memory.device === null ? null : memory.summarization !== 'paused'}
           />
-        )}
+          {memory.device && (
+            <MemoryDevicePicker
+              theme={theme}
+              device={memory.device}
+              onDeviceChange={onDeviceChange}
+            />
+          )}
+        </View>
         {memory.summarization !== 'disabled' && (
           <>
             <ActivityButton

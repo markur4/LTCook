@@ -187,11 +187,15 @@ and **Open Tasks panel**.
 Expand **RAG Index** to see the worktree that the selected conversation is
 authorized to search. Index availability and indexing activity are independent.
 **Checking index** means a ranked query is active and its indexing phase is
-unconfirmed. Opening the panel does not start a search or build.
+unconfirmed. Opening the panel does not start a search or build. Turn off
+**Index updates** to pause ColGREP indexing for the host. Ranked searches can
+still use a complete existing index, and lexical search remains available.
 
 **Session Memory** shows the selected agent's background summaries and last
 acknowledged delegation handoff. Stored and pending counts describe that
-agent's conversation. Select the device next to **Inference device** to open
+agent's conversation. Turn off **Summarizer** to pause generation. Existing
+summaries remain available, and pending work resumes when you turn it back on.
+Both switches persist for the host. Select the device next to **Inference device** to open
 the list. **Auto** lets Ollama choose placement. **CPU** forces CPU inference.
 On supported Ollama hosts, the list also shows named GPUs discovered on the
 host. The picker explains when Ollama's device index is ambiguous or discovery

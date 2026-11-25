@@ -7,6 +7,7 @@ import { createWebTools, type WebToolService } from './web.js';
 import type { OllamaSettings } from '../integrations/ollama.js';
 import { createSessionMemoryTool } from './session-memory.js';
 import type { SessionMemory } from '../session-memory/service.js';
+import type { createColgrepProvider } from '../repository/providers/colgrep.js';
 import type { ToolDefinition } from './types.js';
 
 export function createTools(
@@ -14,8 +15,9 @@ export function createTools(
   ollama?: OllamaSettings,
   web?: WebToolService,
   memory?: SessionMemory,
+  colgrep?: ReturnType<typeof createColgrepProvider>,
 ): readonly ToolDefinition[] {
-  const repoSearch = createRepoSearchTool();
+  const repoSearch = createRepoSearchTool(colgrep);
   return [
     createRiedTool(ried),
     repoSearch,

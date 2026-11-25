@@ -111,6 +111,57 @@ function snapshotFor(
 }
 
 describe('native runtime boundary', () => {
+  test('persistently applies Activity switches only on authenticated user requests', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-activity-controls-'));
+    directories.push(directory);
+    const preferences = join(directory, 'activity-settings.json');
+    const secret = 'activity-control-secret';
+    const memory = new SessionMemory({
+      databasePath: ':memory:',
+      source: {
+        async read() {
+          throw new Error('Toggle must not load history.');
+        },
+      },
+      async summarize() {
+        throw new Error('Toggle must not run inference.');
+      },
+    });
+    const first = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`);
+    first.setActivityPreferences(preferences);
+    first.setSessionMemory(memory);
+    const endpoint = await first.listen();
+    const change = (body: object, token = secret) =>
+      fetch(`${endpoint}/v1/activity/toggle`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    try {
+      const denied = await change(
+        { nativeAgentId: 'worker', feature: 'rag-index', enabled: false },
+        agentBearer(secret, 'worker'),
+      );
+      expect(denied.status).toBe(403);
+      expect(first.activityColgrep.isIndexingEnabled()).toBe(true);
+      for (const feature of ['rag-index', 'summarizer']) {
+        const response = await change({ feature, enabled: false });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ enabled: false });
+      }
+      expect(first.activityColgrep.isIndexingEnabled()).toBe(false);
+      expect(memory.status(undefined, 'leader').summarization).toBe('paused');
+      const restored = new RuntimeApi(undefined, secret, '127.0.0.1:0');
+      restored.setActivityPreferences(preferences);
+      restored.setSessionMemory(memory);
+      expect(restored.activityColgrep.isIndexingEnabled()).toBe(false);
+      expect(memory.status(undefined, 'leader').summarization).toBe('paused');
+    } finally {
+      await first.close();
+      await memory.close();
+    }
+  });
+
   test('only the user can change the host Session Memory device', async () => {
     let probes = 0;
     const gpu = { id: 'CUDA:device-1', label: 'Fixture CUDA GPU', mainGpu: 0 };
