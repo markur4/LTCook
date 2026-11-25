@@ -232,9 +232,9 @@ Both switches apply across conversations and persist across runtime restarts.
 The Session Memory card shows the resolved summarization model and reasoning
 setting, including while paused. Select **Hosted** to send the current user
 messages, agent replies, and any included attachment text to OpenAI. Hosted
-uses the Codex subscription sign-in at Standard speed with low reasoning. Authentication, quota,
-and inference failures appear on the card. Hosted usage shows the LTCook
-runtime's own request and token totals since startup.
+uses the Codex subscription sign-in at Standard speed with low reasoning.
+Authentication, quota, and inference failures appear on the card. Hosted usage
+shows the LTCook runtime's own request and token totals since startup.
 
 Select **Local** to summarize through Ollama. Use **Inference device** to
 choose Auto, CPU, or an available GPU. The saved backend choice applies
@@ -244,9 +244,10 @@ unavailable.
 
 Expand **Stored for this agent** to open the record viewer. It shows Markdown
 summaries, a notice when a short Discussion skipped generation, and execution
-cards. Expand a card to see its original actions and intermediate messages
-where Paseo still has them. **Show summary** opens the records for that passage
-inside the conversation. Reload the viewer to see newly stored records.
+cards. **Show summary** opens the records for that passage inside the
+conversation. Expand an execution card to see compact tool outcomes and
+intermediate agent messages from the original Paseo timeline. Each entry shows
+its source sequence. Reload the viewer to see newly stored records.
 
 The handoff shows the sending agent, receipt time, payload size, and the number
 of summaries represented. A handoff can also carry original user instructions

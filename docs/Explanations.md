@@ -472,13 +472,15 @@ Tool outcomes describe historical work. Source references identify the agent,
 conversation epoch, and original sequence. Session Memory search reports
 pending summaries, result truncation, and original-history availability.
 
-The summarizer reads only the current UAMP and writes concise Markdown under the applicable headings: Intent, Pasted,
-Discoveries, Disagreements, Decisions, and Questions. Earlier Discussions and Task instructions are used by the receiving
-agent through the chronological handoff. The handoff can include original
-messages from intervening short Discussions so the receiver can resolve an
-approval by reference and distinguish it from earlier proposal status.
+The summarizer reads only the current UAMP and writes concise Markdown under
+the applicable headings. These are Intent, Pasted, Discoveries, Disagreements,
+Decisions, and Questions. The receiving agent gets earlier Discussions and
+Task instructions through the chronological handoff. The handoff can include
+original messages from intervening short Discussions so the receiver can resolve
+an approval by reference and distinguish it from earlier proposal status.
 In Hosted mode the current UAMP, including any attachment content in the
-prompt, goes to OpenAI through the Codex subscription with low reasoning. Local mode uses Ollama.
+prompt, goes to OpenAI through the Codex subscription with low reasoning.
+Local mode uses Ollama.
 
 Recognized headings and bullets supply individually retrievable statements.
 The raw Markdown remains available for reading and retrieval when formatting

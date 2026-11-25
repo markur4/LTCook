@@ -424,7 +424,7 @@ export function prepareMemorySummaries(
     let historyText = '';
     const historyIds: string[] = [];
     const allowance = Math.min(available, 512 - estimateMemoryTokens(taskContext));
-    if (allowance > 0) {
+    if (!currentOnly && allowance > 0) {
       const originals = [];
       let remaining = allowance;
       for (const pair of policy.skipped ?? []) {

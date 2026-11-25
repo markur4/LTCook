@@ -19,6 +19,7 @@ import {
   type MemorySource,
 } from '../../../runtime/src/session-memory/service.js';
 import { MemoryStore } from '../../../runtime/src/session-memory/store.js';
+import { prepareMemorySummaries } from '../../../runtime/src/session-memory/summarization.js';
 import { referenceFixture } from '../../../evals/session-memory-simplified.js';
 import type { MemorySourceMessage } from '../../../runtime/src/session-memory/units.js';
 import {
@@ -1022,6 +1023,33 @@ test('gives foreground inference priority and exposes originals during a failed 
     await memory.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('current-only requests omit skipped Discussions while retaining the current reference', () => {
+  const [part] = prepareMemorySummaries(
+    {
+      type: 'UAMP',
+      messages: [
+        { seq: 5, author: 'user', text: 'Use the proposal from earlier.' },
+        { seq: 6, author: 'agent', text: 'I will use it.' },
+      ],
+    },
+    [],
+    undefined,
+    {
+      contextIndependent: true,
+      skipped: [
+        {
+          id: 'earlier',
+          messages: [{ seq: 3, author: 'agent', text: 'Keep the cobalt cursor.' }],
+        },
+      ],
+    },
+  );
+  expect(part!.sources).toEqual([5, 6]);
+  expect(part!.historyIds).toEqual([]);
+  expect(part!.prompt[1].content).toContain('Use the proposal from earlier.');
+  expect(part!.prompt[1].content).not.toContain('Keep the cobalt cursor.');
 });
 
 test('Hosted accepts an isolated Standard request and rejects continuation and tools', () => {
