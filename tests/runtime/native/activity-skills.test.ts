@@ -76,7 +76,13 @@ async function idleCodexActivity(
       controller.abort();
     },
     async () => ({
-      rag: { worktree: null, provider: 'ColGREP', availability: 'unknown', activity: 'unknown' },
+      rag: {
+        worktree: null,
+        provider: 'ColGREP',
+        indexingEnabled: null,
+        availability: 'unknown',
+        activity: 'unknown',
+      },
       memory: {
         device: null,
         rate: null,

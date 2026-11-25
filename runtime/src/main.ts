@@ -254,6 +254,8 @@ async function run(): Promise<void> {
       workspaceShellEnvironments.get(id),
     );
     api = new RuntimeApi(undefined, apiToken, apiListen, process.env, telemetry);
+    await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+    api.setActivityPreferences(path.join(stateDirectory, 'activity-settings.json'));
     const sourceRuntime = process.versions.bun !== undefined;
     const web = new WebToolService(
       python,
@@ -321,7 +323,6 @@ async function run(): Promise<void> {
     api.setPastedDocuments(pastedDocuments);
     if (threshold !== 0) {
       try {
-        await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
         const memorySettings = {
           ...summarization,
           model: process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || sessionMemoryModel,
@@ -391,7 +392,11 @@ async function run(): Promise<void> {
       }
     }
     api.setWorkspaceMcp(
-      new WorkspaceMcp(createTools(ried, summarization, web, memory), apiListen, web),
+      new WorkspaceMcp(
+        createTools(ried, summarization, web, memory, api.activityColgrep),
+        apiListen,
+        web,
+      ),
     );
     const receipt = JSON.parse(
       await fs

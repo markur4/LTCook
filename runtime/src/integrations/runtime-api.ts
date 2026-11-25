@@ -17,7 +17,12 @@ import type { SessionMemory } from '../session-memory/service.js';
 import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import type { WorkspaceMcp } from './mcp.js';
-import { memoryDeviceRpc, storedSummariesRpc } from '../paseo-plugin/shared/activity.js';
+import { ActivityPreferences } from './activity-preferences.js';
+import {
+  activityToggleRpc,
+  memoryDeviceRpc,
+  storedSummariesRpc,
+} from '../paseo-plugin/shared/activity.js';
 import {
   isRepositoryTool,
   SESSION_MEMORY_TOOL_NAME,
@@ -85,7 +90,15 @@ export class RuntimeApi {
     agentId: string,
   ) => { scope?: MemoryScope; task?: MemoryTaskContext } | undefined;
   private pastedDocuments?: PastedDocuments;
-  private readonly activityColgrep = createColgrepProvider();
+  readonly activityColgrep = createColgrepProvider();
+  private activityPreferences?: ActivityPreferences;
+
+  setActivityPreferences(file: string): void {
+    const preferences = new ActivityPreferences(file);
+    this.activityPreferences = preferences;
+    this.activityColgrep.setIndexingEnabled(preferences.enabled('rag-index'));
+    this.memory?.setSummarizationEnabled(preferences.enabled('summarizer'));
+  }
   private providerSubagents?: PaseoHost['listProviderSubagents'];
 
   setProviderSubagents(list: PaseoHost['listProviderSubagents']): void {
@@ -126,6 +139,7 @@ export class RuntimeApi {
   private workspaceMcp: WorkspaceMcp | undefined;
   setSessionMemory(memory: SessionMemory, context?: RuntimeApi['memoryContext']): void {
     this.memory = memory;
+    memory.setSummarizationEnabled(this.activityPreferences?.enabled('summarizer') ?? true);
     this.memoryContext = context;
   }
   setPastedDocuments(documents: PastedDocuments): void {
@@ -262,6 +276,7 @@ export class RuntimeApi {
           '/v1/session-memory/observe',
           '/v1/session-memory/paste',
           '/v1/activity/services',
+          '/v1/activity/toggle',
           '/v1/activity/memory-device',
           '/v1/activity/stored-summaries',
           '/v1/mcp/grant',
@@ -376,6 +391,22 @@ export class RuntimeApi {
         response.writeHead(401).end('{"error":"unauthorized"}');
         return;
       }
+      if (request.url === '/v1/activity/toggle') {
+        if (!isUser) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        const { feature, enabled } = activityToggleRpc.input.parse(parsed);
+        if (!this.activityPreferences || (feature === 'summarizer' && !this.memory)) {
+          response.writeHead(503).end('{"error":"This Activity control is unavailable."}');
+          return;
+        }
+        this.activityPreferences.set(feature, enabled);
+        if (feature === 'summarizer') this.memory?.setSummarizationEnabled(enabled);
+        else this.activityColgrep.setIndexingEnabled(enabled);
+        response.writeHead(200).end(JSON.stringify({ enabled }));
+        return;
+      }
       if (request.url === '/v1/activity/memory-device') {
         if (!isUser) {
           response.writeHead(403).end('{}');
@@ -478,7 +509,10 @@ export class RuntimeApi {
         const task = session?.tasks.find((value) => value.id === assignment?.taskId);
         response.writeHead(200).end(
           JSON.stringify({
-            rag,
+            rag: {
+              ...rag,
+              indexingEnabled: this.activityPreferences?.enabled('rag-index') ?? null,
+            },
             task: task?.title,
             subagents,
             workspace: workspace && { root: workspace.root, identity: workspace.identity },

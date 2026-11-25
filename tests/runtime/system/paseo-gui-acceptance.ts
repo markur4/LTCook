@@ -338,6 +338,7 @@ const environment = {
 const tracePath = path.join(directory, 'gui.perfetto.json');
 const telemetry = new Telemetry(path.join(directory, 'gui.events.jsonl'), tracePath);
 const api = new RuntimeApi(undefined, secret, listen, environment, telemetry);
+api.setActivityPreferences(path.join(directory, 'activity-settings.json'));
 const evals = new EvalRunService(path.join(directory, 'eval-state'), async (request) => {
   assert.equal(request.preset, 'full');
   assert.equal(request.setup, 'synthetic');
@@ -805,9 +806,34 @@ try {
   await clickButton('Open Explorer sidebar');
   await browser('wait', '--text', 'Recent conversation activity');
   assert(activityRequests > requestsWhileHidden, 'Reopening Activity resumes observation');
+  stage = 'native-activity-switches';
+  await browser('click', '[aria-label^="RAG Index,"]');
+  const indexingSwitch = '[role="switch"][aria-label="Index updates"]';
+  await browser('click', indexingSwitch);
+  await browser('wait', '[aria-label^="RAG Index,"][aria-label*="Index updates off"]');
+  assert.equal(api.activityColgrep.isIndexingEnabled(), false);
+  await browser('click', indexingSwitch);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector(${JSON.stringify(indexingSwitch)})?.checked === true`,
+  );
+  assert.equal(api.activityColgrep.isIndexingEnabled(), true);
+  await browser('click', '[aria-label^="RAG Index,"]');
   stage = 'native-activity-memory-summaries';
   await browser('wait', '[aria-label^="Session Memory,"][aria-label*="stored"]');
   await browser('click', '[aria-label^="Session Memory,"]');
+  const summarizerSwitch = '[role="switch"][aria-label="Summarizer"]';
+  await browser('click', summarizerSwitch);
+  await browser('wait', '[aria-label^="Session Memory,"][aria-label$="Paused"]');
+  assert.equal(memory.status(undefined, mobileSession.id).summarization, 'paused');
+  await browser('click', summarizerSwitch);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector(${JSON.stringify(summarizerSwitch)})?.checked === true`,
+  );
+  assert.notEqual(memory.status(undefined, mobileSession.id).summarization, 'paused');
   stage = 'native-activity-memory-device';
   await browser('wait', '[aria-label="Inference device: Auto"]');
   assert.equal(deviceProbes, 0, 'Opening the Activity card does not probe GPUs');
@@ -818,17 +844,26 @@ try {
         const row = document.querySelector('[data-testid="ltcook-memory-device-row"]');
         const trigger = row.querySelector('[aria-label="Inference device: Auto"]');
         const label = [...row.querySelectorAll('div, span')].find(node => node.textContent === 'Inference device');
+        const rowHeight = row.getBoundingClientRect().height;
+        row.style.width = '174px';
         const key = label.getBoundingClientRect();
         const value = trigger.getBoundingClientRect();
+        const narrow = row.getBoundingClientRect();
+        row.style.removeProperty('width');
         return {
-          rowHeight: row.getBoundingClientRect().height,
+          rowHeight,
           sameLine: key.right <= value.left + 1 && Math.abs(key.top + key.height / 2 - value.top - value.height / 2) <= 2,
+          reservedWidth: value.width / narrow.width,
+          fits: value.right <= narrow.right + 1,
         };
       })()`,
     ),
-  ) as { rowHeight: number; sameLine: boolean };
+  ) as { rowHeight: number; sameLine: boolean; reservedWidth: number; fits: boolean };
   assert(
-    deviceRow.sameLine && deviceRow.rowHeight < 48,
+    deviceRow.sameLine &&
+      deviceRow.rowHeight < 32 &&
+      deviceRow.fits &&
+      deviceRow.reservedWidth > 0.5,
     'The device label and control share one compact row',
   );
   await clickButton('Inference device: Auto');

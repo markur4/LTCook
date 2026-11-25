@@ -209,6 +209,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🛠️ Changed
 
+- Activity can pause Session Memory generation and ColGREP index updates independently.
+  The device picker gives the selected device more room on narrow sidebars.
+
 - **Breaking:** 💥 Session Memory starts a fresh v4 derived database for parsed
   summary content and device identities. The compact **Inference device** picker
   shows Ollama-discovered GPUs where supported. **Stored Summaries** and

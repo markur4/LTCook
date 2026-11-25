@@ -5,6 +5,7 @@ import { defineRpc, PluginAttachmentItemSchema } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
 import {
   activitySubscription,
+  activityToggleRpc,
   memoryDeviceRpc,
   MemoryDeviceSchema,
   MemoryRateSchema,
@@ -235,6 +236,7 @@ async function listSessions(input: z.infer<typeof SessionListRequestSchema>, pas
 
 const activityServices = z.object({
   rag: z.object({
+    indexingEnabled: z.boolean().nullable(),
     availability: z.enum(['ready', 'not-ready', 'unavailable', 'unknown']),
     activity: z.enum([
       'idle',
@@ -255,6 +257,7 @@ const activityServices = z.object({
       device: MemoryDeviceSchema,
       rate: MemoryRateSchema.nullable(),
       summarization: z.enum([
+        'paused',
         'summarizing',
         'queued',
         'up-to-date',
@@ -292,6 +295,9 @@ const activityServices = z.object({
 });
 
 export default function contribute(server: PluginServerContext) {
+  server.handle(activityToggleRpc, async (input) =>
+    activityToggleRpc.output.parse(await runtimeJson('/v1/activity/toggle', input)),
+  );
   server.handle(memoryDeviceRpc, async (input) =>
     memoryDeviceRpc.output.parse(
       await runtimeJson('/v1/activity/memory-device', input, undefined, 20_000),
@@ -366,6 +372,7 @@ export default function contribute(server: PluginServerContext) {
                 }
               : null,
             provider: 'ColGREP',
+            indexingEnabled: services?.rag.indexingEnabled ?? null,
             availability: services?.rag.availability ?? 'unknown',
             activity: services?.rag.activity ?? 'unknown',
             ...(services?.rag.diagnostic ? { diagnostic: services.rag.diagnostic } : {}),
