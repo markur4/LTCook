@@ -130,8 +130,9 @@ export async function screenSessionMemory(input: {
   allowRetry?: boolean;
   progress?: (label: string) => void;
 }) {
+  const qualifyMnnLocal = input.qualifyMnnLocal || input.asymmetric;
   if (
-    input.qualifyMnnLocal &&
+    qualifyMnnLocal &&
     (input.profileId ||
       input.approvalDiagnostic ||
       input.localComparison ||
@@ -145,7 +146,7 @@ export async function screenSessionMemory(input: {
     ).length > 1
   )
     throw new Error('Choose one MNN-Pocket qualification experiment at a time.');
-  const revision = input.qualifyMnnLocal ? chronologicalHandoffRevision : frozenRevision;
+  const revision = qualifyMnnLocal ? chronologicalHandoffRevision : frozenRevision;
   const frozen = Bun.spawnSync(
     [
       'git',
@@ -284,7 +285,7 @@ export async function screenSessionMemory(input: {
   const selectedProfiles =
     input.approvalDiagnostic === 'controls'
       ? [...profiles.filter(({ id }) => id === mnnProfileId), mnnQatProfile]
-      : input.approvalDiagnostic === 'minimal' || input.localComparison || input.qualifyMnnLocal
+      : input.approvalDiagnostic === 'minimal' || input.localComparison || qualifyMnnLocal
         ? profiles.filter(({ id }) => id === mnnProfileId)
         : qatScreen
           ? [mnnQatProfile]
@@ -377,7 +378,7 @@ export async function screenSessionMemory(input: {
             localResults.push({ model: verified, arms });
             break;
           }
-          if (input.qualifyMnnLocal) {
+          if (qualifyMnnLocal) {
             if (!model.weightsDigest)
               throw new Error('The qualification requires verified weights.');
             const options = {
@@ -522,7 +523,7 @@ export async function screenSessionMemory(input: {
     results,
     comparison,
     ...(input.approvalDiagnostic ? { diagnostics } : {}),
-    ...(input.localComparison || input.qualifyMnnLocal ? { localResults } : {}),
+    ...(input.localComparison || qualifyMnnLocal ? { localResults } : {}),
     ...(asymmetricResult ? { asymmetric: asymmetricResult } : {}),
     productionSuspended: true,
   };

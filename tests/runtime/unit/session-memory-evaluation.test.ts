@@ -102,17 +102,19 @@ test('MNN-Pocket qualification rejects conflicting evaluation modes before model
     { localValidation: ['immediate'] },
     { mnnApprovalFirst: true },
   ] as const;
-  for (const conflict of conflicts) {
-    await expect(
-      screenSessionMemory({
-        settings: { endpoint: 'http://127.0.0.1:1', model: 'unused', keepAlive: 0 },
-        signal: AbortSignal.abort(),
-        qualifyMnnLocal: true,
-        ...conflict,
-      }),
-    ).rejects.toThrow(
-      '--qualify-mnn-local cannot be combined with other model or screening modes.',
-    );
+  for (const mode of [{ qualifyMnnLocal: true }, { asymmetric: true }]) {
+    for (const conflict of conflicts) {
+      await expect(
+        screenSessionMemory({
+          settings: { endpoint: 'http://127.0.0.1:1', model: 'unused', keepAlive: 0 },
+          signal: AbortSignal.abort(),
+          ...mode,
+          ...conflict,
+        }),
+      ).rejects.toThrow(
+        '--qualify-mnn-local cannot be combined with other model or screening modes.',
+      );
+    }
   }
 });
 

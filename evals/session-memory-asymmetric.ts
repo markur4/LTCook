@@ -2,6 +2,7 @@ import { peakRunnerRss, residency } from '../runtime/src/evals/session-memory.js
 import {
   ollamaEndpoint,
   releaseOllamaModel,
+  summaryGeneration,
   type OllamaSettings,
 } from '../runtime/src/integrations/ollama.js';
 import {
@@ -94,26 +95,29 @@ export async function compareAsymmetricMemory(input: {
         const originalBytes = Buffer.byteLength(user.text) + agentBytes;
         if ((asymmetric ? replyTokens : exchangeTokens) < shortDiscussionTokens) {
           const retainedReply = await reopen(agent);
+          const retained = !!retainedUser && !!retainedReply;
           return {
             arm,
             requests: 0,
-            outcome: retainedUser && retainedReply ? ('retained' as const) : ('failed' as const),
-            acceptedCombinedBytes: retainedUser && retainedReply ? originalBytes : null,
-            passed: false,
+            outcome: retained ? ('retained' as const) : ('failed' as const),
+            acceptedCombinedBytes: retained ? originalBytes : null,
+            passed: retained,
           };
         }
-        const prompt: typeof baseline = asymmetric
-          ? [
-              { ...baseline[0], content: replyPrompt },
-              {
-                ...baseline[1],
-                content: baseline[1].content.replace(
-                  /(\n)Summarize current sources only (\(#[0-9]+ to #[0-9]+\)\.)/,
-                  '$1Use current sources only $2 Summarize only the agent reply.',
-                ),
-              },
-            ]
-          : baseline;
+        let prompt = baseline;
+        if (asymmetric) {
+          const [system, user] = baseline;
+          const content = user.content.replace(
+            /^Summarize current sources only (\(#[0-9]+ to #[0-9]+\)\.)$/m,
+            'Use current sources only $1 Summarize only the agent reply.',
+          );
+          if (content === user.content)
+            throw new Error('Cannot replace the current UAMP summary instruction.');
+          prompt = [
+            { ...system, content: replyPrompt },
+            { ...user, content },
+          ];
+        }
 
         await releaseOllamaModel(settings, signal);
         const start = performance.now();
@@ -135,10 +139,17 @@ export async function compareAsymmetricMemory(input: {
               error: error instanceof Error ? error.message : String(error),
             };
           });
-        const loaded = await residency(endpoint, digest, signal);
+        const { result } = request;
+        let residencyError: string | undefined;
+        const loaded = result
+          ? await residency(endpoint, digest, signal).catch((error: unknown) => {
+              signal.throwIfAborted();
+              residencyError = error instanceof Error ? error.message : String(error);
+              return null;
+            })
+          : null;
         const cpuVerified = !!loaded && loaded.bytes > 0 && loaded.gpuBytes === 0;
         const peakRssBytes = await peakRunnerRss(weightsDigest);
-        const { result } = request;
         const outputBytes = result ? Buffer.byteLength(result.text) : null;
         const replyRatio = outputBytes === null ? null : outputBytes / agentBytes;
         const replyGrade = gradeSimplifiedLayer(
@@ -171,6 +182,7 @@ export async function compareAsymmetricMemory(input: {
           outcome,
           passed: outcome === 'accepted',
           ...('error' in request ? { error: request.error } : {}),
+          ...(residencyError ? { residencyError } : {}),
           providerComplete: result?.complete ?? false,
           cpuVerified,
           peakRssBytes,
@@ -220,10 +232,11 @@ export async function compareAsymmetricMemory(input: {
     }
   }
   return {
+    generation: summaryGeneration(settings),
     maximumReplyRatio,
     fixtures,
     passed: fixtures.every(({ arms }) =>
-      arms.some(({ arm, passed }) => arm === 'agent-reply-only' && passed),
+      arms.some(({ arm, outcome }) => arm === 'agent-reply-only' && outcome === 'accepted'),
     ),
   };
 }

@@ -1194,13 +1194,15 @@ identical source messages, confined to the current UAMP. The baseline used
 the existing simple bullet prompt and the reply-only arm used the requested
 role-specific prompt. The experiment reopened the original user messages
 through their source references and verified an exact match in each fixture.
-The reply-only threshold uses the original agent reply's estimated length.
-Short replies take the source-only path without a model request.
+The reply-only arm uses the original agent reply's estimated length to
+select the source-only path below 256 tokens. Both measured replies
+exceeded that threshold.
 
-MNN-Pocket Q8_0 ran with its established sampling, seed 17 and reasoning
-disabled. Each measured arm made one request with the existing 2,048-token
-cap. CPU placement and zero reasoning tokens were verified for all four
-requests. Peak memory is the Ollama runner's RSS high-water mark.
+MNN-Pocket Q8_0 ran at temperature 0.8, top-k 20, top-p 0.8, repetition
+penalty 1, presence penalty 0, min-p 0 and seed 17, with reasoning disabled.
+Each measured arm made one request with the existing 2,048-token cap. CPU
+placement and zero reasoning tokens were verified for all four requests.
+Peak memory is the Ollama runner's RSS high-water mark.
 
 | Fixture | Prompt | Reply facts | Input / output tokens | CPU wall s | Peak MiB | Output / original reply bytes | Original user + output bytes |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -1223,4 +1225,6 @@ unsupported completion and avoiding a false positive when a reply says
 the production queue was untouched. The probe reopened both exact original
 replies as fallback evidence. Both generated reply outcomes remained
 failed. Broader semantic and delegation qualification stopped at this gate.
+The source-retention evidence comes from lookups against fixture
+transcripts. Receiving-agent behavior is outside the scope of this probe.
 Production processing, AAB recording and handoff retrieval stayed as configured.
