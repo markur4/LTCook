@@ -27,7 +27,7 @@ export function createSessionWorktreeTool(
     async execute({ operation, path, passId }, context) {
       const scope = scopeFor(context, passId);
       if (operation === 'use') await worktrees.register(scope, path, context.signal);
-      else worktrees.clear(scope, path);
+      else await worktrees.clear(scope, path);
       return { ok: true as const };
     },
   });

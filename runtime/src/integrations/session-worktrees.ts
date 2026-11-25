@@ -1,3 +1,4 @@
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { listGitWorktrees } from '../repository/providers/git.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
@@ -35,7 +36,11 @@ export class SessionWorktrees {
     const source = await openRepositoryWorkspace(scope.workspaceRoot);
     const candidate = await openRepositoryWorkspace(checkout);
     const entries = await listGitWorktrees(source, this.gitPath, signal);
-    if (!entries.some((entry) => this.isAvailable(entry) && entry.path === candidate.root))
+    if (
+      !entries.some(
+        (entry) => this.isAvailable(entry) && path.normalize(entry.path) === candidate.root,
+      )
+    )
       throw new Error('The path is not an available worktree of the session repository.');
 
     await candidate.assertUnchanged();
@@ -48,16 +53,20 @@ export class SessionWorktrees {
     worktrees.set(scopeKey(scope), { path: candidate.root, identity: candidate.identity });
   }
 
-  clear(scope: WorktreeScope, checkout: string): void {
+  async clear(scope: WorktreeScope, checkout: string): Promise<void> {
     const worktrees = this.sessions.get(scope.sessionId);
     const key = scopeKey(scope);
-    if (worktrees?.get(key)?.path !== checkout) return;
+    const binding = worktrees?.get(key);
+    if (!worktrees || !binding || !path.isAbsolute(checkout)) return;
+    const canonical = await realpath(checkout).catch(() => path.normalize(checkout));
+    if (binding.path !== canonical || worktrees.get(key) !== binding) return;
     worktrees.delete(key);
     if (!worktrees.size) this.sessions.delete(scope.sessionId);
   }
 
   async read(scope: WorktreeScope, signal?: AbortSignal) {
     const worktrees = this.sessions.get(scope.sessionId);
+    const bindings = worktrees ? [...worktrees] : [];
     const source = await openRepositoryWorkspace(scope.workspaceRoot);
     const entries = await listGitWorktrees(source, this.gitPath, signal).catch((error: unknown) => {
       signal?.throwIfAborted();
@@ -66,15 +75,15 @@ export class SessionWorktrees {
     });
     const available = entries
       .filter((entry) => this.isAvailable(entry))
-      .map(({ path, branch }) => ({
-        path,
+      .map(({ path: checkout, branch }) => ({
+        path: path.normalize(checkout),
         ...(branch ? { branch } : {}),
       }));
     if (!worktrees?.size) return { following: null, available };
 
     const byPath = new Map(available.map((item) => [item.path, item]));
     const registered = new Map<string, SessionWorktree>();
-    for (const [key, binding] of [...worktrees]) {
+    for (const [key, binding] of bindings) {
       const entry = byPath.get(binding.path);
       const checkout =
         entry && (await openRepositoryWorkspace(binding.path).catch(() => undefined));
@@ -96,7 +105,8 @@ export class SessionWorktrees {
     const following = registered.get(scopeKey(scope)) ?? registered.get(`agent:${scope.agentId}`);
     return {
       following:
-        following ?? (paths.size === 1 ? (registered.values().next().value ?? null) : null),
+        following ??
+        (!scope.passId && paths.size === 1 ? (registered.values().next().value ?? null) : null),
       available,
     };
   }

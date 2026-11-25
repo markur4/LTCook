@@ -211,9 +211,10 @@ diff --git a/packages/app/src/panels/diff-panel.tsx b/packages/app/src/panels/di
            focusRequestId={target.kind === "working_diff" ? target.focusRequestId : undefined}
            onSelectDiffFile={isTree ? handleSelectDiffFile : undefined}
 -          onOpenFile={handleOpenFile}
-+          onOpenFile={reviewingWorktree ? undefined : handleOpenFile}
-           onOpenToSide={isTree && openTargetToSide ? handleOpenDiffToSide : undefined}
+-          onOpenToSide={isTree && openTargetToSide ? handleOpenDiffToSide : undefined}
 -          onAddToChat={canAddToChat ? addFile : undefined}
++          onOpenFile={reviewingWorktree ? undefined : handleOpenFile}
++          onOpenToSide={!reviewingWorktree && isTree && openTargetToSide ? handleOpenDiffToSide : undefined}
 +          onAddToChat={!reviewingWorktree && canAddToChat ? addFile : undefined}
            state={changesState}
            onStateChange={setChangesState}
@@ -456,8 +457,8 @@ new file mode 100644
 +  const display = pinned
 +    ? options.find((option) => option.value === pinned) ?? null
 +    : {
-+        label: "Follow session",
-+        description: snapshot.following?.branch ?? "Original checkout",
++        label: snapshot.following?.branch ?? "Follow session",
++        description: snapshot.following ? "Following session" : "Original checkout",
 +      };
 +  return (
 +    <SelectField
