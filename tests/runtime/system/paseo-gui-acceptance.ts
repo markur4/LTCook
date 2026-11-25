@@ -813,7 +813,11 @@ try {
   await browser('wait', '[aria-label^="RAG Index,"][aria-label*="Index updates off"]');
   assert.equal(api.activityColgrep.isIndexingEnabled(), false);
   await browser('click', indexingSwitch);
-  await browser('wait', `${indexingSwitch}[aria-checked="true"]`);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector(${JSON.stringify(indexingSwitch)})?.checked === true`,
+  );
   assert.equal(api.activityColgrep.isIndexingEnabled(), true);
   await browser('click', '[aria-label^="RAG Index,"]');
   stage = 'native-activity-memory-summaries';
@@ -824,7 +828,11 @@ try {
   await browser('wait', '[aria-label^="Session Memory,"][aria-label$="Paused"]');
   assert.equal(memory.status(undefined, mobileSession.id).summarization, 'paused');
   await browser('click', summarizerSwitch);
-  await browser('wait', `${summarizerSwitch}[aria-checked="true"]`);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector(${JSON.stringify(summarizerSwitch)})?.checked === true`,
+  );
   assert.notEqual(memory.status(undefined, mobileSession.id).summarization, 'paused');
   stage = 'native-activity-memory-device';
   await browser('wait', '[aria-label="Inference device: Auto"]');
