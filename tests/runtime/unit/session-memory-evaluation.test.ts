@@ -1,3 +1,4 @@
+import { asymmetricFixtures } from '../../../evals/session-memory-asymmetric-fixtures.js';
 import {
   candidateScreeningFixtures,
   screenSessionMemory,
@@ -456,4 +457,32 @@ test('manifest screening fails a complete summary that leaves explicit approval 
       result.facts.find(({ source, contradicted }) => source === 5 && contradicted)?.label,
     ).toBe('the later approval names the proposed implementation');
   }
+});
+
+test('asymmetric reply grades preserve reported state while detecting unsupported completion', () => {
+  const [discovery, planning] = asymmetricFixtures;
+  for (const fixture of asymmetricFixtures) {
+    const originals = [{ seq: 2, author: 'agent' as const, text: fixture.reply }];
+    const facts = fixture.facts.map((fact) => ({ ...fact, source: 2, critical: true }));
+    expect(originalTokenCount(originals)).toBeGreaterThanOrEqual(shortDiscussionTokens);
+    expect(gradeSimplifiedLayer(facts, originals, originals).passed).toBe(true);
+  }
+
+  const planningFacts = planning.facts.map((fact) => ({ ...fact, source: 2, critical: true }));
+  const queue = planningFacts.find(({ label }) => label === 'production queue was untouched')!;
+  expect(contradictsMemoryFact(queue, 'No runtime code changed; production queue untouched.')).toBe(
+    false,
+  );
+  expect(contradictsMemoryFact(queue, 'The production queue was cleared.')).toBe(true);
+
+  const proposed = planningFacts.find(({ label }) => label.startsWith('prepareImportReplay'))!;
+  const invented =
+    'Proposed extending prepareImportReplay. Check implemented in existing preparation step.';
+  expect(contradictsMemoryFact(proposed, invented)).toBe(true);
+
+  const discoveryFacts = discovery.facts.map((fact) => ({ ...fact, source: 2, critical: true }));
+  const cause = discoveryFacts.find(({ label }) => label.startsWith('keyed by report ID'))!;
+  expect(
+    contradictsMemoryFact(cause, 'The issue is resolved by using the current workspace reader.'),
+  ).toBe(true);
 });

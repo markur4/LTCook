@@ -1178,3 +1178,49 @@ single run. The cap bounded generation but truncated both previously
 complete summaries on this fixture. The 50% ratio remains an evaluation
 setting. The probe exercised one request per UAMP and does not establish
 a total cap for UAMPs split across requests.
+
+### Asymmetric UAMP screen
+
+Run the focused comparison while production summarization is suspended:
+
+```shell
+bun evals/session-memory-live.ts --probe-mnn-asymmetric --production-suspended
+```
+
+The two fixtures contain a read-only technical discovery and an exchange
+that distinguishes a completed test fixture from a proposed runtime change.
+The agent replies were 397 and 407 estimated tokens. Both arms received
+identical source messages, confined to the current UAMP. The baseline used
+the existing simple bullet prompt and the reply-only arm used the requested
+role-specific prompt. The experiment reopened the original user messages
+through their source references and verified an exact match in each fixture.
+The reply-only threshold uses the original agent reply's estimated length.
+Short replies take the source-only path without a model request.
+
+MNN-Pocket Q8_0 ran with its established sampling, seed 17 and reasoning
+disabled. Each measured arm made one request with the existing 2,048-token
+cap. CPU placement and zero reasoning tokens were verified for all four
+requests. Peak memory is the Ollama runner's RSS high-water mark.
+
+| Fixture | Prompt | Reply facts | Input / output tokens | CPU wall s | Peak MiB | Output / original reply bytes | Original user + output bytes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Technical discovery | Simple bullets | 5/5 | 518 / 392 | 6.344 | 658 | 1,933 / 1,587 (122%) | 2,200 |
+| Technical discovery | Reply only | 2/5, contradiction | 548 / 210 | 3.892 | 660 | 1,068 / 1,587 (67%) | 1,335 |
+| Planning and execution | Simple bullets | 5/5 | 541 / 401 | 6.311 | 660 | 1,933 / 1,626 (119%) | 2,238 |
+| Planning and execution | Reply only | 5/5, contradiction | 571 / 205 | 3.759 | 661 | 1,004 / 1,626 (62%) | 1,309 |
+
+The original user-plus-reply sizes were 1,854 and 1,931 bytes. The final
+column counts the retained user text plus the raw generated output for both
+arms, with provenance metadata excluded. Both baseline outputs repeated
+the user and agent source content and failed the compression gate. Both
+reply-only outputs met the chosen 30% reduction threshold. The discovery
+output dropped the exact path, symbol and named check results while calling
+a workaround a resolution. The planning output claimed the proposed runtime
+check was already implemented. All requests completed at the provider.
+
+The saved outputs were regraded after tightening the fixture rules for
+unsupported completion and avoiding a false positive when a reply says
+the production queue was untouched. The probe reopened both exact original
+replies as fallback evidence. Both generated reply outcomes remained
+failed. Broader semantic and delegation qualification stopped at this gate.
+Production processing, AAB recording and handoff retrieval stayed as configured.
