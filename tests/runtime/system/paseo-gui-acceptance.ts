@@ -835,9 +835,20 @@ try {
   await browser('wait', '--text', 'RTX 5090');
   await browser('wait', '--text', 'RTX 4070 Ti SUPER');
   await browser('wait', '--text', ambiguousReason);
+  await browser('wait', '[aria-label="AMD integrated GPU"][aria-disabled="true"]');
   assert(deviceProbes > 0, 'Opening the device list probes Ollama');
   await clickButton('CPU');
-  await browser('wait', '[aria-label="Inference device: CPU"]');
+  await browser(
+    'wait',
+    '--fn',
+    `(() => {
+      const button = document.querySelector('[aria-label="Inference device: CPU"]');
+      if (!button) return false;
+      const bounds = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      return button.contains(hit);
+    })()`,
+  );
   assert.equal(memory.status(undefined, mobileSession.id).device.id, 'cpu');
   await clickButton('Inference device: CPU');
   await clickButton(selectedGpu.label);
@@ -884,9 +895,22 @@ try {
   assert.match(jsonDisplay.font, /monospace/);
   assert(jsonDisplay.colors > 1, 'The Stored Summaries tab colors JSON syntax');
   assert.deepEqual(jsonDisplay.summaries[0]?.parts[0]?.content, summaryContent);
+  await browser(
+    'eval',
+    `(() => {
+      const writeText = navigator.clipboard.writeText.bind(navigator.clipboard);
+      navigator.clipboard.writeText = async value => {
+        await writeText(value);
+        window.__ltcookCopiedSummaries = value;
+      };
+    })()`,
+  );
   await clickButton('Copy JSON');
   await browser('wait', '--text', 'Copied stored summaries');
-  assert.deepEqual(JSON.parse(await browser('clipboard', 'read')), jsonDisplay.summaries);
+  assert.deepEqual(
+    JSON.parse(await browser('eval', 'JSON.parse(window.__ltcookCopiedSummaries)')),
+    jsonDisplay.summaries,
+  );
   await clickButton(mobileLeader.agent.title);
   await waitForComposer(mobileLeader.agent.title);
   stage = 'native-activity-memory-chat-shortcut';
