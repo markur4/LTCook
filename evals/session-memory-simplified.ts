@@ -126,6 +126,16 @@ function referenceFixture(): MemoryFixture {
     correctionSources: [7],
     facts: [
       {
+        label: 'the initial snapshot reuse proposal was open',
+        source: 1,
+        kind: 'decision',
+        critical: true,
+        expected:
+          /(?:propos\w*|consider\w*)[^\n]{0,120}selectWorkspaceSnapshot|selectWorkspaceSnapshot[^\n]{0,120}(?:propos\w*|consider\w*|unapproved|not (?:yet )?approved)/i,
+        contradicts:
+          /selectWorkspaceSnapshot[^.\n]{0,100}\b(?:is|was) approved\b|\b(?:user(?:['’]s approval)?|explicitly) approved\b[^.\n]{0,120}selectWorkspaceSnapshot/i,
+      },
+      {
         ...fixture.facts[0]!,
         source: 7,
         expected:

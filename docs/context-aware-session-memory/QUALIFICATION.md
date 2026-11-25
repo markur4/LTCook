@@ -656,3 +656,42 @@ own qualification record above.
 bun evals/session-memory-edit-live.ts --context-aware --audit-output \
   lfm3:1.7b-qad-q4_0 gpt-6-luna
 ```
+
+## Simplified Session Memory comparison
+
+The matched run used `lfm3:1.7b-qad-q4_0` (manifest digest beginning
+`765f7b`) at seed 17 on CPU. Production Session Memory inference was
+suspended and its preference was restored afterward. The two deterministic
+arms recorded all five focused fixtures without generating a summary. The
+existing JSON arm made 15 attempts, of which one AAB request failed. Its
+request time includes that attempt. Provider token totals are partial when a
+request fails without counts. Requests with provider metrics reported 9,033
+input tokens and 2,948 generated tokens, with 35.76 s of prefill and
+91.33 s of generation.
+
+| Pipeline | Requests | CPU request time | Input tokens | Generation tokens | Stored record bytes | Handoff bytes | Record critical facts | Handoff critical facts |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Existing JSON | 15 | 146.81 s | Partial | Partial | 20328 | 18447 | 14/14 | 14/14 |
+| Deterministic AABs and JSON UAMPs | 0 | 0.00 s | 0 | 0 | 8127 | 10465 | 14/14 | 14/14 |
+| Deterministic AABs and Markdown UAMPs | 0 | 0.00 s | 0 | 0 | 8127 | 10465 | 14/14 | 14/14 |
+
+Both deterministic arms retained the large AAB's failed and passing outcomes
+as separate events. The 14/14 results use normal access to source references
+on recorded AABs and skipped UAMPs.
+
+The generated Markdown approval control remains open. In the strongest replay
+with the added proposal and execution checks, the summarizer retained 4/5
+critical facts in its generated output, across the stored records, and in
+the handoff. It preserved the open proposal, API constraint, rejection of
+an automatic rebuild, and lack of completed implementation. The approval
+still omitted that “Implement that” referred to reuse of
+`selectWorkspaceSnapshot`. A longer reference instruction and a plain
+Markdown context replay both yielded an empty approval summary. The pass
+retains the 4/5 prompt and keeps the gate at 5/5 with zero critical
+contradictions.
+
+Native Pi with GPT-6 Luna at high reasoning completed both the original
+source controls and simplified handoffs for trace pairing and workspace
+preparation. All four runs passed their four executable checks. The
+simplified records for these edit fixtures required zero inference requests.
+The four runs took 72.75 s including setup and assembly.

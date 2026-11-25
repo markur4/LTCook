@@ -20,6 +20,8 @@
 - [x] Record deterministic AABs and short Discussions with source references.
 - [x] Produce UAMP Markdown and display records in Paseo.
 - [x] Extend the matched Agent Evals and regression fixtures.
-- [ ] Verify the final pass with Traditional Tests and native Pi/Paseo.
-- [ ] Qualify the three CPU comparison arms and downstream delegation.
-- [ ] Review the combined pass and integrate after acceptance.
+- [x] Verify the final pass with Traditional Tests and native Pi/Paseo.
+- [x] Compare the three CPU arms and qualify downstream delegation.
+- [ ] Pass the generated Markdown approval control at seed 17. See [qualification](QUALIFICATION.md#simplified-session-memory-comparison).
+- [x] Review the combined pass.
+- [ ] Integrate after the approval control passes.
