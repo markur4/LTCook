@@ -153,6 +153,8 @@ const provider = createServer(async (request, response) => {
     assert.match(instructions, /ltcook_repo_locate[^.]*known symbol/);
     assert.match(instructions, /ltcook_repo_search[^.]*hybrid/);
     assert.match(instructions, /Locate location/);
+    assert.match(instructions, /prefer ltcook_web_search for web searches/);
+    assert.match(instructions, /ltcook_web_fetch to read sources/);
     const result = messages?.findLast((item: Record<string, unknown>) =>
       codex
         ? item.type === 'function_call_output' && item.call_id === marker

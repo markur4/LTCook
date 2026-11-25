@@ -47,6 +47,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- LTCook guides agents to prefer its web search and source-reading tools when
+  available, with a fallback for missing capabilities or incomplete evidence.
+
 - Linux and WSL can queue an LTCook restart until Paseo finishes active and
   queued turns. Check or cancel the queued job from the CLI, or request it
   through an agent that supports Paseo's approval dialog. An optional update
