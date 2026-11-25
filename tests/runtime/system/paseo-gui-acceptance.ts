@@ -1008,7 +1008,9 @@ try {
     '--fn',
     `document.querySelector(${JSON.stringify(execution)})?.textContent.includes(${JSON.stringify(fixtureSkill)})`,
   );
-  await browser('click', `${preview} [aria-label="Hide execution details"]`);
+  const hideDetails = `${preview} [aria-label="Hide execution details"]`;
+  await browser('scrollintoview', hideDetails);
+  await browser('click', hideDetails);
   await clickButton('Open complete summary');
   await browser('wait', completeSummary);
   const complete = await browser('get', 'text', completeSummary);

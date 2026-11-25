@@ -83,6 +83,8 @@ try {
           settings: summarization,
           digest: modelInfo.digest,
           signal,
+          fixtureId: option('fixture'),
+          auditOutput: args.includes('--audit-output'),
           progress: (event) => console.error(event),
         });
         const identityUnchanged = (await listEvaluationModels(summarization.endpoint, signal)).some(

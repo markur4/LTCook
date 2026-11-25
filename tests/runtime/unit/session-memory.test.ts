@@ -923,7 +923,11 @@ test('records actions and short Discussions without inference while paused, acro
     ]);
     const record = { epoch, position: 4, id: summaries[1]!.id };
     expect(await memory.readEvidenceReferences('leader', record)).toMatchObject({
-      sources: [{ seq: 2 }, { seq: 3, messageId: 'tool-0' }, { seq: 4, messageId: 'tool-1' }],
+      sources: [
+        { seq: 2, author: 'agent' },
+        { seq: 3, messageId: 'tool-0', author: 'tool' },
+        { seq: 4, messageId: 'tool-1', author: 'tool' },
+      ],
       next: null,
     });
     const handoff = await memory.handoffDetails('leader', 'CACHE_BOUNDARY', undefined, true);

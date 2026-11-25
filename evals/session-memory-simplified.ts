@@ -20,6 +20,8 @@ import {
 } from '../runtime/src/integrations/ollama.js';
 import {
   memoryDispatchDeadlineMs,
+  originalTokenCount,
+  shortDiscussionTokens,
   SessionMemory,
   type MemorySearchEntry,
 } from '../runtime/src/session-memory/service.js';
@@ -29,7 +31,10 @@ import {
   type MemorySummaryResult,
 } from '../runtime/src/session-memory/summarization.js';
 import { estimateMemoryTokens } from '../runtime/src/session-memory/text.js';
-import type { MemorySourceMessage } from '../runtime/src/session-memory/units.js';
+import {
+  identifyMemoryUnits,
+  type MemorySourceMessage,
+} from '../runtime/src/session-memory/units.js';
 import {
   contextSettings,
   contextTranscript,
@@ -124,7 +129,7 @@ function referenceFixture(): MemoryFixture {
         ...fixture.facts[0]!,
         source: 7,
         expected:
-          /(?=.*\b(?:approv\w*|implement\w*|agreed|accepted|decid\w*)\b)(?=.*\b(?:reuse|use|reusing)\b)(?=.*\bselectWorkspaceSnapshot\b)/is,
+          /(?:approv\w*|implement\w*|agreed|accepted|decid\w*)[^\n]{0,140}(?:reuse|use|reusing)[^\n]{0,50}selectWorkspaceSnapshot|(?:reuse|use|reusing)[^\n]{0,50}selectWorkspaceSnapshot[^\n]{0,100}(?:approv\w*|agreed|accepted)/i,
         contradicts:
           /(?:did not approve|rejected|declined)\s+(?:the\s+)?(?:reuse\s+of\s+)?selectWorkspaceSnapshot/i,
       },
@@ -138,6 +143,16 @@ function referenceFixture(): MemoryFixture {
           /(?:reject|omit|avoid|no|without|disallow)\w*\b[^.\n]{0,50}automatic rebuild|automatic rebuild[^.\n]{0,40}(?:reject|forbidden|disallow)/i,
         contradicts:
           /(?:approved|authorized)\s+(?:an?\s+)?automatic rebuild|automatic rebuild (?:was |is )?(?:approved|authorized|required)/i,
+      },
+      {
+        label: 'requirements were not reported as completed work',
+        source: 8,
+        kind: 'finding',
+        critical: true,
+        expected:
+          /(?:no (?:implementation|changes)|changes (?:have been |were )?not made|no (?:code or file|code|file) changes|changes (?:are |remain )?pending|work (?:has )?not started)/i,
+        contradicts:
+          /\b\d+ items (?:were |have been )?recorded\b|\bimplementation (?:was |is |has been )?completed\b/i,
       },
     ],
   };
@@ -257,7 +272,7 @@ export function gradeSimplifiedLayer(
   };
 }
 
-async function runArm(
+export async function runSimplifiedMemoryArm(
   fixture: MemoryFixture,
   processing: Processing,
   input: {
@@ -265,6 +280,8 @@ async function runArm(
     digest: string;
     signal: AbortSignal;
     progress?: (message: string) => void;
+    onHandoff?: (text: string) => void;
+    auditOutput?: boolean;
   },
 ) {
   const { signal, digest } = input;
@@ -282,12 +299,13 @@ async function runArm(
     result: Omit<MemorySummaryResult, 'text' | 'content'>;
     cpuVerified: boolean;
     observedMs: number;
+    audit?: { summary: string; prompt: string };
   }[] = [];
   const memory = new SessionMemory({
     databasePath: file,
     source,
     processing,
-    async summarize(type, prompt, turnSignal, _placement, _onProgress, format) {
+    async summarize(type, prompt, turnSignal, _placement, onProgress, format) {
       const requestSignal = AbortSignal.any([turnSignal, signal, AbortSignal.timeout(120_000)]);
       const start = performance.now();
       try {
@@ -297,7 +315,7 @@ async function runArm(
           requestSignal,
           type,
           true,
-          undefined,
+          onProgress,
           format,
         );
         const observedMs = performance.now() - start;
@@ -308,6 +326,9 @@ async function runArm(
           result: metrics,
           cpuVerified: !!loaded && loaded.bytes > 0 && loaded.gpuBytes === 0,
           observedMs,
+          ...(input.auditOutput
+            ? { audit: { summary: result.text, prompt: prompt[1].content } }
+            : {}),
         });
         return result;
       } catch (error) {
@@ -360,19 +381,28 @@ async function runArm(
     const stored = records.filter(({ complete }) => complete);
     const generated = stored.filter(({ type, state }) => type === 'UAMP' && state !== 'skipped');
     const deterministic = stored.filter(({ state }) => state === 'recorded');
-    const semanticFacts = fixture.facts.filter((fact) =>
-      records.some(
-        ({ type, state, sources }) =>
-          type === 'UAMP' && state !== 'skipped' && sources.some(({ seq }) => seq === fact.source),
+    const expectedUnits = identifyMemoryUnits(messages, prompts, 3000, true);
+    const semanticFacts = fixture.facts.filter(({ source }) =>
+      expectedUnits.some(
+        ({ type, messages: unitMessages }) =>
+          type === 'UAMP' &&
+          (processing === 'legacy-json' ||
+            originalTokenCount(unitMessages) >= shortDiscussionTokens) &&
+          unitMessages.some(({ seq }) => seq === source),
       ),
     );
-    const atomicFacts = fixture.facts.filter((fact) =>
-      deterministic.some(({ sources, attachmentSources }) =>
-        (fact.attachment ? (attachmentSources ?? []) : sources).some(
-          ({ seq }) => seq === fact.source,
-        ),
-      ),
-    );
+    const atomicFacts =
+      processing === 'legacy-json'
+        ? []
+        : fixture.facts.filter(({ source, attachment }) =>
+            expectedUnits.some(
+              ({ type, instructions, messages: unitMessages }) =>
+                type === 'AAB' &&
+                (attachment ? (instructions ?? []) : unitMessages).some(
+                  ({ seq }) => seq === source,
+                ),
+            ),
+          );
     const readRecords = (selected: typeof records) =>
       memory.recordEntries(agentId, epoch, selected, signal);
     const allEvidence = await readRecords(stored);
@@ -399,6 +429,7 @@ async function runArm(
       );
     const withoutRecovery = await assemble(false);
     const handoff = await assemble(true);
+    input.onHandoff?.(handoff.text);
     const beforeRecovery = gradeSimplifiedLayer(fixture.facts, withoutRecovery.entries, original);
     const delegation = gradeSimplifiedLayer(fixture.facts, handoff.entries, original);
     const recovery = delegation.facts.flatMap(({ label, retained }, index) =>
@@ -479,21 +510,30 @@ async function runArm(
   }
 }
 
-export async function compareSimplifiedMemory(input: Parameters<typeof runArm>[2]) {
-  const fixtures = simplifiedCorpus();
-  const scenarios: Awaited<ReturnType<typeof runArm>>[] = [];
+export async function compareSimplifiedMemory(
+  input: Parameters<typeof runSimplifiedMemoryArm>[2] & { fixtureId?: string },
+) {
+  const fixtures = simplifiedCorpus().filter(
+    ({ id }) => !input.fixtureId || input.fixtureId === id,
+  );
+  const controlFixtures = [referenceFixture(), largeActionsFixture()].filter(
+    ({ id }) => !input.fixtureId || input.fixtureId === id,
+  );
+  if (!fixtures.length && !controlFixtures.length)
+    throw new Error('Unknown Session Memory fixture.');
+  const scenarios: Awaited<ReturnType<typeof runSimplifiedMemoryArm>>[] = [];
   for (const [index, fixture] of fixtures.entries()) {
     for (let offset = 0; offset < simplifiedArms.length; offset++) {
       const arm = simplifiedArms[(index + offset) % simplifiedArms.length]!;
       input.progress?.(`${fixture.id} ${arm}`);
-      scenarios.push(await runArm(fixture, arm, input));
+      scenarios.push(await runSimplifiedMemoryArm(fixture, arm, input));
     }
   }
   const controls = [];
-  for (const fixture of [referenceFixture(), largeActionsFixture()]) {
+  for (const fixture of controlFixtures) {
     for (const arm of simplifiedArms.slice(1)) {
       input.progress?.(`${fixture.id} ${arm}`);
-      controls.push(await runArm(fixture, arm, input));
+      controls.push(await runSimplifiedMemoryArm(fixture, arm, input));
     }
   }
   const totals = (processing: Processing) => {
@@ -528,8 +568,8 @@ export async function compareSimplifiedMemory(input: Parameters<typeof runArm>[2
     performance: { requestReduction, cpuReduction, target: 0.3 },
     passed:
       candidate.passed &&
-      candidate.sessionMemoryCritical === 14 &&
-      candidate.delegationCritical === 14 &&
+      (input.fixtureId !== undefined ||
+        (candidate.sessionMemoryCritical === 14 && candidate.delegationCritical === 14)) &&
       controls
         .filter(({ processing }) => processing === 'deterministic-markdown')
         .every(({ passed }) => passed),

@@ -392,6 +392,17 @@ cover consecutive skipped Discussions before a Task approval and a large
 batch containing a failed check followed by a pass. The 30% reductions in
 requests and CPU wall time are optimization targets.
 
+For downstream qualification on a host without a usable GPU, use the same
+CPU production pause and the native Pi GPT-6 Luna high-reasoning worker:
+
+```shell
+bun evals/session-memory-edit-live.ts --simplified --production-suspended
+```
+
+The runner compares an original-source control with the real simplified
+handoff on both pinned edit fixtures. Both workers use the same provider and
+reasoning settings. Each must finish its turn and pass the executable checks.
+
 Run `bun evals/session-memory-live.ts --context-aware` on the GPU host to
 compare authoritative Task context and Immediate Context on short cache
 recovery, an attachment on a turn with trailing tool evidence, a reference to
