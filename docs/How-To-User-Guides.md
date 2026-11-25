@@ -209,10 +209,11 @@ second once a second and labels estimated rates.
 Expand **Stored for this agent** for a newest-first list with creation time,
 source position, estimated original and summary tokens, and elapsed inference
 time. Older entries can have unknown metrics. Use **Reload stored summaries**
-to refresh the list after new summaries finish. **Open stored summaries** or the
-**Show summaries** button in the conversation opens the **Stored Summaries**
-tab. The tab shows the storage path and syntax-colored JSON with the parsed
-contents of each summary part. Use **Load all summaries** if older pages are
+to refresh the list after new summaries finish. **Show summary** in the
+conversation reveals the stored summary for that passage as readable fields
+and lists. Select **Open complete summary** to read the full entry. **Open
+stored summaries** in Activity opens the **Stored Summaries** tab. The tab shows
+the storage path and syntax-colored JSON with the parsed contents of each summary part. Use **Load all summaries** if older pages are
 available, then **Copy JSON** to export the complete nested JSON to the clipboard.
 
 The handoff shows the sending agent, receipt time, payload size, and the number

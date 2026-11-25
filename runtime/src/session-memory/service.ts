@@ -22,6 +22,7 @@ import {
   type MemoryDevice,
   type MemoryState,
   type MemorySummaryCursor,
+  type MemorySummaryPassage,
   type MemoryTurn,
   type StoredMemorySummary,
 } from './store.js';
@@ -383,7 +384,10 @@ export class SessionMemory {
   async readStoredSummaries(
     agentId: string,
     before?: MemorySummaryCursor,
-    { includeContent = true }: { includeContent?: boolean } = {},
+    {
+      includeContent = true,
+      passage,
+    }: { includeContent?: boolean; passage?: MemorySummaryPassage } = {},
   ) {
     const generation = this.activity.get(agentId)?.generation;
     const tail = await this.options.source.read(agentId, undefined, 'tail');
@@ -393,11 +397,25 @@ export class SessionMemory {
       tail.reset ||
       (generation !== undefined && this.activity.get(agentId)?.generation !== generation) ||
       (state?.epoch === tail.epoch && state.seq > tail.latest) ||
-      (before && (before.epoch !== tail.epoch || before.position > tail.latest))
+      (before && (before.epoch !== tail.epoch || before.position > tail.latest)) ||
+      (passage &&
+        (passage.epoch !== tail.epoch ||
+          !Number.isSafeInteger(passage.start) ||
+          !Number.isSafeInteger(passage.position) ||
+          passage.start < (tail.earliest ?? 1) ||
+          passage.start > passage.position ||
+          passage.position > tail.latest))
     ) {
       throw new Error('Conversation history changed. Reopen the stored summaries.');
     }
-    const page = this.store.summaryPage(agentId, tail.epoch, tail.latest, before, includeContent);
+    const page = this.store.summaryPage(
+      agentId,
+      tail.epoch,
+      tail.latest,
+      before,
+      includeContent,
+      passage,
+    );
     return {
       ...page,
       storagePath: this.options.databasePath === ':memory:' ? null : this.options.databasePath,

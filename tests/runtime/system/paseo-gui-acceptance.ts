@@ -375,7 +375,7 @@ try {
     listen: '127.0.0.1:0',
     runtimeApiUrl: endpoint,
     userToken: secret,
-    pluginDirectory: path.join(root, 'runtime/src/paseo-plugin'),
+    pluginDirectory: path.join(root, 'runtime/dist/paseo-plugin'),
     environment,
     piCommand: path.join(root, 'runtime/dist/integrations/pi-rpc.js'),
   });
@@ -756,6 +756,9 @@ try {
 
   const selectedGpu = { id: 'CUDA:fixture-4070', label: 'RTX 4070 Ti SUPER', mainGpu: 1 };
   const summaryContent = { findings: [{ detail: 'Background summary fixture', confirmed: true }] };
+  const latestSummary = {
+    findings: [{ detail: 'Live throughput passage summary', confirmed: true }],
+  };
   const ambiguousReason = 'Ollama cannot select this device uniquely.';
   let deviceProbes = 0;
   const livePlacements: Array<{ cpuOnly?: boolean; mainGpu?: number }> = [];
@@ -775,17 +778,19 @@ try {
     async summarize(type, prompt, _signal, placement, onProgress) {
       const input = JSON.stringify(prompt);
       if (input.includes('Summarize without Activity')) backgroundSummary = true;
-      if (input.includes('Measure live summary throughput')) {
+      const isLatest = input.includes('Measure live summary throughput');
+      if (isLatest) {
         livePlacements.push(placement);
         onProgress?.({ tokensPerSecond: 12.5, estimated: true });
         await Bun.sleep(2100);
         onProgress?.({ tokensPerSecond: 19, estimated: true });
         await Bun.sleep(2100);
       }
+      const content = isLatest ? latestSummary : summaryContent;
       return {
         type,
-        text: JSON.stringify(summaryContent),
-        content: summaryContent,
+        text: JSON.stringify(content),
+        content,
         complete: true,
         elapsedMs: 1,
       };
@@ -896,6 +901,17 @@ try {
   await browser('wait', '--text', '12.5 tokens/s');
   await browser('wait', '--text', '19 tokens/s');
   assert.deepEqual(livePlacements[0], { mainGpu: 1 });
+  let latestStored = false;
+  for (let attempt = 0; attempt < 100 && !latestStored; attempt++) {
+    const catalog = await memory.readStoredSummaries(mobileSession.id);
+    latestStored = catalog.summaries.some((summary) =>
+      summary.parts.some(
+        ({ content }) => JSON.stringify(content) === JSON.stringify(latestSummary),
+      ),
+    );
+    if (!latestStored) await Bun.sleep(100);
+  }
+  assert(latestStored, 'The live Session Memory summary completed before opening its catalog');
   stage = 'native-activity-memory-catalog';
   await browser('wait', '--text', 'Stored for this agent');
   await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
@@ -907,6 +923,7 @@ try {
   );
   stage = 'native-activity-memory-json-tab';
   await clickButton('Open stored summaries');
+  await browser('wait', '--text', 'Live throughput passage summary');
   await browser('wait', '--text', 'Background summary fixture');
   await browser('wait', '--text', 'activity-memory.sqlite');
   const jsonDisplay = JSON.parse(
@@ -929,7 +946,7 @@ try {
   };
   assert.match(jsonDisplay.font, /monospace/);
   assert(jsonDisplay.colors > 1, 'The Stored Summaries tab colors JSON syntax');
-  assert.deepEqual(jsonDisplay.summaries[0]?.parts[0]?.content, summaryContent);
+  assert.deepEqual(jsonDisplay.summaries[0]?.parts[0]?.content, latestSummary);
   await browser(
     'eval',
     `(() => {
@@ -949,10 +966,73 @@ try {
   await clickButton(mobileLeader.agent.title);
   await waitForComposer(mobileLeader.agent.title);
   stage = 'native-activity-memory-chat-shortcut';
-  await clickButton('Show summaries');
+  await browser('set', 'viewport', '1100', '950');
+  const showSummary = '[aria-label="Show summary"]';
+  const preview = '[data-testid="ltcook-passage-summary-preview"]';
+  const completeSummary = '[data-testid="ltcook-passage-summary-complete"]';
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelectorAll(${JSON.stringify(showSummary)}).length === 2`,
+  );
+  async function openPassage(index: number) {
+    await browser(
+      'eval',
+      `(() => {
+      document.querySelectorAll('[data-ltcook-test-summary]').forEach(node => node.removeAttribute('data-ltcook-test-summary'));
+      document.querySelectorAll(${JSON.stringify(showSummary)})[${index}].setAttribute('data-ltcook-test-summary', '');
+    })()`,
+    );
+    await browser('click', '[data-ltcook-test-summary]');
+    await browser('wait', preview);
+  }
+  await openPassage(0);
   await browser('wait', '--text', 'Background summary fixture');
-  await clickButton(mobileLeader.agent.title);
-  await waitForComposer(mobileLeader.agent.title);
+  const earlier = await browser('get', 'text', preview);
+  assert(earlier.includes('Background summary fixture'));
+  assert(!earlier.includes('Live throughput passage summary'));
+  assert(!earlier.includes('"findings"'), 'The chat preview is rendered as fields, not JSON');
+  await clickButton('Hide summary');
+  await openPassage(1);
+  await browser('wait', '--text', 'Live throughput passage summary');
+  const later = await browser('get', 'text', preview);
+  assert(later.includes('Live throughput passage summary'));
+  assert(!later.includes('Background summary fixture'));
+  const previewLayout = JSON.parse(
+    await browser(
+      'eval',
+      `(() => {
+        const card = document.querySelector(${JSON.stringify(preview)});
+        return {
+          headings: [...card.querySelectorAll('[role="heading"], h1, h2, h3, h4, h5, h6')].map(node => node.textContent),
+          fits: card.scrollWidth <= card.clientWidth + 1,
+        };
+      })()`,
+    ),
+  ) as { headings: string[]; fits: boolean };
+  assert(previewLayout.headings.some((heading) => heading.includes('Findings')));
+  assert(previewLayout.fits, 'Summary fields fit the narrow conversation');
+  await browser('screenshot', path.join(directory, 'passage-summary-preview.png'));
+  await clickButton('Open complete summary');
+  await browser('wait', completeSummary);
+  const complete = await browser('get', 'text', completeSummary);
+  assert(complete.includes('Live throughput passage summary'));
+  assert(!complete.includes('Background summary fixture'));
+  assert(!complete.includes('"findings"'), 'The complete entry is rendered as fields, not JSON');
+  await browser('screenshot', path.join(directory, 'passage-summary-complete.png'));
+  await browser('press', 'Escape');
+  await browser(
+    'wait',
+    '--fn',
+    `(() => {
+    const button = document.querySelector('[aria-label="Hide summary"]');
+    if (!button) return false;
+    const bounds = button.getBoundingClientRect();
+    return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+  })()`,
+  );
+  await clickButton('Hide summary');
+  await browser('set', 'viewport', '1440', '1000');
   await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
   await browser('wait', '--text', 'No acknowledged handoff available for this agent.');
   await browser('click', '[aria-label^="Session Memory,"]');

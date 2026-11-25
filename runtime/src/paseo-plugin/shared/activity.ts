@@ -122,13 +122,15 @@ export const memoryDeviceRpc = defineRpc({
 
 const summaryCursor = z.object({ epoch: id, position: count, id });
 export const MEMORY_SUMMARIES_TIMELINE_KIND = 'memory-summaries';
-export const MemorySummariesTimelineSchema = z.object({});
+const summaryPassage = z.object({ epoch: id, start: count, position: count });
+export const MemorySummariesTimelineSchema = z.object({ passage: summaryPassage.optional() });
 
 export const storedSummariesRpc = defineRpc({
   name: 'ltcook.activity.stored-summaries',
   input: z.object({
     agentId: id,
     before: summaryCursor.optional(),
+    passage: summaryPassage.optional(),
     includeContent: z.boolean().optional(),
   }),
   output: z.object({

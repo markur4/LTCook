@@ -119,20 +119,50 @@ test('missing Team selection fails before opening native LTCook', async () => {
   ).toBeUndefined();
 });
 
-test('restores the stored-summary shortcut after Paseo replaces the conversation epoch', async () => {
+test('anchors summary shortcuts to each completed turn and current timeline epoch', async () => {
   const hook = hooks()('agent.turn.after');
   process.env.LTCOOK_RUNTIME_API_URL = 'http://runtime.invalid';
   process.env.LTCOOK_RUNTIME_USER_TOKEN = 'server-secret';
   globalThis.fetch = (async () => Response.json({ memoryEnabled: true })) as typeof fetch;
   let epoch = 'before-rewind';
-  const appended: unknown[] = [];
+  let resetBefore = false;
+  const appended: Array<{
+    id: string;
+    type: string;
+    kind: string;
+    version: number;
+    data: unknown;
+  }> = [];
+  const earlier = [
+    { seqEnd: 4, turnId: 'previous', item: { type: 'assistant_message', text: 'Earlier' } },
+    { seqEnd: 6, turnId: 'turn', item: { type: 'user_message', text: 'First prompt' } },
+  ];
+  const tail = [
+    { seqEnd: 8, turnId: 'turn', item: { type: 'assistant_message', text: 'First response' } },
+    {
+      seqEnd: 9,
+      turnId: 'turn',
+      item: { type: 'tool_call', status: 'completed', detail: { type: 'unknown' } },
+    },
+    { seqEnd: 10, turnId: 'another', item: { type: 'user_message', text: 'Second prompt' } },
+    { seqEnd: 11, turnId: 'another', item: { type: 'assistant_message', text: 'Second response' } },
+    { seqEnd: 12, turnId: 'another', item: { type: 'assistant_message', text: ' ' } },
+  ];
   const timeline = {
-    async append(row: unknown) {
+    async append(row: (typeof appended)[number]) {
       appended.push(row);
       return { epoch };
     },
-    async refetch() {
-      return { epoch, agent: { archivedAt: null } };
+    async refetch({ direction }: { direction: 'tail' | 'before' }) {
+      const before = direction === 'before';
+      return {
+        epoch,
+        agent: { archivedAt: null },
+        startCursor: { epoch, seq: before ? 4 : 8 },
+        hasOlder: !before,
+        reset: before && resetBefore,
+        entries: before ? earlier : [...tail, ...appended.map((item) => ({ item }))],
+      };
     },
   };
   const context = {
@@ -156,13 +186,34 @@ test('restores the stored-summary shortcut after Paseo replaces the conversation
   };
   await hook(turn, context);
   await hook(turn, context);
+  await hook({ ...turn, turnId: 'another' }, context);
   expect(appended).toEqual([
-    { type: 'plugin', id: 'memory-summaries', kind: 'memory-summaries', version: 1, data: {} },
+    {
+      type: 'plugin',
+      id: 'memory-summaries:turn',
+      kind: 'memory-summaries',
+      version: 1,
+      data: { passage: { epoch, start: 6, position: 8 } },
+    },
+    {
+      type: 'plugin',
+      id: 'memory-summaries:another',
+      kind: 'memory-summaries',
+      version: 1,
+      data: { passage: { epoch, start: 10, position: 11 } },
+    },
   ]);
   epoch = 'after-rewind';
+  resetBefore = true;
   await hook(turn, context);
   expect(appended).toHaveLength(2);
-  expect(appended[1]).toEqual(appended[0]);
+  resetBefore = false;
+  await hook(turn, context);
+  expect(appended).toHaveLength(3);
+  expect(appended[2]).toMatchObject({
+    id: 'memory-summaries:turn',
+    data: { passage: { epoch, start: 6, position: 8 } },
+  });
 });
 
 test('a real turn fails before inference when native initialization is unavailable', async () => {

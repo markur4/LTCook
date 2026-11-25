@@ -426,12 +426,15 @@ export class RuntimeApi {
           response.writeHead(403).end('{}');
           return;
         }
-        const { agentId, before, includeContent } = storedSummariesRpc.input.parse(parsed);
+        const { agentId, before, includeContent, passage } = storedSummariesRpc.input.parse(parsed);
         if (!this.memory) {
           response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
           return;
         }
-        const page = await this.memory.readStoredSummaries(agentId, before, { includeContent });
+        const page = await this.memory.readStoredSummaries(agentId, before, {
+          includeContent,
+          passage,
+        });
         response.writeHead(200).end(JSON.stringify(page));
         return;
       }
