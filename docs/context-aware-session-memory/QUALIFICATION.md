@@ -1038,6 +1038,10 @@ request. Loaded model size was 670 MiB. The handoff had the preceding
 original user message, but the generated-summary gate requires the proposal
 record before any compensatory recovery.
 
+The private audit's revision field still says `e7f1d60` because that label
+was corrected after the run. The pre-request source comparison and the
+handoff-specific comparison both checked `bbc9a3`.
+
 The fixture deliberately repeats the same instruction fourteen times in
 each long exchange. Collapsing those repetitions in a diagnostic copy would
 lower the estimated UAMP sizes from 552 to 93 tokens for the proposal and

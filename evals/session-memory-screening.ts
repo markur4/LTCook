@@ -25,6 +25,7 @@ import {
 } from './session-memory-simplified.js';
 
 const frozenRevision = 'e7f1d601d1382586b903e757281c165ffffc396d';
+const chronologicalHandoffRevision = 'bbc9a3f3a2e79afe70819d59949b49286101e16e';
 const mnnProfileId = 'mnn-pocket';
 const mnnSampling = { temperature: 0.8, top_k: 20, top_p: 0.8, repeat_penalty: 1 };
 const mnnQatProfile = {
@@ -123,12 +124,22 @@ export async function screenSessionMemory(input: {
   allowRetry?: boolean;
   progress?: (label: string) => void;
 }) {
+  if (
+    input.qualifyMnnLocal &&
+    (input.profileId ||
+      input.approvalDiagnostic ||
+      input.localComparison ||
+      input.localValidation ||
+      input.mnnApprovalFirst)
+  )
+    throw new Error('--qualify-mnn-local cannot be combined with other model or screening modes.');
+  const revision = input.qualifyMnnLocal ? chronologicalHandoffRevision : frozenRevision;
   const frozen = Bun.spawnSync(
     [
       'git',
       'diff',
       '--quiet',
-      input.qualifyMnnLocal ? 'bbc9a3f3a2e79afe70819d59949b49286101e16e' : frozenRevision,
+      revision,
       '--',
       'runtime/src/session-memory',
       'runtime/src/integrations/ollama.ts',
@@ -356,17 +367,6 @@ export async function screenSessionMemory(input: {
           if (input.qualifyMnnLocal) {
             if (!model.weightsDigest)
               throw new Error('The qualification requires verified weights.');
-            const frozenHandoff = Bun.spawnSync([
-              'git',
-              'diff',
-              '--quiet',
-              'bbc9a3f3a2e79afe70819d59949b49286101e16e',
-              '--',
-              'runtime/src/session-memory/service.ts',
-              'runtime/src/session-memory/handoff.ts',
-            ]);
-            if (frozenHandoff.exitCode !== 0)
-              throw new Error('Qualification requires the chronological handoff from bbc9a3.');
             const order = [
               'approval-after-skipped-discussion',
               'semantic-retry-correction',
@@ -481,9 +481,7 @@ export async function screenSessionMemory(input: {
     (!comparison || find(after, comparison.model.name)?.digest === comparison.model.digest);
   if (!unchanged) throw new Error('A model identity changed during screening.');
   return {
-    frozenRevision: input.qualifyMnnLocal
-      ? 'bbc9a3f3a2e79afe70819d59949b49286101e16e'
-      : frozenRevision,
+    frozenRevision: revision,
     seed: simplifiedSeed,
     results,
     comparison,
