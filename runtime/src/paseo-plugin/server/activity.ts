@@ -38,6 +38,21 @@ function status(agent: PaseoAgent): AgentActivity['status'] {
   return agent.status === 'initializing' ? 'waiting' : agent.status;
 }
 
+function codexSkillRead(command: string, output?: string): string | undefined {
+  // > Codex reports file reads as shell calls. Require a direct read and the returned front matter.
+  const reader =
+    /^(?:cat|head(?:[ \t]+(?:-n[ \t]*|-)\d+)?|sed[ \t]+-n[ \t]+(['"]?)1,\d+p\1)[ \t]+(?:--[ \t]+)?(.+)$/;
+  const operand = reader.exec(command.trim())?.[2];
+  if (!operand || !output) return undefined;
+  const token = /^(?:"([^"]+)"|'([^']+)'|([^\s<>&|;$*?]+))$/.exec(operand);
+  const file = token?.[1] ?? token?.[2] ?? token?.[3];
+  if (!file || path.basename(file) !== 'SKILL.md') return undefined;
+  const header = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(
+    output.slice(0, 4096),
+  )?.[1];
+  return header ? /^name:[ \t]*(['"]?)([\w.-]+)\1[ \t]*(?:#.*)?$/m.exec(header)?.[2] : undefined;
+}
+
 export function nativeActivity(agent: PaseoAgent, events?: AgentEvents): AgentActivity {
   const updatedAt = time(agent.updatedAt);
   const usedTokens = agent.lastUsage?.contextWindowUsedTokens;
@@ -89,6 +104,7 @@ class AgentTimeline {
   constructor(
     private readonly agent: PaseoAgentHandle,
     private readonly signal: AbortSignal,
+    private readonly provider: PaseoAgent['provider'],
   ) {
     this.stop = agent.timeline.subscribe((update) => {
       const { event } = update;
@@ -239,7 +255,7 @@ class AgentTimeline {
   ): Promise<void> {
     if (this.signal.aborted) return;
     const generation = this.timelineGeneration;
-    if (!this.skillFilesKnown) {
+    if (this.provider !== 'codex' && !this.skillFilesKnown) {
       const resolved = await files().catch(() => undefined);
       if (this.signal.aborted || generation !== this.timelineGeneration) return;
       if (resolved) {
@@ -248,7 +264,12 @@ class AgentTimeline {
         this.refetchRequired = true;
       }
     }
-    if (this.skillsKnown || !agent.activeTurn) return;
+    if (
+      this.skillsKnown ||
+      agent.providerUnavailable ||
+      (this.provider === 'codex' ? agent.status === 'initializing' : !agent.activeTurn)
+    )
+      return;
     try {
       const commands = await this.agent.commands();
       if (commands.error || this.signal.aborted || generation !== this.timelineGeneration) return;
@@ -265,6 +286,7 @@ class AgentTimeline {
 
   private accept(item: TimelineItem, seq: number, timestamp: number): void {
     if (item.type === 'user_message') {
+      if (this.provider !== 'pi' && this.provider !== 'ltcook') return;
       const skill = /^<skill name="([^"]+)" location="([^"]+)">\n/.exec(item.text);
       if (skill) {
         const [, name, location] = skill;
@@ -288,6 +310,15 @@ class AgentTimeline {
           : undefined;
       const name = location && this.skillFiles.get(location);
       if (name) this.loadSkill(name, timestamp);
+    }
+    if (
+      this.provider === 'codex' &&
+      item.status === 'completed' &&
+      item.detail.type === 'shell' &&
+      (item.detail.exitCode == null || item.detail.exitCode === 0)
+    ) {
+      const name = codexSkillRead(item.detail.command, item.detail.output);
+      if (name && this.skills.has(name)) this.loadSkill(name, timestamp);
     }
     const prior = this.calls.get(item.callId);
     if (prior && prior.seq >= seq) {
@@ -387,10 +418,10 @@ export async function observeActivity(
       let observation = observations.get(agent.id);
       if (!observation || observation.subscriptionFailed) {
         observation?.close();
-        observation = new AgentTimeline(paseo.agents.ref(agent), signal);
+        observation = new AgentTimeline(paseo.agents.ref(agent), signal, agent.provider);
         observations.set(agent.id, observation);
       }
-      if (agent.provider === 'pi' || agent.provider === 'ltcook')
+      if (['pi', 'ltcook', 'codex'].includes(agent.provider))
         await observation.registerSkills(agent, () => registeredSkills(agent, signal));
       const events = await observation.read(agent.activeTurn);
       return { activity: nativeActivity(agent, events), events };

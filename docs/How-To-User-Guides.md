@@ -171,6 +171,9 @@ whenever you need them.
   usage when available. Repeated calls share one entry per tool. Select a tool
   to see the individual calls. The conversation button opens a subagent's
   native chat.
+  For Codex, Activity recognizes successful direct reads of `SKILL.md` with
+  `cat`, `head`, or `sed -n` when the returned front matter names a
+  skill in the provider's catalog.
 - **Team** shows the focused LTCook Session's Leader, persistent and temporary
   members, available temporary roles, active Passes, progress, and blockers.
   **Agent Focus** shows role settings, assignments, handoffs, and reports.

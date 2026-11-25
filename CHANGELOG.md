@@ -340,6 +340,8 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- Activity can show observed Codex skill reads in idle and active chats.
+
 - Session Memory delegation sends compact, Task-scoped evidence followed by the
   latest applicable original user instruction. Historical tool outcomes are
   identified separately from the assignment's required verification.
