@@ -80,7 +80,8 @@ async function build() {
       LEFTHOOK: '0',
       PASEO_WEB_PLATFORM: 'web',
     };
-    await run('npm', ['ci', '--include=dev'], source, env);
+    await run('npm', ['ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'], source, env);
+    await run('npm', ['run', 'postinstall'], source, env);
     await run(process.execPath, ['packages/protocol/scripts/generate-validation-aot.mjs'], source, env);
     await run('npm', ['run', 'build:daemon-web-ui'], source, env);
 

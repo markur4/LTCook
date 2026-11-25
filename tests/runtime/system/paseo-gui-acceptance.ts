@@ -699,6 +699,19 @@ try {
     '--fn',
     `document.querySelectorAll('[aria-label^="read call, Success,"]').length === 8`,
   );
+  stage = 'native-activity-tool-skill-document';
+  await clickButton('Open skill in new tab');
+  await browser('wait', skillDocument);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector(${JSON.stringify(skillDocument)})?.textContent.includes('Read the fixture.')`,
+  );
+  await clickButton(mobileLeader.agent.title);
+  await waitForComposer(mobileLeader.agent.title);
+  if (!(await browser('snapshot')).includes('Close read preview'))
+    await clickButton('read, 8 calls');
+
   stage = 'native-activity-show-in-chat';
   await browser('wait', '[aria-label^="Show in Chat, read 1 of 8 at"]');
   const turn = await host.api.agents.ref(mobileSession.id).timeline.refetch({
