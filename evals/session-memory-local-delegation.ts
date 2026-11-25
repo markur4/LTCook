@@ -66,6 +66,7 @@ export async function evaluateLocalDelegation(
   signal: AbortSignal,
   progress: (label: string) => void,
   auditOutput = false,
+  allowBaseline = false,
 ) {
   const fixtures = candidateScreeningFixtures();
   const cases = reports.flatMap((report) =>
@@ -90,7 +91,7 @@ export async function evaluateLocalDelegation(
       }),
     ),
   );
-  if (!cases.some(({ arm }) => arm.arm !== 'immediate'))
+  if (!cases.length || (!allowBaseline && !cases.some(({ arm }) => arm.arm !== 'immediate')))
     throw new Error('No context-independent handoff passed the evidence gate.');
 
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-local-delegation-'));

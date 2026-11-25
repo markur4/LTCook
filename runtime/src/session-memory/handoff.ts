@@ -6,6 +6,7 @@ export type MemoryHandoffSelection = {
   agentId: string;
   epoch: string;
   originalHistory: OriginalHistoryAvailability;
+  contextIncomplete?: boolean;
   evidence: readonly MemorySearchEntry[];
   decision?: MemorySearchEntry;
 };
@@ -40,6 +41,7 @@ export function renderMemoryHandoff(selection: MemoryHandoffSelection): string {
     return selection.originalHistory === 'unavailable' ? unavailableMemoryHandoff : '';
   return [
     ...memoryHandoffHeader(selection),
+    ...(selection.contextIncomplete ? ['Some relevant context is truncated or omitted.'] : []),
     ...(selection.evidence.length
       ? ['Older supplemental evidence', ...selection.evidence.map(compactHandoffLine)]
       : []),

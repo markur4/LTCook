@@ -68,6 +68,7 @@ try {
           controller.signal,
           console.error,
           args.includes('--audit-output'),
+          args.includes('--allow-baseline-delegation'),
         ),
         null,
         2,

@@ -1636,6 +1636,8 @@ export class SessionMemory {
       decision = false,
       entryScope = scopeBySequence.get(seq),
     ) => {
+      if (scope?.sessionId && entryScope?.sessionId && entryScope.sessionId !== scope.sessionId)
+        return false;
       if (scope?.taskId && entryScope?.taskId) return scope.taskId === entryScope.taskId;
       return (
         !query ||
@@ -1682,11 +1684,12 @@ export class SessionMemory {
         ...observedMemoryChecks(recent),
       ].map((check) => [JSON.stringify([check.seq, check.text]), check]),
     );
-    const applicableRecords = summaries.filter(
-      ({ complete, scope: recordedScope }) =>
-        complete &&
+    const scopedRecords = summaries.filter(
+      ({ scope: recordedScope }) =>
+        (!scope?.sessionId || relevantDiscussionScope(recordedScope, scope)) &&
         (!scope?.taskId || !recordedScope?.taskId || recordedScope.taskId === scope.taskId),
     );
+    const applicableRecords = scopedRecords.filter(({ complete }) => complete);
     const resolved = await this.resolveRecordEntries(
       agentId,
       tail.epoch,
@@ -1849,13 +1852,70 @@ export class SessionMemory {
           .map(({ seq }) => seq),
       ),
     ];
+    const selectedUamps = evidence.selected.filter(
+      ({ kind, summaryId }) => kind === 'UAMP' && summaryId,
+    );
+    const selectedUserSequences = new Set(users.selected.map(({ seq }) => seq));
+    const selectedPositions = applicableRecords
+      .filter(
+        ({ type, sources }) =>
+          type === 'UAMP' && sources.some(({ seq }) => selectedUserSequences.has(seq)),
+      )
+      .map(({ position }) => position);
+    const firstSelected = Math.min(...selectedUamps.map(({ seq }) => seq), ...selectedPositions);
+    const lastSelected = decision?.seq ?? Math.max(...selectedUamps.map(({ seq }) => seq));
+    const related = applicableRecords.filter(
+      ({ type, position }) =>
+        type === 'UAMP' && position >= firstSelected && position <= lastSelected,
+    );
+    const relatedIds = new Set(related.map(({ id }) => id));
+    const relatedEntries = related
+      .flatMap((record) =>
+        record.state === 'skipped'
+          ? resolved.entries.filter(({ summaryId }) => summaryId === record.id)
+          : record.parts.map((part, index) => ({
+              kind: 'UAMP' as const,
+              author: 'summary',
+              seq: record.position,
+              summaryId: record.id,
+              portion: index + 1,
+              sources: part.sources,
+              text: memorySummaryText(part.content),
+            })),
+      )
+      .filter(({ text }) => text.trim());
+    const relatedBudget = budgetMemoryText(
+      relatedEntries,
+      Math.max(
+        0,
+        900 -
+          evidence.selected
+            .filter(({ summaryId }) => !summaryId || !relatedIds.has(summaryId))
+            .reduce(
+              (total, entry) => total + estimateMemoryTokens(compactHandoffLine(entry) + '\n'),
+              0,
+            ),
+      ),
+      '',
+      (entry) => estimateMemoryTokens(compactHandoffLine(entry) + '\n'),
+    );
     const selection = {
       agentId,
       epoch: tail.epoch,
       originalHistory,
-      evidence: [...users.selected.map(sourceEntry), ...evidence.selected].sort(
-        (a, b) => a.seq - b.seq,
-      ),
+      contextIncomplete:
+        relatedBudget.incomplete ||
+        users.incomplete ||
+        evidence.incomplete ||
+        scopedRecords.some(
+          ({ type, position, complete }) =>
+            type === 'UAMP' && !complete && position >= firstSelected && position <= lastSelected,
+        ),
+      evidence: [
+        ...users.selected.map(sourceEntry),
+        ...evidence.selected.filter(({ summaryId }) => !summaryId || !relatedIds.has(summaryId)),
+        ...relatedBudget.selected,
+      ].sort((a, b) => a.seq - b.seq),
       decision,
     };
     const entries = [...selection.evidence, ...(decision ? [decision] : [])];

@@ -14,6 +14,8 @@ import {
   type MemoryMessage,
 } from '../../../runtime/src/evals/session-memory-extractive.js';
 import { SessionMemory, type MemorySource } from '../../../runtime/src/session-memory/service.js';
+import { MemoryStore } from '../../../runtime/src/session-memory/store.js';
+import { referenceFixture } from '../../../evals/session-memory-simplified.js';
 import type { MemorySourceMessage } from '../../../runtime/src/session-memory/units.js';
 import { PastedDocuments } from '../../../runtime/src/session-memory/pasted-documents.js';
 import { readFile, readdir } from 'node:fs/promises';
@@ -31,6 +33,117 @@ const correction: MemoryMessage = {
 };
 const issue: MemoryMessage = { seq: 4, author: 'tool', text: 'Cobalt shell exited with code 1.' };
 const [original, revision] = preservePromptMessages([first, correction]);
+
+test('handoff keeps consecutive skipped Discussions between a stored proposal and Task decision', async () => {
+  const fixture = referenceFixture();
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-handoff-records-'));
+  const databasePath = path.join(directory, 'memory.sqlite');
+  const turns = fixture.turns.map((turn) =>
+    turn.map((message) => ({ ...message, seq: message.seq * 2 })),
+  );
+  const unrelated: MemorySourceMessage = {
+    seq: 7,
+    turnId: 'other',
+    author: 'user',
+    scope: { sessionId: 'snapshot', taskId: 'other' },
+    text: 'Unrelated task must never enter the handoff.',
+  };
+  const messages = [...turns.flat(), unrelated].sort((a, b) => a.seq - b.seq);
+  const store = new MemoryStore(databasePath);
+  const records = [
+    {
+      index: 0,
+      state: 'summarized' as const,
+      content: 'Proposed reuse selectWorkspaceSnapshot for compatible caches.',
+    },
+    { index: 1, state: 'skipped' as const },
+    { index: 2, state: 'skipped' as const },
+    {
+      index: 3,
+      state: 'summarized' as const,
+      content: 'Implement that, preserve the API, reject automatic rebuild. No changes yet.',
+    },
+  ];
+  for (const { index, state, content } of records) {
+    const sources = turns[index]!;
+    store.saveSummary({
+      id: `unit-${index}`,
+      agentId: 'leader',
+      sessionId: 'snapshot',
+      epoch: 'one',
+      type: 'UAMP',
+      position: sources.at(-1)!.seq,
+      sources,
+      scope: sources[0]!.scope,
+      createdAt: '2026-01-01T00:00:00Z',
+      state,
+      historyHash: '',
+      parts: content
+        ? [{ content, format: 'markdown', sources: sources.map(({ seq }) => seq) }]
+        : [],
+      expectedParts: 1,
+      complete: true,
+    });
+  }
+  store.saveSummary({
+    id: 'unrelated',
+    agentId: 'leader',
+    sessionId: 'snapshot',
+    epoch: 'one',
+    type: 'UAMP',
+    position: 7,
+    sources: [unrelated],
+    scope: unrelated.scope,
+    createdAt: '2026-01-01T00:00:00Z',
+    state: 'skipped',
+    historyHash: '',
+    parts: [],
+    expectedParts: 1,
+    complete: true,
+  });
+  store.saveState('leader', { epoch: 'one', seq: 16 });
+  store.savePrompts('leader', 'one', messages);
+  store.close();
+  const memory = new SessionMemory({
+    databasePath,
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize() {
+      throw new Error('Inference must not run.');
+    },
+  });
+  try {
+    const result = await memory.handoffDetails(
+      'leader',
+      messages.at(-1)!.text,
+      undefined,
+      false,
+      undefined,
+      turns[3]![0]!.scope,
+    );
+    const text = result.text;
+    for (const phrase of [
+      'selectWorkspaceSnapshot',
+      'Can we use it?',
+      'Yes, on compatible caches.',
+      'Please keep that option on the table.',
+      'It remains a proposal.',
+      'Implement that',
+    ])
+      expect(text).toContain(phrase);
+    expect(text.indexOf('Can we use it?')).toBeLessThan(
+      text.indexOf('Please keep that option on the table.'),
+    );
+    expect(text.indexOf('Please keep that option on the table.')).toBeLessThan(
+      text.indexOf('Implement that'),
+    );
+    expect(result.recoveredSources).toEqual([]);
+    expect(result.selection?.decision?.seq).toBe(18);
+    expect(text).not.toContain('Unrelated task must never enter the handoff.');
+  } finally {
+    await memory.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test('the runtime preserves exact user messages and derives the authors of ordered additions', () => {
   const excerpts = [
