@@ -205,8 +205,9 @@ export class WorkspaceMcp {
       this.tokens.get(grant.token) !== grant ||
       realpathSync(grant.workspaceRoot) !== grant.workspaceRoot ||
       directoryIdentity(grant.workspaceRoot) !== grant.workspaceIdentity
-    )
+    ) {
       throw new Error('The authorized workspace is no longer available.');
+    }
   }
 
   private async approveRestart(
