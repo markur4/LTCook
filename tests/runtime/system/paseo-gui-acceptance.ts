@@ -832,10 +832,10 @@ try {
   await browser('wait', '--text', 'RAG Index');
 
   const selectedGpu = { id: 'CUDA:fixture-4070', label: 'RTX 4070 Ti SUPER', mainGpu: 1 };
-  const summaryContent = { findings: [{ detail: 'Background summary fixture', confirmed: true }] };
-  const latestSummary = {
-    findings: [{ detail: 'Live throughput passage summary', confirmed: true }],
-  };
+  const summaryContent = '## Discoveries\n\n- Background summary fixture';
+  const latestSummary = '## Discoveries\n\n- Live throughput passage summary';
+  const longerPrompt =
+    ' Keep this Session Memory fixture long enough to qualify for inference.'.repeat(18);
   const ambiguousReason = 'Ollama cannot select this device uniquely.';
   let deviceProbes = 0;
   const livePlacements: Array<{ cpuOnly?: boolean; mainGpu?: number }> = [];
@@ -866,7 +866,7 @@ try {
       const content = isLatest ? latestSummary : summaryContent;
       return {
         type,
-        text: JSON.stringify(content),
+        text: content,
         content,
         complete: true,
         elapsedMs: 1,
@@ -879,7 +879,7 @@ try {
   const requestsWhileHidden = activityRequests;
   await host.api.agents
     .ref(mobileSession.id)
-    .send('Summarize without Activity', { clientMessageId: randomUUID() });
+    .send('Summarize without Activity' + longerPrompt, { clientMessageId: randomUUID() });
   for (let attempt = 0; attempt < 100 && !backgroundSummary; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -974,7 +974,9 @@ try {
   stage = 'native-activity-memory-live-rate';
   await host.api.agents
     .ref(mobileSession.id)
-    .send('Measure live summary throughput', { clientMessageId: randomUUID() });
+    .send('Measure live summary throughput. Exercise Activity tools.' + longerPrompt, {
+      clientMessageId: randomUUID(),
+    });
   await browser('wait', '--text', '12.5 tokens/s');
   await browser('wait', '--text', '19 tokens/s');
   assert.deepEqual(livePlacements[0], { mainGpu: 1 });
@@ -998,32 +1000,17 @@ try {
     !(await browser('snapshot')).includes('Background summary fixture'),
     'The narrow Explorer does not render summary bodies',
   );
-  stage = 'native-activity-memory-json-tab';
+  stage = 'native-activity-memory-records-tab';
   await clickButton('Open stored summaries');
   await browser('wait', '--text', 'Live throughput passage summary');
   await browser('wait', '--text', 'Background summary fixture');
   await browser('wait', '--text', 'activity-memory.sqlite');
-  const jsonDisplay = JSON.parse(
-    await browser(
-      'eval',
-      `(() => {
-        const code = document.querySelector('[data-testid="ltcook-stored-summaries-json"]');
-        const tokens = [...code.querySelectorAll('span')];
-        return {
-          font: getComputedStyle(code).fontFamily,
-          colors: new Set(tokens.map(token => getComputedStyle(token).color)).size,
-          summaries: JSON.parse(code.textContent),
-        };
-      })()`,
-    ),
-  ) as {
-    font: string;
-    colors: number;
-    summaries: Array<{ parts: Array<{ content: unknown }> }>;
-  };
-  assert.match(jsonDisplay.font, /monospace/);
-  assert(jsonDisplay.colors > 1, 'The Stored Summaries tab colors JSON syntax');
-  assert.deepEqual(jsonDisplay.summaries[0]?.parts[0]?.content, latestSummary);
+  const storedRecords = '[data-testid="ltcook-stored-summaries-records"]';
+  const headings = await browser(
+    'eval',
+    `[...document.querySelectorAll(${JSON.stringify(storedRecords + ' h2')})].map(node => node.textContent)`,
+  );
+  assert.match(headings, /Discoveries/, 'The Stored Summaries tab renders the Markdown heading');
   await browser(
     'eval',
     `(() => {
@@ -1036,10 +1023,10 @@ try {
   );
   await clickButton('Copy JSON');
   await browser('wait', '--text', 'Copied stored summaries');
-  assert.deepEqual(
-    JSON.parse(await browser('eval', 'JSON.parse(window.__ltcookCopiedSummaries)')),
-    jsonDisplay.summaries,
-  );
+  const copiedRecords = JSON.parse(
+    await browser('eval', 'JSON.parse(window.__ltcookCopiedSummaries)'),
+  ) as { parts: { content: unknown }[] }[];
+  assert.equal(copiedRecords[0]?.parts[0]?.content, latestSummary);
   await clickButton(mobileLeader.agent.title);
   await waitForComposer(mobileLeader.agent.title);
   stage = 'native-activity-memory-chat-shortcut';
@@ -1087,9 +1074,20 @@ try {
       })()`,
     ),
   ) as { headings: string[]; fits: boolean };
-  assert(previewLayout.headings.some((heading) => heading.includes('Findings')));
+  assert(previewLayout.headings.some((heading) => heading.includes('Discoveries')));
   assert(previewLayout.fits, 'Summary fields fit the narrow conversation');
   await browser('screenshot', path.join(directory, 'passage-summary-preview.png'));
+  await browser('click', `${preview} [aria-label="Show execution details"]`);
+  const execution = `${preview} [data-testid="ltcook-execution-evidence"]`;
+  await browser('wait', execution);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector(${JSON.stringify(execution)})?.textContent.includes(${JSON.stringify(fixtureSkill)})`,
+  );
+  const hideDetails = `${preview} [aria-label="Hide execution details"]`;
+  await browser('scrollintoview', hideDetails);
+  await browser('click', hideDetails);
   await clickButton('Open complete summary');
   await browser('wait', completeSummary);
   const complete = await browser('get', 'text', completeSummary);
@@ -1108,6 +1106,17 @@ try {
     return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
   })()`,
   );
+  await clickButton('Hide summary');
+  await host.api.agents
+    .ref(mobileSession.id)
+    .send('Keep this reply short.', { clientMessageId: randomUUID() });
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelectorAll(${JSON.stringify(showSummary)}).length === 3`,
+  );
+  await openPassage(2);
+  await browser('wait', '--text', 'Not summarized, user-agent message pair is below 256 tokens.');
   await clickButton('Hide summary');
   await browser('set', 'viewport', '1440', '1000');
   await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');

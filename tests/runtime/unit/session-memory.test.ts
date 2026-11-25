@@ -20,6 +20,10 @@ import { readFile, readdir } from 'node:fs/promises';
 
 const first: MemoryMessage = { seq: 1, author: 'user', text: 'Keep the cobalt cursor.' };
 const finding: MemoryMessage = { seq: 2, author: 'agent', text: 'Cobalt test passed.' };
+const longReply = {
+  ...finding,
+  text: finding.text + ' The cursor remains valid for the existing readers.'.repeat(26),
+};
 const correction: MemoryMessage = {
   seq: 3,
   author: 'user',
@@ -326,7 +330,7 @@ test('persists device identity, resolves its current index, and releases a CPU r
   async function summarizeTurn(turnId: string, storedCount: number) {
     messages.push(
       { ...first, seq: messages.length + 1, turnId },
-      { ...finding, seq: messages.length + 2, turnId },
+      { ...longReply, seq: messages.length + 2, turnId },
     );
     memory.turn('leader', { turnId, outcome: 'completed' }, false);
     await eventually(() => memory.status(undefined, 'leader').stored?.uamp === storedCount);
@@ -363,7 +367,7 @@ test('persists device identity, resolves its current index, and releases a CPU r
 test('keeps the requested GPU and leaves summaries pending when the device disappears', async () => {
   const messages = [
     { ...first, turnId: '1' },
-    { ...finding, turnId: '1' },
+    { ...longReply, turnId: '1' },
   ];
   const gpu = { id: 'CUDA:removable', label: 'Fixture removable GPU', mainGpu: 0 };
   let available = true;
@@ -390,7 +394,9 @@ test('keeps the requested GPU and leaves summaries pending when the device disap
       pendingUamp: 1,
     });
     expect(requestCount).toBe(0);
-    expect((await memory.readStoredSummaries('leader')).summaries).toEqual([]);
+    expect((await memory.readStoredSummaries('leader')).summaries).toMatchObject([
+      { state: 'failed' },
+    ]);
   } finally {
     await memory.close();
   }
@@ -413,16 +419,8 @@ test('stores the attachment citation from a native turn with only a trailing act
   const memory = new SessionMemory({
     databasePath: ':memory:',
     source: timeline(() => ({ epoch: 'one', messages })),
-    async summarize(type, request) {
-      expect(type).toBe('AAB');
-      expect(request.at(-1)?.content).toContain('Keep ATTACHED_CHECK part of the next run.');
-      return {
-        type,
-        text: 'Reference ATTACHED_CHECK.',
-        content: 'Reference ATTACHED_CHECK.',
-        complete: true,
-        elapsedMs: 1,
-      };
+    async summarize() {
+      throw new Error('A deterministic AAB must never invoke inference.');
     },
   });
   try {
@@ -432,7 +430,7 @@ test('stores the attachment citation from a native turn with only a trailing act
     );
     const search = await memory.search('leader', '', 'ATTACHED_CHECK', 'leader');
     expect(search.matches.flatMap(({ entries }) => entries)).toContainEqual(
-      expect.objectContaining({ kind: 'AAB', sources: [1, 2, 3] }),
+      expect.objectContaining({ kind: 'AAB', sources: [1], author: 'attachment' }),
     );
   } finally {
     await memory.close();
@@ -450,6 +448,7 @@ test('stores chronological summaries, preserves original authority, and removes 
   const prompts: string[] = [];
   const options = {
     databasePath: path.join(directory, 'memory.sqlite'),
+    processing: 'legacy-json' as const,
     source: timeline(() => ({ epoch: 'one', messages })),
     peers: (id: string) => (id === 'peer' ? ['leader'] : []),
     async summarize(type: 'UAMP' | 'AAB', request: { content: string }[]) {
@@ -481,7 +480,7 @@ test('stores chronological summaries, preserves original authority, and removes 
     });
     const fullCatalog = await memory.readStoredSummaries('leader');
     expect(fullCatalog.summaries[0]?.parts).toEqual([
-      { content: { resolution: { value: 'corrected-decision' } }, sources: [3, 4] },
+      { content: { resolution: { value: 'corrected-decision' } }, format: 'json', sources: [3, 4] },
     ]);
     const firstPassage = await memory.readStoredSummaries('leader', undefined, {
       passage: { epoch: 'one', start: 1, position: 2 },
@@ -583,6 +582,7 @@ test('a delayed read cannot invalidate summaries rebuilt for a replacement histo
   let requests = 0;
   const memory = new SessionMemory({
     databasePath: ':memory:',
+    processing: 'legacy-json',
     source: {
       async read(...args) {
         if (pauseRead && args[2] === 'tail') {
@@ -644,6 +644,7 @@ test('continues a newer turn when the older provider terminal event was missed',
   const completed: string[] = [];
   const memory = new SessionMemory({
     databasePath: ':memory:',
+    processing: 'legacy-json',
     source: timeline(() => ({ epoch: 'one', messages })),
     async summarize(type) {
       completed.push(type);
@@ -806,7 +807,7 @@ test('pauses active summaries, keeps stored summaries readable, and resumes queu
   function completeTurn(turnId: string) {
     messages.push(
       { ...first, seq: messages.length + 1, turnId },
-      { ...finding, seq: messages.length + 2, turnId },
+      { ...longReply, seq: messages.length + 2, turnId },
     );
     memory.turn('leader', { turnId, outcome: 'completed' }, false);
   }
@@ -820,7 +821,10 @@ test('pauses active summaries, keeps stored summaries readable, and resumes queu
     expect(interrupted).toBe(true);
     completeTurn('three');
     expect(status()).toMatchObject({ summarization: 'paused', rate: null, lastError: null });
-    expect((await memory.readStoredSummaries('leader')).summaries).toHaveLength(1);
+    await memory.settled();
+    expect(
+      (await memory.readStoredSummaries('leader')).summaries.map(({ state }) => state),
+    ).toEqual(['pending', 'pending', 'summarized']);
     expect(calls).toBe(2);
     memory.setSummarizationEnabled(true);
     await eventually(() => status().stored?.uamp === 3);
@@ -835,7 +839,7 @@ test('pauses active summaries, keeps stored summaries readable, and resumes queu
 test('gives foreground inference priority and exposes originals during a failed summary', async () => {
   const messages = [
     { ...first, turnId: '1' },
-    { ...finding, turnId: '1' },
+    { ...longReply, turnId: '1' },
   ];
   let calls = 0;
   const memory = new SessionMemory({
@@ -845,9 +849,8 @@ test('gives foreground inference priority and exposes originals during a failed 
       calls++;
       return {
         type,
-        text: 'partial answer',
+        text: 'partial Markdown',
         complete: false,
-        failure: 'invalid-json',
         elapsedMs: 1,
       };
     },
@@ -860,10 +863,181 @@ test('gives foreground inference priority and exposes originals during a failed 
     memory.foregroundEnded('local-worker');
     await eventually(() => memory.status(undefined, 'leader').summarization === 'failed');
     expect(calls).toBe(1);
-    expect(memory.status(undefined, 'leader').lastError?.message).toContain('invalid JSON');
-    expect((await memory.search('leader', '', 'partial answer')).matches).toEqual([]);
+    expect(memory.status(undefined, 'leader').lastError?.message).toContain('incomplete');
+    expect((await memory.search('leader', '', 'partial Markdown')).matches).toEqual([]);
     expect((await memory.search('leader', '', 'cobalt')).status.summariesPending).toBe(true);
     expect(await memory.handoff('leader', 'cursor')).toContain(first.text);
+  } finally {
+    await memory.close();
+  }
+});
+
+test('records actions and short Discussions without inference while paused, across restart', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-recording-'));
+  let epoch = 'before-rewind';
+  let messages: MemorySourceMessage[] = [
+    { seq: 1, turnId: 'one', author: 'user', text: 'Check the boundary.' },
+    { seq: 2, turnId: 'one', author: 'agent', text: 'Checking the source now.' },
+    ...[false, true].map((ok, index): MemorySourceMessage => ({
+      seq: 3 + index,
+      turnId: 'one',
+      messageId: `tool-${index}`,
+      author: 'tool',
+      text: ok ? 'CACHE_BOUNDARY PASS' : 'CACHE_BOUNDARY FAIL',
+      tool: {
+        kind: 'shell',
+        name: 'shell',
+        status: ok ? 'completed' : 'failed',
+        exitCode: ok ? 0 : 1,
+      },
+    })),
+    { seq: 5, turnId: 'one', author: 'agent', text: 'The second run passed.' },
+  ];
+  const options = {
+    databasePath: path.join(directory, 'memory.sqlite'),
+    source: timeline(() => ({ epoch, messages })),
+    async summarize(): Promise<never> {
+      throw new Error('Inference was not expected.');
+    },
+  };
+  let memory = new SessionMemory(options);
+  try {
+    memory.setSummarizationEnabled(false);
+    memory.turn('leader', { turnId: 'one', outcome: 'completed' }, false);
+    await memory.settled();
+    await memory.close();
+    memory = new SessionMemory(options);
+    memory.setSummarizationEnabled(false);
+    memory.recover(['leader']);
+    await memory.settled();
+    const passage = { epoch, start: 1, position: 5, turnId: 'one' };
+    const { summaries } = await memory.readStoredSummaries('leader', undefined, { passage });
+    expect(summaries).toMatchObject([
+      { state: 'skipped', position: 5, parts: [] },
+      {
+        state: 'recorded',
+        position: 4,
+        discussionId: summaries[0]?.id,
+        action: { checkCount: 2, failureCount: 1, counts: [{ kind: 'shell', count: 2 }] },
+      },
+    ]);
+    const record = { epoch, position: 4, id: summaries[1]!.id };
+    expect(await memory.readEvidenceReferences('leader', record)).toMatchObject({
+      sources: [
+        { seq: 2, author: 'agent' },
+        { seq: 3, messageId: 'tool-0', author: 'tool' },
+        { seq: 4, messageId: 'tool-1', author: 'tool' },
+      ],
+      next: null,
+    });
+    const handoff = await memory.handoffDetails('leader', 'CACHE_BOUNDARY', undefined, true);
+    expect(handoff.text).toContain('CACHE_BOUNDARY FAIL');
+    expect(handoff.text).toContain('CACHE_BOUNDARY PASS');
+    expect(handoff.recoveredSources).toEqual([]);
+    epoch = 'after-rewind';
+    messages = [];
+    expect(await memory.readEvidenceReferences('leader', record)).toEqual({
+      sources: [],
+      next: null,
+    });
+  } finally {
+    await memory.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('reopens the preceding original Discussion after a short reference crosses into a Task', async () => {
+  const discussion = { sessionId: 'session' };
+  const task = { ...discussion, taskId: 'task' };
+  const proposal = 'Consider reusing selectWorkspaceSnapshot on compatible caches.';
+  const messages: MemorySourceMessage[] = [
+    { seq: 1, turnId: 'proposal', author: 'user', scope: discussion, text: proposal },
+    { ...longReply, seq: 2, turnId: 'proposal', scope: discussion },
+    {
+      seq: 3,
+      turnId: 'clarification',
+      author: 'user',
+      scope: discussion,
+      text: 'Keep that option open.',
+    },
+    {
+      seq: 4,
+      turnId: 'clarification',
+      author: 'agent',
+      scope: discussion,
+      text: 'It remains a proposal.',
+    },
+    { seq: 5, turnId: 'approval', author: 'user', scope: task, text: 'Implement that.' },
+    { ...longReply, seq: 6, turnId: 'approval', scope: task },
+  ];
+  const prompts: string[] = [];
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type, prompt) {
+      prompts.push(prompt[1].content);
+      const text = 'The previous Discussion considered a cache change.';
+      return { type, complete: true, text, content: text, elapsedMs: 0 };
+    },
+  });
+  try {
+    for (const turnId of ['proposal', 'clarification', 'approval'])
+      memory.turn('leader', { turnId, outcome: 'completed' }, false);
+    await memory.settled();
+    expect(prompts).toHaveLength(2);
+    const context = prompts[1]!.split('Current Task scope')[0]!;
+    expect(context).toContain('User #1: ' + proposal);
+    expect(context).toContain('Keep that option open.');
+    expect(context).not.toContain('The previous Discussion considered a cache change.');
+  } finally {
+    await memory.close();
+  }
+});
+
+test('includes supplied attachment bytes in the short Discussion threshold once', async () => {
+  const prompts: string[] = [];
+  const messages: MemorySourceMessage[] = [];
+  for (const [index, bytes] of [1016, 1020].entries()) {
+    const turnId = String(index);
+    const attachment = { id: turnId, name: 'Reference', text: 'x'.repeat(bytes) };
+    messages.push(
+      {
+        seq: index * 2 + 1,
+        turnId,
+        author: 'user',
+        text: 'Go',
+        attachments: [attachment, attachment],
+      },
+      { seq: index * 2 + 2, turnId, author: 'agent', text: 'OK' },
+    );
+  }
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type, prompt, _signal, _placement, _progress, format) {
+      expect(format).toBe('markdown');
+      prompts.push(prompt[1]!.content);
+      return {
+        type,
+        content: 'An unsectioned but useful boundary fact.',
+        text: 'An unsectioned but useful boundary fact.',
+        complete: true,
+        elapsedMs: 1,
+      };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: '0', outcome: 'completed' }, false);
+    memory.turn('leader', { turnId: '1', outcome: 'completed' }, false);
+    await memory.settled();
+    expect(prompts).toHaveLength(1);
+    expect((await memory.readStoredSummaries('leader')).summaries).toMatchObject([
+      { state: 'summarized', originalTokens: 256 },
+      { state: 'skipped', originalTokens: 255 },
+    ]);
+    expect((await memory.search('leader', '', 'unsectioned')).matches[0]?.entries).toMatchObject([
+      { kind: 'UAMP', text: 'An unsectioned but useful boundary fact.' },
+    ]);
   } finally {
     await memory.close();
   }

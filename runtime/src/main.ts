@@ -329,11 +329,11 @@ async function run(): Promise<void> {
           generation: JSON.stringify(sessionMemoryGeneration),
         };
         memory = new SessionMemory({
-          databasePath: path.join(stateDirectory, 'session-memory-v4.sqlite'),
+          databasePath: path.join(stateDirectory, 'session-memory-v5.sqlite'),
           source: createPaseoMemorySource(host.api, apiToken, pastedDocuments),
           threshold,
           deviceCatalog: createOllamaDeviceCatalog(memorySettings.endpoint),
-          summarize: (type, prompt, signal, placement, onProgress) =>
+          summarize: (type, prompt, signal, placement, onProgress, format) =>
             summarizeMemory(
               { ...memorySettings, ...placement },
               prompt,
@@ -341,6 +341,7 @@ async function run(): Promise<void> {
               type,
               false,
               onProgress,
+              format,
             ),
           releaseCpuModel: (signal) => releaseOllamaModel(memorySettings, signal),
           model: memorySettings.model,

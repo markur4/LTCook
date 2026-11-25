@@ -45,6 +45,7 @@ import {
   editTranscript,
   sessionMemoryEditCases,
 } from './session-memory-edit-fixtures.js';
+import { runSimplifiedMemoryArm, simplifiedSeed } from './session-memory-simplified.js';
 import { MemoryEditProgress } from './session-memory-edit-progress.js';
 
 const root = path.resolve(import.meta.dir, '..');
@@ -56,7 +57,12 @@ const { summarization } = resolveEvaluationContext({
 if (!summarization) throw new Error('AppRC summarizer settings are unavailable.');
 const { endpoint } = summarization;
 const args = process.argv.slice(2);
-const contextAware = args.includes('--context-aware');
+const simplified = args.includes('--simplified');
+const contextAware = simplified || args.includes('--context-aware');
+if (simplified && !args.includes('--production-suspended'))
+  throw new Error(
+    'Suspend production inference before this comparison and pass --production-suspended.',
+  );
 const auditOutput = args.includes('--audit-output');
 const compareCheckInstructions = args.includes('--compare-check-instructions');
 const compareHandoffFormat = args.includes('--compare-handoff-format');
@@ -64,7 +70,7 @@ if ((compareCheckInstructions || compareHandoffFormat) && !contextAware)
   throw new Error('Handoff comparisons require --context-aware.');
 const [
   extractorName = contextAware ? contextModel : 'LiquidAI/lfm2.5-1.2b-instruct:q8_0',
-  workerName = EVAL_MODEL,
+  workerName = simplified ? LUNA_EVALUATION.model : EVAL_MODEL,
 ] = args.filter((value) => !value.startsWith('--'));
 if (contextAware && modelTag(extractorName) !== modelTag(contextModel))
   throw new Error('The context-aware comparison uses the configured Session Memory summarizer.');
@@ -100,7 +106,7 @@ type ContextComparison = Awaited<ReturnType<typeof compareContextMemory>>;
 
 async function editWithPi(input: {
   fixture: EditCase;
-  mode: 'conventional' | 'search' | 'hybrid' | ContextStrategy;
+  mode: 'conventional' | 'search' | 'hybrid' | 'simplified' | ContextStrategy;
   source: MemorySource;
   handoff: string;
   seed?: number;
@@ -331,6 +337,7 @@ try {
   ]);
   const started = performance.now();
   const scenarios = [];
+  let simplifiedFailed = false;
   for (const fixture of fixtures) {
     const transcript = editTranscript(fixture);
     const messages = transcript.turns.flat();
@@ -348,7 +355,7 @@ try {
           includeDecisionLastControl: compareHandoffFormat,
         });
       const edit = async (
-        mode: ContextStrategy,
+        mode: ContextStrategy | 'simplified',
         handoff: string,
         seed?: number,
         diagnostic?: EditDiagnostic,
@@ -379,6 +386,32 @@ try {
         originalEvidence && originalControlRetrievedCriticalFacts
           ? await edit('original-search', originalEvidence)
           : undefined;
+      if (simplified) {
+        let handoff = '';
+        const candidate = baseline?.passed
+          ? await runSimplifiedMemoryArm(transcript, 'deterministic-markdown', {
+              settings: summarization,
+              digest: extractor.digest,
+              signal,
+              onHandoff: (text) => {
+                handoff = text;
+              },
+            })
+          : undefined;
+        const downstream =
+          candidate?.passed && handoff
+            ? await edit('simplified', handoff, simplifiedSeed)
+            : undefined;
+        simplifiedFailed ||= !baseline?.passed || !candidate?.passed || !downstream?.passed;
+        scenarios.push({
+          fixture: fixture.id,
+          transcriptHash: hash(JSON.stringify(messages)),
+          originalControl: { ...original, worker: baseline },
+          simplified: candidate && { ...candidate, worker: downstream },
+          comparisonInconclusive: !baseline?.passed,
+        });
+        continue;
+      }
       type EditOutcome = Awaited<ReturnType<typeof editWithPi>>;
       const arms: (Omit<ContextComparison['arms'][number], 'handoff' | 'decisionLastJson'> & {
         worker?: EditOutcome;
@@ -485,7 +518,7 @@ try {
       2,
     ),
   );
-  if (!identityUnchanged) process.exitCode = 1;
+  if (!identityUnchanged || simplifiedFailed) process.exitCode = 1;
 } finally {
   process.off('SIGINT', cancel);
   process.off('SIGTERM', cancel);
