@@ -3,13 +3,14 @@ import { memoryIdentifierMatches } from '../session-memory/text.js';
 
 type CheckStatus = NonNullable<MemoryFact['checkStatus']>;
 
-const checkStatusPattern = '(pass(?:ed)?|success|fail(?:ed)?|skip(?:ped)?)';
+const namedCheck = '[A-Z][A-Z0-9]*(?:[_-][A-Z0-9]+)+';
+const checkStatusPattern = '(pass(?:ed|es)?|success|fail(?:ed|s)?|skip(?:ped|s)?)';
 const outcomeFormatting = '[ \\t`"*_~)\\]}]*';
 
 function checkStatus(status: string): CheckStatus | undefined {
-  if (/^(?:pass(?:ed)?|success)$/i.test(status)) return 'pass';
-  if (/^fail(?:ed)?$/i.test(status)) return 'fail';
-  if (/^skip(?:ped)?$/i.test(status)) return 'skip';
+  if (/^(?:pass(?:ed|es)?|success)$/i.test(status)) return 'pass';
+  if (/^fail(?:ed|s)?$/i.test(status)) return 'fail';
+  if (/^skip(?:ped|s)?$/i.test(status)) return 'skip';
 }
 
 function namedOutcomePatterns(name: string) {
@@ -24,6 +25,16 @@ function namedOutcomePatterns(name: string) {
   ];
 }
 
+function reversedOutcomes(value: string, pattern: RegExp) {
+  const [forward] = namedOutcomePatterns(namedCheck);
+  const boundStatuses = new Set(
+    [...value.matchAll(forward!)]
+      .filter(([, name]) => name === name?.toUpperCase())
+      .map((match) => match.index + match[0].length - match[2]!.length),
+  );
+  return [...value.matchAll(pattern)].filter((match) => !boundStatuses.has(match.index));
+}
+
 function namedStringOutcome(value: string, identifier: string, expected: CheckStatus) {
   const exact = identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const [forward, reverse] = namedOutcomePatterns(exact);
@@ -31,7 +42,7 @@ function namedStringOutcome(value: string, identifier: string, expected: CheckSt
     [...value.matchAll(forward!)].some(
       ([, name, status]) => name === identifier && checkStatus(status!) === expected,
     ) ||
-    [...value.matchAll(reverse!)].some(
+    reversedOutcomes(value, reverse!).some(
       ([, status, name]) => name === identifier && checkStatus(status!) === expected,
     )
   );
@@ -95,9 +106,12 @@ export function namedMemoryOutcomes(text: string) {
   }
   function visit(value: unknown): void {
     if (typeof value === 'string') {
-      const name = '[A-Z][A-Z0-9]*(?:[_-][A-Z0-9]+)+';
-      for (const [index, pattern] of namedOutcomePatterns(name).entries()) {
-        for (const [, first, second] of value.matchAll(pattern)) {
+      const [forward, reverse] = namedOutcomePatterns(namedCheck);
+      for (const [index, matches] of [
+        value.matchAll(forward!),
+        reversedOutcomes(value, reverse!),
+      ].entries()) {
+        for (const [, first, second] of matches) {
           const outcomeName = index === 0 ? first! : second!;
           const status = index === 0 ? second! : first!;
           add(outcomeName, status);

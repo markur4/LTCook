@@ -25,6 +25,7 @@ import { identifyMemoryUnits } from '../../../runtime/src/session-memory/units.j
 import { contextTranscript, gradesMemoryFact } from '../../../evals/session-memory-context.js';
 import {
   gradeSimplifiedLayer,
+  realisticReferenceFixture,
   simplifiedCorpus,
 } from '../../../evals/session-memory-simplified.js';
 import {
@@ -329,6 +330,9 @@ test('grades Markdown and reversed named outcomes without mixing adjacent checks
   expect(contradictsMemoryFact(fact, '- **FAIL** — `PI_REWIND_PROVIDER_ID`')).toBe(true);
   expect(matchesMemoryFact(fact, 'OTHER_CHECK PASS\nPI_REWIND_PROVIDER_ID')).toBe(false);
   expect(matchesMemoryFact(fact, 'OTHER_CHECK PASS, PI_REWIND_PROVIDER_ID')).toBe(false);
+  expect(matchesMemoryFact(fact, 'OTHER_CHECK PASS PI_REWIND_PROVIDER_ID')).toBe(false);
+  expect(contradictsMemoryFact(fact, 'OTHER_CHECK FAIL PI_REWIND_PROVIDER_ID PASS')).toBe(false);
+  expect(matchesMemoryFact(fact, 'The same case passes `PI_REWIND_PROVIDER_ID`.')).toBe(true);
 });
 
 test('stops an alternating tool loop and gives changed results room to progress', () => {
@@ -550,4 +554,30 @@ test('asymmetric reply grades preserve reported state while detecting unsupporte
   expect(
     contradictsMemoryFact(cause, 'The issue is resolved by using the current workspace reader.'),
   ).toBe(true);
+});
+
+test('local proposal grades recognize precise signature and explicit pending status', () => {
+  const proposal = manifestLocalFacts(
+    semanticMemoryFixtures.find(({ id }) => id === 'semantic-manifest-reference')!,
+    true,
+  ).find(({ source }) => source === 1)!;
+  const pending =
+    '- Assess `reuseExportManifest` when the revision matches.\n- Proposed, not approved or implemented.';
+  expect(matchesMemoryFact(proposal, pending)).toBe(true);
+  expect(contradictsMemoryFact(proposal, pending)).toBe(false);
+  expect(contradictsMemoryFact(proposal, 'reuseExportManifest was approved.')).toBe(true);
+
+  const preserve = realisticReferenceFixture().facts.find(
+    ({ label }) => label === 'approval preserves the API',
+  )!;
+  expect(
+    matchesMemoryFact(
+      preserve,
+      'Implement the proposal while preserving the restart signature and response.',
+    ),
+  ).toBe(true);
+  expect(
+    matchesMemoryFact(preserve, 'Preserve the restart signature, but change the response.'),
+  ).toBe(false);
+  expect(contradictsMemoryFact(preserve, 'Replace the existing API.')).toBe(true);
 });

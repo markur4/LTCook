@@ -182,7 +182,7 @@ export const semanticMemoryFixtures: readonly MemoryFixture[] = [
         source: 1,
         critical: true,
         expected:
-          /(?:propos\w*|consider\w*)[^\n]{0,125}reuseExportManifest|reuseExportManifest[^\n]{0,125}(?:propos\w*|consider\w*)/i,
+          /(?:propos\w*|consider\w*)[^\n]{0,125}reuseExportManifest|reuseExportManifest[^\n]{0,125}(?:propos\w*|consider\w*)|reuseExportManifest[\s\S]{0,250}\bpropos\w*[,; ]{1,4}not approved\b/i,
         contradicts:
           /reuseExportManifest[^.\n]{0,80}\b(?:is|was) approved\b|\buser approved\b[^.\n]{0,80}reuseExportManifest/i,
       },

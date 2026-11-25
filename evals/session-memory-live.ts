@@ -55,6 +55,7 @@ process.once('SIGINT', cancel);
 process.once('SIGTERM', cancel);
 try {
   const asymmetricArchive = option('regrade-hosted-asymmetric');
+  const hostedReplay = option('replay-hosted-memory');
   const fallbackFrom = option('luna-low-from');
   const localDelegation = option('check-local-delegation');
   if (asymmetricArchive !== undefined) {
@@ -64,12 +65,17 @@ try {
     const report = regradeHostedAsymmetric(saved);
     console.log(JSON.stringify(report, null, 2));
     if (!report.passed) process.exitCode = 1;
-  } else if (args.includes('--qualify-hosted-memory')) {
+  } else if (args.includes('--qualify-hosted-memory') || hostedReplay !== undefined) {
+    if (hostedReplay !== undefined && !hostedReplay)
+      throw new Error('Supply the saved hosted qualification report path.');
     const { qualifyHostedMemory } = await import('./session-memory-hosted.js');
     const report = await qualifyHostedMemory({
       signal: controller.signal,
       auditOutput: args.includes('--audit-output'),
       progress: console.error,
+      ...(hostedReplay
+        ? { replay: JSON.parse(await readFile(hostedReplay, 'utf8')) as unknown }
+        : {}),
     });
     console.log(JSON.stringify(report, null, 2));
     if (!report.passed) process.exitCode = 1;

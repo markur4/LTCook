@@ -9,6 +9,8 @@ import { prepareLunaPiEvaluation } from '../runtime/src/evals/summarization-deci
 import { modelTag } from '../runtime/src/evals/summarization-grader.js';
 import { resolveModel } from '../runtime/src/models/aliases.js';
 import { createHostedMemorySummarizer } from '../runtime/src/session-memory/hosted.js';
+import type { MemorySummaryResult } from '../runtime/src/session-memory/summarization.js';
+import { MemoryHostedUsageSchema } from '../runtime/src/paseo-plugin/shared/activity.js';
 import type { SessionMemory } from '../runtime/src/session-memory/service.js';
 import { asymmetricFixtures } from './session-memory-asymmetric-fixtures.js';
 import { localMemoryFacts } from './session-memory-local.js';
@@ -259,16 +261,56 @@ function parseDecisionAnswer(text: string | undefined) {
   }
 }
 
+const hostedAudit = z.object({
+  usage: MemoryHostedUsageSchema,
+  cases: z.array(
+    z.object({
+      fixture: z.string(),
+      requests: z.array(
+        z.object({
+          result: z.object({
+            type: z.literal('UAMP'),
+            complete: z.literal(true),
+            elapsedMs: z.number().nonnegative(),
+            hosted: z.object({
+              model: z.literal(LUNA_EVALUATION.model),
+              serviceTier: z.literal('default'),
+              providerModelVerified: z.literal(true),
+              providerTier: z.literal('default').optional(),
+            }),
+            metrics: z.object({
+              reasoningTokens: z.literal(0),
+              thinkingPresent: z.literal(false),
+              cachedInputTokens: z.number().int().nonnegative(),
+            }),
+            usage: z.object({
+              inputTokens: z.number().int().nonnegative(),
+              outputTokens: z.number().int().nonnegative(),
+            }),
+          }),
+          audit: z.object({
+            systemPrompt: z.string(),
+            prompt: z.string(),
+            summary: z.string().min(1),
+          }),
+        }),
+      ),
+    }),
+  ),
+});
+
 export async function qualifyHostedMemory(input: {
   signal: AbortSignal;
   auditOutput: boolean;
   progress: (label: string) => void;
+  replay?: unknown;
 }) {
   const { signal, auditOutput, progress } = input;
   const selection = resolveModel('tiny', { LTCOOK_MODEL_SMOL: hostedModel });
   if (selection.reasoning !== 'none' || selection.reasoningSource !== 'alias')
     throw new Error('The hosted Session Memory qualification requires @tiny with no reasoning.');
-  const backend = createHostedMemorySummarizer(selection);
+  const saved = input.replay === undefined ? undefined : hostedAudit.parse(input.replay);
+  const backend = saved ? undefined : createHostedMemorySummarizer(selection);
   const reference = realisticReferenceFixture();
   const fixtures = [
     { fixture: reference, requests: 2, critical: 5, skipped: [3, 4, 5, 6] },
@@ -289,6 +331,12 @@ export async function qualifyHostedMemory(input: {
   ];
   if (fixtures.length !== 4)
     throw new Error('The four hosted qualification fixtures are required.');
+  if (
+    saved &&
+    (saved.cases.length !== fixtures.length ||
+      saved.usage.requests !== fixtures.reduce((sum, fixture) => sum + fixture.requests, 0))
+  )
+    throw new Error('The saved report does not contain the complete hosted run.');
   const cases = [];
   let receiverHandoff: string | undefined;
   for (const { fixture: original, requests, critical, skipped } of fixtures) {
@@ -300,13 +348,30 @@ export async function qualifyHostedMemory(input: {
       focus: latest.text,
       facts: localMemoryFacts(original, 'local-template'),
     };
-    progress(`Hosted Session Memory: ${fixture.id}`);
+    progress(`${saved ? 'Replay' : 'Hosted Session Memory'}: ${fixture.id}`);
+    const savedRequests = saved?.cases.find((record) => record.fixture === fixture.id)?.requests;
+    if (saved && savedRequests?.length !== requests)
+      throw new Error(`Missing saved requests for ${fixture.id}.`);
+    let replayed = 0;
     let handoff: Handoff | undefined;
     const result = await runHostedMemoryArm(fixture, {
       signal,
       auditOutput,
       hosted: {
-        summarize: backend.summarize,
+        summarize:
+          backend?.summarize ??
+          (async (type, prompt, requestSignal): Promise<MemorySummaryResult> => {
+            requestSignal.throwIfAborted();
+            const row = savedRequests?.[replayed++];
+            if (
+              !row ||
+              type !== row.result.type ||
+              prompt[0].content !== row.audit.systemPrompt ||
+              prompt[1].content !== row.audit.prompt
+            )
+              throw new Error(`The saved prompt does not match ${fixture.id}.`);
+            return { ...row.result, text: row.audit.summary, content: row.audit.summary };
+          }),
         inference: {
           hosted: { model: selection.model, reasoning: 'off' },
           local: { model: 'unused', reasoning: 'none' },
@@ -373,7 +438,8 @@ export async function qualifyHostedMemory(input: {
   return {
     selection,
     serviceTier: 'default',
-    usage: backend.usage(),
+    usage: saved?.usage ?? backend!.usage(),
+    replayedSummaries: !!saved,
     cases,
     receivingAgent: receivingAgent ?? { passed: false, skipped: 'Handoff did not qualify.' },
     passed: cases.every(({ passed }) => passed) && receivingAgent?.passed === true,
