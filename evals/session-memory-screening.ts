@@ -25,6 +25,7 @@ import {
 } from './session-memory-simplified.js';
 
 const frozenRevision = 'e7f1d601d1382586b903e757281c165ffffc396d';
+const chronologicalHandoffRevision = 'bbc9a3f3a2e79afe70819d59949b49286101e16e';
 const mnnProfileId = 'mnn-pocket';
 const mnnSampling = { temperature: 0.8, top_k: 20, top_p: 0.8, repeat_penalty: 1 };
 const mnnQatProfile = {
@@ -117,17 +118,28 @@ export async function screenSessionMemory(input: {
   profileId?: string;
   approvalDiagnostic?: 'controls' | 'minimal';
   localComparison?: boolean;
+  qualifyMnnLocal?: boolean;
   localValidation?: readonly (typeof localMemoryArms)[number][];
   mnnApprovalFirst?: boolean;
   allowRetry?: boolean;
   progress?: (label: string) => void;
 }) {
+  if (
+    input.qualifyMnnLocal &&
+    (input.profileId ||
+      input.approvalDiagnostic ||
+      input.localComparison ||
+      input.localValidation ||
+      input.mnnApprovalFirst)
+  )
+    throw new Error('--qualify-mnn-local cannot be combined with other model or screening modes.');
+  const revision = input.qualifyMnnLocal ? chronologicalHandoffRevision : frozenRevision;
   const frozen = Bun.spawnSync(
     [
       'git',
       'diff',
       '--quiet',
-      frozenRevision,
+      revision,
       '--',
       'runtime/src/session-memory',
       'runtime/src/integrations/ollama.ts',
@@ -139,7 +151,7 @@ export async function screenSessionMemory(input: {
     { cwd: new URL('..', import.meta.url).pathname },
   );
   if (frozen.exitCode !== 0)
-    throw new Error('Screening requires the production code and fixtures pinned at e7f1d60.');
+    throw new Error('Screening requires the requested pinned production code and fixtures.');
   if (input.mnnApprovalFirst && input.profileId && input.profileId !== mnnProfileId)
     throw new Error('--mnn-approval-first selects the MNN-Pocket Q8_0 experiment.');
   if (input.approvalDiagnostic && (input.profileId || input.mnnApprovalFirst))
@@ -259,7 +271,7 @@ export async function screenSessionMemory(input: {
   const selectedProfiles =
     input.approvalDiagnostic === 'controls'
       ? [...profiles.filter(({ id }) => id === mnnProfileId), mnnQatProfile]
-      : input.approvalDiagnostic === 'minimal' || input.localComparison
+      : input.approvalDiagnostic === 'minimal' || input.localComparison || input.qualifyMnnLocal
         ? profiles.filter(({ id }) => id === mnnProfileId)
         : qatScreen
           ? [mnnQatProfile]
@@ -352,6 +364,44 @@ export async function screenSessionMemory(input: {
             localResults.push({ model: verified, arms });
             break;
           }
+          if (input.qualifyMnnLocal) {
+            if (!model.weightsDigest)
+              throw new Error('The qualification requires verified weights.');
+            const order = [
+              'approval-after-skipped-discussion',
+              'semantic-retry-correction',
+              'semantic-export-header',
+              'semantic-manifest-reference',
+            ];
+            let active: ('local-template' | 'local-bullets')[] = [
+              'local-template',
+              'local-bullets',
+            ];
+            const arms: Awaited<ReturnType<typeof compareLocalMemory>> = [];
+            for (const id of order) {
+              const fixture = fixtures.find((item) => item.id === id);
+              if (!fixture) throw new Error(`Missing fixture ${id}.`);
+              const stage = await compareLocalMemory(
+                [fixture],
+                {
+                  settings,
+                  digest: model.digest,
+                  signal,
+                  auditOutput,
+                  screening: { weightsDigest: model.weightsDigest },
+                  progress: (label) => progress?.(`${profile.name}: ${label}`),
+                },
+                active,
+              );
+              arms.push(...stage);
+              active = active.filter((arm) =>
+                stage.some((item) => item.arm === arm && item.passed),
+              );
+              if (!active.length) break;
+            }
+            localResults.push({ model: verified, arms });
+            break;
+          }
           const result = await run(settings, model, `${profile.name} T=${temperature}`);
           attempts.push({ generation, ...result });
           if (input.allowRetry === false || !result.nearPass || temperature === 0.1) break;
@@ -431,12 +481,12 @@ export async function screenSessionMemory(input: {
     (!comparison || find(after, comparison.model.name)?.digest === comparison.model.digest);
   if (!unchanged) throw new Error('A model identity changed during screening.');
   return {
-    frozenRevision,
+    frozenRevision: revision,
     seed: simplifiedSeed,
     results,
     comparison,
     ...(input.approvalDiagnostic ? { diagnostics } : {}),
-    ...(input.localComparison ? { localResults } : {}),
+    ...(input.localComparison || input.qualifyMnnLocal ? { localResults } : {}),
     productionSuspended: true,
   };
 }

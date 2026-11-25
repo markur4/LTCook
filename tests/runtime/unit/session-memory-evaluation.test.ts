@@ -1,4 +1,7 @@
-import { candidateScreeningFixtures } from '../../../evals/session-memory-screening.js';
+import {
+  candidateScreeningFixtures,
+  screenSessionMemory,
+} from '../../../evals/session-memory-screening.js';
 import {
   localMemoryFacts,
   localMemoryPrompt,
@@ -29,6 +32,28 @@ import {
 import { prepareMemorySummaries } from '../../../runtime/src/session-memory/summarization.js';
 import { estimateMemoryTokens } from '../../../runtime/src/session-memory/text.js';
 import { memoryFixtures } from '../../../runtime/src/evals/session-memory-fixtures.js';
+
+test('MNN-Pocket qualification rejects conflicting evaluation modes before model setup', async () => {
+  const conflicts = [
+    { profileId: 'mnn-pocket-q4-1' },
+    { approvalDiagnostic: 'controls' },
+    { localComparison: true },
+    { localValidation: ['immediate'] },
+    { mnnApprovalFirst: true },
+  ] as const;
+  for (const conflict of conflicts) {
+    await expect(
+      screenSessionMemory({
+        settings: { endpoint: 'http://127.0.0.1:1', model: 'unused', keepAlive: 0 },
+        signal: AbortSignal.abort(),
+        qualifyMnnLocal: true,
+        ...conflict,
+      }),
+    ).rejects.toThrow(
+      '--qualify-mnn-local cannot be combined with other model or screening modes.',
+    );
+  }
+});
 
 test('the delegation grader preserves exact decisions across equivalent citation shapes', () => {
   const expected = { symbol: 'reuseExportManifest', originalProposal: 1, userApproval: 5 };

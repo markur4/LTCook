@@ -96,8 +96,10 @@ try {
     const minimalApproval = args.includes('--diagnose-minimal-approval');
     const validateLocal = option('validate-local-memory');
     const localComparison = args.includes('--compare-local-memory') || validateLocal !== undefined;
+    const qualifyMnnLocal = args.includes('--qualify-mnn-local');
     if (
-      (localComparison ||
+      (qualifyMnnLocal ||
+        localComparison ||
         minimalApproval ||
         mnnDiagnostic ||
         screening ||
@@ -109,13 +111,14 @@ try {
       throw new Error(
         'Suspend production inference before this comparison and pass --production-suspended.',
       );
-    if (screening || mnnDiagnostic || minimalApproval || localComparison) {
+    if (screening || mnnDiagnostic || minimalApproval || localComparison || qualifyMnnLocal) {
       const report = await screenSessionMemory({
         settings: summarization,
         signal: controller.signal,
         profileId: option('screen-profile'),
         approvalDiagnostic: minimalApproval ? 'minimal' : mnnDiagnostic ? 'controls' : undefined,
         localComparison,
+        qualifyMnnLocal,
         localValidation: validateLocal
           ? localValidationArms(JSON.parse(await readFile(validateLocal, 'utf8')))
           : undefined,
