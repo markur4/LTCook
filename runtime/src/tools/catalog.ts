@@ -16,12 +16,14 @@ export function createTools(
   web?: WebToolService,
   memory?: SessionMemory,
   colgrep?: ReturnType<typeof createColgrepProvider>,
+  worktree?: ToolDefinition,
 ): readonly ToolDefinition[] {
   const repoSearch = createRepoSearchTool(colgrep);
   return [
     createRiedTool(ried),
     repoSearch,
     createRepoLocateTool(repoSearch),
+    ...(worktree ? [worktree] : []),
     ...(ollama
       ? [createSummarizeTool(ollama, undefined, memory && (() => memory.holdForeground()))]
       : []),

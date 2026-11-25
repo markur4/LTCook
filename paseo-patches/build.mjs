@@ -2,13 +2,15 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const version = '0.16.0-beta.2';
 const revision = '23bae61535542a45ade7196a7b3c152705f16de3';
 const archiveSha256 = '9bf1a5088b85057aea7038497d00e39305385c9ed56581d60247e7752184c15a';
-const patch = new URL('./timeline-navigation.patch', import.meta.url);
+const patches = ['timeline-navigation.patch', 'session-worktrees.patch'].map(
+  (name) => new URL(name, import.meta.url),
+);
 const stampName = 'ltcook-paseo-build.json';
 const defaultOutput = fileURLToPath(new URL('../runtime/dist/paseo-web', import.meta.url));
 
@@ -48,7 +50,12 @@ async function build() {
     version,
     revision,
     archiveSha256,
-    patchSha256: sha256(await readFile(patch)),
+    patches: await Promise.all(
+      patches.map(async (patch) => ({
+        name: basename(patch.pathname),
+        sha256: sha256(await readFile(patch)),
+      })),
+    ),
     builderSha256: sha256(await readFile(new URL(import.meta.url))),
   });
   const currentStamp = await readStamp(output);
@@ -63,7 +70,12 @@ async function build() {
   try {
     await run(
       'curl',
-      ['-fsSL', `https://codeload.github.com/getpaseo/paseo/tar.gz/${revision}`, '-o', 'source.tar.gz'],
+      [
+        '-fsSL',
+        `https://codeload.github.com/getpaseo/paseo/tar.gz/${revision}`,
+        '-o',
+        'source.tar.gz',
+      ],
       scratch,
     );
     if (sha256(await readFile(join(scratch, 'source.tar.gz'))) !== archiveSha256) {
@@ -71,7 +83,7 @@ async function build() {
     }
     const source = join(scratch, `paseo-${revision}`);
     await run('tar', ['-xzf', 'source.tar.gz'], scratch);
-    await run('git', ['apply', fileURLToPath(patch)], source);
+    await run('git', ['apply', ...patches.map((patch) => fileURLToPath(patch))], source);
     const env = {
       ...process.env,
       CI: '1',
@@ -80,9 +92,19 @@ async function build() {
       LEFTHOOK: '0',
       PASEO_WEB_PLATFORM: 'web',
     };
-    await run('npm', ['ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'], source, env);
+    await run(
+      'npm',
+      ['ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
+      source,
+      env,
+    );
     await run('npm', ['run', 'postinstall'], source, env);
-    await run(process.execPath, ['packages/protocol/scripts/generate-validation-aot.mjs'], source, env);
+    await run(
+      process.execPath,
+      ['packages/protocol/scripts/generate-validation-aot.mjs'],
+      source,
+      env,
+    );
     await run('npm', ['run', 'build:daemon-web-ui'], source, env);
 
     const assets = join(source, 'packages', 'server', 'dist', 'server', 'web-ui');
