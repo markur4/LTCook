@@ -23,6 +23,7 @@ import {
 } from './session-memory-simplified.js';
 
 const frozenRevision = 'e7f1d601d1382586b903e757281c165ffffc396d';
+const mnnProfileId = 'mnn-pocket';
 const liquid = { temperature: 0.4, top_k: 50, top_p: 1, repeat_penalty: 1.05 };
 const profiles = [
   {
@@ -40,7 +41,7 @@ const profiles = [
     ...liquid,
   },
   {
-    id: 'mnn-pocket',
+    id: mnnProfileId,
     name: 'MNN-Pocket-0.3B Q8_0',
     model: 'hf.co/taobao-mnn/MNN-Pocket-0.3B-GGUF:Q8_0',
     weights: '31eb5db92b2e02a80e9e3a9316aa83120cbee98e4f4a22ca19015ba601dbd690',
@@ -92,7 +93,8 @@ export function candidateScreeningFixtures() {
           ...fact,
           contradicts: new RegExp(
             (fact.contradicts?.source ?? '(?!)') +
-              "|\\b(?:is|remains) (?:a |an |the )?(?:open )?proposal (?:still )?(?:awaiting|pending) (?:your|the user[’']s) (?:approval|decision)",
+              "|\\b(?:is|remains) (?:a |an |the )?(?:open )?proposal (?:still )?(?:awaiting|pending) (?:your|the user[’']s) (?:approval|decision)" +
+              '|\\bapproval (?:is (?:still )?pending|remains pending)\\b',
             'i',
           ),
         };
@@ -106,6 +108,7 @@ export async function screenSessionMemory(input: {
   signal: AbortSignal;
   auditOutput?: boolean;
   profileId?: string;
+  mnnApprovalFirst?: boolean;
   allowRetry?: boolean;
   progress?: (label: string) => void;
 }) {
@@ -127,6 +130,8 @@ export async function screenSessionMemory(input: {
   );
   if (frozen.exitCode !== 0)
     throw new Error('Screening requires the production code and fixtures pinned at e7f1d60.');
+  if (input.mnnApprovalFirst && input.profileId && input.profileId !== mnnProfileId)
+    throw new Error('The approval-first experiment is only for MNN-Pocket.');
   const { signal, auditOutput, progress } = input;
   const endpoint = ollamaEndpoint(input.settings.endpoint);
   const api = async (route: string, body: object, method = 'POST', requestSignal = signal) => {
@@ -164,11 +169,13 @@ export async function screenSessionMemory(input: {
   const models = await inventory();
   const fixtures = candidateScreeningFixtures();
   const expected = [4, 3, 4, 5];
+  const order = input.mnnApprovalFirst ? [2, 0, 1, 3] : [0, 1, 2, 3];
   const run = async (settings: OllamaSettings, model: ModelIdentity, label: string) => {
     if (!model.weightsDigest) throw new Error('Could not verify the Ollama model weights.');
     const stages = [];
     let nearPass = false;
-    for (const [index, fixture] of fixtures.entries()) {
+    for (const index of order) {
+      const fixture = fixtures[index]!;
       progress?.(`${label}: ${fixture.id}`);
       const result = await runSimplifiedMemoryArm(fixture, 'deterministic-markdown', {
         settings,
@@ -218,7 +225,8 @@ export async function screenSessionMemory(input: {
     };
   };
   const results = [];
-  const selectedProfiles = profiles.filter(({ id }) => !input.profileId || id === input.profileId);
+  const profileId = input.mnnApprovalFirst ? mnnProfileId : input.profileId;
+  const selectedProfiles = profiles.filter(({ id }) => !profileId || id === profileId);
   if (!selectedProfiles.length) throw new Error('Unknown Session Memory screening profile.');
   for (const profile of selectedProfiles) {
     const source = find(models, profile.model);
@@ -255,7 +263,8 @@ export async function screenSessionMemory(input: {
         )
           throw new Error(`Ollama did not preserve the native definition for ${profile.name}.`);
         const attempts = [];
-        for (const temperature of [profile.temperature, 0.1]) {
+        const temperatures = input.mnnApprovalFirst ? [0.6] : [profile.temperature, 0.1];
+        for (const temperature of temperatures) {
           const generation = {
             ...sessionMemoryGeneration,
             options: {

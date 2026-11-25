@@ -169,3 +169,36 @@ test('screening accepts an equivalent attempt limit and rejects a stale approval
     ),
   ).toBe(true);
 });
+
+test('manifest screening fails a complete summary that leaves explicit approval pending', () => {
+  const { facts, turns } = candidateScreeningFixtures().find(
+    ({ id }) => id === 'semantic-manifest-reference',
+  )!;
+  const proposal = {
+    seq: 2,
+    sources: [1, 2],
+    text: 'The proposal is to use reuseExportManifest. Approval is still pending.',
+  };
+  const approval = {
+    seq: 6,
+    sources: [5, 6],
+    text: 'The user approved reuseExportManifest. Keep the exporter API stable. Do not delete old manifests.',
+  };
+  const originals = turns.flat();
+  expect(gradeSimplifiedLayer(facts, [proposal, approval], originals)).toMatchObject({
+    retained: 4,
+    required: 4,
+    passed: true,
+  });
+  for (const staleStatus of [
+    'This is a proposal awaiting your decision.',
+    'Approval is still pending.',
+  ]) {
+    const staleApproval = { ...approval, text: approval.text + ' ' + staleStatus };
+    const result = gradeSimplifiedLayer(facts, [proposal, staleApproval], originals);
+    expect(result).toMatchObject({ retained: 4, required: 4, passed: false });
+    expect(
+      result.facts.find(({ source, contradicted }) => source === 5 && contradicted)?.label,
+    ).toBe('the later approval names the proposed implementation');
+  }
+});
