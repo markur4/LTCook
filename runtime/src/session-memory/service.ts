@@ -1212,7 +1212,7 @@ export class SessionMemory {
         )
         .sort((a, b) => b.position - a.position);
       const anchor = prior.find(({ state }) => state !== 'skipped');
-      let history = anchor
+      const history = anchor
         ? anchor.parts.map((part, index) => ({
             ...part,
             type: anchor.type,
@@ -1221,46 +1221,48 @@ export class SessionMemory {
             id: `${anchor.id}/${index + 1}`,
           }))
         : [];
+      const historyGeneration = activity.generation;
+      const resolveDiscussion = (summary: StoredMemorySummary) =>
+        this.referencedMessages(
+          agentId,
+          epoch,
+          summary.sources,
+          signal,
+          messages,
+          undefined,
+          latest,
+        );
+      const confirmHistory = async () =>
+        (await this.currentHistory(agentId, epoch, latest, signal)) &&
+        activity.generation === historyGeneration;
       const skipped = [];
       let skippedTokens = 0;
       for (const candidate of prior) {
         if (candidate.state !== 'skipped' || skippedTokens >= 512) break;
-        const { messages: originals } = await this.referencedMessages(
-          agentId,
-          epoch,
-          candidate.sources,
-          signal,
-          messages,
-        );
+        const { messages: originals, originalHistory } = await resolveDiscussion(candidate);
+        if (activity.generation !== historyGeneration) return true;
+        if (originalHistory === 'unavailable') {
+          if (!(await confirmHistory())) return true;
+          break;
+        }
         if (originals.length) skipped.push({ id: candidate.id, messages: originals });
         skippedTokens += Math.max(32, candidate.originalTokens ?? 32);
       }
+      let originalAnchor: string | undefined;
       if (format === 'markdown' && anchor && skipped.length) {
-        // > A short exchange can refer to an earlier proposal. Use that pair's original wording when available.
-        const { messages: originals } = await this.referencedMessages(
-          agentId,
-          epoch,
-          anchor.sources,
-          signal,
-          messages,
-        );
-        if (originals.length === anchor.sources.length) {
-          history = [
-            {
-              id: anchor.id,
-              unitId: anchor.id,
-              scope: unit.scope,
-              type: 'UAMP',
-              content: originalUampDialogue(originals),
-              sources: anchor.sources.map(({ seq }) => seq),
-              format: undefined,
-            },
-          ];
-        }
+        // > A short exchange can refer to an earlier proposal.
+        const { messages: originals, originalHistory } = await resolveDiscussion(anchor);
+        if (activity.generation !== historyGeneration) return true;
+        if (originalHistory === 'unavailable' && !(await confirmHistory())) return true;
+        if (originalHistory === 'available') originalAnchor = originalUampDialogue(originals);
       }
       let parts: ReturnType<typeof prepareMemorySummaries>;
       try {
-        parts = prepareMemorySummaries(unit, history, this.budgets, { format, skipped });
+        parts = prepareMemorySummaries(unit, history, this.budgets, {
+          format,
+          skipped,
+          originalAnchor,
+        });
       } catch (error) {
         if (!(error instanceof MemoryInputBudgetError)) throw error;
         retainCoverage(unit);

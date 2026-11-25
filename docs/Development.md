@@ -392,6 +392,23 @@ cover consecutive skipped Discussions before a Task approval and a large
 batch containing a failed check followed by a pass. The 30% reductions in
 requests and CPU wall time are optimization targets.
 
+Use the same CPU isolation for approval reference diagnostics and semantic
+qualification:
+
+```shell
+bun evals/session-memory-live.ts --diagnose-approval --production-suspended
+bun evals/session-memory-live.ts --semantic --production-suspended
+```
+
+The approval diagnostic compares JSON and Markdown on one fixed current
+exchange. Each pair sees the same preceding context. The three pairs use
+generated context, original source for the preceding UAMP, and compact
+chronological context. With `--audit-output`, the report includes the exact
+rendered prompts and answers. Keep that output local. The semantic baseline
+requires each intended long UAMP to run the summarizer. It gates critical
+facts and contradictions in generated summaries, complete records and
+assembled handoffs. It uses the same pinned LFM3 model and seed 17.
+
 For downstream qualification on a host without a usable GPU, use the same
 CPU production pause and the native Pi GPT-6 Luna high-reasoning worker:
 

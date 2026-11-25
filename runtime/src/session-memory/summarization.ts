@@ -11,7 +11,12 @@ import {
   parseMemoryJson,
   type MemoryJson,
 } from './json.js';
-import { estimateMemoryTokens, memoryPreview } from './text.js';
+import {
+  estimateMemoryTokens,
+  memoryIdentifierMatches,
+  memoryIdentifiers,
+  memoryPreview,
+} from './text.js';
 import type { MemoryScope, MemorySourceMessage, MemoryUnit } from './units.js';
 
 export const sessionMemoryModel = 'lfm3:1.7b-qad-q4_0';
@@ -228,6 +233,7 @@ export function prepareMemorySummaries(
     mode?: MemoryContextMode;
     format?: MemorySummaryFormat;
     contextStyle?: 'dialogue';
+    originalAnchor?: string;
     skipped?: readonly { id: string; messages: readonly MemorySourceMessage[] }[];
   } = {},
 ) {
@@ -385,12 +391,22 @@ export function prepareMemorySummaries(
       }
       if (latest) {
         const label = dialogue ? 'Earlier exchange summary:\n' : '';
-        const summary = immediateContext(
-          previousPortions,
-          remaining - estimateMemoryTokens(label),
-          dialogue,
-        );
-        if (summary) historyText = label + summary;
+        const allowance = remaining - estimateMemoryTokens(label);
+        const summary = immediateContext(previousPortions, allowance, dialogue);
+        const original = policy.originalAnchor
+          ? immediateContext(
+              [{ ...latest, content: policy.originalAnchor, format: undefined }],
+              allowance,
+              dialogue,
+            )
+          : '';
+        const identifiers = original ? memoryIdentifiers(summary) : [];
+        // > Original wording can resolve ambiguity only when its preview retains the known identifiers.
+        const anchor =
+          original && memoryIdentifierMatches(original, identifiers).size === identifiers.length
+            ? original
+            : summary;
+        if (anchor) historyText = label + anchor;
         const historyId = latest.unitId ?? latest.id;
         if (historyText && historyId) historyIds.push(historyId);
       }

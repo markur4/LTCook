@@ -679,7 +679,7 @@ Both deterministic arms retained the large AAB's failed and passing outcomes
 as separate events. The 14/14 results use normal access to source references
 on recorded AABs and skipped UAMPs.
 
-The generated Markdown approval control remains open. In the strongest replay
+The generated Markdown approval control was open at the end of this comparison. In the strongest replay
 with the added proposal and execution checks, the summarizer retained 4/5
 critical facts in its generated output, across the stored records, and in
 the handoff. It preserved the open proposal, API constraint, rejection of
@@ -687,11 +687,58 @@ an automatic rebuild, and lack of completed implementation. The approval
 still omitted that “Implement that” referred to reuse of
 `selectWorkspaceSnapshot`. A longer reference instruction and a plain
 Markdown context replay both yielded an empty approval summary. The pass
-retains the 4/5 prompt and keeps the gate at 5/5 with zero critical
-contradictions.
+retained the 4/5 prompt and the 5/5 gate with zero critical contradictions.
+The [approval reference follow-up](#approval-reference-follow-up) closes this gap.
 
 Native Pi with GPT-6 Luna at high reasoning completed both the original
 source controls and simplified handoffs for trace pairing and workspace
 preparation. All four runs passed their four executable checks. The
 simplified records for these edit fixtures required zero inference requests.
 The four runs took 72.75 s including setup and assembly.
+
+## Approval reference follow-up
+
+The preceding generated UAMP and the exact rendered approval prompt both
+contained `selectWorkspaceSnapshot`, including the description of reusing it
+for compatible caches. The original Markdown answer omitted the identifier
+despite having it in context. The missing fact arose during generation.
+
+Each diagnostic pair used the same current exchange, task context, and prior
+content for JSON and Markdown. LFM3 ran on CPU at seed 17 with production
+inference suspended. The table grades the four facts in the current approval.
+A fifth fact covers the still open proposal in the preceding UAMP.
+
+| Preceding context | Estimated context tokens | JSON | Markdown |
+| --- | ---: | ---: | ---: |
+| Generated summary with structured records | 225 | 3/4 | 3/4 |
+| Original UAMP with structured records | 419 | 2/4 | 4/4 |
+| Generated summary with compact chronological dialogue | 187 | 2/4 | 0/4 |
+
+The Markdown dialogue replay returned an empty answer. JSON sometimes repeated
+the symbol without tying it to the user's approval. The successful Markdown
+replay used the preceding original UAMP within the same context budget. In
+production, a chain of skipped UAMPs can now reopen that one preceding pair.
+The normal runtime replay retained **5/5** in generated summaries, stored
+records, and the assembled handoff. The known technical identifier in the
+bounded generated summary remains available if clipping the original would
+lose it.
+
+### Semantic LFM3 baseline
+
+These fixtures require summarization and model the length and content of
+ordinary engineering discussions. The abbreviated clarification in the
+manifest case remains below the 256-token threshold. The four long UAMPs range
+from 281 to 294 estimated tokens.
+
+| Fixture | Requests | CPU request time | Generated summaries | Stored records | Delegation |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Export header discovery and observed checks | 1 | 7.63 s | 4/4 | 4/4 | 4/4 |
+| Corrected retry delay and rejection | 1 | 6.96 s | 3/3 | 3/3 | 3/3 |
+| Manifest approval by reference | 2 | 21.20 s | 4/4 | 4/4 | 4/4 |
+| Total | 4 | 35.79 s | 11/11 | 11/11 | 11/11 |
+
+The selected checks detected zero critical contradictions and all 11 labels
+were present before compensatory original search. The graders check the
+labeled source, status, identifiers and decision language. The audit of the
+fixture responses also confirmed the expected failure and the 45-second
+correction. Smaller models were outside this run.

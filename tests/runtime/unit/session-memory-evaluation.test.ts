@@ -15,6 +15,7 @@ import {
   contradictsMemoryFact,
   matchesMemoryFact,
 } from '../../../runtime/src/evals/session-memory-facts.js';
+import { prepareMemorySummaries } from '../../../runtime/src/session-memory/summarization.js';
 import { memoryFixtures } from '../../../runtime/src/evals/session-memory-fixtures.js';
 
 test('grades multiline named results without borrowing the status of another check', () => {
@@ -121,4 +122,31 @@ test('semantic grading accepts the named failure and reads a nonbreaking retry h
     true,
   );
   expect(contradictsMemoryFact(retry!.facts[0]!, 'Approved a 10‑second delay.')).toBe(true);
+});
+
+test('keeps the generated anchor when an original preview would lose its technical referent', () => {
+  const [part] = prepareMemorySummaries(
+    { type: 'UAMP', messages: [{ seq: 4, author: 'user', text: 'Implement that.' }] },
+    [
+      {
+        id: 'proposal',
+        type: 'UAMP',
+        format: 'markdown',
+        content: '**Intent**\n- Consider reuseExportManifest for unchanged exports.',
+      },
+    ],
+    undefined,
+    {
+      format: 'markdown',
+      skipped: [
+        { id: 'clarification', messages: [{ seq: 3, author: 'agent', text: 'Still a proposal.' }] },
+      ],
+      originalAnchor:
+        'Long original prefix. '.repeat(180) + 'Agent #2: Consider reuseExportManifest.',
+    },
+  );
+  expect(part?.historyText).toContain('reuseExportManifest');
+  expect(part?.historyText).toContain('Still a proposal.');
+  expect(part?.historyText).not.toContain('Long original prefix.');
+  expect(part?.historyEstimatedTokens).toBeLessThanOrEqual(512);
 });

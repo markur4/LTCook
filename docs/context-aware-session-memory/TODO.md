@@ -22,6 +22,7 @@
 - [x] Extend the matched Agent Evals and regression fixtures.
 - [x] Verify the final pass with Traditional Tests and native Pi/Paseo.
 - [x] Compare the three CPU arms and qualify downstream delegation.
-- [ ] Pass the generated Markdown approval control at seed 17. See [qualification](QUALIFICATION.md#simplified-session-memory-comparison).
+- [x] Pass the generated Markdown approval control at seed 17.
+- [x] Qualify LFM3 on the realistic semantic UAMP fixtures. See [qualification](QUALIFICATION.md#approval-reference-follow-up).
 - [x] Review the combined pass.
-- [ ] Integrate after the approval control passes.
+- [ ] Complete final verification and integrate after the follow-up review.

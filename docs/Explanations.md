@@ -474,8 +474,10 @@ pending summaries, result truncation, and original-history availability.
 Immediate Context supplies the current Task objective and acceptance criteria.
 It uses up to 512 estimated supplementary tokens for Task context and relevant
 preceding Discussion when the current material leaves room. The current
-summary can resolve a reference using one preceding generated summary and
-original messages from subsequent skipped UAMPs. The runtime can use
+summary can resolve a reference using one preceding UAMP and original
+messages from subsequent skipped UAMPs. When there are skipped exchanges
+after a summarized UAMP, Markdown summarization uses that preceding UAMP’s
+original messages when available. Its generated summary remains the fallback. The runtime can use
 Discussion from the same Session and compatible Plan and Pass when work enters
 a Task. Prior context helps resolve references. Approval and execution claims
 must come from the current sources.
