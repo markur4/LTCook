@@ -2,6 +2,10 @@ import { expect, test } from 'bun:test';
 import { MemoryEditProgress } from '../../../evals/session-memory-edit-progress.js';
 import { gradesMemoryFact } from '../../../evals/session-memory-context.js';
 import {
+  gradeSimplifiedLayer,
+  simplifiedCorpus,
+} from '../../../evals/session-memory-simplified.js';
+import {
   contradictsMemoryFact,
   matchesMemoryFact,
 } from '../../../runtime/src/evals/session-memory-facts.js';
@@ -46,4 +50,36 @@ test('stops an alternating tool loop and gives changed results room to progress'
   expect(search()).toBe(false);
   expect(read('after')).toBe(false);
   expect(search()).toBe(true);
+});
+
+test('requires the complete critical Session Memory corpus', () => {
+  const corpus = simplifiedCorpus();
+  expect(corpus).toHaveLength(5);
+  expect(corpus.flatMap(({ facts }) => facts).filter(({ critical }) => critical)).toHaveLength(14);
+});
+
+test('records recovery separately and rejects attributed reversals and invented outcomes', () => {
+  const fixture = simplifiedCorpus().find(({ id }) => id === 'runtime-rebuild-and-cache-recovery')!;
+  const originals = fixture.turns.flat();
+  const facts = fixture.facts.filter(({ critical }) => critical);
+  const entries = originals.filter(({ seq }) => [5, 8].includes(seq));
+  expect(gradeSimplifiedLayer(facts, entries, originals)).toMatchObject({
+    retained: 3,
+    required: 3,
+    passed: true,
+  });
+  expect(gradeSimplifiedLayer(facts, entries.slice(1), originals)).toMatchObject({
+    retained: 1,
+    required: 3,
+    passed: false,
+  });
+  const fabricated = [...entries, { seq: 8, text: 'CACHE_OPEN_RESTART PASS. EXTRA_CHECK PASS.' }];
+  expect(gradeSimplifiedLayer(facts, fabricated, originals)).toMatchObject({
+    contradictions: [
+      { sources: [8], name: 'CACHE_OPEN_RESTART', status: 'pass' },
+      { sources: [8], name: 'EXTRA_CHECK', status: 'pass' },
+    ],
+    retained: 3,
+    passed: false,
+  });
 });

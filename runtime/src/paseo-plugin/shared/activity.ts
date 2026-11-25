@@ -122,7 +122,12 @@ export const memoryDeviceRpc = defineRpc({
 
 const summaryCursor = z.object({ epoch: id, position: count, id });
 export const MEMORY_SUMMARIES_TIMELINE_KIND = 'memory-summaries';
-const summaryPassage = z.object({ epoch: id, start: count, position: count });
+const summaryPassage = z.object({
+  epoch: id,
+  start: count,
+  position: count,
+  turnId: id.optional(),
+});
 export const MemorySummariesTimelineSchema = z.object({ passage: summaryPassage.optional() });
 
 export const storedSummariesRpc = defineRpc({
@@ -138,6 +143,19 @@ export const storedSummariesRpc = defineRpc({
       z.object({
         id,
         type: z.enum(['UAMP', 'AAB']),
+        state: z.enum(['summarized', 'skipped', 'pending', 'failed', 'recorded']),
+        epoch: id,
+        discussionId: id.optional(),
+        action: z
+          .object({
+            counts: z.array(z.object({ kind: id, count })),
+            files: z.array(z.string()),
+            fileCount: count,
+            checks: z.array(z.object({ seq: count, text: z.string() })),
+            checkCount: count,
+            failureCount: count,
+          })
+          .optional(),
         createdAt: z.string(),
         position: count,
         originalTokens: count.nullable(),
@@ -151,6 +169,31 @@ export const storedSummariesRpc = defineRpc({
   }),
 });
 
+export const MemoryEvidenceReferencesSchema = z.object({
+  sources: z.array(z.object({ seq: count, messageId: id.optional() })).max(8),
+  next: count.nullable(),
+});
+
+export const memoryEvidenceRpc = defineRpc({
+  name: 'ltcook.activity.memory-evidence',
+  input: z.strictObject({ agentId: id, epoch: id, id, position: count, after: count.optional() }),
+  output: z.object({
+    entries: z.array(
+      z.object({
+        seq: count,
+        source: z
+          .discriminatedUnion('kind', [
+            z.object({ kind: z.literal('agent'), text: z.string() }),
+            z.object({ kind: z.literal('tool'), name: id, status: id, details: z.string() }),
+          ])
+          .nullable(),
+      }),
+    ),
+    next: count.nullable(),
+  }),
+});
+
+export type MemoryEvidencePage = z.infer<typeof memoryEvidenceRpc.output>;
 export type StoredSummariesPage = z.infer<typeof storedSummariesRpc.output>;
 export type ActivitySnapshot = z.infer<typeof ActivitySnapshotSchema>;
 export type AgentActivity = z.infer<typeof agentActivity>;

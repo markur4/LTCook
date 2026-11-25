@@ -14,3 +14,12 @@
 - [x] Qualify the attachment fixture and recheck exact named results. Measure the reference to a previous Discussion in the [lean single-seed run](QUALIFICATION.md#lean-single-seed-qualification).
 - [x] Establish passing original-source Pi controls for trace pairing and workspace preparation.
 - [x] Qualify automatic delegation on the two repository-edit fixtures with GPT-6 Luna through Pi. The [Luna comparison](QUALIFICATION.md#downstream-qualification-with-gpt-6-luna) passed in all four arms and records the observed Bonsai limitations.
+
+## Simplify Session Memory
+
+- [x] Record deterministic AABs and short Discussions with source references.
+- [x] Produce UAMP Markdown and display records in Paseo.
+- [x] Extend the matched Agent Evals and regression fixtures.
+- [ ] Verify the final pass with Traditional Tests and native Pi/Paseo.
+- [ ] Qualify the three CPU comparison arms and downstream delegation.
+- [ ] Review the combined pass and integrate after acceptance.

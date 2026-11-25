@@ -66,7 +66,7 @@ export function contextSeeds(raw?: string) {
 export type ContextStrategy = (typeof contextStrategies)[number];
 export const contextModel = sessionMemoryModel;
 
-function contextSettings(settings: OllamaSettings, seed?: number): OllamaSettings {
+export function contextSettings(settings: OllamaSettings, seed?: number): OllamaSettings {
   return {
     ...settings,
     model: contextModel,
@@ -101,7 +101,7 @@ type Request = {
 };
 type Evidence = { sources: readonly number[]; text: string };
 
-function logicalUnits(fixture: MemoryFixture) {
+export function contextTranscript(fixture: MemoryFixture) {
   const prompts = new Map<string, 'completed'>();
   const messages: MemorySourceMessage[] = [];
   let turn: MemorySourceMessage[] = [];
@@ -125,6 +125,11 @@ function logicalUnits(fixture: MemoryFixture) {
     turn.push(source);
   }
   addTurn();
+  return { messages, prompts };
+}
+
+function logicalUnits(fixture: MemoryFixture) {
+  const { messages, prompts } = contextTranscript(fixture);
   return identifyMemoryUnits(messages, prompts, 3000, true);
 }
 
@@ -160,6 +165,7 @@ const evaluationEpoch = 'fixed-history';
 
 export function transcriptSource(
   history: readonly MemorySourceMessage[] | ((id: string) => readonly MemorySourceMessage[]),
+  fixedEpoch?: string,
 ): MemorySource {
   return {
     async read(id, cursor, direction = 'after') {
@@ -171,7 +177,7 @@ export function transcriptSource(
           : direction === 'before'
             ? messages.filter(({ seq }) => seq < cursor!.seq).slice(-16)
             : messages.filter(({ seq }) => seq > (cursor?.seq ?? -1)).slice(0, 16);
-      const epoch = typeof history === 'function' ? id : evaluationEpoch;
+      const epoch = fixedEpoch ?? (typeof history === 'function' ? id : evaluationEpoch);
       return {
         epoch,
         earliest: messages[0]?.seq,

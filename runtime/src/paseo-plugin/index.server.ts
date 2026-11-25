@@ -7,6 +7,8 @@ import {
   activitySubscription,
   activityToggleRpc,
   memoryDeviceRpc,
+  memoryEvidenceRpc,
+  MemoryEvidenceReferencesSchema,
   MemoryDeviceSchema,
   MemoryRateSchema,
   MEMORY_SUMMARIES_TIMELINE_KIND,
@@ -15,7 +17,7 @@ import {
   storedSummariesRpc,
 } from './shared/activity';
 import { observeActivity, observedTimestamp } from './server/activity';
-import { readPaseoMemoryPassage } from './server/memory-source';
+import { readPaseoMemoryEvidence, readPaseoMemoryPassage } from './server/memory-source';
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
 import {
@@ -312,6 +314,18 @@ export default function contribute(server: PluginServerContext) {
     return storedSummariesRpc.output.parse(
       await runtimeJson('/v1/activity/stored-summaries', input),
     );
+  });
+  server.handle(memoryEvidenceRpc, async (input, { paseo }) => {
+    const signal = AbortSignal.timeout(5_000);
+    const agent = paseo.agents.ref(input.agentId);
+    const entry = await agent.refresh();
+    if (!entry || entry.agent.archivedAt)
+      throw new Error('The Activity conversation is unavailable.');
+    const { sources, next } = MemoryEvidenceReferencesSchema.parse(
+      await runtimeJson('/v1/activity/memory-evidence', input, signal),
+    );
+    const entries = await readPaseoMemoryEvidence(agent.timeline, input.epoch, sources, signal);
+    return { entries, next };
   });
   server.handle(activitySubscription, ({ agentId }, { paseo, signal, push }) =>
     observeActivity(

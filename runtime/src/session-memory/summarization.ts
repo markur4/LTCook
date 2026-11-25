@@ -56,7 +56,36 @@ const fields = {
   UAMP: ['intent', 'pasted', 'discoveries', 'disagreements', 'decisions', 'questions'],
   AAB: ['pasted', 'discoveries', 'changes', 'results', 'issues', 'remaining'],
 } as const;
-type MemorySummary = { type: MemoryUnit['type']; content: MemoryJson };
+export type MemorySummaryFormat = 'json' | 'markdown';
+type MemorySummary = {
+  type: MemoryUnit['type'];
+  content: MemoryJson;
+  format?: MemorySummaryFormat;
+};
+
+function markdownStatements(text: string) {
+  const statements: { field?: string; text: string }[] = [];
+  let field: string | undefined;
+  let fenced = false;
+  let unparsed = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*(?:```|~~~)/.test(line)) fenced = !fenced;
+    if (!line.trim()) continue;
+    const heading =
+      !fenced &&
+      line.match(
+        /^\s*(?:#{1,6}\s+|\*\*)?(Intent|Pasted|Discoveries|Disagreements|Decisions|Questions)(?:\*\*)?:?\s*$/i,
+      );
+    if (heading) {
+      field = heading[1]!.toLowerCase();
+      continue;
+    }
+    const bullet = field && !fenced && line.match(/^\s*(?:[-*+] |\d+[.)] )(.+)$/);
+    if (bullet && bullet[1]!.trim()) statements.push({ field, text: bullet[1]!.trim() });
+    else unparsed = true;
+  }
+  return unparsed || !statements.length ? [...statements, { text }] : statements;
+}
 
 export type MemorySummaryResult = {
   type: MemoryUnit['type'];
@@ -81,9 +110,11 @@ export type MemoryHistoryEntry = MemorySummary & {
 export function retrievableSummaryStatements({
   type,
   content,
+  format,
 }: MemorySummary): { field?: string; text: string }[] {
   const text = memorySummaryText(content);
   if (!text.trim() || isEmptyMemorySummary(content)) return [];
+  if (format === 'markdown' && typeof content === 'string') return markdownStatements(content);
   const fallback = { text };
   if (content === null || typeof content !== 'object' || Array.isArray(content)) return [fallback];
   const statements = fields[type].flatMap((field) => {
@@ -151,10 +182,25 @@ export function prepareMemorySummaries(
   unit: MemoryUnit,
   history: readonly MemoryHistoryEntry[],
   budgets: MemoryBudgets = defaultMemoryBudgets,
-  policy: { mode?: MemoryContextMode } = {},
+  policy: {
+    mode?: MemoryContextMode;
+    format?: MemorySummaryFormat;
+    skipped?: readonly { id: string; messages: readonly MemorySourceMessage[] }[];
+  } = {},
 ) {
   const mode = policy.mode ?? 'immediate';
-  const header = 'Previous generated context. Use it only to understand the current sources:\n';
+  const markdown = policy.format === 'markdown';
+  const directionsFormat = markdown
+    ? 'Return concise Markdown. Use bold section headings and short bullets. Omit empty sections and return empty text if there are no useful facts.\n' +
+      instructions
+        .split('\n')
+        .slice(1)
+        .join('\n')
+        .replace(' Example: {"results":"CACHE_GUARD PASS; old bytes unchanged."}', '')
+    : instructions;
+  const header = policy.skipped?.length
+    ? 'Previous context (summaries and labeled original messages). Use it only to understand the current sources:\n'
+    : 'Previous generated context. Use it only to understand the current sources:\n';
   const authoritative =
     unit.task || unit.scope || unit.instructions?.length
       ? '\nCurrent authoritative Task context. Objectives, acceptance criteria and steering describe requested work. Report completed AAs and observed results from current original sources.\n' +
@@ -173,11 +219,16 @@ export function prepareMemorySummaries(
   const directions =
     unit.type === 'AAB' && unit.messages.length === 1 && unit.messages[0]?.author === 'tool'
       ? unitInstructions.tool
-      : unitInstructions[unit.type];
+      : markdown
+        ? unitInstructions.UAMP.replace('using these fields', 'using these headings').replace(
+            /^(intent|pasted|discoveries|disagreements|decisions|questions):/gm,
+            (_, field: string) => '**' + field[0]!.toUpperCase() + field.slice(1) + '**',
+          )
+        : unitInstructions[unit.type];
   const suffix = taskContext + current;
   const capacity =
     budgets.input -
-    estimateMemoryTokens(instructions + directions + header + authoritative + current) -
+    estimateMemoryTokens(directionsFormat + directions + header + authoritative + current) -
     128;
   if (capacity < 128)
     throw new MemoryInputBudgetError(
@@ -265,32 +316,55 @@ export function prepareMemorySummaries(
   return parts.map((part, index) => {
     const available =
       budgets.input -
-      estimateMemoryTokens(instructions + directions + header + suffix + part.text) -
+      estimateMemoryTokens(directionsFormat + directions + header + suffix + part.text) -
       128;
     let historyText = '';
     const historyIds: string[] = [];
     const allowance = Math.min(available, 512 - estimateMemoryTokens(taskContext));
-    if (latest && allowance > 0) {
-      historyText = immediateContext(previousPortions, allowance);
-      const historyId = latest.unitId ?? latest.id;
-      if (historyText && historyId) historyIds.push(historyId);
+    if (allowance > 0) {
+      const originals = [];
+      let remaining = allowance;
+      for (const pair of policy.skipped ?? []) {
+        const lines = pair.messages.flatMap((message) => [
+          sourceLine(message),
+          ...(message.attachments ?? []).map((attachment) =>
+            sourceLine({ ...message, text: '', attachment }),
+          ),
+        ]);
+        const raw = 'Original UAMP (skipped):\n' + lines.join('');
+        const availableForOriginal = remaining - (latest ? Math.ceil(allowance / 2) : 0);
+        if (availableForOriginal <= 0) break;
+        const excerpt = raw.length ? memoryPreview(raw, availableForOriginal) : '';
+        if (!excerpt) break;
+        originals.unshift({ id: pair.id, text: excerpt });
+        remaining -= estimateMemoryTokens(excerpt);
+      }
+      if (latest) {
+        historyText = immediateContext(previousPortions, remaining);
+        const historyId = latest.unitId ?? latest.id;
+        if (historyText && historyId) historyIds.push(historyId);
+      }
+      for (const original of originals) {
+        historyText += original.text;
+        historyIds.push(original.id);
+      }
     }
     const target = Math.max(24, Math.min(512, Math.ceil(part.sourceSize / 3)));
     const guidance =
       (parts.length > 1
         ? `\nPart ${index + 1}/${parts.length} of the same ${unit.type}. Summarize the evidence in this portion.\n`
         : '') +
-      `\nReply with the compact JSON only. Aim for about ${target} output tokens. Keep essential identifiers and their exact outcomes together. Omit commentary, duplicate facts, and background.\n`;
+      `\n${markdown ? 'Reply with the Markdown summary only.' : 'Reply with the compact JSON only.'} Aim for about ${target} output tokens. Keep essential identifiers and their exact outcomes together. Omit commentary, duplicate facts, and background.\n`;
     return {
       ...part,
       historyIds,
       prefixHash: createHash('sha256')
-        .update(instructions + directions + header + historyText)
+        .update(directionsFormat + directions + header + historyText)
         .digest('hex'),
       historyEstimatedTokens: estimateMemoryTokens(historyText),
       authoritativeEstimatedTokens: estimateMemoryTokens(taskContext),
       prompt: [
-        { role: 'system' as const, content: instructions + '\n' + directions },
+        { role: 'system' as const, content: directionsFormat + '\n' + directions },
         { role: 'user' as const, content: header + historyText + suffix + part.text + guidance },
       ],
     };
@@ -304,6 +378,7 @@ export async function summarizeMemory(
   type: MemoryUnit['type'],
   diagnostics = false,
   onProgress?: (progress: MemorySummaryProgress | undefined) => void,
+  format: MemorySummaryFormat = 'json',
 ): Promise<MemorySummaryResult> {
   const start = performance.now();
   let usage: OllamaUsage | undefined;
@@ -315,7 +390,7 @@ export async function summarizeMemory(
     (value) => {
       usage = value;
     },
-    'json',
+    format === 'json' ? 'json' : undefined,
     (value) => {
       metrics = value;
     },
@@ -331,7 +406,7 @@ export async function summarizeMemory(
         onProgress({ tokensPerSecond: (tokens * 1_000) / elapsedMs, estimated });
       }),
   );
-  const content = parseMemoryJson(response.summary);
+  const content = format === 'json' ? parseMemoryJson(response.summary) : response.summary;
   const result = {
     type,
     text: response.summary,

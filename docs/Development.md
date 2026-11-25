@@ -373,6 +373,25 @@ the three agent cases still use their original attempts.
 
 ### Session Memory qualification
 
+Run the matched CPU comparison after suspending production inference:
+
+```shell
+bun evals/session-memory-live.ts --simplified --production-suspended
+```
+
+The comparison uses the pinned LFM3 QAD Q4 model at seed 17. It compares the
+prior JSON pipeline, deterministic AABs and the short UAMP threshold with
+JSON, and the same pipeline with Markdown. The report gives request counts,
+CPU request time and provider prefill and generation measurements, along with
+storage and handoff size. The final arm must retain all critical facts assigned
+to generated UAMP summaries, all 14 critical facts across stored records, and
+all 14 in delegation handoffs. Ordinary retrieval of cited records counts
+toward record quality. The handoff may also recover missing evidence from
+other authorized originals. Critical contradictions fail each layer. Controls
+cover consecutive skipped Discussions before a Task approval and a large
+batch containing a failed check followed by a pass. The 30% reductions in
+requests and CPU wall time are optimization targets.
+
 Run `bun evals/session-memory-live.ts --context-aware` on the GPU host to
 compare authoritative Task context and Immediate Context on short cache
 recovery, an attachment on a turn with trailing tool evidence, a reference to
@@ -465,20 +484,20 @@ against the latest confirmed decisions and records tool calls and usage. See the
 [hybrid qualification](../evals/session-memory-hybrid-results.md), and the
 [initial qualification](../evals/session-memory-results.md).
 
-The production runtime stores chronological UAMP and AAB summaries, native turn
-outcomes, original user prompts, and the Paseo checkpoint in
-`session-memory-v4.sqlite` under runtime state. The v4 format starts a fresh
-derived store. To reset incompatible v4 data, stop the LTCook instance and
-remove this Session Memory database and its SQLite sidecars from that instance's
-runtime state, then start the instance again. Original conversation search
-reads authorized canonical pages from Paseo.
+The runtime stores Session Memory records, native turn receipts, original
+user prompts and the Paseo checkpoint in `session-memory-v5.sqlite` under
+runtime state. This version starts a fresh derived store. To reset it, stop the
+LTCook instance, remove only that database and its SQLite sidecars from the
+instance's runtime state, and restart. Preserve Paseo's native history and
+the pasted attachment store. Older conversations remain available through
+authorized original search. Rebuilding UAMPs requires valid native turn
+receipts.
 
-Session Memory requests Ollama JSON mode and parses each finished response
-using the same parser as the context Agent Eval. Successful portions persist
-parsed values and source references. Malformed or truncated responses leave
-their portions pending. Rewind invalidates the affected summary suffix. A new
-epoch rebuilds from original history where native receipts establish the
-boundaries.
+Generated UAMP summaries use Markdown. The full response is retained for
+display and retrieval even when its headings are irregular. Truncated or
+failed requests do not become completed summaries. Short UAMPs and AABs store
+references without inference and continue while generation is paused. Rewind
+invalidates the affected record suffix.
 
 The previous extractive summarizer is limited to the Agent Evals baseline.
 The production default runs local LFM3 QAD Q4 at temperature 0.4 with
