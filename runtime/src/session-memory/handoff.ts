@@ -1,4 +1,5 @@
 import type { MemorySearchEntry } from './service.js';
+import { budgetMemoryText, estimateMemoryTokens } from './text.js';
 
 export type OriginalHistoryAvailability = 'available' | 'partial' | 'unavailable';
 
@@ -6,6 +7,7 @@ export type MemoryHandoffSelection = {
   agentId: string;
   epoch: string;
   originalHistory: OriginalHistoryAvailability;
+  contextIncomplete?: boolean;
   evidence: readonly MemorySearchEntry[];
   decision?: MemorySearchEntry;
 };
@@ -35,11 +37,48 @@ export function compactHandoffLine(entry: MemorySearchEntry): string {
   return `- ${label} [${references}]${entry.truncated ? ' (excerpt)' : ''} ${text}`;
 }
 
+export function handoffEntryCost(entry: MemorySearchEntry): number {
+  return estimateMemoryTokens(compactHandoffLine(entry) + '\n');
+}
+
+export function budgetHandoffDiscussions(
+  discussions: readonly (readonly MemorySearchEntry[])[],
+  total: number,
+  query: string,
+  identifiers: readonly string[],
+) {
+  const selected: MemorySearchEntry[] = [];
+  let remaining = total;
+  let incomplete = false;
+  for (const discussion of discussions) {
+    const cost = discussion.reduce((sum, entry) => sum + handoffEntryCost(entry), 0);
+    if (cost <= remaining) {
+      selected.push(...discussion);
+      remaining -= cost;
+    } else {
+      incomplete = true;
+      if (cost <= total) continue;
+      // > Give exceptionally large Discussions a marked excerpt within the shared budget.
+      const excerpt = budgetMemoryText(
+        discussion,
+        Math.min(350, remaining),
+        query,
+        handoffEntryCost,
+        identifiers,
+      );
+      selected.push(...excerpt.selected);
+      remaining -= excerpt.selected.reduce((sum, entry) => sum + handoffEntryCost(entry), 0);
+    }
+  }
+  return { selected, incomplete, remaining };
+}
+
 export function renderMemoryHandoff(selection: MemoryHandoffSelection): string {
-  if (!selection.evidence.length && !selection.decision)
+  if (!selection.evidence.length && !selection.decision && !selection.contextIncomplete)
     return selection.originalHistory === 'unavailable' ? unavailableMemoryHandoff : '';
   return [
     ...memoryHandoffHeader(selection),
+    ...(selection.contextIncomplete ? ['Some relevant context is truncated or omitted.'] : []),
     ...(selection.evidence.length
       ? ['Older supplemental evidence', ...selection.evidence.map(compactHandoffLine)]
       : []),

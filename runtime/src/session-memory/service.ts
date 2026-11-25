@@ -11,7 +11,9 @@ import {
   memoryPreview,
 } from './text.js';
 import {
+  budgetHandoffDiscussions,
   compactHandoffLine,
+  handoffEntryCost,
   renderMemoryHandoff,
   unavailableMemoryHandoff,
   type MemoryHandoffSelection,
@@ -1636,6 +1638,8 @@ export class SessionMemory {
       decision = false,
       entryScope = scopeBySequence.get(seq),
     ) => {
+      if (scope?.sessionId && entryScope?.sessionId && entryScope.sessionId !== scope.sessionId)
+        return false;
       if (scope?.taskId && entryScope?.taskId) return scope.taskId === entryScope.taskId;
       return (
         !query ||
@@ -1682,11 +1686,14 @@ export class SessionMemory {
         ...observedMemoryChecks(recent),
       ].map((check) => [JSON.stringify([check.seq, check.text]), check]),
     );
-    const applicableRecords = summaries.filter(
-      ({ complete, scope: recordedScope }) =>
-        complete &&
+    const scopedRecords = summaries.filter(
+      ({ scope: recordedScope }) =>
+        (!scope?.sessionId || relevantDiscussionScope(recordedScope, scope)) &&
         (!scope?.taskId || !recordedScope?.taskId || recordedScope.taskId === scope.taskId),
     );
+    const decisionScope = decision ? scopeBySequence.get(decision.seq) : undefined;
+    const discussionScope = { ...decisionScope, ...scope };
+    const applicableRecords = scopedRecords.filter(({ complete }) => complete);
     const resolved = await this.resolveRecordEntries(
       agentId,
       tail.epoch,
@@ -1735,6 +1742,69 @@ export class SessionMemory {
     ].filter(
       ({ seq, author, text, summaryId }) => summaryId || author === 'summary' || applies(seq, text),
     );
+    const scopedDiscussions = scopedRecords.filter(
+      ({ type, scope: recordedScope }) =>
+        type === 'UAMP' && relevantDiscussionScope(recordedScope, discussionScope),
+    );
+    const matchedDiscussionIds = new Set(
+      candidates.filter(({ kind }) => kind === 'UAMP').map(({ summaryId }) => summaryId),
+    );
+    const selectedUserSequences = new Set(users.selected.map(({ seq }) => seq));
+    const decisionDiscussion = decision
+      ? scopedDiscussions.find(({ sources }) => sources.some(({ seq }) => seq === decision.seq))
+      : undefined;
+    const lastDiscussionPosition = decisionDiscussion?.position ?? decision?.seq;
+    const firstDiscussion = scopedDiscussions.find(
+      ({ id, position, sources }) =>
+        (lastDiscussionPosition === undefined || position <= lastDiscussionPosition) &&
+        (matchedDiscussionIds.has(id) || sources.some(({ seq }) => selectedUserSequences.has(seq))),
+    );
+    const relatedDiscussions = scopedDiscussions.filter(
+      ({ id, position }) =>
+        matchedDiscussionIds.has(id) ||
+        id === decisionDiscussion?.id ||
+        (firstDiscussion !== undefined &&
+          lastDiscussionPosition !== undefined &&
+          position >= firstDiscussion.position &&
+          position <= lastDiscussionPosition),
+    );
+    const relatedIds = new Set(relatedDiscussions.map(({ id }) => id));
+    const skippedEntries = new Map<string, SearchEntry[]>();
+    for (const entry of resolved.entries) {
+      if (!entry.summaryId || !relatedIds.has(entry.summaryId) || entry.author === 'summary')
+        continue;
+      if (decision && entry.author === 'user' && entry.seq === decision.seq && !decision.truncated)
+        continue;
+      const recorded = skippedEntries.get(entry.summaryId);
+      if (recorded) recorded.push(entry);
+      else skippedEntries.set(entry.summaryId, [entry]);
+    }
+    const relatedEntries = [
+      ...new Set([firstDiscussion, decisionDiscussion, ...relatedDiscussions]),
+    ]
+      .filter((record): record is StoredMemorySummary => record?.complete === true)
+      .map((record) =>
+        record.state === 'skipped'
+          ? (skippedEntries.get(record.id) ?? [])
+          : record.parts
+              .map((part, index) => ({
+                kind: 'UAMP' as const,
+                author: 'summary',
+                seq: record.position,
+                summaryId: record.id,
+                portion: index + 1,
+                sources: part.sources,
+                text: memorySummaryText(part.content),
+              }))
+              .filter(({ text }) => text.trim()),
+      );
+    const discussionEvidence = budgetHandoffDiscussions(relatedEntries, 900, query, identifiers);
+    const discussionUsers = new Set(
+      discussionEvidence.selected
+        .filter(({ author, truncated }) => author === 'user' && !truncated)
+        .map(({ seq }) => seq),
+    );
+    const selectedUsers = users.selected.filter(({ seq }) => !discussionUsers.has(seq));
     const nativeRecordIds = new Set(
       applicableRecords
         .filter(({ state }) => state === 'recorded' || state === 'skipped')
@@ -1748,7 +1818,9 @@ export class SessionMemory {
     ]);
     const selectEvidence = (identifiers: readonly string[] = []) => {
       const included = new Set(
-        [...users.selected, ...(decision ? [decision] : [])].map(({ text }) => normalized(text)),
+        [...users.selected, ...discussionEvidence.selected, ...(decision ? [decision] : [])].map(
+          ({ text }) => normalized(text),
+        ),
       );
       const ranked = candidates
         .sort(
@@ -1758,9 +1830,10 @@ export class SessionMemory {
             memoryRelevance(b.text, query) - memoryRelevance(a.text, query) ||
             b.seq - a.seq,
         )
-        .filter(({ seq, author, text }) => {
+        .filter(({ seq, author, text, summaryId }) => {
           const key = normalized(text);
           if (
+            (summaryId && relatedIds.has(summaryId)) ||
             included.has(key) ||
             superseded.has(seq) ||
             (author === 'user' && alreadySelectedUsers.has(seq))
@@ -1771,9 +1844,9 @@ export class SessionMemory {
         });
       return budgetMemoryText(
         ranked,
-        900,
+        discussionEvidence.remaining,
         query,
-        (entry) => estimateMemoryTokens(compactHandoffLine(entry) + '\n'),
+        handoffEntryCost,
         identifiers,
       );
     };
@@ -1853,9 +1926,17 @@ export class SessionMemory {
       agentId,
       epoch: tail.epoch,
       originalHistory,
-      evidence: [...users.selected.map(sourceEntry), ...evidence.selected].sort(
-        (a, b) => a.seq - b.seq,
-      ),
+      contextIncomplete:
+        discussionEvidence.incomplete ||
+        decision?.truncated ||
+        users.incomplete ||
+        evidence.incomplete ||
+        relatedDiscussions.some(({ complete }) => !complete),
+      evidence: [
+        ...selectedUsers.map(sourceEntry),
+        ...evidence.selected,
+        ...discussionEvidence.selected,
+      ].sort((a, b) => a.seq - b.seq),
       decision,
     };
     const entries = [...selection.evidence, ...(decision ? [decision] : [])];
@@ -1864,7 +1945,7 @@ export class SessionMemory {
     signal.throwIfAborted();
     if (observePayload) {
       const types = new Map<string, MemoryUnit['type']>();
-      for (const { summaryId, kind } of evidence.selected) {
+      for (const { summaryId, kind } of selection.evidence) {
         if (summaryId && (kind === 'UAMP' || kind === 'AAB')) types.set(summaryId, kind);
       }
       observePayload({
