@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -119,6 +120,8 @@ def test_app_help_lists_its_immediate_commands(
         ([], 0, 0, ["stop", "serve"], 19),
         (["-u"], 0, 0, ["stop", "update", "serve"], 19),
         (["--update"], 0, 0, ["stop", "update", "serve"], 19),
+        (["-u", "-y"], 0, 0, ["stop", "update", "serve"], 19),
+        (["--update", "--yes"], 0, 0, ["stop", "update", "serve"], 19),
         (["--update"], 7, 0, ["stop"], 7),
         (["--update"], 0, 8, ["stop", "update"], 8),
     ],
@@ -152,7 +155,8 @@ def test_restart_orders_lifecycle_and_propagates_failures(
         return 19
 
     def run(arguments: list[object], *, check: bool) -> SimpleNamespace:
-        assert arguments == [launcher, "app", "update"]
+        flags = ["--yes"] if {"--yes", "-y"}.intersection(options) else []
+        assert arguments == [launcher, "app", "update", *flags]
         assert check is False
         calls.append("update")
         return SimpleNamespace(returncode=update_status)
@@ -184,6 +188,68 @@ def test_restart_orders_lifecycle_and_propagates_failures(
 
     assert result.exit_code == exit_code, result.output
     assert calls == expected_calls
+
+
+@pytest.mark.parametrize(
+    ("options", "answer", "interactive", "queued", "code"),
+    [
+        ([], "", False, [False], 0),
+        (["-u", "-y"], "", False, [True], 0),
+        (["--update", "--yes"], "", False, [True], 0),
+        (["--update"], "y\n", True, [True], 0),
+        (["--update"], "n\n", True, [], 1),
+        (["--update"], "", False, [], 2),
+        (["--yes"], "", False, [], 2),
+    ],
+)
+def test_restart_confirms_updating_before_queueing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    options: list[str],
+    answer: str,
+    interactive: bool,
+    queued: list[bool],
+    code: int,
+) -> None:
+    """The worker only receives an update request after user approval."""
+    from ltcook import _idle_restart
+
+    cli = importlib.import_module("ltcook.cli.app")
+    launcher = tmp_path / "ltcook"
+    calls: list[bool] = []
+
+    def queue(
+        environment: dict[str, str], registered: Path, *, update: bool
+    ) -> dict[str, str]:
+        assert environment == {"installation": "fixture"}
+        assert registered == launcher
+        calls.append(update)
+        return {"state": "waiting", "message": "queued"}
+
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    monkeypatch.setattr(
+        cli,
+        "sys",
+        SimpleNamespace(
+            platform="linux", stdin=SimpleNamespace(isatty=lambda: interactive)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "resolve_launch",
+        lambda _: SimpleNamespace(environment={"installation": "fixture"}),
+    )
+    monkeypatch.setattr(cli, "_registered_launcher", lambda: launcher)
+    monkeypatch.setattr(cli, "stop_runtime", lambda _: pytest.fail("Unexpected stop"))
+    monkeypatch.setattr(_idle_restart, "queue_restart", queue)
+    result = RUNNER.invoke(
+        app, ["restart", "--when-idle", "--json", *options], input=answer, color=False
+    )
+
+    assert result.exit_code == code, result.output
+    assert calls == queued
+    if queued:
+        assert json.loads(result.stdout.splitlines()[-1])["state"] == "waiting"
 
 
 def test_restart_update_on_windows_exits_before_stopping(
@@ -407,8 +473,6 @@ main(["--help"])
 
 
 def test_shared_doctor_includes_host_metadata_without_creating_resources(tmp_path):
-    import json
-
     root = tmp_path / "uninitialized"
     result = RUNNER.invoke(
         app,

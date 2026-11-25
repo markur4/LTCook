@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { ElicitRequestSchema, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { WORKSPACE_MCP_SERVER } from '../../../runtime/src/paseo-plugin/shared/workspace-tools.js';
 import {
   LFM3_SUMMARIZER_MODEL,
   ollamaChat,
@@ -466,6 +468,129 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
     await Promise.all(clients.map((sdk) => sdk.close()));
     await api.close();
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+test('MCP restart requires matching Paseo approval and MCP acceptance before queueing', async () => {
+  const workspace = await mkdtemp(path.join(tmpdir(), 'ltcook-mcp-restart-'));
+  const authority = await localAuthority();
+  const api = new RuntimeApi(undefined, 'fixture-runtime-authority', authority);
+  const queued: boolean[] = [];
+  const mcp = new WorkspaceMcp([], authority, undefined, async (update) => {
+    queued.push(update);
+    return { status: 'queued', update };
+  });
+  api.setWorkspaceMcp(mcp);
+  const agentId = 'codex-restart';
+  const capable = new Client(
+    { name: 'codex-fixture', version: '1.0.0' },
+    { capabilities: { elicitation: { form: {} } } },
+  );
+  const incapable = new Client({ name: 'pi-fixture', version: '1.0.0' });
+  const dialogs: string[] = [];
+  let mcpAction: ElicitResult['action'] = 'accept';
+  let paseoDecision: 'allow' | 'deny' | undefined = 'deny';
+  function resolve(permissionId: string, behavior: 'allow' | 'deny', actor = agentId) {
+    mcp.observeRestartApproval({
+      type: 'agent_permission_resolved',
+      agentId: actor,
+      requestId: permissionId,
+      resolution: { behavior },
+    });
+  }
+  capable.setRequestHandler(ElicitRequestSchema, async ({ params }) => {
+    if (params.mode !== 'form') throw new Error('Expected an MCP approval form.');
+    const { message } = params;
+    dialogs.push(message);
+    const id = `permission-${dialogs.length}`;
+    const request = {
+      id,
+      provider: 'codex',
+      kind: 'tool' as const,
+      name: 'CodexMcpElicitation',
+      title: `MCP approval: ${WORKSPACE_MCP_SERVER}`,
+      description: message,
+      metadata: { serverName: WORKSPACE_MCP_SERVER },
+      input: { mode: 'form' },
+    };
+    mcp.observeRestartApproval({
+      type: 'agent_permission_request',
+      agentId: 'other-agent',
+      request,
+    });
+    resolve(id, 'allow', 'other-agent');
+    mcp.observeRestartApproval({
+      type: 'agent_permission_request',
+      agentId,
+      request: { ...request, id: 'wrong-message', description: 'A different request.' },
+    });
+    resolve('wrong-message', 'allow');
+    mcp.observeRestartApproval({
+      type: 'agent_permission_request',
+      agentId,
+      request: { ...request, id: 'wrong-server', metadata: { serverName: 'other-server' } },
+    });
+    resolve('wrong-server', 'allow');
+    if (paseoDecision) {
+      mcp.observeRestartApproval({ type: 'agent_permission_request', agentId, request });
+      resolve(id, 'allow', 'other-agent');
+      resolve('wrong-permission', 'allow');
+      resolve(id, paseoDecision);
+    }
+    return { action: mcpAction, ...(mcpAction === 'accept' ? { content: {} } : {}) };
+  });
+  const connect = async (client: Client, id: string) => {
+    const token = await mcp.grant(id, workspace, true);
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`http://${authority}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${token}` } },
+      }),
+    );
+  };
+  const name = 'ltcook_restart';
+  const call = (args?: Record<string, unknown>) =>
+    capable.callTool({ name, arguments: args }, undefined, { timeout: 2_000 });
+
+  try {
+    await api.listen();
+    await connect(capable, agentId);
+    await connect(incapable, 'pi-restart');
+    expect((await capable.listTools()).tools.map((tool) => tool.name)).toContain(name);
+    expect((await incapable.listTools()).tools.map((tool) => tool.name)).not.toContain(name);
+    expect((await incapable.callTool({ name })).isError).toBe(true);
+    for (const input of [
+      { update: 'true' },
+      { yes: true },
+      { force: true },
+      { host: 'other' },
+      { path: '..' },
+    ])
+      expect((await call(input)).isError).toBe(true);
+    expect(dialogs).toHaveLength(0);
+
+    expect((await call()).isError).toBe(true);
+    paseoDecision = 'allow';
+    for (const action of ['decline', 'cancel'] as const) {
+      mcpAction = action;
+      expect((await call({ update: true })).isError).toBe(true);
+    }
+    expect(queued).toEqual([]);
+    mcpAction = 'accept';
+    expect((await call()).structuredContent).toEqual({ status: 'queued', update: false });
+    expect((await call({ update: true })).structuredContent).toEqual({
+      status: 'queued',
+      update: true,
+    });
+    expect(dialogs.at(-1)).toContain('update and restart this local installation');
+
+    paseoDecision = undefined;
+    await expect(call()).rejects.toThrow('Request timed out');
+    expect(queued).toEqual([false, true]);
+    expect(new Set(dialogs).size).toBe(dialogs.length);
+  } finally {
+    await Promise.all([capable.close(), incapable.close()]);
+    await api.close();
+    await rm(workspace, { force: true, recursive: true });
   }
 });
 

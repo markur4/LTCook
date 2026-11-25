@@ -9,13 +9,19 @@ import {
   isInitializeRequest,
   ListToolsRequestSchema,
   ToolSchema,
+  type RequestId,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolDefinition, ToolContext } from '../tools/types.js';
-import { isRepositoryTool, WORKTREE_TOOL_NAME } from '../paseo-plugin/shared/workspace-tools.js';
+import {
+  isRepositoryTool,
+  WORKSPACE_MCP_SERVER,
+  WORKTREE_TOOL_NAME,
+} from '../paseo-plugin/shared/workspace-tools.js';
 import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
 import type { WebToolService } from '../tools/web.js';
+import type { PlanningDialogEvent } from './planning-dialogs.js';
 
 type Grant = {
   agentId: string;
@@ -33,8 +39,25 @@ type Connection = {
   transport: StreamableHTTPServerTransport;
 };
 
+type RestartApproval = {
+  message: string;
+  permissionId?: string;
+  resolve: (approved: boolean) => void;
+};
+
 const MAX_BODY_BYTES = 128 * 1024;
 const MAX_CONNECTIONS = 256;
+const RESTART_APPROVAL_TIMEOUT_MS = 90_000;
+const RESTART_TOOL: Tool = {
+  name: 'ltcook_restart',
+  description:
+    'Ask the user to approve a restart of this local LTCook installation after active work ends. Use only when the user requests a restart. Set update to true if they also requested an update. Report the returned queue result and finish the turn so LTCook can become idle. If approval is unavailable, direct the user to ltcook restart --when-idle.',
+  inputSchema: {
+    type: 'object',
+    properties: { update: { type: 'boolean', description: 'Update LTCook before restarting.' } },
+    additionalProperties: false,
+  },
+};
 
 function requiresRepositoryAccess(name: string): boolean {
   return isRepositoryTool(name) || name === WORKTREE_TOOL_NAME;
@@ -51,6 +74,7 @@ export class WorkspaceMcp {
   private readonly grants = new Map<string, Grant>();
   private readonly tokens = new Map<string, Grant>();
   private readonly connections = new Map<string, Connection>();
+  private readonly restartApprovals = new Map<string, RestartApproval>();
   private readonly catalog: Tool[];
   private readonly tools: Map<string, ToolDefinition>;
 
@@ -58,6 +82,7 @@ export class WorkspaceMcp {
     tools: readonly ToolDefinition[],
     private readonly authority: string,
     private readonly web?: WebToolService,
+    private readonly requestRestart?: (update: boolean) => Promise<Record<string, unknown>>,
   ) {
     this.tools = new Map(tools.map((tool) => [tool.name, tool]));
     this.catalog = tools.map(({ name, description, inputSchema, outputSchema }) =>
@@ -160,6 +185,84 @@ export class WorkspaceMcp {
     ]);
   }
 
+  /** Authenticate consent through the parent host in addition to the MCP client. */
+  observeRestartApproval(event: PlanningDialogEvent): void {
+    const approval = this.restartApprovals.get(event.agentId);
+    if (!approval) return;
+    if (event.type === 'agent_permission_request') {
+      const { request } = event;
+      if (
+        request.provider !== 'codex' ||
+        request.kind !== 'tool' ||
+        request.name !== 'CodexMcpElicitation' ||
+        request.title !== `MCP approval: ${WORKSPACE_MCP_SERVER}` ||
+        request.metadata?.serverName !== WORKSPACE_MCP_SERVER ||
+        request.input?.mode !== 'form' ||
+        request.description !== approval.message ||
+        approval.permissionId !== undefined
+      )
+        return;
+      approval.permissionId = request.id;
+    } else if (approval.permissionId === event.requestId) {
+      approval.resolve(event.resolution.behavior === 'allow');
+    }
+  }
+
+  private assertWorkspaceGrant(grant: Grant): void {
+    if (
+      this.tokens.get(grant.token) !== grant ||
+      realpathSync(grant.workspaceRoot) !== grant.workspaceRoot ||
+      directoryIdentity(grant.workspaceRoot) !== grant.workspaceIdentity
+    ) {
+      throw new Error('The authorized workspace is no longer available.');
+    }
+  }
+
+  private async approveRestart(
+    args: Record<string, unknown>,
+    connection: Connection,
+    requestId: RequestId,
+    signal: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    const { grant, server } = connection;
+    const requestRestart = this.requestRestart;
+    if (!requestRestart || !server.getClientCapabilities()?.elicitation?.form)
+      throw new Error('Restart approval is unavailable. Use ltcook restart --when-idle.');
+    if (
+      Object.keys(args).some((key) => key !== 'update') ||
+      (Object.hasOwn(args, 'update') && typeof args.update !== 'boolean')
+    )
+      throw new Error('The restart tool accepts only an optional update boolean.');
+    if (this.restartApprovals.has(grant.agentId))
+      throw new Error('A restart approval is already pending for this conversation.');
+
+    const update = args.update === true;
+    const action = update ? 'update and restart' : 'restart';
+    const message = `Allow LTCook to ${action} this local installation after active work ends? Request ${randomUUID()}.`;
+    const approval = Promise.withResolvers<boolean>();
+    this.restartApprovals.set(grant.agentId, { message, resolve: approval.resolve });
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(RESTART_APPROVAL_TIMEOUT_MS)]);
+    const cancelApproval = () => approval.resolve(false);
+    deadline.addEventListener('abort', cancelApproval, { once: true });
+    try {
+      deadline.throwIfAborted();
+      const result = await server.elicitInput(
+        { mode: 'form', message, requestedSchema: { type: 'object', properties: {} } },
+        { relatedRequestId: requestId, signal: deadline, timeout: RESTART_APPROVAL_TIMEOUT_MS },
+      );
+      if (result.action !== 'accept' || !(await approval.promise))
+        throw new Error('The user did not approve the restart. Use ltcook restart --when-idle.');
+      deadline.throwIfAborted();
+      this.assertWorkspaceGrant(grant);
+      if (this.connections.get(connection.id) !== connection)
+        throw new Error('The authorized MCP connection is no longer available.');
+      return requestRestart(update);
+    } finally {
+      deadline.removeEventListener('abort', cancelApproval);
+      this.restartApprovals.delete(grant.agentId);
+    }
+  }
+
   private createConnection(grant: Grant): Connection {
     const id = randomUUID();
     const server = new Server(
@@ -172,30 +275,36 @@ export class WorkspaceMcp {
     transport.onclose = () => {
       this.connections.delete(id);
     };
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: grant.repositorySearchAccess
+    const connection = { id, server, transport, grant };
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
+      const tools = grant.repositorySearchAccess
         ? this.catalog
-        : this.catalog.filter(({ name }) => !requiresRepositoryAccess(name)),
-    }));
-    server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal }) => {
+        : this.catalog.filter(({ name }) => !requiresRepositoryAccess(name));
+      return {
+        tools:
+          this.requestRestart && server.getClientCapabilities()?.elicitation?.form
+            ? [...tools, RESTART_TOOL]
+            : tools,
+      };
+    });
+    server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal, requestId }) => {
       try {
-        if (
-          this.tokens.get(grant.token) !== grant ||
-          realpathSync(grant.workspaceRoot) !== grant.workspaceRoot ||
-          directoryIdentity(grant.workspaceRoot) !== grant.workspaceIdentity
-        ) {
-          throw new Error('The authorized workspace is no longer available.');
+        this.assertWorkspaceGrant(grant);
+        let output: Record<string, unknown>;
+        if (params.name === RESTART_TOOL.name) {
+          output = await this.approveRestart(params.arguments ?? {}, connection, requestId, signal);
+        } else {
+          const tool = this.tools.get(params.name);
+          if (!tool || (requiresRepositoryAccess(params.name) && !grant.repositorySearchAccess))
+            throw new Error('Unknown LTCook tool.');
+          output = await tool.invoke(params.arguments ?? {}, {
+            agentId: grant.agentId,
+            workspaceRoot: grant.workspaceRoot,
+            workspaceFileAccess: grant.workspaceFileAccess,
+            repositorySearchAccess: grant.repositorySearchAccess,
+            signal,
+          });
         }
-        const tool = this.tools.get(params.name);
-        if (!tool || (requiresRepositoryAccess(params.name) && !grant.repositorySearchAccess))
-          throw new Error('Unknown LTCook tool.');
-        const output = await tool.invoke(params.arguments ?? {}, {
-          agentId: grant.agentId,
-          workspaceRoot: grant.workspaceRoot,
-          workspaceFileAccess: grant.workspaceFileAccess,
-          repositorySearchAccess: grant.repositorySearchAccess,
-          signal,
-        });
         const text = isRepositoryTool(params.name)
           ? repositoryEvidenceText(params.name, output)
           : JSON.stringify(output);
@@ -208,7 +317,7 @@ export class WorkspaceMcp {
         return { isError: true, content: [{ type: 'text', text: message }] };
       }
     });
-    return { id, server, transport, grant };
+    return connection;
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {

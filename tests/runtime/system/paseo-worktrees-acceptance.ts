@@ -161,11 +161,6 @@ try {
     );
     await browser('wait', '--text', `Worktree fixture ${name}`);
   }
-  const explorerClosed = await browser(
-    'eval',
-    `Boolean(document.querySelector('[aria-label="Open Explorer sidebar"]'))`,
-  );
-  if (JSON.parse(explorerClosed) === true) await clickButton('Open Explorer sidebar');
   await browser('wait', '--text', 'Recent conversation activity');
   const report = await fetch(`${endpoint}/v1/session/worktrees`, {
     method: 'POST',

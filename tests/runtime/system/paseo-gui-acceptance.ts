@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readDaemonInstance } from '@getpaseo/server/daemon-control';
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import path from 'node:path';
@@ -367,10 +368,11 @@ let runtime: ReturnType<typeof createRuntime> | undefined;
 let memory: SessionMemory | undefined;
 let backgroundSummary = false;
 let activityRequests = 0;
+const paseoHome = path.join(deployment, 'paseo');
 try {
   host = await startPaseoHost({
     node,
-    home: path.join(deployment, 'paseo'),
+    home: paseoHome,
     deploymentRoot: deployment,
     listen: '127.0.0.1:0',
     runtimeApiUrl: endpoint,
@@ -379,6 +381,8 @@ try {
     environment,
     piCommand: path.join(root, 'runtime/dist/integrations/pi-rpc.js'),
   });
+  const reserveIdleRestart = host.reserveIdleRestart;
+  assert(reserveIdleRestart, 'The staged supervisor and its worker expose idle restart');
   api.setProviderSubagents(async (agentId) => {
     activityRequests++;
     return host!.listProviderSubagents(agentId);
@@ -822,6 +826,8 @@ try {
     '--fn',
     `document.querySelectorAll('[aria-label="bash, 2 calls, 2 running"]').length === 1`,
   );
+  const busyRestart = await reserveIdleRestart();
+  assert(busyRestart.status === 'busy' && busyRestart.activeTurns > 0);
   await inspectStage('native-activity-parallel-tools');
   await browser('wait', '--text', 'Activity parallel fixture done.');
   await clickButton(`Back to ${mobileLeader.agent.title}`);
@@ -1192,6 +1198,33 @@ try {
       `Existing telemetry measured ${operation}`,
     );
   }
+  stage = 'native-idle-restart';
+  const rejected = await fetch(`http://${host.listen}/api/ltcook/idle-restart`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ operation: 'status' }),
+  });
+  assert.equal(rejected.status, 403);
+  const reservation = await reserveIdleRestart();
+  assert.equal(reservation.status, 'reserved');
+  const priorModelCalls = modelCalls;
+  try {
+    await assert.rejects(
+      host.api.agents.ref(mobileSession.id).send('Prompt blocked by idle restart'),
+      /reserved for an LTCook restart/,
+    );
+    assert.equal(modelCalls, priorModelCalls);
+  } finally {
+    await reservation.release();
+  }
+  const committed = await reserveIdleRestart();
+  assert.equal(committed.status, 'reserved');
+  assert.deepEqual(await committed.commit(), { status: 'committed' });
+  const shutdownDeadline = Date.now() + 10_000;
+  while ((await readDaemonInstance(paseoHome)) && Date.now() < shutdownDeadline) {
+    await Bun.sleep(100);
+  }
+  assert.equal(await readDaemonInstance(paseoHome), null);
   console.log(
     JSON.stringify({
       result: 'passed',
@@ -1201,6 +1234,7 @@ try {
       childNavigation: 'native subagent track and contextual panel',
       panels: 'Activity Explorer, Team hierarchy, Task Board, Diagnostics',
       telemetry: 'existing Perfetto timings exported',
+      idleRestart: 'busy refusal, admission freeze, release and graceful shutdown',
       modelCalls,
     }),
   );

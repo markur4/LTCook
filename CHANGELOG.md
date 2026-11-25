@@ -47,6 +47,11 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- Linux and WSL can queue an LTCook restart until Paseo finishes active and
+  queued turns. Check or cancel the queued job from the CLI, or request it
+  through an agent that supports Paseo's approval dialog. An optional update
+  uses AppRC and accepts `-y` or `--yes`.
+
 - **Changes** in LTCook's bundled Paseo web app follows the focused session's
   reported Git worktree. The **Worktree** picker can pin an existing checkout
   for that session or resume following while leaving the Git branch in place.
