@@ -1,38 +1,14 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo } from 'react';
 import { Text, View } from 'react-native';
 import type { PluginAgentPanelProps } from '@getpaseo/plugin/client';
 import { copyText, ScrollView, useToast } from '@getpaseo/plugin/client/ui';
-import { Action, Label, type Theme } from '../components/PanelChrome';
+import { Action, Label } from '../components/PanelChrome';
+import { MemoryRecords } from '../components/MemoryRecords';
 import { useStoredSummaries } from '../use-stored-summaries';
 
 export const MEMORY_SUMMARIES_PANEL_ID = 'stored-summaries';
 
-const jsonToken = /"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b/g;
-
-function highlightJson(json: string, colors: Theme['colors']): ReactNode[] {
-  const tokens: ReactNode[] = [];
-  let end = 0;
-  for (const match of json.matchAll(jsonToken)) {
-    const [token] = match;
-    const start = match.index;
-    tokens.push(json.slice(end, start));
-    end = start + token.length;
-    const color = token.startsWith('"')
-      ? json[end] === ':'
-        ? colors.accent
-        : colors.statusSuccess
-      : colors.statusWarning;
-    tokens.push(
-      <Text key={start} style={{ color }}>
-        {token}
-      </Text>,
-    );
-  }
-  tokens.push(json.slice(end));
-  return tokens;
-}
-
-function SummaryReader({ params, theme, layout }: PluginAgentPanelProps) {
+function SummaryReader({ params, theme }: PluginAgentPanelProps) {
   const { page, error, loading, loadOlder, loadAll, reload } = useStoredSummaries(
     params.agentId,
     true,
@@ -41,7 +17,6 @@ function SummaryReader({ params, theme, layout }: PluginAgentPanelProps) {
   const entries = page?.summaries;
   const colors = theme.colors;
   const json = useMemo(() => (entries ? JSON.stringify(entries, null, 2) : null), [entries]);
-  const code = useMemo(() => (json === null ? null : highlightJson(json, colors)), [json, colors]);
   const partial = Boolean(page?.next);
 
   async function copyJson() {
@@ -115,8 +90,8 @@ function SummaryReader({ params, theme, layout }: PluginAgentPanelProps) {
         <>
           <Label theme={theme} muted>
             {entries.length === 0
-              ? 'No completed summaries for this agent.'
-              : `${entries.length.toLocaleString()} ${entries.length === 1 ? 'summary' : 'summaries'}${partial ? ' loaded' : ''} · newest first`}
+              ? 'No Session Memory records for this agent.'
+              : `${entries.length.toLocaleString()} ${entries.length === 1 ? 'record' : 'records'}${partial ? ' loaded' : ''} · newest first`}
           </Label>
           <ScrollView
             style={{
@@ -128,18 +103,9 @@ function SummaryReader({ params, theme, layout }: PluginAgentPanelProps) {
             }}
             contentContainerStyle={{ padding: 12 }}
           >
-            <Text
-              testID="ltcook-stored-summaries-json"
-              selectable
-              style={{
-                color: colors.foreground,
-                fontFamily: layout.platform === 'ios' ? 'Menlo' : 'monospace',
-                fontSize: 12,
-                lineHeight: 19,
-              }}
-            >
-              {code}
-            </Text>
+            <View testID="ltcook-stored-summaries-records">
+              <MemoryRecords agentId={params.agentId} records={entries} theme={theme} />
+            </View>
           </ScrollView>
         </>
       )}

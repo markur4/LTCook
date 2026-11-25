@@ -21,6 +21,7 @@ import { ActivityPreferences } from './activity-preferences.js';
 import {
   activityToggleRpc,
   memoryDeviceRpc,
+  memoryEvidenceRpc,
   storedSummariesRpc,
 } from '../paseo-plugin/shared/activity.js';
 import {
@@ -327,6 +328,7 @@ export class RuntimeApi {
           '/v1/session-memory/paste',
           '/v1/activity/services',
           '/v1/activity/toggle',
+          '/v1/activity/memory-evidence',
           '/v1/activity/memory-device',
           '/v1/activity/stored-summaries',
           '/v1/mcp/grant',
@@ -490,6 +492,20 @@ export class RuntimeApi {
         }
         const device = await this.memory.device(deviceId);
         response.writeHead(200).end(JSON.stringify(device));
+        return;
+      }
+      if (request.url === '/v1/activity/memory-evidence') {
+        if (!isUser) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        if (!this.memory) {
+          response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
+          return;
+        }
+        const { agentId, after, ...record } = memoryEvidenceRpc.input.parse(parsed);
+        const references = await this.memory.readEvidenceReferences(agentId, record, after);
+        response.writeHead(200).end(JSON.stringify(references));
         return;
       }
       if (request.url === '/v1/activity/stored-summaries') {

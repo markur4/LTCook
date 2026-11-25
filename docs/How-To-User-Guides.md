@@ -214,7 +214,8 @@ manage their own index updates.
 **Session Memory** shows the selected agent's background summaries and last
 acknowledged delegation handoff. Stored and pending counts describe that
 agent's conversation. Turn off **Summarizer** to pause generation. Existing
-summaries remain available, and pending work resumes when you turn it back on.
+summaries remain available. Session Memory still records actions and short
+Discussions. Pending generation resumes when you turn it back on.
 Both switches apply across conversations and persist across runtime restarts.
 Select the device next to **Inference device** to open the list. **Auto** lets
 Ollama choose placement. **CPU** forces CPU inference.
@@ -224,15 +225,11 @@ is unavailable. LTCook saves the host-wide choice and applies it to the next
 summary request. While a summary is generating, the panel updates tokens per
 second once a second and labels estimated rates.
 
-Expand **Stored for this agent** for a newest-first list with creation time,
-source position, estimated original and summary tokens, and elapsed inference
-time. Older entries can have unknown metrics. Use **Reload stored summaries**
-to refresh the list after new summaries finish. **Show summary** in the
-conversation reveals the stored summary for that passage as readable fields
-and lists. Select **Open complete summary** to read the full entry. **Open
-stored summaries** in Activity opens the **Stored Summaries** tab. The tab shows
-the storage path and syntax-colored JSON with the parsed contents of each summary part. Use **Load all summaries** if older pages are
-available, then **Copy JSON** to export the complete nested JSON to the clipboard.
+Expand **Stored for this agent** to open the record viewer. It shows Markdown
+summaries, a notice when a short Discussion skipped generation, and execution
+cards. Expand a card to see its original actions and intermediate messages
+where Paseo still has them. **Show summary** opens the records for that passage
+inside the conversation. Reload the viewer to see newly stored records.
 
 The handoff shows the sending agent, receipt time, payload size, and the number
 of summaries represented. A handoff can also carry original user instructions
@@ -310,8 +307,8 @@ to unload after a request or to a positive number of seconds for timed residency
 
 Ask the agent to call `session-memory` with a short `query` after resuming a
 conversation or starting work that depends on an earlier decision. Results
-include UAMP and AAB summaries and original conversation messages, including
-information omitted from summaries. Summary results list source sequences and
+include UAMP summaries, short Discussions, execution records, and original
+conversation messages. Summary results list source sequences and
 identify the original user sources. Use `source` with its `agentId`, `epoch`
 and `seq` to inspect a full original message. A result with `truncated: true`
 is a preview.

@@ -11,24 +11,37 @@ const scopeSchema = z.object({
   stepId: z.string().optional(),
 });
 
-const schemaVersion = 4;
+const schemaVersion = 5;
 export const automaticMemoryDevice = { id: 'auto', label: 'Auto' };
 export type MemoryDevice = { id: string; label: string };
 
 const sourceSchema = z.object({
   seq: z.number().int().nonnegative(),
   messageId: z.string().optional(),
+  turnId: z.string().optional(),
   timestamp: z.string().optional(),
   author: z.enum(['user', 'agent', 'tool', 'runtime', 'unknown']),
 });
 
 const summaryPartSchema = z.object({
   content: z.json(),
+  format: z.enum(['json', 'markdown']).optional(),
   sources: z.array(z.number().int().nonnegative()),
 });
 const tokenCountSchema = z.number().int().nonnegative();
 const durationMsSchema = z.number().int().nonnegative();
 
+const recordState = z.enum(['summarized', 'skipped', 'pending', 'failed', 'recorded']);
+const actionCount = z.object({ kind: z.string(), count: tokenCountSchema });
+const actionOverview = z.object({
+  counts: z.array(actionCount),
+  files: z.array(z.object({ path: z.string(), counts: z.array(actionCount) })),
+  pathCount: tokenCountSchema,
+  fileCount: tokenCountSchema,
+  checks: z.array(z.object({ seq: tokenCountSchema, text: z.string() })),
+  checkCount: tokenCountSchema,
+  failureCount: tokenCountSchema,
+});
 const summarySchema = z.object({
   id: z.string(),
   agentId: z.string(),
@@ -37,6 +50,9 @@ const summarySchema = z.object({
   type: z.enum(['UAMP', 'AAB']),
   position: z.number().int().nonnegative(),
   sources: z.array(sourceSchema).min(1),
+  attachmentSources: z.array(sourceSchema).optional(),
+  state: recordState.optional(),
+  action: actionOverview.optional(),
   scope: scopeSchema.optional(),
   createdAt: z.string(),
   originalTokens: tokenCountSchema.optional(),
@@ -53,18 +69,22 @@ const summarySchema = z.object({
   complete: z.boolean(),
 });
 const catalogRowSchema = summarySchema
-  .pick({ id: true, type: true, position: true, createdAt: true })
+  .pick({ id: true, type: true, position: true, createdAt: true, epoch: true })
   .extend({
     originalTokens: tokenCountSchema.nullable(),
     summaryTokens: tokenCountSchema.nullable(),
     durationMs: durationMsSchema.nullable(),
     parts: z.string().nullable(),
+    state: recordState,
+    action: z.string().nullable(),
+    discussionId: z.string().nullable(),
   });
 
 export type StoredMemorySummary = z.infer<typeof summarySchema>;
 export type MemorySummaryCursor = Pick<StoredMemorySummary, 'epoch' | 'position' | 'id'>;
 export type MemorySummaryPassage = Pick<StoredMemorySummary, 'epoch' | 'position'> & {
   start: number;
+  turnId?: string;
 };
 export type MemoryState = { epoch: string; seq: number };
 
@@ -208,38 +228,75 @@ export class MemoryStore {
     const pageSize = 8;
     const rows = this.database
       .prepare(
-        `SELECT id, position, json_extract(value, '$.type') AS type,
-           json_extract(value, '$.createdAt') AS createdAt,
-           json_extract(value, '$.originalTokens') AS originalTokens,
-           json_extract(value, '$.summaryTokens') AS summaryTokens,
-           json_extract(value, '$.durationMs') AS durationMs,
-           ${includeContent ? "json_extract(value, '$.parts')" : 'NULL'} AS parts
-         FROM memory_summary
-         WHERE agent = ? AND epoch = ? AND position <= ?
-           AND json_extract(value, '$.complete') = 1
+        `SELECT m.id, m.position, m.epoch, json_extract(m.value, '$.type') AS type,
+           json_extract(m.value, '$.createdAt') AS createdAt,
+           json_extract(m.value, '$.originalTokens') AS originalTokens,
+           json_extract(m.value, '$.summaryTokens') AS summaryTokens,
+           json_extract(m.value, '$.durationMs') AS durationMs,
+           coalesce(json_extract(m.value, '$.state'), 'summarized') AS state,
+           json_extract(m.value, '$.action') AS action,
+           ${includeContent ? "json_extract(m.value, '$.parts')" : 'NULL'} AS parts,
+           CASE WHEN json_extract(m.value, '$.state') = 'recorded' THEN (
+             SELECT d.id FROM memory_summary AS d
+             WHERE d.agent = m.agent AND d.epoch = m.epoch AND d.position BETWEEN m.position AND ?
+               AND json_extract(d.value, '$.type') = 'UAMP'
+               AND json_extract(d.value, '$.sources[0].turnId') IS NOT NULL
+               AND json_extract(d.value, '$.sources[0].seq') <= json_extract(m.value, '$.sources[0].seq')
+               AND json_extract(d.value, '$.scope.sessionId') IS json_extract(m.value, '$.scope.sessionId')
+               AND json_extract(d.value, '$.scope.taskId') IS json_extract(m.value, '$.scope.taskId')
+               AND json_extract(d.value, '$.scope.planId') IS json_extract(m.value, '$.scope.planId')
+               AND json_extract(d.value, '$.scope.passId') IS json_extract(m.value, '$.scope.passId')
+               AND json_extract(d.value, '$.scope.stepId') IS json_extract(m.value, '$.scope.stepId')
+               AND NOT EXISTS (
+                 SELECT 1 FROM json_each(m.value, '$.sources') AS a
+                 WHERE json_extract(a.value, '$.turnId') IS NOT json_extract(d.value, '$.sources[0].turnId')
+               )
+             ORDER BY d.position, d.id LIMIT 1
+           ) END AS discussionId
+         FROM memory_summary AS m
+         WHERE m.agent = ? AND m.epoch = ? AND m.position <= ?
+           AND (json_extract(m.value, '$.complete') = 1 OR json_extract(m.value, '$.state') IS NOT NULL)
            ${
              passage
-               ? `AND position = ? AND NOT EXISTS (
-             SELECT 1 FROM json_each(memory_summary.value, '$.sources') AS source
-             WHERE json_extract(source.value, '$.seq') NOT BETWEEN ? AND memory_summary.position
-           )`
+               ? `AND (
+                    (m.position = ? AND NOT EXISTS (
+                      SELECT 1 FROM json_each(m.value, '$.sources') AS source
+                      WHERE json_extract(source.value, '$.seq') NOT BETWEEN ? AND m.position
+                    )) OR (
+                      json_extract(m.value, '$.state') = 'recorded' AND ? IS NOT NULL
+                      AND m.position BETWEEN ? AND ?
+                      AND json_extract(m.value, '$.sources[#-1].turnId') = ?
+                    )
+                  )`
                : ''
            }
-           ${before ? 'AND (position, id) < (?, ?)' : ''}
-         ORDER BY position DESC, id DESC LIMIT ?`,
+           ${before ? 'AND (m.position, m.id) < (?, ?)' : ''}
+         ORDER BY m.position DESC, m.id DESC LIMIT ?`,
       )
       .all(
+        through,
         agentId,
         epoch,
         through,
-        ...(passage ? [passage.position, passage.start] : []),
+        ...(passage
+          ? [
+              passage.position,
+              passage.start,
+              passage.turnId ?? null,
+              passage.start,
+              passage.position,
+              passage.turnId ?? null,
+            ]
+          : []),
         ...(before ? [before.position, before.id] : []),
         pageSize + 1,
       );
     const summaries = rows.slice(0, pageSize).map((row) => {
-      const { parts, ...metadata } = catalogRowSchema.parse(row);
+      const { parts, action, discussionId, ...metadata } = catalogRowSchema.parse(row);
       return {
         ...metadata,
+        action: action === null ? undefined : actionOverview.parse(JSON.parse(action)),
+        discussionId: discussionId ?? undefined,
         parts: parts === null ? [] : summarySchema.shape.parts.parse(JSON.parse(parts)),
       };
     });
@@ -248,6 +305,13 @@ export class MemoryStore {
       summaries,
       next: rows.length > pageSize && last ? { epoch, position: last.position, id: last.id } : null,
     };
+  }
+
+  summary(agentId: string, epoch: string, id: string) {
+    const row = this.database
+      .prepare('SELECT value FROM memory_summary WHERE agent = ? AND epoch = ? AND id = ?')
+      .get(agentId, epoch, id) as { value: string } | undefined;
+    return row ? summarySchema.parse(JSON.parse(row.value)) : undefined;
   }
 
   saveSummary(summary: StoredMemorySummary) {

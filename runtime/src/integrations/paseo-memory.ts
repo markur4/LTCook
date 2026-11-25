@@ -75,7 +75,11 @@ export function createPaseoMemorySource(
         limit: 48,
       });
       if (page.error || !page.agent) throw new Error('Session Memory history is unavailable.');
-      const messages = readMemoryMessages(page.entries, (id) => promptAuthor(id, agentId, secret));
+      const messages = readMemoryMessages(
+        page.entries,
+        (id) => promptAuthor(id, agentId, secret),
+        true,
+      );
       if (documents) {
         for (const message of messages) {
           if (message.author !== 'user' && message.author !== 'unknown') continue;

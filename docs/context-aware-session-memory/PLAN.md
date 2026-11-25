@@ -52,3 +52,42 @@ Use the shared pass branch and one draft PR. Review the integrated pass
 snapshot once, check the full local suite before integration, and follow
 the repository's committed CI policy. Integration targets the configured
 upstream of the main checkout. No release is in scope.
+
+## Simplify Session Memory
+
+**Goal:** Reduce CPU inference cost and factual errors while retaining Discussion,
+execution evidence and delegation context.
+
+**Specifics:** Record AABs deterministically in the existing SQLite store. Use
+Paseo's canonical timeline to resolve original action references on demand.
+Preserve exact recognized outcomes, including failures followed by successes.
+Expose bounded execution cards, search evidence and delegation context. Put
+standalone or multiple-turn AABs in the chronological viewer once.
+
+Retain completed UAMPs below 256 estimated tokens with references to their
+originals. Count user messages, final replies and supplied attachment text once.
+Summarize larger UAMPs in Markdown with Intent, Pasted, Discoveries,
+Disagreements, Decisions, and Questions when relevant. Use the existing input
+budget. Keep raw output and derive sections for display and retrieval. Continue
+deterministic recording while inference is paused. Preserve the Immediate
+Context budget, use one preceding summary with bounded skipped originals, and
+verify approval references across Discussion and Task scope.
+
+Extend the existing Traditional Tests and Agent Evals. Compare JSON
+summarization of all units, JSON UAMPs with deterministic records and the
+threshold, and Markdown UAMPs with the same records and threshold. Match the
+corpus, pin LFM3 QAD Q4 to seed 17 and verify CPU placement with production
+inference suspended. Measure inference requests, prefill and generation, CPU
+wall time, record and delegation sizes. Aim for a 30% reduction in requests
+and CPU wall time. Keep original references, attachment access, restart,
+rewind and existing Pi/Paseo acceptance covered. Use the approved Luna high
+fallback for downstream Pi Agent Evals when the host has no usable GPU.
+
+The generated-summary layer must preserve every critical fact assigned to a
+summarized UAMP, including approved and rejected work and resolved references.
+Session Memory records collectively must preserve 14/14 critical facts before
+compensatory source recovery. Resolving a skipped UAMP or AAB source reference
+is ordinary record access. The assembled delegation handoffs must also
+preserve 14/14 facts and may use additional original sources. Require zero
+critical contradictions in every layer. The pass may replace the derived
+database with v5. Follow the same integration route and preserve native history.

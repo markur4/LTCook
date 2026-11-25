@@ -243,7 +243,8 @@ describe('native runtime boundary', () => {
           epoch: 'original',
           type: position % 2 ? 'UAMP' : 'AAB',
           position,
-          sources: [{ seq: position, author: 'agent' }],
+          sources: [{ seq: position, author: 'agent', messageId: `native-${position}` }],
+          state: position === 10 ? 'recorded' : undefined,
           createdAt: '2026-01-01T00:00:00Z',
           historyHash: 'fixture',
           parts: [
@@ -283,7 +284,25 @@ describe('native runtime boundary', () => {
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ agentId: 'selected', ...body }),
       });
+    const readEvidence = (body: object, token = master) =>
+      fetch(`${endpoint}/v1/activity/memory-evidence`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ agentId: 'selected', ...body }),
+      });
     try {
+      const record = { epoch, id: 'summary-10', position: 10 };
+      expect((await readEvidence(record, agentBearer(master, 'selected'))).status).toBe(401);
+      expect(await (await readEvidence(record)).json()).toEqual({
+        sources: [{ seq: 10, messageId: 'native-10', author: 'agent' }],
+        next: null,
+      });
+      for (const forged of [
+        { ...record, position: 9 },
+        { ...record, agentId: 'other-agent' },
+      ]) {
+        expect(await (await readEvidence(forged)).json()).toEqual({ sources: [], next: null });
+      }
       const agent = await readPage({ nativeAgentId: 'selected' }, agentBearer(master, 'selected'));
       expect(agent.status).toBe(403);
       const firstResponse = await readPage({});
@@ -324,6 +343,7 @@ describe('native runtime boundary', () => {
       expect(second.summaries.map(({ id }) => id)).toEqual(['summary-2', 'summary-1']);
       expect(second.next).toBeNull();
       epoch = 'replacement';
+      expect(await (await readEvidence(record)).json()).toEqual({ sources: [], next: null });
       expect((await readPage({ before: first.next })).status).toBe(400);
       expect(storedSummariesRpc.output.parse(await (await readPage({})).json()).summaries).toEqual(
         [],
