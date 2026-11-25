@@ -84,6 +84,7 @@ try {
         settings: summarization,
         signal: controller.signal,
         profileId: option('screen-profile'),
+        mnnApprovalFirst: args.includes('--mnn-approval-first'),
         allowRetry: !args.includes('--no-screen-retry'),
         auditOutput: args.includes('--audit-output'),
         progress: console.error,
