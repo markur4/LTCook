@@ -223,7 +223,14 @@ export interface MeterState {
 
 export type MeterAction =
   | { t: 'turn_started'; at: number; turnId: string | null }
-  | { t: 'text'; at: number; key: string; text: string; kind?: 'text' | 'reasoning' }
+  | {
+      t: 'text';
+      at: number;
+      key: string;
+      text: string;
+      kind?: 'text' | 'reasoning';
+      delta?: boolean;
+    }
   | { t: 'usage'; at: number; usage: UsageSnapshot; maxTokPerSec?: number }
   | { t: 'compaction'; at: number }
   /** The model blocked on the user (question asked, permission pending). */
@@ -348,9 +355,12 @@ function applyText(
   key: string,
   text: string,
   isReasoning: boolean,
+  isDelta: boolean,
 ): MeterState {
   if (state.phase !== 'running' || text.length === 0) return state;
-  const { lens, tails, growth } = growText(state, key, text);
+  const { lens, tails, growth } = isDelta
+    ? { lens: state.textLens, tails: state.textTails, growth: text.length }
+    : growText(state, key, text);
   if (growth <= 0) return state;
   return {
     ...state,
@@ -687,6 +697,7 @@ export function reduceMeter(state: MeterState, action: MeterAction): MeterState 
         action.kind === 'reasoning' ||
           // Backwards compatibility with callers using the legacy key scheme.
           (action.kind === undefined && action.key.startsWith('reasoning')),
+        action.delta === true,
       );
     case 'usage': {
       const next = applyUsage(

@@ -365,8 +365,16 @@ export default function contribute(client: PluginClientContext) {
       }
       case 'timeline': {
         const item = event.item;
+        // Pi streams text and reasoning deltas, including repeated fragments.
+        const delta = event.provider === 'pi' || event.provider === 'ltcook';
         if (item.type === 'assistant_message') {
-          store.dispatch({ t: 'text', at, key: item.messageId ?? 'assistant', text: item.text });
+          store.dispatch({
+            t: 'text',
+            at,
+            key: item.messageId ?? 'assistant',
+            text: item.text,
+            delta,
+          });
         } else if (item.type === 'reasoning') {
           // Per-turn key: text tails survive turn boundaries, and each turn's
           // reasoning block starts fresh.
@@ -376,6 +384,7 @@ export default function contribute(client: PluginClientContext) {
             key: `reasoning:${event.turnId ?? 'current'}`,
             text: item.text,
             kind: 'reasoning',
+            delta,
           });
         } else if (item.type === 'compaction') {
           store.dispatch({ t: 'compaction', at });
