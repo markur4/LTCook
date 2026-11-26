@@ -139,7 +139,12 @@ if (process.argv.includes('blocked index update')) {
         );
       const cold = await trace();
       expect(cold.trace?.leads[0]?.gaps).toContain('unavailable');
-      expect(cold.trace?.leads[1]?.evidenceIds.length).toBeGreaterThan(0);
+      const lexical = cold.trace?.leads[1];
+      if (Bun.which('rg')) {
+        expect(lexical?.evidenceIds.length).toBeGreaterThan(0);
+      } else {
+        expect(lexical?.gaps).toContain('unavailable');
+      }
       expect(await provider.readStatus(workspace)).toEqual({
         availability: 'not-ready',
         activity: 'idle',
