@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from ltcook_dev.packaging import release_assets
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -34,6 +36,78 @@ def _just(workspace: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 def _git(workspace: Path, *arguments: str) -> None:
     subprocess.run(["git", *arguments], cwd=workspace, check=True, capture_output=True)
+
+
+@pytest.mark.parametrize(
+    "change", ["version-only", "source", "dependency", "tag", "ci"]
+)
+def test_stable_ci_reuses_only_successful_equivalent_rc_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _git(tmp_path, "init", "-b", "main")
+    _git(tmp_path, "config", "user.name", "Release fixture")
+    _git(tmp_path, "config", "user.email", "fixture@example.invalid")
+    candidate, stable = "v0.2.0rc1", "v0.2.0"
+    metadata, lock, source = (
+        tmp_path / "pyproject.toml",
+        tmp_path / "uv.lock",
+        tmp_path / "app.py",
+    )
+    metadata.write_text(
+        f'[project]\nname = "ltcook"\nversion = "{candidate[1:]}"\n',
+        encoding="utf-8",
+    )
+    lock.write_text(
+        f'[[package]]\nname = "ltcook"\nversion = "{candidate[1:]}"\n'
+        'source = { editable = "." }\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "pylock.toml").write_text('lock-version = "1.0"\n', encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text("Candidate notes\n", encoding="utf-8")
+    source.write_text("print('release')\n", encoding="utf-8")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "--no-gpg-sign", "-m", "Release candidate")
+    _git(tmp_path, "tag", candidate)
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+
+    for path in (metadata, lock):
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(candidate[1:], stable[1:]),
+            encoding="utf-8",
+        )
+    (tmp_path / "CHANGELOG.md").write_text("Stable notes\n", encoding="utf-8")
+    if change == "source":
+        source.write_text("print('changed')\n", encoding="utf-8")
+    if change == "dependency":
+        lock.write_text(
+            lock.read_text(encoding="utf-8") + '[[package]]\nname = "added"\n',
+            encoding="utf-8",
+        )
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "--no-gpg-sign", "-m", "Stable release")
+    _git(tmp_path, "tag", stable)
+
+    def ci_runs(endpoint: str) -> dict[str, object]:
+        assert change not in {"source", "dependency"}
+        assert f"head_sha={commit}" in endpoint
+        return {
+            "workflow_runs": [
+                {
+                    "head_sha": commit,
+                    "head_branch": "main" if change == "tag" else candidate,
+                    "event": "push",
+                    "conclusion": "failure" if change == "ci" else "success",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(release_assets, "_api_object", ci_runs)
+    assert release_assets.reuse_rc("markur4/LTCook", stable) is (
+        change == "version-only"
+    )
 
 
 def test_release_policy_uses_the_exact_tag_snapshot(tmp_path: Path) -> None:

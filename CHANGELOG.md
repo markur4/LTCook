@@ -114,7 +114,10 @@ All notable changes to `ltcook` will be documented in this file.
 - Explicit GitHub Release workflow for beta, release candidate, and stable
   versions. Release preparation uses cumulative changelog notes. Publishing
   stages and verifies Linux assets locally, with a separately configurable
-  hosted CI gate.
+  hosted CI gate. GitHub keeps the latest beta, the latest release candidate,
+  and all stable releases. Routine CI runs on pull requests and main with
+  Python 3.12. Release candidates and stable tags without equivalent candidate
+  results receive extended checks.
 
 - Shared model aliases for Teams, Paseo, and the native Pi and Codex launcher.
   Paseo saves the effective model and reasoning with each new conversation.
