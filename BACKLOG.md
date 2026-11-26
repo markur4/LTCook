@@ -88,6 +88,67 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 <br>
 
+# 2026-11-26
+
+The [architectural CSC report](code-smells.md) records findings, accepted
+decisions, the Explorer fix status, and the order for the remaining passes.
+
+## P2 / E1 [Code smell] - *Give managed tool classification and bound-member lookup explicit owners*
+
+- **Area:** `runtime/src/tools`, `runtime/src/core`, `runtime/src/integrations/native-policy.ts`, and `runtime/src/integrations/runtime-api.ts`.
+- **Observed while:** Reviewing the managed Pi Session Memory denial and its server authorization path.
+- **Why not fixed now:** The independent Explorer correction is in draft PR #62. Classification and lookup need a focused follow-up.
+- **Evidence:** Three policy paths classify many of the same tools. Managed workspace-tool authorization builds two Session snapshots, and the Session Memory hook adds an authorization round trip. Tool metadata also crosses the deployed plugin boundary.
+- **Context:** The next milestone depends on explicit tool classification and a current binding lookup. Keep role, Pass approval, workspace grants, and Memory peer scope distinct.
+- **Suggested next step:** Consolidate classification, use targeted state reads, and verify the three authorization scopes. See [CSC-01](code-smells.md#csc-01--tool-classification-and-authorization-disagree), [CSC-05](code-smells.md#csc-05--backend-contracts-sit-under-the-paseo-plugin), [CSC-06A](code-smells.md#csc-06a--managed-authorization-repeats-broad-reads), and the [runtime decomposition](#p3--e1-code-smell---separate-runtime-composition-transport-and-coordination) entry.
+
+## P3 / E1 [Code smell] - *Separate runtime composition, transport and coordination*
+
+- **Area:** `runtime/src/main.ts`, `runtime/src/integrations/runtime-api.ts`, `runtime/src/integrations/mcp.ts`, and `runtime/src/core/runtime.ts`.
+- **Observed while:** Tracing shared tool construction, startup and scheduling.
+- **Why not fixed now:** The tool classification and member lookup provide a prerequisite for moving invocation ownership.
+- **Evidence:** The HTTP adapter constructs services used by the shared catalog. RuntimeController implements command policy, scheduling, native lifecycle, delivery, and snapshot projection. RIED and Session Memory lose returned error detail at the native boundary.
+- **Context:** Preserve startup readiness, one coordination owner, uncertain-send protection, approval and review gates, and the existing user workflows.
+- **Suggested next step:** Move shared service construction first, extract cohesive Core responsibilities using the shared task gates, and fix evidenced error detail losses. See [CSC-02](code-smells.md#csc-02--http-constructs-services-also-used-by-the-tool-catalog), [CSC-04](code-smells.md#csc-04--runtimecontroller-concentrates-coordination-responsibilities), [CSC-09](code-smells.md#csc-09--adapters-discard-actionable-failure-detail), [tool classification and lookup](#p2--e1-code-smell---give-managed-tool-classification-and-bound-member-lookup-explicit-owners), and [model contract ownership](#p3--e3-code-smell---clarify-model-contract-and-documentation-ownership).
+
+## P3 / E1 [Code smell] - *Decompose Session Memory after covering production recovery*
+
+- **Area:** `runtime/src/session-memory`, `runtime/src/integrations/paseo-memory.ts`, `evals/session-memory-simplified.ts`, and `tests/runtime/unit/session-memory.test.ts`.
+- **Observed while:** Comparing production recording and recovery with the qualification paths.
+- **Why not fixed now:** Production-profile characterization must precede extraction.
+- **Evidence:** One service owns ingestion, checkpoints, inference, Activity state, retrieval, and handoff. Some recovery tests use legacy JSON while production uses deterministic Markdown with context independence. The legacy branches have documented evaluation callers.
+- **Context:** Recovery coverage can land alongside the next milestone. Preserve same-version recovery, authority and citations, one derived-store owner, and runnable historical evaluations.
+- **Suggested next step:** Cover current-profile restart, resume, rewind, partial history and interruption, then extract cohesive workflows and isolate qualification strategies. See [CSC-03](code-smells.md#csc-03--session-memory-concentrates-recording-inference-retrieval-and-handoff), [CSC-07](code-smells.md#csc-07--production-memory-carries-historical-evaluation-strategies), and [retrieval measurements](#p3--e1-question---measure-session-memory-retrieval-scaling).
+
+## P3 / E1 [Question] - *Measure Session Memory retrieval scaling*
+
+- **Area:** `runtime/src/session-memory/service.ts` and `runtime/src/integrations/paseo-memory.ts`.
+- **Observed while:** Tracing broad discovery through authorized original history.
+- **Why not fixed now:** Practical latency and recall have not been measured.
+- **Evidence:** Broad searches walk history pages and rank results after each page. Exact source lookup already uses a targeted cursor read. Output limits do not bound broad history reads.
+- **Context:** Evaluate search, exact lookup, and handoff recovery separately. Preserve epoch, peer scope, citations, and truthful incomplete results.
+- **Suggested next step:** Measure pages, bytes, latency, deadlines and recall for long histories and multiple peers. Consider a rebuildable lexical index if warranted. See [CSC-06B](code-smells.md#csc-06b--broad-memory-search-walks-original-history) and [Session Memory decomposition](#p3--e1-code-smell---decompose-session-memory-after-covering-production-recovery).
+
+## P3 / E2 [Question] - *Measure live workspace preparation and cache growth*
+
+- **Area:** `runtime/src/integrations/paseo.ts`, `runtime/src/integrations/workspace-preparation.ts`, and `src/ltcook/config/pi_config.py`.
+- **Observed while:** Tracing AppRC workspace preparation for managed native agents.
+- **Why not fixed now:** Event-loop delay and cache growth have not been measured. Async preparation can introduce shared-output races.
+- **Evidence:** The live runtime uses `spawnSync` and synchronous fingerprints. The cache has no eviction. Different Session keys can point to the same generated Pi configuration.
+- **Context:** AppRC owns configuration and shell provenance. Configuration writes include read-merge-replace behavior.
+- **Suggested next step:** Measure delay and cache growth independently. If changes are justified, preserve invalidation and serialize writes by shared output path. See [CSC-06C](code-smells.md#csc-06c--live-workspace-preparation-uses-synchronous-io).
+
+## P3 / E3 [Code smell] - *Clarify model contract and documentation ownership*
+
+- **Area:** `runtime/src/models/aliases.ts`, `runtime/src/paseo-plugin/shared/models.ts`, and `docs/Development.md`.
+- **Observed while:** Comparing strict model inputs, panel DTOs, and contributor routing.
+- **Why not fixed now:** The model contract and documentation should follow the actual module owners as boundaries move.
+- **Evidence:** Model DTOs repeat reasoning values and fields. The panel deliberately accepts broader identifiers and projects native overrides. Contributors have only broad runtime routing guidance.
+- **Context:** Preserve public aliases, provider-native overrides, and appropriate validation at each boundary.
+- **Suggested next step:** Derive common declarations where deployed dependency resolution supports it, then update routing and qualification documentation in place. See [CSC-08](code-smells.md#csc-08--model-and-documentation-contracts-have-split-ownership) and [runtime decomposition](#p3--e1-code-smell---separate-runtime-composition-transport-and-coordination).
+
+<br>
+
 # 2026-11-25
 
 ## P2 / E2 [Question] - *Align the chat diff count with the reviewed worktree*
