@@ -2,10 +2,15 @@ import { SidebarRow } from '@getpaseo/plugin/client/ui';
 import type { PluginClientContext } from '@getpaseo/plugin/client';
 import { TeamsBrowser } from './client/screens/TeamsBrowser';
 import { TeamStatus } from './client/screens/TeamStatus';
-import { PassageSummary } from './client/components/PassageSummary';
-import { MEMORY_SUMMARIES_TIMELINE_KIND, MemorySummariesTimelineSchema } from './shared/activity';
-import { MEMORY_SUMMARIES_PANEL_ID, StoredSummaries } from './client/screens/StoredSummaries';
+import { TurnSkills } from './client/components/TurnSkills';
+import {
+  CLARIFY_REPLY_KIND,
+  ClarifyReply,
+  ClarifyReplySchema,
+} from './client/components/ClarifyReply';
+import { TURN_SKILLS_TIMELINE_KIND, TurnSkillsTimelineSchema } from './shared/activity';
 import { ActivityPanel } from './client/screens/ActivityPanel';
+import { TrackedItems } from './client/screens/TrackedItems';
 import {
   clearPendingSkillDocuments,
   SKILL_DOCUMENT_PANEL_ID,
@@ -67,12 +72,12 @@ export default function contribute(client: PluginClientContext) {
       locations: ['explorer'],
       Component: (props) => <ActivityPanel {...props} client={client} />,
     }),
-    client.addAgentPanel({
-      id: MEMORY_SUMMARIES_PANEL_ID,
-      title: 'Stored Summaries',
-      icon: 'Brain',
-      locations: ['workspace'],
-      Component: StoredSummaries,
+    client.addWorkspacePanel({
+      id: 'tracked-items',
+      title: 'Tracked Items',
+      icon: 'Notebook',
+      locations: ['explorer'],
+      Component: (props) => <TrackedItems {...props} client={client} />,
     }),
     client.addAgentPanel({
       id: SKILL_DOCUMENT_PANEL_ID,
@@ -82,10 +87,10 @@ export default function contribute(client: PluginClientContext) {
       Component: SkillDocument,
     }),
     client.addTimelineRenderer({
-      kind: MEMORY_SUMMARIES_TIMELINE_KIND,
+      kind: TURN_SKILLS_TIMELINE_KIND,
       version: 1,
-      schema: MemorySummariesTimelineSchema,
-      Component: (props) => <PassageSummary {...props} client={client} />,
+      schema: TurnSkillsTimelineSchema,
+      Component: (props) => <TurnSkills {...props} client={client} />,
     }),
     client.addCommandCenterItem({
       id: 'open-activity-panel',
@@ -123,6 +128,49 @@ export default function contribute(client: PluginClientContext) {
       },
     }),
   ];
+  if ('timelineDecorations' in client && client.timelineDecorations === true) {
+    cleanup.push(
+      client.addTimelineTransformer({
+        id: CLARIFY_REPLY_KIND,
+        query: { itemType: 'assistant_message' },
+        transform(source) {
+          if (source.phase !== 'complete' || !source.item.text.trim()) return;
+          const cursor = 'timelineCursor' in source ? source.timelineCursor : undefined;
+          const reply = ClarifyReplySchema.safeParse({
+            ...(cursor && typeof cursor === 'object' ? cursor : {}),
+            messageId: source.item.messageId,
+          });
+          if (!reply.success) return;
+          return {
+            preserveSource: true,
+            items: [
+              {
+                type: 'plugin',
+                kind: CLARIFY_REPLY_KIND,
+                version: 1,
+                data: {
+                  epoch: reply.data.epoch,
+                  seq: reply.data.seq,
+                  ...(reply.data.messageId ? { messageId: reply.data.messageId } : {}),
+                },
+              },
+            ],
+          };
+        },
+      }),
+      client.addTimelineRenderer({
+        kind: CLARIFY_REPLY_KIND,
+        schema: ClarifyReplySchema,
+        version: 1,
+        Component: (props) => (
+          <ClarifyReply
+            key={JSON.stringify([props.host.id, props.agentId, props.item.data])}
+            {...props}
+          />
+        ),
+      }),
+    );
+  }
   return () => {
     clearPendingSkillDocuments();
     cleanup.forEach((dispose) => dispose());

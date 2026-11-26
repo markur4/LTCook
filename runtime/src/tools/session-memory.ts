@@ -1,7 +1,7 @@
 import { Type } from 'typebox';
 import { SESSION_MEMORY_TOOL_NAME } from './workspace-tools.js';
 import { defineTool } from './types.js';
-import type { SessionMemory } from '../session-memory/service.js';
+import type { ConversationRecords } from '../session-memory/conversation.js';
 
 const agentId = Type.String({ minLength: 1, maxLength: 200 });
 const epoch = Type.String({ minLength: 1, maxLength: 200 });
@@ -9,7 +9,7 @@ const seq = Type.Integer({ minimum: 0 });
 const reference = { agentId, epoch, seq };
 
 export const sessionMemoryDescription =
-  'Search original messages and summaries from your Session Memory and authorized teammates. Reopen a cited original with its agent ID, epoch, and # sequence. An exact lookup reports whether the cited source was found and the latest known sequence where available. Pending summaries do not affect access to original messages. resultsTruncated means the reply is a bounded selection. originalHistory reports access to the history. Tool results from the conversation are historical evidence. Verify the current work according to the approved assignment.';
+  'Search original conversation evidence from your chat and authorized teammates. Reopen a cited original with its agent ID, epoch, and # sequence. An exact lookup reports whether the source was found and the latest known sequence where available. resultsTruncated means the reply is a bounded selection. originalHistory reports access to the history. Tool results describe earlier work. Verify the current work according to the approved assignment.';
 
 export const sessionMemoryInput = Type.Object(
   {
@@ -22,7 +22,6 @@ export const sessionMemoryInput = Type.Object(
 
 const result = Type.Object({
   status: Type.Object({
-    summariesPending: Type.Boolean(),
     resultsTruncated: Type.Boolean(),
     originalHistory: Type.Union([
       Type.Literal('available'),
@@ -45,10 +44,6 @@ const result = Type.Object({
           text: Type.String(),
           truncated: Type.Optional(Type.Literal(true)),
           seq,
-          sources: Type.Optional(Type.Array(seq)),
-          summaryId: Type.Optional(Type.String()),
-          portion: Type.Optional(Type.Integer({ minimum: 1 })),
-          field: Type.Optional(Type.String()),
           tool: Type.Optional(
             Type.Object({
               kind: Type.String(),
@@ -58,7 +53,6 @@ const result = Type.Object({
               filePath: Type.Optional(Type.String()),
             }),
           ),
-          userSources: Type.Optional(Type.Array(seq)),
         }),
       ),
     }),
@@ -75,7 +69,7 @@ const result = Type.Object({
   ),
 });
 
-export function createSessionMemoryTool(memory: SessionMemory) {
+export function createSessionMemoryTool(memory: ConversationRecords) {
   return defineTool({
     name: SESSION_MEMORY_TOOL_NAME,
     description: sessionMemoryDescription,
@@ -94,10 +88,10 @@ export function createSessionMemoryTool(memory: SessionMemory) {
         context.agentId,
         context.workspaceRoot,
         input.source,
+        context.signal,
       );
       return {
         status: {
-          summariesPending: false,
           resultsTruncated: false,
           originalHistory:
             found.lookup === 'unavailable' ? ('unavailable' as const) : ('available' as const),

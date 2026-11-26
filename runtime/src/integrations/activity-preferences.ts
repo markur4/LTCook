@@ -2,10 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
 
-const preferencesSchema = z.strictObject({
-  summarizer: z.boolean(),
+const preferencesSchema = z.object({
   'rag-index': z.boolean(),
-  sessionMemoryMode: z.enum(['hosted', 'local']).optional(),
 });
 type Preferences = z.infer<typeof preferencesSchema>;
 
@@ -17,24 +15,15 @@ export class ActivityPreferences {
       this.values = preferencesSchema.parse(JSON.parse(readFileSync(file, 'utf8')));
     } catch (error) {
       if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
-      this.values = { summarizer: true, 'rag-index': true };
+      this.values = { 'rag-index': true };
     }
   }
 
-  enabled(feature: 'summarizer' | 'rag-index'): boolean {
+  enabled(feature: 'rag-index'): boolean {
     return this.values[feature];
   }
 
-  memoryInferenceMode() {
-    return this.values.sessionMemoryMode;
-  }
-
-  setMemoryInferenceMode(mode: NonNullable<Preferences['sessionMemoryMode']>): void {
-    if (mode !== this.values.sessionMemoryMode)
-      this.save({ ...this.values, sessionMemoryMode: mode });
-  }
-
-  set(feature: 'summarizer' | 'rag-index', enabled: boolean): void {
+  set(feature: 'rag-index', enabled: boolean): void {
     if (this.enabled(feature) === enabled) return;
     this.save({ ...this.values, [feature]: enabled });
   }

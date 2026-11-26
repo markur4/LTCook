@@ -11,6 +11,7 @@
   - [Lifecycle and deployment assets](#lifecycle-and-deployment-assets)
 - [Configuration and public interfaces](#configuration-and-public-interfaces)
   - [Environment variables](#environment-variables)
+    - [Workspace service settings](#workspace-service-settings)
   - [Configuration files](#configuration-files)
   - [Team API](#team-api)
   - [Guidance API](#guidance-api)
@@ -41,6 +42,8 @@
 | [runtime/src/workflow-api](../runtime/src/workflow-api) | Planning, decisions, approvals and coordination contract. |
 | [runtime/resources](../runtime/resources) | Required Core rules and shared native skills/references. |
 | [runtime/src/services/controller.ts](../runtime/src/services/controller.ts) | Internal local Compose controller used by the service commands. |
+| [runtime/src/services/workspace-organizer.ts](../runtime/src/services/workspace-organizer.ts) | Standard workspace classification and guarded automatic archive. |
+| [runtime/src/services/renamer.ts](../runtime/src/services/renamer.ts) | Scheduled workspace and agent-session naming. |
 | [teams](../teams) | Bundled team packages and Markdown resources. |
 | [services](../services) | Pinned Compose services and their non-secret configuration. |
 | [src/ltcook_distr/payload/app_lifecycle](../src/ltcook_distr/payload/app_lifecycle) | Authored installation, preparation, and maintenance behavior. |
@@ -204,7 +207,8 @@ accepted. The workflow creates no tag, GitHub Release or PyPI publication;
 ## Environment variables
 
 AppRC resolves each exact declared environment name. The settings bundle exposes
-`app`, `runtime`, `paseo`, `pi`, `anthropic`, `openai`, `google`, `openrouter`,
+`app`, `runtime`, `paseo`, `pi`, `workspace_organizer`, `renamer`, `anthropic`,
+`openai`, `google`, `openrouter`,
 `context7`, `agent_browser`, `web`, `searxng`, `crawl4ai`, `podman`, `container`,
 and `playwright` sections; their declarations are in
 [`src/ltcook/config/sections`](../src/ltcook/config/sections).
@@ -224,11 +228,10 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_SUMMARIZER_KEEP_ALIVE` | Global `runtime.summarizer_keep_alive`. Default `-1` keeps the loaded model resident. Use `0` to unload or a positive number of seconds. |
 | `LTCOOK_SUMMARIZER_GENERATION` | Global `runtime.summarizer_generation`. Optional JSON object with `options` containing `num_ctx`, `num_predict`, and `temperature`. Supports optional `think`, `top_k`, and `repeat_penalty` (the latter two inside `options`). Streaming is disabled. The default Spark profile uses reasoning off, a 32,768-token context, a 512-token generation limit, and temperature 0.1. An explicit generation profile is used as supplied. A smaller context reduces the supported source byte limit. |
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
-| `LTCOOK_SESSION_MEMORY_THRESHOLD` | Global `runtime.session_memory_threshold`. Default 3,000 estimated Agent Action tokens per AAB. Use an integer from 1 to 6,500. Set 0 to disable capture and the tool. |
-| `LTCOOK_SESSION_MEMORY_MODE` | Global `runtime.session_memory_mode`. Set `hosted` to enable OpenAI subscription inference or `local` to use Ollama. An empty value starts in Local mode until Hosted is selected explicitly in Activity. The saved Activity choice takes precedence. |
-| `LTCOOK_SESSION_MEMORY_MODEL` | Global `runtime.session_memory_model` selects the Local model. An empty value uses `@local-CPU`. You can supply an Ollama alias or an installed Ollama model tag. Hosted uses `@tiny` and requires an `openai-codex` model with low reasoning. |
-| `LTCOOK_SESSION_MEMORY_INPUT_TOKENS` | Global `runtime.session_memory_input_tokens`. Total input target including instructions and current UAMP source text. Defaults to 8,000 estimated tokens. |
-| `LTCOOK_SESSION_MEMORY_DELEGATION` | Global `runtime.session_memory_delegation`. Set to `true` to add automatic supplemental context on Core assignments. Default `false`. Search and source retrieval remain available when capture is enabled. |
+| `LTCOOK_CONVERSATION_INFERENCE` | Global `runtime.conversation_inference`. Defaults to `hosted` for Codex subscription inference with `@tiny`. Set `local` to use Ollama. |
+| `LTCOOK_CONVERSATION_LOCAL_MODEL` | Global `runtime.conversation_local_model`. An empty value uses `@local-CPU`. Supply an Ollama alias or installed model tag. |
+| `LTCOOK_CONVERSATION_INPUT_TOKENS` | Global `runtime.conversation_input_tokens`. Estimated per-request input budget for Clarify and Tracker. Defaults to 8,000. |
+| `LTCOOK_SESSION_MEMORY_DELEGATION` | Global `runtime.session_memory_delegation`. Set `true` to add original conversation evidence to Core assignments. Defaults to `false`. |
 | `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |
 | `LTCOOK_TEAM_INSTANCE_ID` | Runtime-derived identifier for the persistent TeamInstance shared by Sessions on the same selected team and canonical workspace. |
@@ -273,6 +276,40 @@ source declarations for the complete exact names. Never print the raw
 launch environment: it can contain credentials. Secret redaction is presentation,
 not encryption of the AppRC-managed files.
 
+### Workspace service settings
+
+The settings in [`sections/services.py`](../src/ltcook/config/sections/services.py)
+apply to the whole LTCook-managed Paseo host. They are resolved from global
+AppRC settings and original shell inputs, ignoring project overlays. Changes
+apply when the runtime next starts. The typed bundle exposes
+`config.workspace_organizer` and `config.renamer`.
+
+| Environment name | AppRC setting | Default | Effect |
+| --- | --- | --- | --- |
+| `LTCOOK_WORKSPACE_ORGANIZER_ENABLED` | `runtime.services.workspace_organizer.enabled` | `true` | Enable standard label maintenance, classification, and eligible automatic archival. |
+| `LTCOOK_WORKSPACE_ORGANIZER_AUTO_ARCHIVE` | `runtime.services.workspace_organizer.auto_archive` | `true` | Enable the 14-day inactivity archive policy while Workspace Organizer is enabled. |
+| `LTCOOK_RENAMER_ENABLED` | `runtime.services.renamer.enabled` | `true` | Enable the Renamer schedule. |
+| `LTCOOK_RENAMER_WORKSPACES` | `runtime.services.renamer.workspaces` | `true` | Allow workspace titles of at most 20 Unicode grapheme clusters. |
+| `LTCOOK_RENAMER_TABS` | `runtime.services.renamer.tabs` | `true` | Allow agent-session titles of at most 15 Unicode grapheme clusters. |
+
+Workspace classification uses the first nonempty conversation context and then
+12-hour attempt intervals, with a changed conversation or Git revision required.
+Its first valid proposal may receive one early retry after at least 60 seconds
+if new content made it stale and the workspace is idle; the regular deadline
+stays fixed. Renamer uses the first nonempty context and then at least 30 minutes
+between attempts. Workspace titles follow conversation and observed Git changes;
+agent titles follow their own conversation. The runtime validates `@tiny`
+proposals; model calls do not decide archival or alter service schedules. See the
+[service explanation](Explanations.md#workspace-organizer-and-renamer) and
+[settings guide](How-To-User-Guides.md#change-the-service-settings).
+
+**Activity → Services** exposes read-only service status and archive-protection
+diagnostics. Automatic archive requires the connected Paseo daemon's verified
+directory-preserving HTTP operation; an unavailable operation leaves the
+workspace active. It keeps all working-directory files and skips project
+teardown, including for Paseo-owned worktrees. Manual native archival can still
+remove an owned checkout.
+
 ## Configuration files
 
 | File or path | Meaning |
@@ -285,6 +322,8 @@ not encryption of the AppRC-managed files.
 | `<state>/runtime/documents/designs/Design-YYYY_MM_DD-HH_MM-title.md` | Team-authored Design, using creation-machine local time and timezone metadata. |
 | `<state>/runtime/documents/plans/Plan-YYYY_MM_DD-HH_MM-title.md` | Team-authored Plan; stable filename and append-only reporting convention. |
 | `<state>/runtime/coordination.sqlite` | Runtime coordination, document references, decisions and approval metadata. |
+| `<LTCOOK_RUNTIME_STATE_DIR>/workspace-organizer.json` | Workspace observations, classification deadlines, and archive state; separate from AppRC settings. |
+| `<LTCOOK_RUNTIME_STATE_DIR>/renamer.json` | Rename deadlines and successfully processed conversation revisions; separate from AppRC settings. |
 | `<cache>/projects` | Lazily refreshed declarative facts; Git state is refreshed separately. |
 | `<LTCOOK_DEPLOYMENT_DIR>/paseo/config.json` | Paseo configuration written by the Node host; the home also holds mutable Paseo data. |
 | `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` | Workspace-specific Pi home; `write-native-config` writes its private `web-search.json`. |

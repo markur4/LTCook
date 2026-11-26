@@ -21,7 +21,6 @@ import { ActivityServices } from '../components/ActivityServices';
 import type { Theme } from '../components/PanelChrome';
 import { useFocusedAgent } from '../explorer-panels';
 import { openSkillDocument } from './SkillDocument';
-import { MEMORY_SUMMARIES_PANEL_ID } from './StoredSummaries';
 
 type ActivityPanelProps = PluginWorkspacePanelProps & {
   client: Pick<PluginClientContext, 'composers' | 'openPanel'>;
@@ -112,18 +111,6 @@ function ObservedActivity(
     }
   }
 
-  function openStoredSummaries() {
-    try {
-      client.openPanel(MEMORY_SUMMARIES_PANEL_ID, {
-        agentId: selectedAgentId,
-        workspaceId: selectedWorkspaceId,
-        location: 'workspace',
-      });
-    } catch {
-      toast.error('Could not open stored summaries for this agent.');
-    }
-  }
-
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
@@ -141,15 +128,8 @@ function ObservedActivity(
           <Section theme={theme} title="Services" />
           <ActivityServices
             theme={theme}
-            agentId={selectedAgentId}
             rag={snapshot.rag}
-            memory={snapshot.memory}
-            onDeviceChange={(device) =>
-              setSnapshot((current) =>
-                current ? { ...current, memory: { ...current.memory, device } } : current,
-              )
-            }
-            onOpenSummaries={openStoredSummaries}
+            lastHandoff={snapshot.lastHandoff}
             agentWorktree={snapshot.agent.worktree?.path}
           />
           <Section theme={theme} title="Agent" />

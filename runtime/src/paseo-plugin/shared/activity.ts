@@ -67,54 +67,11 @@ const ragStatus = z.object({
   activity: z.enum(['idle', 'checking', 'indexing', 'updating', 'interrupted', 'error', 'unknown']),
   diagnostic: z.string().optional(),
 });
-export const MemoryUnitCountsSchema = z.object({ uamp: count, aab: count });
-export const MemoryRateSchema = z.object({
-  tokensPerSecond: z.number().finite().nonnegative(),
-  estimated: z.boolean(),
-});
-export const MemoryDeviceSchema = z.object({ id, label: z.string().min(1) });
-const memoryDeviceOption = MemoryDeviceSchema.extend({ unavailable: z.string().optional() });
-const memoryInferenceMode = z.enum(['hosted', 'local']);
-export const MemoryInferenceSchema = z.object({
-  mode: memoryInferenceMode,
-  model: id,
-  reasoning: id,
-});
-export const MemoryHostedUsageSchema = z.object({
-  requests: count,
-  inputTokens: count,
-  cachedInputTokens: count,
-  outputTokens: count,
-  reasoningTokens: count,
-  lastLatencyMs: z.number().finite().nonnegative().optional(),
-});
-const sessionMemoryStatus = z.object({
-  rate: MemoryRateSchema.nullable(),
-  device: MemoryDeviceSchema.nullable(),
-  inference: MemoryInferenceSchema.optional(),
-  hostedUsage: MemoryHostedUsageSchema.optional(),
-  lastHandoff: z
-    .object({
-      at: timestamp,
-      bytes: count,
-      sourceName: z.string().nullable(),
-      summaries: MemoryUnitCountsSchema,
-    })
-    .nullable(),
-  summarization: z.enum([
-    'paused',
-    'summarizing',
-    'queued',
-    'up-to-date',
-    'below-threshold',
-    'failed',
-    'disabled',
-    'unknown',
-  ]),
-  lastSummaryAt: timestamp.nullable(),
-  stored: MemoryUnitCountsSchema.nullable(),
-  pending: MemoryUnitCountsSchema.nullable(),
-  diagnostic: z.string().optional(),
+const handoff = z.object({
+  at: timestamp,
+  bytes: count,
+  sourceName: z.string().nullable(),
+  aab: count,
 });
 
 export const ActivitySnapshotSchema = z.object({
@@ -124,7 +81,7 @@ export const ActivitySnapshotSchema = z.object({
   agent: agentActivity,
   subagents: z.array(agentActivity).nullable(),
   rag: ragStatus,
-  memory: sessionMemoryStatus,
+  lastHandoff: handoff.nullable(),
   activityScopeLabel: z.string(),
 });
 
@@ -136,38 +93,12 @@ export const activitySubscription = defineSubscription({
 
 export const activityToggleRpc = defineRpc({
   name: 'ltcook.activity.toggle',
-  input: z.strictObject({ feature: z.enum(['summarizer', 'rag-index']), enabled: z.boolean() }),
+  input: z.strictObject({ feature: z.literal('rag-index'), enabled: z.boolean() }),
   output: z.object({ enabled: z.boolean() }),
 });
 
-export const memoryInferenceRpc = defineRpc({
-  name: 'ltcook.activity.memory-inference',
-  input: z.strictObject({ mode: memoryInferenceMode }),
-  output: MemoryInferenceSchema,
-});
-
-export const memoryDeviceRpc = defineRpc({
-  name: 'ltcook.activity.memory-device',
-  input: z.strictObject({ deviceId: id.optional() }),
-  output: z.object({
-    device: MemoryDeviceSchema,
-    devices: z.array(memoryDeviceOption),
-    diagnostic: z.string().optional(),
-  }),
-});
-
-const summaryCursor = z.object({ epoch: id, position: count, id });
-export const MEMORY_SUMMARIES_TIMELINE_KIND = 'memory-summaries';
-const summaryPassage = z.object({
-  epoch: id,
-  start: count,
-  position: count,
-  turnId: id.optional(),
-});
-export const MemorySummariesTimelineSchema = z.object({
-  passage: summaryPassage.optional(),
-  skills: z.array(skillLoad).optional(),
-});
+export const TURN_SKILLS_TIMELINE_KIND = 'turn-skills';
+export const TurnSkillsTimelineSchema = z.object({ skills: z.array(skillLoad).min(1) });
 
 export const activitySkillDocumentRpc = defineRpc({
   name: 'ltcook.activity.skill-document',
@@ -180,88 +111,10 @@ export const activitySkillDocumentRpc = defineRpc({
   output: z.object({ name: id, markdown: z.string() }),
 });
 
-const actionCount = z.object({ kind: id, count });
-export const storedSummariesRpc = defineRpc({
-  name: 'ltcook.activity.stored-summaries',
-  input: z.object({
-    agentId: id,
-    before: summaryCursor.optional(),
-    passage: summaryPassage.optional(),
-    includeContent: z.boolean().optional(),
-  }),
-  output: z.object({
-    summaries: z.array(
-      z.object({
-        id,
-        type: z.enum(['UAMP', 'AAB']),
-        state: z.enum(['summarized', 'skipped', 'pending', 'failed', 'recorded']),
-        epoch: id,
-        discussionId: id.optional(),
-        action: z
-          .object({
-            counts: z.array(actionCount),
-            files: z.array(z.object({ path: z.string(), counts: z.array(actionCount) })),
-            pathCount: count,
-            fileCount: count,
-            checks: z.array(z.object({ seq: count, text: z.string() })),
-            checkCount: count,
-            failureCount: count,
-          })
-          .optional(),
-        createdAt: z.string(),
-        position: count,
-        originalTokens: count.nullable(),
-        summaryTokens: count.nullable(),
-        durationMs: count.nullable(),
-        parts: z.array(z.object({ content: z.json(), sources: z.array(count) })),
-      }),
-    ),
-    next: summaryCursor.nullable(),
-    storagePath: z.string().nullable(),
-  }),
-});
-
-export const MemoryEvidenceReferencesSchema = z.object({
-  sources: z
-    .array(
-      z.object({
-        seq: count,
-        messageId: id.optional(),
-        turnId: id.optional(),
-        author: z.enum(['agent', 'tool']),
-      }),
-    )
-    .max(8),
-  next: count.nullable(),
-});
-
-export const memoryEvidenceRpc = defineRpc({
-  name: 'ltcook.activity.memory-evidence',
-  input: z.strictObject({ agentId: id, epoch: id, id, position: count, after: count.optional() }),
-  output: z.object({
-    entries: z.array(
-      z.object({
-        seq: count,
-        source: z
-          .discriminatedUnion('kind', [
-            z.object({ kind: z.literal('agent'), text: z.string() }),
-            z.object({ kind: z.literal('tool'), name: id, status: id, details: z.string() }),
-          ])
-          .nullable(),
-      }),
-    ),
-    next: count.nullable(),
-  }),
-});
-
-export type MemoryEvidencePage = z.infer<typeof memoryEvidenceRpc.output>;
-export type StoredSummariesPage = z.infer<typeof storedSummariesRpc.output>;
 export type ActivitySnapshot = z.infer<typeof ActivitySnapshotSchema>;
 export type AgentActivity = z.infer<typeof agentActivity>;
 export type ContextUsage = z.infer<typeof contextUsage>;
 export type RagStatus = z.infer<typeof ragStatus>;
-export type MemoryUnitCounts = z.infer<typeof MemoryUnitCountsSchema>;
-export type SessionMemoryStatus = z.infer<typeof sessionMemoryStatus>;
 export type ActivityAnchor = z.infer<typeof ActivityAnchorSchema>;
 export type ToolCall = z.infer<typeof toolCall>;
 export type SkillLoad = z.infer<typeof skillLoad>;

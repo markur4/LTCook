@@ -1,17 +1,9 @@
 import { expect, test } from 'bun:test';
 import {
-  defaultMemoryBudgets,
-  MemoryInputBudgetError,
-  prepareMemorySummaries,
-  retrievableSummaryStatements,
-} from '../../../runtime/src/session-memory/summarization.js';
-import {
   identifyMemoryUnits,
   type MemorySourceMessage,
   type MemoryTurnOutcome,
 } from '../../../runtime/src/session-memory/units.js';
-import { estimateMemoryTokens } from '../../../runtime/src/paseo-plugin/server/memory-text.js';
-import { isEmptyMemorySummary, parseMemoryJson } from '../../../runtime/src/session-memory/json.js';
 
 test('uses native outcomes and preserves steering while treating an assignment as runtime input', () => {
   const messages: MemorySourceMessage[] = [
@@ -104,13 +96,8 @@ test('supplies attached evidence to an action batch without a completed Discussi
   ];
   const units = identifyMemoryUnits(messages, new Map([['native', 'completed']]), 3000);
   expect(units.map(({ type }) => type)).toEqual(['AAB']);
-  const [request] = prepareMemorySummaries(units[0]!, []);
-  expect(request?.attachmentSources).toEqual([1]);
-  expect(request?.sources).toEqual([1, 2, 3]);
-  expect(request?.text).toContain('The exact reference is RETAIN_CACHE.');
-  expect(
-    retrievableSummaryStatements({ type: 'AAB', content: { pasted: 'Reference RETAIN_CACHE.' } }),
-  ).toEqual([{ field: 'pasted', text: 'Reference RETAIN_CACHE.' }]);
+  expect(units[0]?.messages.map(({ seq }) => seq)).toEqual([2, 3]);
+  expect(units[0]?.instructions).toEqual([messages[0]!]);
 });
 
 test('uses the signed runtime assignment for context and ignores peer and heartbeat prompts', () => {
@@ -129,126 +116,4 @@ test('uses the signed runtime assignment for context and ignores peer and heartb
   ];
   const [unit] = identifyMemoryUnits(messages, new Map([['native', 'completed']]), 3000);
   expect(unit?.instructions?.map(({ seq }) => seq)).toEqual([1, 4]);
-});
-
-test('parses the final response as JSON without requiring particular fields', () => {
-  expect(parseMemoryJson('{"other":{"notes":[null,"evidence",true,0]}}')).toEqual({
-    other: { notes: [null, 'evidence', true, 0] },
-  });
-  expect(parseMemoryJson(' null ')).toBeNull();
-  expect(parseMemoryJson('""')).toBe('');
-  expect(parseMemoryJson('false')).toBe(false);
-  for (const output of ['', 'intent: free-form', '{"results":"incomplete"', '```json\n{}\n```'])
-    expect(parseMemoryJson(output)).toBeUndefined();
-});
-
-test('uses JSON content in retrieval without hiding nested facts', () => {
-  expect(
-    retrievableSummaryStatements({ type: 'AAB', content: 'An unquoted summary for search.' }),
-  ).toEqual([{ text: 'An unquoted summary for search.' }]);
-  const content = { results: 'CACHE_GUARD passed', issues: { detail: 'CACHE_FALLBACK failed' } };
-  expect(retrievableSummaryStatements({ type: 'AAB', content })).toEqual([
-    { field: 'results', text: 'CACHE_GUARD passed' },
-    { text: JSON.stringify(content) },
-  ]);
-  expect(isEmptyMemorySummary({})).toBe(true);
-  expect(retrievableSummaryStatements({ type: 'AAB', content: {} })).toEqual([]);
-  expect(isEmptyMemorySummary({ results: [' '] })).toBe(false);
-});
-
-test('uses only the latest relevant completed UAMP for Immediate Context', () => {
-  const unit = {
-    type: 'AAB' as const,
-    scope: { taskId: 'cache' },
-    task: {
-      title: 'Cache restore',
-      description: 'Recover the existing cache.',
-      acceptance: ['Keep the existing manifest.'],
-    },
-    instructions: [
-      { seq: 8, author: 'user' as const, text: 'Steering: use CHECK_CACHE for the current run.' },
-    ],
-    messages: [{ seq: 9, author: 'tool' as const, text: 'CHECK_CACHE PASS' }],
-  };
-  const history = [
-    {
-      id: 'older',
-      type: 'UAMP' as const,
-      content: { intent: 'Older details' },
-      scope: { taskId: 'cache' },
-    },
-    {
-      id: 'latest',
-      type: 'UAMP' as const,
-      content: { intent: 'Latest cache details' },
-      scope: { taskId: 'cache' },
-    },
-    {
-      id: 'independent',
-      type: 'UAMP' as const,
-      content: { intent: 'Independent docs details' },
-      scope: { taskId: 'docs' },
-    },
-  ];
-  const [part] = prepareMemorySummaries(unit, history);
-  expect(part?.historyIds).toEqual(['latest']);
-  expect(part?.sources).toEqual([9]);
-  const prompt = part?.prompt[1]?.content;
-  expect(prompt).toContain('Keep the existing manifest.');
-  expect(prompt).toContain('Steering: use CHECK_CACHE');
-  expect(prompt).not.toContain('Independent docs details');
-  expect(prompt).toContain('{"field":"intent","text":"Latest cache details"}');
-  const [baseline] = prepareMemorySummaries(unit, history, defaultMemoryBudgets, {
-    mode: 'no-context',
-  });
-  expect(baseline?.text).toBe(part?.text);
-  expect(baseline?.sources).toEqual(part?.sources);
-  expect(baseline?.prompt[1]?.content).not.toContain('Latest cache details');
-  const [taskOnly] = prepareMemorySummaries(unit, history, defaultMemoryBudgets, {
-    mode: 'task-context',
-  });
-  expect(taskOnly?.text).toBe(part?.text);
-  expect(taskOnly?.sources).toEqual(part?.sources);
-});
-
-test('keeps authoritative context above its soft target and protects the hard source budget', () => {
-  const task = {
-    title: 'Cache restore',
-    description: 'Preserve the recorded constraint. '.repeat(100) + 'FINAL_CONSTRAINT',
-    acceptance: ['Do not alter the existing manifest.'],
-  };
-  const unit = {
-    type: 'AAB' as const,
-    task,
-    messages: [{ seq: 7, author: 'tool' as const, text: 'CHECK_CACHE PASS.' }],
-  };
-  const [part] = prepareMemorySummaries(unit, []);
-  expect(part?.authoritativeEstimatedTokens).toBeGreaterThan(512);
-  expect(part?.prompt[1]?.content).toContain('FINAL_CONSTRAINT');
-  expect(() => prepareMemorySummaries(unit, [], { input: 1024 })).toThrow(MemoryInputBudgetError);
-});
-
-test('preserves complete oversized source text across identical bounded portions', () => {
-  const text = '✍️"\n'.repeat(8000);
-  const parts = prepareMemorySummaries(
-    { type: 'UAMP', messages: [{ seq: 1, author: 'user', text }] },
-    [{ type: 'UAMP', content: 'Prior context'.repeat(500) }],
-  );
-  expect(parts.length).toBeGreaterThan(1);
-  expect(
-    parts
-      .flatMap(({ text }) =>
-        text
-          .trim()
-          .split('\n')
-          .map((line) => JSON.parse(line).text),
-      )
-      .join(''),
-  ).toBe(text);
-  for (const { prompt, sources } of parts) {
-    expect(sources).toEqual([1]);
-    expect(estimateMemoryTokens(prompt.map(({ content }) => content).join(''))).toBeLessThan(
-      defaultMemoryBudgets.input,
-    );
-  }
 });

@@ -1,0 +1,142 @@
+diff --git a/packages/app/src/plugins/evaluate.ts b/packages/app/src/plugins/evaluate.ts
+--- a/packages/app/src/plugins/evaluate.ts
++++ b/packages/app/src/plugins/evaluate.ts
+@@ -246,8 +246,9 @@
+       () => workspacePanelIds.delete(normalizedId),
+     );
+   }
+-  const pluginContext: PluginClientContext = {
++  const pluginContext: PluginClientContext & { timelineDecorations: true } = {
+     ...runtime,
++    timelineDecorations: true,
+     addSettingsScreen(contribution) {
+       const screenId = requireId(contribution.id, "settings screen id");
+       if (settingsScreenIds.has(screenId))
+diff --git a/packages/app/src/plugins/timeline/model.ts b/packages/app/src/plugins/timeline/model.ts
+--- a/packages/app/src/plugins/timeline/model.ts
++++ b/packages/app/src/plugins/timeline/model.ts
+@@ -9,12 +9,14 @@
+ export interface InstalledPluginTimelineItem extends PluginTimelineItem {
+   id: string;
+   pluginId: string;
++  preserveSource?: true;
+ }
+
+ export interface TimelineItemTransformInput {
+   item: AgentTimelineItem;
+   phase: "streaming" | "complete";
+   sourceId: string;
++  timelineCursor?: { epoch: string; seq: number };
+ }
+
+ export type TimelineItemTransform = (
+@@ -41,7 +43,9 @@
+   return valid;
+ }
+
+-function parseTransformResult(value: unknown): PluginTimelineTransformResult {
++function parseTransformResult(
++  value: unknown,
++): PluginTimelineTransformResult & { preserveSource?: true } {
+   if (!value || typeof value !== "object") {
+     throw new Error("transform must return an object containing items");
+   }
+@@ -68,7 +72,10 @@
+       throw new Error(`transformed timeline item ${kind} data must be JSON-compatible`);
+     }
+   }
+-  return { items: items as PluginTimelineItem[] };
++  return {
++    items: items as PluginTimelineItem[],
++    ...(Reflect.get(value, "preserveSource") === true ? { preserveSource: true } : {}),
++  };
+ }
+
+ export function transformTimelineItem(
+@@ -81,8 +88,13 @@
+         const transform = transformer.transform as (input: {
+           item: AgentTimelineItem;
+           phase: "streaming" | "complete";
++          timelineCursor?: { epoch: string; seq: number };
+         }) => PluginTimelineTransformResult | undefined;
+-        const output = transform({ item: input.item, phase: input.phase });
++        const output = transform({
++          item: input.item,
++          phase: input.phase,
++          timelineCursor: input.timelineCursor && Object.freeze({ ...input.timelineCursor }),
++        });
+         if (output === undefined) continue;
+         const parsed = parseTransformResult(output);
+         return parsed.items.map((transformedItem, index) => ({
+@@ -92,6 +104,7 @@
+           version: transformedItem.version,
+           data: JSON.parse(JSON.stringify(transformedItem.data)) as PluginTimelineData,
+           pluginId: plugin.id,
++          ...(parsed.preserveSource ? { preserveSource: true as const } : {}),
+         }));
+       } catch (error) {
+         console.warn(
+diff --git a/packages/app/src/plugins/timeline/projection.ts b/packages/app/src/plugins/timeline/projection.ts
+--- a/packages/app/src/plugins/timeline/projection.ts
++++ b/packages/app/src/plugins/timeline/projection.ts
+@@ -89,9 +89,10 @@
+     item: cloneAndFreeze(source),
+     phase,
+     sourceId: item.id,
++    ...(item.timelineCursor ? { timelineCursor: item.timelineCursor } : {}),
+   });
+   if (transformed === undefined) return [item];
+-  return transformed.map((pluginItem) => {
++  const decorations = transformed.map((pluginItem) => {
+     const projected: PluginTimelineStreamItem = {
+       kind: "plugin",
+       id: `${pluginItem.pluginId}/${pluginItem.id}`,
+@@ -108,6 +109,7 @@
+     if (item.turnId) projected.turnId = item.turnId;
+     return projected;
+   });
++  return transformed[0]?.preserveSource === true ? [item, ...decorations] : decorations;
+ }
+
+ export function projectPluginTimelineItems(
+diff --git a/packages/app/src/plugins/timeline/projection.test.ts b/packages/app/src/plugins/timeline/projection.test.ts
+--- a/packages/app/src/plugins/timeline/projection.test.ts
++++ b/packages/app/src/plugins/timeline/projection.test.ts
+@@ -14,6 +14,37 @@
+ }
+
+ describe("plugin timeline projection", () => {
++  it("keeps the native reply before a decoration bound to its canonical position", () => {
++    const source: StreamItem = {
++      kind: "assistant_message",
++      id: "reply-row",
++      messageId: "reply-message",
++      text: "Original **reply**",
++      timestamp: new Date("2026-01-01T00:00:00.000Z"),
++      timelineCursor: { epoch: "live-epoch", seq: 7 },
++    };
++    const decorate: TimelineItemTransform = ({ timelineCursor, phase }) =>
++      phase === "complete" && timelineCursor
++        ? [{
++            type: "plugin",
++            id: "reply-row/0",
++            pluginId: "ltcook",
++            kind: "clarify-reply",
++            version: 1,
++            preserveSource: true,
++            data: timelineCursor,
++          }]
++        : undefined;
++    const [reply, decoration] = projectPluginTimelineItems([source], decorate);
++    expect(reply).toBe(source);
++    expect(decoration).toMatchObject({
++      sourceId: source.id,
++      sourceKind: "assistant_message",
++      data: { epoch: "live-epoch", seq: 7 },
++    });
++    expect(projectPluginTimelineItems([source], decorate, "streaming")).toEqual([source]);
++  });
++
+   it.each(["message", "finished", "errored", "permission-required", "closed"] as const)(
+     "preserves immutable agent-message provenance for %s cards",
+     (event) => {

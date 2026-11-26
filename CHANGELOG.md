@@ -47,6 +47,32 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- **Clarify** in the bundled Paseo web app rewrites an individual completed
+  reply on demand and saves the result against that exact source.
+- **Tracked Items** in the Explorer sidebar maintains a conversation-specific
+  notebook with configurable Trackers, original evidence, manual editing,
+  and extraction coverage.
+
+- Workspace Organizer maintains the standard Feature, Bugfix, CSC, and Research
+  labels in blue, red, amber, and violet. It classifies new workspaces and
+  rechecks changed workspaces every 12 hours, preserving other labels, with one
+  bounded retry when content changes during the first classification.
+  Its optional 14-day archive policy protects pinned workspaces, active or
+  pending work, and incomplete activity. Automatic archival preserves working
+  directories and skips project teardown, including for Paseo-owned worktrees.
+
+- Renamer refreshes changed workspace and agent-session titles at most every
+  30 minutes, with limits of 20 and 15 visible characters respectively. Global
+  AppRC switches independently control workspace renaming, agent-tab renaming,
+  and automatic archival. Both services run in the existing runtime and use
+  `@tiny` only for category and title proposals. Read-only cards in
+  **Activity → Services** show their status and archive-protection diagnostics.
+
+- The glossary and shared agent instructions distinguish Paseo projects,
+  workspaces, sessions, tabs, and AppRC workspaces. The documented default is one
+  main user-facing session per Paseo workspace, with supporting tabs and extra
+  sessions when useful.
+
 - LTCook guides agents to prefer its web search and source-reading tools when
   available, with a fallback for missing capabilities or incomplete evidence.
 
@@ -69,8 +95,11 @@ All notable changes to `ltcook` will be documented in this file.
   **Stored for this agent** to inspect summary timings, token estimates, and
   source positions. The **Stored Summaries** tab shows the storage path and
   syntax-colored JSON with clipboard export. **Show summary** in the chat
-  reveals the passage summary and can open its complete entry. The Session
-  Memory card shows live tokens per second during generation.
+  reveals the passage summary and can open its complete entry. Redo that
+  passage from the chat, or choose a stored summary in Activity to rebuild it
+  and all later summaries. The expanded chat summary also has **Hide summary**
+  at the bottom. The Session Memory card shows live tokens per second during
+  generation.
 
 - Activity links individual tool and skill occurrences to their chat rows in
   LTCook's Paseo web app. The details header opens skill documents in a workspace
@@ -380,6 +409,11 @@ All notable changes to `ltcook` will be documented in this file.
 <br>
 
 ### 🔥 Removed
+
+- **Breaking:** 💥 Continuous Session Memory summaries and redo controls
+  are replaced by Clarify and Tracker. Fresh stores hold deterministic
+  conversation evidence and product state. Native Paseo history and pasted
+  attachments remain available. Delegation uses authorized originals.
 
 <br>
 

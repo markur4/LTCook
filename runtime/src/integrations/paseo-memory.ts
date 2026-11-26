@@ -4,7 +4,7 @@ import {
   MemoryHistoryUnavailableError,
   type MemoryCursor,
   type MemorySource,
-} from '../session-memory/service.js';
+} from '../session-memory/conversation.js';
 import type { MemorySourceMessage } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import { readMemoryMessages } from '../paseo-plugin/server/memory-source.js';
@@ -51,13 +51,13 @@ export function createPaseoMemorySource(
           event.type === 'replacement' ||
           event.type === 'subscription_restored' ||
           (event.type === 'timeline' &&
-            event.item.type === 'tool_call' &&
-            event.item.status !== 'running')
+            (event.item.type === 'user_message' ||
+              (event.item.type === 'tool_call' && event.item.status !== 'running')))
         )
           notify();
       });
       void unsubscribe.ready.catch(() => {});
-      return unsubscribe;
+      return () => unsubscribe.release();
     },
     async read(agentId: string, cursor?: MemoryCursor, direction = 'after') {
       const timeline = api.agents.ref(agentId).timeline;

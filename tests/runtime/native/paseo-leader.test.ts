@@ -119,50 +119,22 @@ test('missing Team selection fails before opening native LTCook', async () => {
   ).toBeUndefined();
 });
 
-test('anchors summary shortcuts to each completed turn and current timeline epoch', async () => {
+test('records native turn receipts independently of timeline decoration', async () => {
   const hook = hooks()('agent.turn.after');
   process.env.LTCOOK_RUNTIME_API_URL = 'http://runtime.invalid';
   process.env.LTCOOK_RUNTIME_USER_TOKEN = 'server-secret';
-  globalThis.fetch = (async () => Response.json({ memoryEnabled: true })) as typeof fetch;
-  let epoch = 'before-rewind';
-  let resetBefore = false;
-  const appended: Array<{
-    id: string;
-    type: string;
-    kind: string;
-    version: number;
-    data: unknown;
-  }> = [];
-  const earlier = [
-    { seqEnd: 4, turnId: 'previous', item: { type: 'assistant_message', text: 'Earlier' } },
-    { seqEnd: 6, turnId: 'turn', item: { type: 'user_message', text: 'First prompt' } },
-  ];
-  const tail = [
-    { seqEnd: 8, turnId: 'turn', item: { type: 'assistant_message', text: 'First response' } },
-    {
-      seqEnd: 9,
-      turnId: 'turn',
-      item: { type: 'tool_call', status: 'completed', detail: { type: 'unknown' } },
-    },
-    { seqEnd: 10, turnId: 'another', item: { type: 'user_message', text: 'Second prompt' } },
-    { seqEnd: 11, turnId: 'another', item: { type: 'assistant_message', text: 'Second response' } },
-    { seqEnd: 12, turnId: 'another', item: { type: 'assistant_message', text: ' ' } },
-  ];
+  const receipts: unknown[] = [];
+  globalThis.fetch = (async (_url, options) => {
+    receipts.push(JSON.parse(String(options?.body)));
+    return Response.json({});
+  }) as typeof fetch;
+  let appended = 0;
   const timeline = {
-    async append(row: (typeof appended)[number]) {
-      appended.push(row);
-      return { epoch };
+    async append() {
+      appended++;
     },
-    async refetch({ direction }: { direction: 'tail' | 'before' }) {
-      const before = direction === 'before';
-      return {
-        epoch,
-        agent: { archivedAt: null },
-        startCursor: { epoch, seq: before ? 4 : 8 },
-        hasOlder: !before,
-        reset: before && resetBefore,
-        entries: before ? earlier : [...tail, ...appended.map((item) => ({ item }))],
-      };
+    async refetch() {
+      return { epoch: 'rewound', agent: { archivedAt: null }, reset: true, entries: [] };
     },
   };
   const context = {
@@ -185,35 +157,12 @@ test('anchors summary shortcuts to each completed turn and current timeline epoc
     timeline: [],
   };
   await hook(turn, context);
-  await hook(turn, context);
   await hook({ ...turn, turnId: 'another' }, context);
-  expect(appended).toEqual([
-    {
-      type: 'plugin',
-      id: 'memory-summaries:turn',
-      kind: 'memory-summaries',
-      version: 1,
-      data: { passage: { epoch, start: 6, position: 9, turnId: 'turn' } },
-    },
-    {
-      type: 'plugin',
-      id: 'memory-summaries:another',
-      kind: 'memory-summaries',
-      version: 1,
-      data: { passage: { epoch, start: 10, position: 11, turnId: 'another' } },
-    },
+  expect(receipts).toEqual([
+    { nativeAgentId: 'native-leader', turnId: 'turn', outcome: 'completed' },
+    { nativeAgentId: 'native-leader', turnId: 'another', outcome: 'completed' },
   ]);
-  epoch = 'after-rewind';
-  resetBefore = true;
-  await hook(turn, context);
-  expect(appended).toHaveLength(2);
-  resetBefore = false;
-  await hook(turn, context);
-  expect(appended).toHaveLength(3);
-  expect(appended[2]).toMatchObject({
-    id: 'memory-summaries:turn',
-    data: { passage: { epoch, start: 6, position: 9, turnId: 'turn' } },
-  });
+  expect(appended).toBe(0);
 });
 
 test('a real turn fails before inference when native initialization is unavailable', async () => {
