@@ -2,21 +2,40 @@ import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { WorkspacePreparationCache } from '../../../runtime/src/integrations/workspace-preparation.js';
+import {
+  WorkspacePreparationCache,
+  type NativeInputGuard,
+} from '../../../runtime/src/integrations/workspace-preparation.js';
 import { createPaseoAgentBackend } from '../../../runtime/src/integrations/paseo.js';
 import team from '@ltcook/team-default-minimal';
 
 const sha256 = (content: string) => createHash('sha256').update(content).digest('hex');
+
+function inputGuard(file: string): NativeInputGuard {
+  const stat = lstatSync(file, { bigint: true });
+  return {
+    identity: [
+      String(stat.dev),
+      String(stat.ino),
+      String(stat.mode),
+      String(stat.uid),
+      String(stat.gid),
+    ],
+    version: [String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)],
+  };
+}
 
 test('workspace preparation is shared concurrently and invalidated by input and output changes', async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'ltcook-preparation-'));
@@ -35,6 +54,7 @@ test('workspace preparation is shared concurrently and invalidated by input and 
       dependencies: [workspace, config, optional, generated],
       identityPaths: [],
       outputHashes: {},
+      inputGuards: {},
       reusable: true,
     });
     const [one, two] = await Promise.all([
@@ -103,8 +123,9 @@ test.skipIf(process.platform === 'win32')(
             PATH: process.env.PATH,
           },
           dependencies: [dependency, models, web],
-          identityPaths: [],
+          identityPaths: [dependency],
           outputHashes: { [models]: sha256('{}'), [web]: sha256('{}') },
+          inputGuards: { [dependency]: inputGuard(dependency) },
           reusable: true,
         }),
       );
@@ -149,6 +170,7 @@ test.skipIf(process.platform === 'win32')(
       writeFileSync(dependency, 'two');
       const changedResponse = JSON.parse(readFileSync(response, 'utf8'));
       changedResponse.environment.LTCOOK_MODEL_SMART = 'fixture/updated-model';
+      changedResponse.inputGuards[dependency] = inputGuard(dependency);
       writeFileSync(response, JSON.stringify(changedResponse));
       expect((await backend.prepare(options, 'three')).model.model).toBe('updated-model');
       const reopened = await backend.prepare(options, 'one', first.model);
@@ -205,6 +227,7 @@ test('ordered preparation continues after a rejected asynchronous writer', async
       dependencies: [],
       identityPaths: [],
       outputHashes: {},
+      inputGuards: {},
       reusable: true,
     };
   };
@@ -227,6 +250,7 @@ test('shutdown rejects active and queued workspace preparations', async () => {
     dependencies: [],
     identityPaths: [],
     outputHashes: {},
+    inputGuards: {},
     reusable: true,
   });
   const active = cache.get('first', async () => {
@@ -258,6 +282,7 @@ test('completed preparations evict the least recently reused entry', async () =>
     dependencies: [],
     identityPaths: [],
     outputHashes: {},
+    inputGuards: {},
     reusable: true,
   });
   const first = await cache.get('first', prepare);
@@ -280,6 +305,7 @@ test('preparation refuses to pair fresh configuration with replaced outputs', as
         dependencies: [output],
         identityPaths: [],
         outputHashes: { [output]: sha256(content) },
+        inputGuards: {},
         reusable: true,
       };
     };
@@ -295,6 +321,67 @@ test('preparation refuses to pair fresh configuration with replaced outputs', as
     expect(
       (await cache.get('workspace', () => publish('third publication'))).environment.MODEL,
     ).toBe('third publication');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unchanged-size source edit after resolution prevents stale cache publication', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ltcook-preparation-source-'));
+  try {
+    const source = path.join(root, 'workspace.env');
+    writeFileSync(source, 'first');
+    utimesSync(source, 1_700_000_000, 1_700_000_000);
+    const prepare = () => ({
+      environment: { MODEL: readFileSync(source, 'utf8') },
+      dependencies: [source],
+      identityPaths: [source],
+      outputHashes: {},
+      inputGuards: { [source]: inputGuard(source) },
+      reusable: true,
+    });
+    const cache = new WorkspacePreparationCache();
+    const first = await cache.get('workspace', () => {
+      const resolved = prepare();
+      writeFileSync(source, 'later');
+      utimesSync(source, 1_700_000_001, 1_700_000_001);
+      return resolved;
+    });
+    expect(first.environment.MODEL).toBe('first');
+    const current = await cache.get('workspace', prepare);
+    expect(current.environment.MODEL).toBe('later');
+    writeFileSync(source, 'later');
+    expect(await cache.get('workspace', prepare)).toBe(current);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a missing source marker that briefly appears prevents cache publication', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ltcook-preparation-missing-'));
+  try {
+    const marker = path.join(root, 'workspace.env');
+    utimesSync(root, 1_700_000_000, 1_700_000_000);
+    const prepare = (model: string) => ({
+      environment: { MODEL: model },
+      dependencies: [marker],
+      identityPaths: [root, marker],
+      outputHashes: {},
+      inputGuards: { [root]: inputGuard(root), [marker]: null },
+      reusable: true,
+    });
+    const cache = new WorkspacePreparationCache();
+    const first = await cache.get('workspace', () => {
+      const resolved = prepare('former');
+      writeFileSync(marker, 'transient');
+      rmSync(marker);
+      utimesSync(root, 1_700_000_001, 1_700_000_001);
+      return resolved;
+    });
+    expect(first.environment.MODEL).toBe('former');
+    const current = await cache.get('workspace', () => prepare('current'));
+    expect(current.environment.MODEL).toBe('current');
+    expect(await cache.get('workspace', () => prepare('unexpected'))).toBe(current);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -320,6 +407,7 @@ test('installation authority, ownership and parent permissions invalidate native
         dependencies: [authority, ownership],
         identityPaths: [root],
         outputHashes: {},
+        inputGuards: {},
         reusable: true,
       };
     };
@@ -352,6 +440,7 @@ test('unrepresentable AppRC guards force resolution for every caller', async () 
     dependencies: [],
     identityPaths: [],
     outputHashes: {},
+    inputGuards: null,
     reusable: false,
   });
   const [first, second] = await Promise.all([
@@ -376,6 +465,7 @@ test('an invalid old dependency path falls back to fresh preparation', async () 
       dependencies: calls === 1 ? [dependency] : [],
       identityPaths: [],
       outputHashes: {},
+      inputGuards: {},
       reusable: true,
     });
     await cache.get('session', prepare);
@@ -403,6 +493,7 @@ test.skipIf(process.platform === 'win32')(
         dependencies: [],
         identityPaths: [linked],
         outputHashes: {},
+        inputGuards: {},
         reusable: true,
       });
       await cache.get('session', prepare);

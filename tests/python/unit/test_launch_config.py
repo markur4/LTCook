@@ -38,11 +38,22 @@ def test_native_preparation_reports_configuration_inputs_and_outputs(
     }
     monkeypatch.setenv("LTCOOK_SHELL_PROVENANCE", json.dumps(shell))
     config = APP_RC.paths(environment=shell).require("config")
+    resolve_launch = launch.resolve_launch
+    resolutions = 0
+
+    def resolve_once(*args, **kwargs):
+        nonlocal resolutions
+        resolutions += 1
+        return resolve_launch(*args, **kwargs)
+
+    monkeypatch.setattr(launch, "resolve_launch", resolve_once)
     launch.prepare_native_command(project)
     result = json.loads(capsys.readouterr().out)
     inputs = set(result["dependencies"])
     assert str(project) in result["identityPaths"]
     assert result["reusable"] is False
+    assert result["inputGuards"] is None
+    assert resolutions == 1
     marker = project / APP_RC.schema.workspace_dotenv_filename
     assert str(marker) in inputs
     assert str(marker.with_name(f"{marker.stem}.secret{marker.suffix}")) in inputs
@@ -105,6 +116,70 @@ def test_native_preparation_tracks_installed_authority_and_disables_unknown_guar
     inaccessible = launch.NativePreparationInputs()
     inaccessible.capture(replace(installed, layers=(resource,)))
     assert inaccessible.reusable is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Installed source reuse requires POSIX")
+@pytest.mark.parametrize("edit_during_resolution", [False, True])
+def test_native_preparation_attests_the_second_configuration_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    edit_during_resolution: bool,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
+    workspace.mkdir()
+    source = workspace / "workspace.env"
+    optional = workspace / "workspace.secret.env"
+    source.write_text("first", encoding="utf-8")
+    deployment = tmp_path / "deployment"
+    resolutions = 0
+
+    def resolved_launch(
+        requested: Path,
+        *,
+        original_environment,
+        preparation_inputs: launch.NativePreparationInputs,
+    ) -> launch.LaunchConfig:
+        nonlocal resolutions
+        resolutions += 1
+        assert requested == workspace
+        value = source.read_text(encoding="utf-8")
+        preparation_inputs.dependencies.update((source, optional))
+        preparation_inputs.identity_paths.add(workspace)
+        if resolutions == 1:
+            source.write_text("newer", encoding="utf-8")
+            os.utime(source, (1_700_000_000, 1_700_000_000))
+        elif edit_during_resolution:
+            source.write_text("later", encoding="utf-8")
+            os.utime(source, (1_700_000_001, 1_700_000_001))
+        return launch.LaunchConfig(
+            {
+                "LTCOOK_DEPLOYMENT_DIR": str(deployment),
+                "PI_CODING_AGENT_DIR": str(deployment / "pi"),
+                "LTCOOK_MODEL_SMART": value,
+            },
+            _native_config(),
+            workspace,
+        )
+
+    monkeypatch.setattr(launch, "resolve_launch", resolved_launch)
+    launch.prepare_native_command(workspace)
+    result = json.loads(capsys.readouterr().out)
+    assert resolutions == 2
+    assert result["environment"]["LTCOOK_MODEL_SMART"] == "newer"
+    assert result["reusable"] is not edit_during_resolution
+    if edit_during_resolution:
+        assert result["inputGuards"] is None
+    else:
+        guards = result["inputGuards"]
+        assert guards[str(optional)] is None
+        for guarded in (source, workspace):
+            observed = guarded.lstat()
+            assert guards[str(guarded)]["version"] == [
+                str(observed.st_size),
+                str(observed.st_mtime_ns),
+                str(observed.st_ctime_ns),
+            ]
 
 
 def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
@@ -565,6 +640,7 @@ def test_native_preparation_discards_reuse_after_waiting_for_shared_writer(
         original_environment,
         preparation_inputs: launch.NativePreparationInputs,
     ) -> launch.LaunchConfig:
+        preparation_inputs.identity_paths.add(workspace)
         return launch.LaunchConfig(
             {
                 "LTCOOK_DEPLOYMENT_DIR": str(deployment),

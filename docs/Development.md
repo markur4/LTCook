@@ -118,10 +118,11 @@ Native workspace preparation calls AppRC asynchronously from
 workspace entries and checks recorded dependency fingerprints and generated
 output hashes before reuse. The shared Python writer in
 `src/ltcook/config/pi_config.py` serializes updates by canonical Pi home for
-native, web, and CLI callers. When preparation waits for the lock, the next
-request resolves configuration again. The runtime takes its first dependency
-fingerprint after AppRC reads the inputs, so an edit between those steps can
-escape invalidation.
+native, web, and CLI callers. For reusable installations, AppRC first discovers
+the input paths, then resolves settings again after the helper captures their
+file versions. The runtime verifies those versions and the generated outputs
+before caching the result. An input change during preparation or a wait for the
+writer lock makes the next request resolve configuration again.
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,

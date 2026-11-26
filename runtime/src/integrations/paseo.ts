@@ -32,12 +32,24 @@ import { WorkspacePreparationCache, type WorkspacePreparation } from './workspac
 import { connectIdleRestart, type IdleRestartReservation } from './paseo-idle-restart.js';
 
 const exec = promisify(execFile);
+const exactStatNumber = z.string().regex(/^-?\d{1,24}$/);
+const nativeInputGuard = z.object({
+  identity: z.tuple([
+    exactStatNumber,
+    exactStatNumber,
+    exactStatNumber,
+    exactStatNumber,
+    exactStatNumber,
+  ]),
+  version: z.tuple([exactStatNumber, exactStatNumber, exactStatNumber]).optional(),
+});
 const workspacePreparationResponse = z.object({
   workspaceRoot: z.string(),
   environment: z.record(z.string(), z.string()),
   dependencies: z.array(z.string()),
   identityPaths: z.array(z.string()),
   outputHashes: z.record(z.string(), z.string().regex(/^[0-9a-f]{64}$/)),
+  inputGuards: z.record(z.string(), nativeInputGuard.nullable()).nullable(),
   reusable: z.boolean(),
 });
 
@@ -59,6 +71,19 @@ function readWorkspacePreparation(response: unknown, workspaceRoot: string): Wor
       !preparation.dependencies.includes(output)
     )
       throw new Error('AppRC did not report the generated Pi configuration');
+  }
+  const { inputGuards, dependencies, identityPaths, outputHashes } = preparation;
+  if (preparation.reusable) {
+    const guarded = Object.keys(inputGuards ?? {});
+    if (
+      inputGuards === null ||
+      guarded.length === 0 ||
+      guarded.some((file) => !path.isAbsolute(file) || !identityPaths.includes(file)) ||
+      dependencies.some(
+        (file) => !Object.hasOwn(outputHashes, file) && !Object.hasOwn(inputGuards, file),
+      )
+    )
+      throw new Error('AppRC did not attest the workspace preparation inputs');
   }
   return preparation;
 }

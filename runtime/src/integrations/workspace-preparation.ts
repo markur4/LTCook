@@ -3,11 +3,17 @@ import { constants, type Stats } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
+export type NativeInputGuard = {
+  identity: [string, string, string, string, string];
+  version?: [string, string, string];
+};
+
 export type WorkspacePreparation = {
   environment: Record<string, string>;
   dependencies: string[];
   identityPaths: string[];
   outputHashes: Record<string, string>;
+  inputGuards: Record<string, NativeInputGuard | null> | null;
   reusable: boolean;
 };
 
@@ -17,11 +23,15 @@ function identity(stat: Stats): string {
   return JSON.stringify([stat.mode, stat.size, stat.dev, stat.ino, stat.uid, stat.gid]);
 }
 
+function isMissing(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
 async function statOrMissing(file: string): Promise<Stats | undefined> {
   try {
     return await lstat(file);
   } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+    if (isMissing(error)) return undefined;
     throw error;
   }
 }
@@ -56,6 +66,27 @@ async function outputHomeMatches(preparation: WorkspacePreparation): Promise<boo
   if (file === undefined) return true;
   const home = preparation.environment.PI_CODING_AGENT_DIR;
   return home !== undefined && path.relative(path.dirname(file), await realpath(home)) === '';
+}
+
+async function inputGuardsMatch(guards: WorkspacePreparation['inputGuards']): Promise<boolean> {
+  if (guards === null) return false;
+  for (const [file, guard] of Object.entries(guards)) {
+    try {
+      const stat = await lstat(file, { bigint: true });
+      if (guard === null) return false;
+      const identity = [stat.dev, stat.ino, stat.mode, stat.uid, stat.gid];
+      if (!identity.every((value, index) => String(value) === guard.identity[index])) return false;
+      const requiredVersion = guard.version;
+      if (requiredVersion) {
+        const version = [stat.size, stat.mtimeNs, stat.ctimeNs];
+        if (!version.every((value, index) => String(value) === requiredVersion[index]))
+          return false;
+      }
+    } catch (error) {
+      if (guard !== null || !isMissing(error)) return false;
+    }
+  }
+  return true;
 }
 
 async function fingerprint(preparation: WorkspacePreparation): Promise<string | undefined> {
@@ -141,11 +172,13 @@ export class WorkspacePreparationCache {
     const preparation = await prepare();
     signal?.throwIfAborted();
     const observed = preparation.reusable ? await fingerprint(preparation) : undefined;
-    const published = observed !== undefined || (await outputsMatch(preparation));
+    // > The fingerprint may have observed newer bytes than AppRC resolved.
+    const attested = observed !== undefined && (await inputGuardsMatch(preparation.inputGuards));
+    const published = await outputsMatch(preparation);
     signal?.throwIfAborted();
     if (!published)
       throw new Error('AppRC workspace preparation outputs changed. Retry preparation.');
-    if (observed !== undefined) {
+    if (observed !== undefined && attested) {
       this.entries.set(key, { preparation, fingerprint: observed });
       if (this.entries.size > maxEntries) {
         const oldest = this.entries.keys().next().value;

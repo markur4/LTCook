@@ -312,6 +312,7 @@ export const sessionMemoryEditCases: readonly EditCase[] = [
           dependencies: [dependency],
           identityPaths: [identity],
           outputHashes: {},
+          inputGuards: {},
         }));
       const initial = await get();
       await replace(dependency, 'v1');
