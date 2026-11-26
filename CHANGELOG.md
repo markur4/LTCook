@@ -47,6 +47,26 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- Workspace Organizer maintains the standard Feature, Bugfix, CSC, and Research
+  labels in blue, red, amber, and violet. It classifies new workspaces and
+  rechecks changed workspaces every 12 hours, preserving other labels, with one
+  bounded retry when content changes during the first classification.
+  Its optional 14-day archive policy protects pinned workspaces, active or
+  pending work, and incomplete activity. Automatic archival preserves working
+  directories and skips project teardown, including for Paseo-owned worktrees.
+
+- Renamer refreshes changed workspace and agent-session titles at most every
+  30 minutes, with limits of 20 and 15 visible characters respectively. Global
+  AppRC switches independently control workspace renaming, agent-tab renaming,
+  and automatic archival. Both services run in the existing runtime and use
+  `@tiny` only for category and title proposals. Read-only cards in
+  **Activity → Services** show their status and archive-protection diagnostics.
+
+- The glossary and shared agent instructions distinguish Paseo projects,
+  workspaces, sessions, tabs, and AppRC workspaces. The documented default is one
+  main user-facing session per Paseo workspace, with supporting tabs and extra
+  sessions when useful.
+
 - LTCook guides agents to prefer its web search and source-reading tools when
   available, with a fallback for missing capabilities or incomplete evidence.
 

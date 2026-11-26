@@ -8,9 +8,11 @@ import { fileURLToPath } from 'node:url';
 const version = '0.16.0-beta.2';
 const revision = '23bae61535542a45ade7196a7b3c152705f16de3';
 const archiveSha256 = '9bf1a5088b85057aea7038497d00e39305385c9ed56581d60247e7752184c15a';
-const patches = ['timeline-navigation.patch', 'session-worktrees.patch'].map(
-  (name) => new URL(name, import.meta.url),
-);
+const patches = [
+  'timeline-navigation.patch',
+  'session-worktrees.patch',
+  'workspace-activity.patch',
+].map((name) => new URL(name, import.meta.url));
 const stampName = 'ltcook-paseo-build.json';
 const defaultOutput = fileURLToPath(new URL('../runtime/dist/paseo-web', import.meta.url));
 

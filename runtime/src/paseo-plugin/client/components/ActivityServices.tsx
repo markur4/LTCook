@@ -20,6 +20,7 @@ import {
   statusLabel,
 } from './ActivityCard';
 import { Action, type Theme } from './PanelChrome';
+import { WorkspaceServices } from './WorkspaceServices';
 
 const ragAvailabilityTones = {
   ready: 'success',
@@ -811,6 +812,7 @@ export function ActivityServices({
           </ActivityText>
         )}
       </ActivityCard>
+      <WorkspaceServices theme={theme} />
     </>
   );
 }

@@ -29,6 +29,7 @@ import { readPaseoMemoryEvidence, readPaseoMemoryPassage } from './server/memory
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
 import { SessionWorktreesSchema, sessionWorktreesSubscription } from './shared/session-worktrees';
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
+import { workspaceActivityRpc, workspaceServicesRpc } from './shared/workspace-services';
 import {
   ModelCatalogRequestSchema,
   ModelCatalogResponseSchema,
@@ -364,6 +365,12 @@ const activityServices = z.object({
 });
 
 export default function contribute(server: PluginServerContext) {
+  server.handle(workspaceActivityRpc, async (input) =>
+    workspaceActivityRpc.output.parse(await runtimeJson('/v1/activity/workspace-touch', input)),
+  );
+  server.handle(workspaceServicesRpc, async (input) =>
+    workspaceServicesRpc.output.parse(await runtimeJson('/v1/activity/workspace-services', input)),
+  );
   server.handle(activityToggleRpc, async (input) =>
     activityToggleRpc.output.parse(await runtimeJson('/v1/activity/toggle', input)),
   );

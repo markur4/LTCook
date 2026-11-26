@@ -18,11 +18,13 @@
   - [Pi and Paseo](#pi-and-paseo)
   - [Pi authentication](#pi-authentication)
   - [Domain terminology](#domain-terminology)
+    - [Paseo and AppRC terminology](#paseo-and-apprc-terminology)
   - [Interchangeable teams](#interchangeable-teams)
   - [Guidance and planning](#guidance-and-planning)
     - [Instruction sources in Codex and Pi](#instruction-sources-in-codex-and-pi)
   - [Context-aware Session Memory](#context-aware-session-memory)
   - [Coordination and recovery](#coordination-and-recovery)
+  - [Workspace Organizer and Renamer](#workspace-organizer-and-renamer)
   - [Web services and diagnostics](#web-services-and-diagnostics)
 
 This page explains LTCook's configuration boundary and its native agent runtime.
@@ -60,7 +62,8 @@ installation receipt cannot enable an undeclared path.
 
 Config sections group settings by component and environment prefix. The
 [`LtcookConfig`](../src/ltcook/config/bundle.py) exposes `app`, `runtime`,
-`paseo`, `pi`, provider sections (`anthropic`, `openai`, `google`, `openrouter`),
+`paseo`, `pi`, `workspace_organizer`, `renamer`, provider sections
+(`anthropic`, `openai`, `google`, `openrouter`),
 `context7`, `agent_browser`, and web-service sections (`web`, `searxng`,
 `crawl4ai`, `podman`, `container`, `playwright`). The native environment names
 remain those declared by each field; for example, `LtcookConfig` exposes
@@ -238,7 +241,9 @@ WebSocket password.
 
 ## Domain terminology
 
-These terms describe work, not ten separate workflow engines or database tables:
+These LTCook terms describe work, not ten separate workflow engines or database
+tables. Qualify Project and Workspace with the component name when discussing
+Paseo or AppRC; their meanings differ as described [below](#paseo-and-apprc-terminology).
 
 | Term | Meaning |
 | --- | --- |
@@ -281,6 +286,39 @@ The fix phases identify what prompted a correction: `review-fix` addresses revie
 findings, `verification-fix` addresses check failures, `integration-fix` resolves
 integration differences, and `system-fix` addresses a failure observed in the
 running system. These classifications do not grant approval or bypass review.
+
+### Paseo and AppRC terminology
+
+| Term | Meaning |
+| --- | --- |
+| Paseo project | A registered root and sidebar grouping, usually a repository, containing Paseo workspaces. An ordinary directory can also be a project. |
+| Paseo workspace | A task container within a Paseo project. It references a working directory and can contain several agent sessions and supporting tabs. |
+| Agent session | One agent's native conversation history, identity, and runtime state. An LTCook Session can bind several native agent sessions, including its Leader and supporting Team members. |
+| Tab | A view inside a Paseo workspace, such as an agent or subagent conversation, terminal, browser, file, or diff. A tab is not necessarily an agent session. |
+| Working directory | The filesystem directory used by a workspace or process. Several Paseo workspaces can share it. |
+| Git worktree | An optional separate Git checkout with its own working directory. It isolates files; creating a Paseo workspace does not inherently require creating a worktree. |
+| Host | The computer running a Paseo daemon and its agent sessions. Choose the host for the work; a project has no LTCook-assigned preferred host. |
+| AppRC workspace | A selected working directory and its configuration scope. Registration can give that root a name and saved selection. This is not a Paseo workspace container. |
+
+When AppRC selects a repository root, **the Paseo project's root and the AppRC
+workspace's root are the same directory**. This is the common shorthand behind
+“Paseo Project = AppRC Workspace”. It is not a universal identity: AppRC can
+select a worktree directory instead, and several Paseo workspaces can share one
+selected root. LTCook's logical Project and Session remain the concepts in the
+table above.
+
+The organizational default is **one Paseo workspace = one main user-facing
+session**, with additional sessions when useful. Keep related subagents and
+supporting views, such as plans, files, diffs, and summaries, in that workspace's
+tabs. This is a working convention, not a session limit or an automatic
+worktree-creation rule. A separate worktree follows the work's isolation needs
+and the Pass checkout policy above.
+
+See Paseo's [workspaces](https://paseo.sh/docs/workspaces) and
+[worktrees](https://paseo.sh/docs/worktrees) documentation, and AppRC's
+[workspace explanation](https://github.com/HisQu/apprc/blob/main/docs/Explanations.md#workspaces).
+LTCook's [workspace terminology rule](../runtime/resources/rules/workspace-terminology.md)
+supplies the same distinction to ordinary Paseo agents and managed Team members.
 
 ## Interchangeable teams
 
@@ -340,7 +378,7 @@ authorization fails closed at the native tool and API boundaries.
 | --- | --- | --- |
 | Project and shared skills | The repository's [`AGENTS.md`](../AGENTS.md) points to [`CONTRIBUTING.md`](../CONTRIBUTING.md) and the development guides. Native loaders discover project skills and shared user skills from `~/.agents/skills`. A skill's instructions live in its `SKILL.md` and linked references. | Both harnesses, according to their native discovery and trust rules. |
 | Codex user guidance and overrides | Codex reads `AGENTS.md` or `AGENTS.override.md` in its home (usually `~/.codex`), then the applicable project instructions from the repository root through the launch directory. Codex resolves native command permissions from inputs including `config.toml` and the active session. | Standalone Codex and ordinary Codex in Paseo. |
-| Paseo launch and LTCook workspace tools | LTCook's [Paseo integration](../runtime/src/integrations/paseo.ts) supplies `daemon.appendSystemPrompt` for workspace-tool usage. Paseo's Codex adapter starts `codex app-server` and forwards launch guidance in `developerInstructions` along with mode overrides. The [LTCook plugin](../runtime/src/paseo-plugin/index.server.ts) attaches scoped workspace tools. | The daemon prompt and plugin apply to ordinary chats in LTCook's Paseo host. Codex resolves and enforces its command permissions. |
+| Paseo launch and LTCook workspace tools | LTCook's [Paseo integration](../runtime/src/integrations/paseo.ts) supplies `daemon.appendSystemPrompt` for workspace terminology and workspace-tool usage. Paseo's Codex adapter starts `codex app-server` and forwards launch guidance in `developerInstructions` along with mode overrides. The [LTCook plugin](../runtime/src/paseo-plugin/index.server.ts) attaches scoped workspace tools. | The daemon prompt and plugin apply to ordinary chats in LTCook's Paseo host. Codex resolves and enforces its command permissions. |
 | Managed Pi guidance | [`NativeGuidance`](../runtime/src/integrations/native-guidance.ts) composes [Core rules and skills](../runtime/resources/catalog.json), the selected Team's `definition.resources` filtered by member, and AppRC User guidance from `guidance/rules` and `guidance/skills`. The [Pi RPC integration](../runtime/src/integrations/pi-rpc.ts) passes these to Pi's native loader alongside native project guidance. | Managed LTCook Team sessions in Pi. The [guidance inspector](References.md#guidance-api) shows applicable and loaded resources. |
 | Managed workflow state | The [Pass scheduler](../runtime/src/core/pass-scheduler.ts) dispatches declared Tasks with acceptance criteria and checks dependencies and recorded user approvals. The [Pi tool-call hook](../runtime/src/integrations/pi-extension.ts) requests runtime authorization for guarded native tools. | Managed LTCook Team sessions in Pi. |
 
@@ -524,6 +562,86 @@ through the AAB's reference to the initiating instruction.
 Rewind invalidates affected summaries and receipts that were tied to the
 replaced history. The runtime rebuilds from authorized original messages.
 Paseo still owns the original conversation and the native lifecycle metadata.
+
+## Workspace Organizer and Renamer
+
+Workspace Organizer and Renamer run inside LTCook's existing runtime on each
+Paseo host. They use the host's native workspace and agent records. Their
+[AppRC settings](References.md#workspace-service-settings) are global to that
+installation; project overrides cannot change the host's policy. Both services
+start enabled and resume their persisted schedules when the runtime starts.
+
+Workspace Organizer maintains four standard native Paseo labels:
+
+| Label | Color | Purpose |
+| --- | --- | --- |
+| Feature | Blue | Add or change intended behavior. |
+| Bugfix | Red | Correct unintended behavior. |
+| CSC | Amber | Clean up code structure while preserving intended behavior. |
+| Research | Violet | Investigate a question, compare options, or develop a design. |
+
+It chooses one of these labels when a workspace first has conversation content.
+After that it checks classification every 12 hours, and only when conversation
+content or the observed Git revision has changed. If the first valid proposal
+becomes stale while the conversation changes, it may retry once after at least
+60 seconds while the workspace is idle. That retry keeps the original 12-hour
+deadline. It preserves other labels. Renaming or relabeling a workspace does not
+trigger another classification. The labels use
+Paseo's existing label and filter controls; they do not create directories or
+another sidebar hierarchy. Paseo's native default places newly created
+workspaces first within a project. Existing client sorting preferences remain
+in effect.
+
+Renamer proposes a workspace title and agent-session titles from conversation
+content. Its first eligible update runs without waiting 30 minutes; subsequent
+updates are at least 30 minutes apart and require changed content. A workspace
+revision includes conversation and observed Git changes; each agent title follows
+that agent's conversation. Titles are limited to 20 visible characters for a
+workspace and 15 for an agent tab, counted
+as Unicode grapheme clusters. Workspace and agent-tab renaming have independent
+switches. Supporting file, diff, terminal, browser, and native provider-subagent
+views retain their native titles.
+
+Both services ask the configured `@tiny` model with low reasoning for bounded
+label or title proposals from conversation excerpts. They do not read project
+file contents into the model prompt. These are independent inference requests
+without a persistent helper chat. The runtime owns schedules, validates the
+proposals, rechecks the target, and applies native updates. An unsuccessful model
+request leaves the current labels or titles in place. Deterministic inactivity and archive
+decisions do not require a model.
+
+Workspace Organizer can archive a workspace after 14 days without meaningful
+use. A workspace first discovered by the service, or restored after archival,
+gets a fresh 14-day observation period. Conversation activity, observed Git
+revisions and tracked or untracked file changes, and interaction in LTCook's
+bundled Paseo web app count as use. External-only edits in ordinary-directory
+projects, changes only to ignored files, and service-generated labels and titles
+do not. Other Paseo clients do not report focus-only use to this service. Pin a
+workspace if you use another Paseo client or edit files that the service does
+not observe.
+
+Pins, active or queued work, waiting for user input, live terminals, incomplete
+activity information, and unavailable archive support prevent automatic archival.
+Empty workspaces remain active because native History exposes conversations.
+LTCook's automatic archive always keeps the working directory, including
+modified, untracked, and ignored files, and skips project teardown commands.
+This also applies to Paseo-owned worktrees; archival does not require a clean
+checkout, a named branch, or a remote push. The runtime uses a dedicated HTTP
+archive operation only after verifying that the connected daemon supports this
+behavior. Missing support pauses automatic archival and reports that LTCook
+needs a restart. Paseo's manual archive action retains its native behavior and
+can remove a Paseo-owned worktree directory.
+
+The archive is native Paseo state on the host, not another filesystem folder.
+Archived conversations remain accessible through **History**. See the
+[organization and recovery guide](How-To-User-Guides.md#organize-workspaces-and-find-the-archive)
+for restoring a conversation and changing the service settings.
+
+**Activity → Services** shows each service's current state, latest check and
+change, and diagnostics, including reasons workspaces are protected from
+archival. The private `workspace-organizer.json` and `renamer.json` files under
+`LTCOOK_RUNTIME_STATE_DIR` persist observation and attempt schedules. AppRC owns
+the service settings separately; the status cards are read-only.
 
 ## Web services and diagnostics
 

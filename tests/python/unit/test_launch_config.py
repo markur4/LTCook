@@ -293,6 +293,59 @@ def test_launch_exports_only_nonempty_podman_connection(tmp_path, connection):
         assert "CONTAINER_CONNECTION" not in result.environment
 
 
+@pytest.mark.parametrize("user_enabled", [None, False])
+def test_workspace_services_use_global_settings_and_original_shell(
+    tmp_path: Path, user_enabled: bool | None
+) -> None:
+    from ltcook.config.app import APP_RC
+
+    project = tmp_path / "project"
+    project.mkdir()
+    shell = {
+        "HOME": str(tmp_path / "home"),
+        "USERPROFILE": str(tmp_path / "home"),
+        "APPDATA": str(tmp_path / "config"),
+        "LOCALAPPDATA": str(tmp_path / "data"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
+    keys = (
+        "LTCOOK_WORKSPACE_ORGANIZER_ENABLED",
+        "LTCOOK_WORKSPACE_ORGANIZER_AUTO_ARCHIVE",
+        "LTCOOK_RENAMER_ENABLED",
+        "LTCOOK_RENAMER_WORKSPACES",
+        "LTCOOK_RENAMER_TABS",
+    )
+    if user_enabled is not None:
+        config = APP_RC.paths(environment=shell).require("config")
+        config.mkdir(parents=True)
+        (config / APP_RC.schema.user_dotenv_filename).write_text(
+            "".join(f"{key}={str(user_enabled).lower()}\n" for key in keys),
+            encoding="utf-8",
+        )
+    expected = "true" if user_enabled is None else "false"
+    project_value = "false" if user_enabled is None else "true"
+    (project / APP_RC.schema.workspace_dotenv_filename).write_text(
+        "".join(f"{key}={project_value}\n" for key in keys), encoding="utf-8"
+    )
+
+    resolved = launch.resolve_launch(project, original_environment=shell)
+    assert {key: resolved.environment[key] for key in keys} == dict.fromkeys(
+        keys, expected
+    )
+
+    shell["LTCOOK_RENAMER_TABS"] = project_value
+    inherited = {
+        **resolved.environment,
+        "LTCOOK_SHELL_PROVENANCE": json.dumps(shell),
+    }
+    resumed = launch.resolve_launch(project, original_environment=inherited)
+    assert resumed.environment["LTCOOK_RENAMER_TABS"] == project_value
+    assert resumed.environment["LTCOOK_RENAMER_WORKSPACES"] == expected
+
+
 class Section:
     def __init__(self, values, **attributes):
         self.values = values
@@ -372,6 +425,8 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
         ),
         web=Section({"LTCOOK_CRAWL4AI_URL": ""}),
         pi=Section({}),
+        workspace_organizer=Section({"LTCOOK_WORKSPACE_ORGANIZER_ENABLED": "true"}),
+        renamer=Section({"LTCOOK_RENAMER_ENABLED": "true"}),
     )
 
     class Resolved:
@@ -450,6 +505,8 @@ def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_p
         ),
         web=Section({}),
         pi=Section({}),
+        workspace_organizer=Section({"LTCOOK_WORKSPACE_ORGANIZER_ENABLED": "true"}),
+        renamer=Section({"LTCOOK_RENAMER_ENABLED": "true"}),
     )
 
     class Resolved:

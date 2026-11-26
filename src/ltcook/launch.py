@@ -267,6 +267,12 @@ def resolve_launch(
         environment.update(
             section.current_env_mapping(prefixed=True, include_empty=True)
         )
+    # > Runtime services maintain the whole host, so project overlays cannot
+    # > replace their user settings. Deliberate shell exports still apply.
+    for section in (global_config.workspace_organizer, global_config.renamer):
+        environment.update(
+            section.current_env_mapping(prefixed=True, include_empty=True)
+        )
     # > Even an empty CONTAINER_CONNECTION switches Podman into remote mode.
     if not environment.get("CONTAINER_CONNECTION"):
         environment.pop("CONTAINER_CONNECTION", None)

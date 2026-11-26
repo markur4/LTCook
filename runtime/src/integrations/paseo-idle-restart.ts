@@ -4,7 +4,10 @@ import { z } from 'zod';
 const busy = z.object({ status: z.literal('busy'), activeTurns: z.number().int().nonnegative() });
 const reply = z.discriminatedUnion('status', [
   busy,
-  z.object({ status: z.literal('ready') }),
+  z.object({
+    status: z.literal('ready'),
+    workspaceArchive: z.literal('preserve-directory-v1').optional(),
+  }),
   z.object({ status: z.literal('reserved') }),
   z.object({ status: z.literal('committed') }),
   z.object({ status: z.literal('released') }),
@@ -34,7 +37,7 @@ function loopbackControlUrl(listen: string): URL | undefined {
 }
 
 /** Negotiate the pinned daemon's local maintenance API before advertising it to callers. */
-export async function connectIdleRestart(listen: string, token: string) {
+export async function connectPaseoMaintenance(listen: string, token: string) {
   const controlUrl = loopbackControlUrl(listen);
   if (!controlUrl) return undefined;
 
@@ -52,7 +55,7 @@ export async function connectIdleRestart(listen: string, token: string) {
 
   const ready = await request('status').catch(() => undefined);
   if (ready?.status !== 'ready') return undefined;
-  return async (): Promise<IdleRestartReservation> => {
+  const reserveIdleRestart = async (): Promise<IdleRestartReservation> => {
     const id = randomUUID();
     const result = await request('reserve', id);
     if (result.status === 'busy') return result;
@@ -69,4 +72,32 @@ export async function connectIdleRestart(listen: string, token: string) {
       },
     };
   };
+  const archiveWorkspacePreservingFiles =
+    ready.workspaceArchive === 'preserve-directory-v1'
+      ? async (workspaceId: string, signal?: AbortSignal): Promise<boolean> => {
+          const response = await fetch(new URL('/api/ltcook/workspace-archive', controlUrl), {
+            method: 'POST',
+            redirect: 'error',
+            signal: AbortSignal.any([
+              ...(signal ? [signal] : []),
+              AbortSignal.timeout(30_000),
+            ]) as NonNullable<RequestInit['signal']>,
+            headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+            body: JSON.stringify({ workspaceId }),
+          });
+          if (response.status === 409) return false;
+          if (!response.ok) throw new Error('Paseo directory-preserving archive is unavailable.');
+          const result = z
+            .strictObject({
+              workspaceId: z.string(),
+              archived: z.boolean(),
+              preservedDirectory: z.literal(true),
+            })
+            .parse(await response.json());
+          if (result.workspaceId !== workspaceId)
+            throw new Error('Paseo archived a different workspace.');
+          return result.archived;
+        }
+      : undefined;
+  return { reserveIdleRestart, archiveWorkspacePreservingFiles };
 }
