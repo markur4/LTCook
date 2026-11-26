@@ -473,8 +473,9 @@ conversation epoch, and original sequence. Session Memory search reports
 pending summaries, result truncation, and original-history availability.
 
 The summarizer reads only the current UAMP and writes concise Markdown under
-the applicable headings. These are Intent, Pasted, Discoveries, Disagreements,
-Decisions, and Questions. The receiving agent gets earlier Discussions and
+the applicable headings. It groups shared outcomes and keeps details that
+affect follow-up, including the distinction between proposals, approvals, and
+completed work. The receiving agent gets earlier Discussions and
 Task instructions through the chronological handoff. The handoff can include
 original messages from intervening short Discussions so the receiver can resolve
 an approval by reference and distinguish it from earlier proposal status.

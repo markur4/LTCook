@@ -11,6 +11,7 @@ import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
+import { MemoryStore } from '../../../runtime/src/session-memory/store.js';
 import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
@@ -865,7 +866,15 @@ try {
 
   const selectedGpu = { id: 'CUDA:fixture-4070', label: 'RTX 4070 Ti SUPER', mainGpu: 1 };
   const summaryContent = '## Discoveries\n\n- Background summary fixture';
-  const latestSummary = '## Discoveries\n\n- Live throughput passage summary';
+  const summaryLink = 'https://example.com/cache/replay';
+  const summaryStart = '## Discoveries\n\n- Live throughput passage summary\n\n';
+  const latestSummary =
+    summaryStart +
+    '- ' +
+    'Verified the cache result. '.repeat(41) +
+    `[Cache evidence](${summaryLink}).\n\n- Final summary outcome remains visible.`;
+  const linkStart = latestSummary.indexOf('[Cache evidence]');
+  assert(linkStart < 1200 && latestSummary.indexOf(summaryLink) + summaryLink.length > 1200);
   const longerPrompt =
     ' Keep this Session Memory fixture long enough to qualify for inference.'.repeat(18);
   const ambiguousReason = 'Ollama cannot select this device uniquely.';
@@ -1152,6 +1161,8 @@ try {
   await browser('wait', '--text', 'Live throughput passage summary');
   const later = await browser('get', 'text', preview);
   assert(later.includes('Live throughput passage summary'));
+  assert(later.includes('Final summary outcome remains visible.'));
+  assert.equal((await browser('get', 'attr', `${preview} a`, 'href')).trim(), summaryLink);
   assert(!later.includes('Background summary fixture'));
   const previewLayout = JSON.parse(
     await browser(
@@ -1186,7 +1197,10 @@ try {
   assert(!complete.includes('Background summary fixture'));
   assert(!complete.includes('"findings"'), 'The complete entry is rendered as fields, not JSON');
   await browser('screenshot', path.join(directory, 'passage-summary-complete.png'));
+  assert(complete.includes('Final summary outcome remains visible.'));
   await browser('press', 'Escape');
+  await browser('wait', completeSummary, '--state', 'hidden');
+  await browser('scrollintoview', '[aria-label="Hide summary"]');
   await browser(
     'wait',
     '--fn',
@@ -1197,6 +1211,45 @@ try {
     return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
   })()`,
   );
+  await clickButton('Hide summary');
+  assert(!(await browser('snapshot')).includes('Final summary outcome remains visible.'));
+  const memoryStore = new MemoryStore(path.join(directory, 'activity-memory.sqlite'));
+  try {
+    const catalog = await memory.readStoredSummaries(mobileSession.id);
+    const action = catalog.summaries.find(
+      ({ type, discussionId }) =>
+        type === 'AAB' &&
+        discussionId === catalog.summaries.find(({ type }) => type === 'UAMP')?.id,
+    );
+    assert(action);
+    const record = memoryStore.summary(mobileSession.id, action.epoch, action.id);
+    assert(record?.action);
+    for (let index = 0; index < 8; index++) {
+      const checks = [{ seq: action.position, text: `Pagination evidence ${index}` }];
+      memoryStore.saveSummary({
+        ...record,
+        id: `!pagination-${index}`,
+        action: { ...record.action, checkCount: checks.length, checks },
+      });
+    }
+  } finally {
+    memoryStore.close();
+  }
+  await openPassage(1);
+  await clickButton('Open loaded summaries');
+  await browser('wait', completeSummary);
+  assert(!(await browser('get', 'text', completeSummary)).includes('Pagination evidence 0'));
+  await browser('press', 'Escape');
+  await browser('wait', completeSummary, '--state', 'hidden');
+  await clickButton('Load older passage records');
+  await browser('wait', '--text', 'Pagination evidence 0');
+  assert(
+    (await browser('get', 'text', preview)).includes('Final summary outcome remains visible.'),
+  );
+  await clickButton('Open complete summary');
+  await browser('wait', completeSummary);
+  await browser('press', 'Escape');
+  await browser('wait', completeSummary, '--state', 'hidden');
   await clickButton('Hide summary');
   await host.api.agents
     .ref(mobileSession.id)

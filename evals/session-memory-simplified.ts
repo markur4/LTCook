@@ -436,24 +436,28 @@ async function runMemoryArm(
           const sources = /^Summarize current sources only \(#(\d+) to #(\d+)\)\.$/m.exec(
             prompt[1].content,
           );
+          const first = Number(sources?.[1]);
+          const last = Number(sources?.[2]);
           const unit = expectedUnits.find(
-            ({ messages }) =>
-              messages[0]?.seq === Number(sources?.[1]) &&
-              messages.at(-1)?.seq === Number(sources?.[2]),
+            ({ type, messages }) =>
+              type === 'UAMP' &&
+              messages.some(({ seq }) => seq === first) &&
+              messages.some(({ seq }) => seq === last),
           );
-          const sourceLines = unit?.messages.map(({ seq, author, text, tool }) =>
+          const messages = unit?.messages.filter(({ seq }) => seq >= first && seq <= last);
+          const sourceLines = messages?.map(({ seq, author, text, tool }) =>
             JSON.stringify({ seq, author, text, tool }),
           );
           if (
-            !unit ||
+            !messages?.length ||
             !prompt[1].content.startsWith(
               'Current original source messages:\n' + sourceLines?.join('\n') + '\n\n',
             )
           )
             throw new Error(
-              'The hosted prompt did not contain just the current original exchange.',
+              'The hosted prompt did not contain just the current original exchange portion.',
             );
-          const currentSources = unit.messages.map(({ seq }) => seq);
+          const currentSources = messages.map(({ seq }) => seq);
           const result = await hosted.summarize(type, prompt, requestSignal);
           const { text, content: _content, ...metrics } = result;
           if (result.complete)
@@ -730,6 +734,12 @@ async function runMemoryArm(
       fixture: fixture.id,
       processing,
       ...(hosted ? { inference, sourcePreservation } : {}),
+      discussions: generated.map(({ sources, originalTokens, summaryTokens, parts }) => ({
+        sources: sources.map(({ seq }) => seq),
+        originalTokens,
+        summaryTokens,
+        parts: parts.map(({ sources }) => sources),
+      })),
       ...(incompleteFallbacks ? { incompleteFallbacks } : {}),
       requests,
       measurements: {
