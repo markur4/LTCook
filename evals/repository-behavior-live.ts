@@ -9,6 +9,7 @@ import { Value } from 'typebox/value';
 import { sanitizeEvaluationText } from '../runtime/src/evals/diagnostics.js';
 import { WorkspaceMcp } from '../runtime/src/integrations/mcp.js';
 import { RuntimeApi } from '../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../runtime/src/integrations/session-activation.js';
 import { WORKSPACE_MCP_SERVER } from '../runtime/src/paseo-plugin/shared/workspace-tools.js';
 import { createColgrepProvider } from '../runtime/src/repository/providers/colgrep.js';
 import type { RepositoryHit, RepositoryRetrieval } from '../runtime/src/repository/results.js';
@@ -675,7 +676,12 @@ try {
   let endpoint: string | undefined;
   if (!piEvaluation) {
     const authority = await loopbackAuthority();
-    api = new RuntimeApi(undefined, randomBytes(32).toString('base64url'), authority);
+    api = new RuntimeApi(
+      undefined,
+      randomBytes(32).toString('base64url'),
+      authority,
+      new SessionActivation(),
+    );
     mcp = new WorkspaceMcp(new ToolCatalog(toolDefinitions), authority);
     api.setWorkspaceMcp(mcp);
     endpoint = await api.listen();

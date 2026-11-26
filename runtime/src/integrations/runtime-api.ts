@@ -2,15 +2,8 @@ import type { Telemetry } from '../diagnostics/telemetry.js';
 import process from 'node:process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { isRuntimeCommand } from '../workflow-api/commands.js';
-import type {
-  RuntimeActor,
-  RuntimeCommand,
-  RuntimeController,
-  SessionSnapshot,
-} from '../workflow-api/index.js';
+import type { RuntimeActor, RuntimeController } from '../workflow-api/index.js';
 import { canonicalWorkspace } from '../core/workspace.js';
-import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { PaseoHost } from './paseo.js';
 import type { SessionMemory } from '../session-memory/service.js';
@@ -19,10 +12,17 @@ import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import type { WorkspaceMcp } from './mcp.js';
 import { handleActivityRoute, isActivityRoute, type ActivityServices } from './runtime-activity.js';
 import { handleToolRoute, isToolRoute } from './runtime-tool-routes.js';
+import {
+  handleSessionRoute,
+  isSessionRoute,
+  SESSION_OPEN_PATH,
+  type PrepareSession,
+} from './runtime-session-routes.js';
+import type { SessionActivation } from './session-activation.js';
 import type { ToolCatalog } from '../tools/catalog.js';
 import type { SessionWorktrees, WorktreeScopeResolver } from './session-worktrees.js';
 import { z } from 'zod';
-import { ResolvedModelSchema, type ResolvedModel } from '../models/aliases.js';
+import type { ResolvedModel } from '../models/aliases.js';
 import {
   ModelCatalogRequestSchema,
   type ModelCatalogResponseSchema,
@@ -43,14 +43,6 @@ export interface RuntimeLifecycleIdentity {
   telemetryLogPath: string;
   buildFingerprint?: string;
   idleRestart?: boolean;
-}
-
-export interface WorkspaceSessionRequest {
-  workspaceRoot: string;
-  sessionId: string;
-  teamSelection: string;
-  shellEnvironment: Record<string, string>;
-  leaderAgentId?: string;
 }
 
 const modelSelectionRequest = ModelCatalogRequestSchema.extend({
@@ -102,20 +94,8 @@ export class RuntimeApi {
   }
 
   private runtime: RuntimeController | undefined;
-  private readonly sessions = new Map<string, string>();
-  private readonly pendingSessions = new Map<
-    string,
-    { workspaceRoot: string; pending: Promise<SessionSnapshot> }
-  >();
-  private readonly startupShellEnvironment: Record<string, string>;
-  private openWorkspace:
-    ((request: WorkspaceSessionRequest) => Promise<SessionSnapshot>) | undefined;
-  private prepareSession:
-    | ((
-        request: WorkspaceSessionRequest & { leaderAgentId: string; savedModel?: ResolvedModel },
-      ) => Promise<{ env: Record<string, string>; mcpServers?: Record<string, unknown> }>)
-    | undefined;
-  setPrepareSessionHandler(handler: NonNullable<RuntimeApi['prepareSession']>): void {
+  private prepareSession?: PrepareSession;
+  setPrepareSessionHandler(handler: PrepareSession): void {
     this.prepareSession = handler;
   }
   private modelSelection:
@@ -167,6 +147,7 @@ export class RuntimeApi {
     runtime: RuntimeController | undefined,
     private readonly secret: string,
     private readonly listenAddress: string,
+    private readonly activation: SessionActivation,
     startupEnvironment: NodeJS.ProcessEnv = process.env,
     private readonly telemetry?: Telemetry,
     private readonly services: RuntimeApiServices = {},
@@ -174,7 +155,6 @@ export class RuntimeApi {
     this.runtime = runtime;
     this.memoryDisabled =
       Number(startupEnvironment.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000') === 0;
-    this.startupShellEnvironment = captureShellEnvironment(startupEnvironment);
     const activity = services.activity;
     if (activity) activity.colgrep.setIndexingEnabled(activity.preferences.enabled('rag-index'));
   }
@@ -237,19 +217,6 @@ export class RuntimeApi {
 
   beginShutdown(): void {
     this.stopping = true;
-  }
-  setSession(workspaceRoot: string, sessionId: string): void {
-    const canonicalRoot = canonicalWorkspace(workspaceRoot);
-    const existingRoot = this.sessions.get(sessionId);
-    if (existingRoot && existingRoot !== canonicalRoot) {
-      throw new Error('Session is already bound to a different workspace');
-    }
-    this.sessions.set(sessionId, canonicalRoot);
-  }
-  setOpenWorkspaceHandler(
-    handler: (request: WorkspaceSessionRequest) => Promise<SessionSnapshot>,
-  ): void {
-    this.openWorkspace = handler;
   }
   async listen(): Promise<string> {
     const [host, rawPort] = this.listenAddress.startsWith('[')
@@ -315,19 +282,15 @@ export class RuntimeApi {
     response.setHeader('content-type', 'application/json');
     const activityRoute = isActivityRoute(request.url) ? request.url : undefined;
     const toolRoute = isToolRoute(request.url) ? request.url : undefined;
+    const sessionRoute = isSessionRoute(request.url) ? request.url : undefined;
     const isPostRoute =
       activityRoute !== undefined ||
       toolRoute !== undefined ||
+      sessionRoute !== undefined ||
       [
-        '/v1/command',
-        '/v1/snapshot',
-        '/v1/session/open',
-        '/v1/team/catalog',
         '/v1/model/catalog',
         '/v1/model/resolve',
-        '/v1/session/list',
         '/v1/session/worktrees',
-        '/v1/session/prepare',
         '/v1/runtime/stop',
         '/v1/session-memory/observe',
         '/v1/session-memory/paste',
@@ -356,7 +319,7 @@ export class RuntimeApi {
         response.writeHead(401).end('{"error":"unauthorized"}');
         return;
       }
-      if (this.stopping || !this.lifecycle || !this.openWorkspace) {
+      if (this.stopping || !this.lifecycle || !this.activation.ready) {
         response.writeHead(503).end('{"error":"LTCook runtime is starting or stopping"}');
         return;
       }
@@ -371,7 +334,7 @@ export class RuntimeApi {
       const maxBodyLength =
         request.url === '/v1/session-memory/paste'
           ? 2_097_152
-          : request.url === '/v1/session/open'
+          : sessionRoute === SESSION_OPEN_PATH
             ? 1_048_576
             : 64_000;
       let body = '';
@@ -393,7 +356,7 @@ export class RuntimeApi {
           response.writeHead(400).end('{"error":"instanceId is required"}');
           return;
         }
-        if (this.stopping || !this.lifecycle || !this.shutdown || !this.openWorkspace) {
+        if (this.stopping || !this.lifecycle || !this.shutdown || !this.activation.ready) {
           response.writeHead(503).end('{"error":"LTCook runtime is starting or stopping"}');
           return;
         }
@@ -441,12 +404,8 @@ export class RuntimeApi {
       }
       const input = parsed as {
         sessionId?: string;
-        command?: RuntimeCommand;
         workspaceRoot?: string;
         nativeAgentId?: string;
-        teamSelection?: string;
-        leaderAgentId?: string;
-        shellEnvironment?: unknown;
         force?: unknown;
         turnId?: unknown;
         outcome?: unknown;
@@ -496,7 +455,7 @@ export class RuntimeApi {
           memoryDisabled: this.memoryDisabled,
           readMemory: () => this.memory,
           readSession: (id) => this.runtime?.snapshot(id),
-          registeredWorkspace: (id) => this.sessions.get(id),
+          registeredWorkspace: (id) => this.activation.registeredWorkspace(id),
           readGrantedWorkspace: (id) => this.workspaceMcp?.repositorySearchWorkspace(id),
           listProviderSubagents: (id) => this.providerSubagents?.(id),
         });
@@ -641,7 +600,7 @@ export class RuntimeApi {
         await this.handleEvals(request.url!, parsed, response);
         return;
       }
-      if (request.url === '/v1/session/open' && actor.kind !== 'user') {
+      if (sessionRoute === SESSION_OPEN_PATH && actor.kind !== 'user') {
         response.writeHead(403).end('{"error":"user authentication required"}');
         return;
       }
@@ -650,8 +609,12 @@ export class RuntimeApi {
         return;
       }
       const runtime = this.runtime;
-      if (request.url === '/v1/session/open') {
-        await this.handleSessionOpen(input, response);
+      if (sessionRoute) {
+        await handleSessionRoute(sessionRoute, parsed, response, actor, {
+          runtime,
+          activation: this.activation,
+          prepareSession: this.prepareSession,
+        });
         return;
       }
       if (!runtime) {
@@ -662,7 +625,7 @@ export class RuntimeApi {
         await handleToolRoute(toolRoute, parsed, response, actor, {
           runtime,
           catalog: this.workspaceTools,
-          registeredWorkspace: (id) => this.sessions.get(id),
+          registeredWorkspace: (id) => this.activation.registeredWorkspace(id),
         });
         return;
       }
@@ -679,310 +642,11 @@ export class RuntimeApi {
         response.writeHead(200).end(JSON.stringify(result));
         return;
       }
-      if (request.url === '/v1/session/prepare') {
-        if (actor.kind !== 'user') {
-          response.writeHead(403).end('{"error":"user authentication required"}');
-          return;
-        }
-        if (!this.prepareSession) throw new Error('Session preparation is not ready');
-        if (
-          !input.sessionId ||
-          !input.workspaceRoot ||
-          !input.teamSelection ||
-          input.leaderAgentId !== input.sessionId
-        )
-          throw new Error('Explicit Session Leader identity is required');
-        const snapshot = runtime.snapshot(input.sessionId);
-        const team = runtime
-          .teamCatalog()
-          .find(
-            (entry) =>
-              entry.selection === input.teamSelection || entry.teamId === input.teamSelection,
-          );
-        const leader = snapshot.members.find(
-          (item) => item.member.key === snapshot.definition.leaderKey,
-        );
-        if (
-          !team ||
-          snapshot.session.teamId !== team.teamId ||
-          canonicalWorkspace(input.workspaceRoot) !== snapshot.session.workspaceRoot ||
-          leader?.binding?.nativeAgentId !== input.leaderAgentId
-        )
-          throw new Error('Session preparation identity does not match its binding');
-        const prepared = await this.prepareSession({
-          sessionId: input.sessionId,
-          workspaceRoot: snapshot.session.workspaceRoot,
-          teamSelection: input.teamSelection,
-          leaderAgentId: input.leaderAgentId!,
-          ...(Object.hasOwn(parsed, 'savedModel')
-            ? {
-                savedModel: ResolvedModelSchema.parse(
-                  (parsed as Record<string, unknown>).savedModel,
-                ),
-              }
-            : {}),
-          shellEnvironment: this.startupShellEnvironment,
-        });
-        response.writeHead(200).end(JSON.stringify(prepared));
-        return;
-      }
-      if (request.url === '/v1/team/catalog' || request.url === '/v1/session/list') {
-        if (actor.kind !== 'user') {
-          response.writeHead(403).end('{"error":"user authentication required"}');
-          return;
-        }
-        if (request.url === '/v1/team/catalog') {
-          response.writeHead(200).end(JSON.stringify({ teams: runtime.teamCatalog() }));
-        } else {
-          if (!input.workspaceRoot) throw new Error('workspaceRoot is required');
-          const catalog = runtime.teamCatalog();
-          const sessions = runtime
-            .listSessions(input.workspaceRoot, input.teamSelection)
-            .map((session) => {
-              const selected = catalog.find((team) => team.teamId === session.teamId);
-              if (selected?.status !== 'installed')
-                return {
-                  sessionId: session.id,
-                  teamId: session.teamId,
-                  workspaceRoot: session.workspaceRoot,
-                  createdAt: session.createdAt,
-                  leaderAgentId: null,
-                  blocker: `Saved Team ${session.teamId} is unavailable or invalid; rebuild or reinstall its local package before resuming this Session.`,
-                };
-              const snapshot = runtime.snapshot(session.id);
-              const leader = snapshot.members.find(
-                (item) => item.member.key === snapshot.definition.leaderKey,
-              )?.binding;
-              return {
-                sessionId: session.id,
-                teamId: session.teamId,
-                workspaceRoot: session.workspaceRoot,
-                createdAt: session.createdAt,
-                leaderAgentId: leader?.nativeAgentId ?? null,
-                ...(leader?.state !== 'bound' || !leader.nativeAgentId
-                  ? {
-                      blocker:
-                        leader?.blocker ??
-                        'Leader binding is unavailable; inspect this Session before starting a replacement.',
-                    }
-                  : {}),
-              };
-            });
-          response.writeHead(200).end(JSON.stringify({ sessions }));
-        }
-        return;
-      }
-      if (request.url === '/v1/snapshot') {
-        if (actor.kind === 'user') {
-          const requestedWorkspace = input.workspaceRoot
-            ? canonicalWorkspace(input.workspaceRoot)
-            : undefined;
-          const sessionId = input.sessionId;
-          if (!sessionId) {
-            response
-              .writeHead(404)
-              .end('{"error":"No session found for workspace","code":"SESSION_NOT_FOUND"}');
-            return;
-          }
-          const registeredWorkspace = this.sessions.get(sessionId);
-          if (!registeredWorkspace) {
-            if (
-              !requestedWorkspace ||
-              typeof input.teamSelection !== 'string' ||
-              !input.teamSelection ||
-              typeof input.leaderAgentId !== 'string' ||
-              !input.leaderAgentId
-            )
-              throw new Error('Session is not active in this runtime');
-            const snapshot = runtime.snapshot(sessionId);
-            const selected = runtime
-              .teamCatalog()
-              .find(
-                (team) =>
-                  team.status === 'installed' &&
-                  (team.selection === input.teamSelection || team.teamId === input.teamSelection),
-              );
-            const leader = snapshot.members.find(
-              (member) => member.member.key === snapshot.definition.leaderKey,
-            );
-            if (
-              selected?.teamId !== snapshot.session.teamId ||
-              requestedWorkspace !== canonicalWorkspace(snapshot.session.workspaceRoot) ||
-              leader?.binding?.state !== 'bound' ||
-              leader.binding.nativeAgentId !== input.leaderAgentId
-            )
-              throw new Error('Saved Session identity does not match its native Leader');
-            // > History reads retain metadata without activating or reconciling native agents.
-            response.writeHead(200).end(JSON.stringify(snapshot));
-            return;
-          }
-          if (requestedWorkspace && registeredWorkspace !== requestedWorkspace)
-            throw new Error('Session does not belong to the requested workspace');
-          const snapshot = runtime.snapshot(sessionId);
-          if (canonicalWorkspace(snapshot.session.workspaceRoot) !== registeredWorkspace)
-            throw new Error('Session does not belong to its registered workspace');
-          response.writeHead(200).end(JSON.stringify(snapshot));
-          return;
-        }
-        if (!input.sessionId) throw new Error('Agent snapshot requires a bound session');
-        const snapshot: SessionSnapshot = runtime.snapshot(input.sessionId);
-        if (
-          !snapshot.members.some(
-            (member) =>
-              member.binding?.nativeAgentId === actor.nativeAgentId &&
-              member.binding.state === 'bound',
-          )
-        ) {
-          throw new Error('Native agent is not bound to this session');
-        }
-        response.writeHead(200).end(JSON.stringify(snapshot));
-        return;
-      }
-      if (!input.sessionId || !isRuntimeCommand(input.command))
-        throw new Error('sessionId and a valid runtime command are required');
-      const metadataRecovery =
-        actor.kind === 'user' &&
-        ['planning.show', 'planning.questions', 'decision.answer'].includes(input.command.type);
-      const sessionSnapshot = runtime.snapshot(input.sessionId);
-      if (metadataRecovery && !this.sessions.has(input.sessionId))
-        this.setSession(sessionSnapshot.session.workspaceRoot, input.sessionId);
-      if (actor.kind === 'agent') {
-        const member = sessionSnapshot.members.find(
-          (candidate) =>
-            candidate.binding?.nativeAgentId === actor.nativeAgentId &&
-            candidate.binding.state === 'bound',
-        );
-        if (!member) {
-          response.writeHead(403).end('{"error":"native agent is not bound to this session"}');
-          return;
-        }
-      } else if (
-        this.sessions.get(input.sessionId) !==
-        canonicalWorkspace(sessionSnapshot.session.workspaceRoot)
-      ) {
-        response.writeHead(403).end('{"error":"session is not active in this runtime"}');
-        return;
-      }
-      const value = await runtime.execute(input.sessionId, actor, input.command);
-      response.writeHead(200).end(JSON.stringify({ value }));
     } catch (error) {
       response
         .writeHead(400)
         .end(JSON.stringify({ error: error instanceof Error ? error.message : 'request failed' }));
     }
-  }
-  private async handleSessionOpen(
-    input: {
-      workspaceRoot?: string;
-      sessionId?: string;
-      teamSelection?: string;
-      leaderAgentId?: string;
-      shellEnvironment?: unknown;
-    },
-    response: import('node:http').ServerResponse,
-  ): Promise<void> {
-    const runtime = this.runtime;
-    const openWorkspace = this.openWorkspace;
-    if (!runtime || !openWorkspace) {
-      response.writeHead(503).end('{"error":"Runtime session activation is not ready"}');
-      return;
-    }
-    const shell = input.shellEnvironment;
-    if (
-      typeof input.workspaceRoot !== 'string' ||
-      !input.workspaceRoot ||
-      typeof input.sessionId !== 'string' ||
-      !input.sessionId ||
-      typeof input.teamSelection !== 'string' ||
-      !input.teamSelection ||
-      (shell !== undefined &&
-        (!shell ||
-          typeof shell !== 'object' ||
-          Array.isArray(shell) ||
-          !Object.values(shell).every((value) => typeof value === 'string')))
-    ) {
-      response
-        .writeHead(400)
-        .end(
-          '{"error":"workspaceRoot, sessionId and teamSelection are required; shellEnvironment must be a string mapping when supplied"}',
-        );
-      return;
-    }
-    const workspaceRoot = canonicalWorkspace(input.workspaceRoot);
-    const registeredWorkspace = this.sessions.get(input.sessionId);
-    if (registeredWorkspace && registeredWorkspace !== workspaceRoot) {
-      response.writeHead(409).end('{"error":"Session is already bound to a different workspace"}');
-      return;
-    }
-    let snapshot: SessionSnapshot | undefined;
-    if (registeredWorkspace) {
-      const existing = runtime.snapshot(input.sessionId);
-      if (
-        existing.session.teamId !==
-        runtime
-          .teamCatalog()
-          .find(
-            (team) => team.selection === input.teamSelection || team.teamId === input.teamSelection,
-          )?.teamId
-      )
-        throw new Error('Session Team is immutable');
-      if (!input.leaderAgentId) snapshot = existing;
-    }
-    if (!snapshot) {
-      let entry = input.leaderAgentId ? undefined : this.pendingSessions.get(input.sessionId);
-      if (entry && entry.workspaceRoot !== workspaceRoot) {
-        response
-          .writeHead(409)
-          .end('{"error":"Session initialization is already requested for a different workspace"}');
-        return;
-      }
-      if (!entry) {
-        const pending = openWorkspace({
-          workspaceRoot,
-          sessionId: input.sessionId,
-          teamSelection: input.teamSelection,
-          ...(input.leaderAgentId ? { leaderAgentId: input.leaderAgentId } : {}),
-          shellEnvironment: captureShellEnvironment(
-            shell === undefined ? this.startupShellEnvironment : (shell as Record<string, string>),
-          ),
-        });
-        entry = { workspaceRoot, pending };
-        if (!input.leaderAgentId) this.pendingSessions.set(input.sessionId, entry);
-      }
-      try {
-        snapshot = await entry.pending;
-      } finally {
-        if (this.pendingSessions.get(input.sessionId) === entry)
-          this.pendingSessions.delete(input.sessionId);
-      }
-      if (
-        snapshot.session.id !== input.sessionId ||
-        canonicalWorkspace(snapshot.session.workspaceRoot) !== workspaceRoot
-      ) {
-        response.writeHead(409).end('{"error":"Runtime opened a different workspace session"}');
-        return;
-      }
-      const selected = runtime
-        .teamCatalog()
-        .find(
-          (team) => team.selection === input.teamSelection || team.teamId === input.teamSelection,
-        );
-      if (!selected || snapshot.session.teamId !== selected.teamId)
-        throw new Error('Session Team is immutable');
-      this.setSession(workspaceRoot, snapshot.session.id);
-    }
-    response.writeHead(200).end(
-      JSON.stringify({
-        sessionId: snapshot.session.id,
-        workspaceRoot: snapshot.session.workspaceRoot,
-        teamId: snapshot.session.teamId,
-        teamInstanceId: snapshot.session.teamInstanceId,
-        leaderAgentId:
-          snapshot.members.find((item) => item.member.key === snapshot.definition.leaderKey)
-            ?.binding?.nativeAgentId ?? null,
-      }),
-    );
-    return;
   }
   private async handleEvals(
     url: string,
@@ -1019,7 +683,8 @@ export class RuntimeApi {
           if (
             canonicalWorkspace(session.workspaceRoot) !==
               canonicalWorkspace(request.workspaceRoot) ||
-            this.sessions.get(request.sessionId) !== canonicalWorkspace(request.workspaceRoot)
+            this.activation.registeredWorkspace(request.sessionId) !==
+              canonicalWorkspace(request.workspaceRoot)
           )
             throw new Error('Evaluation Session does not match the registered workspace');
           const team = this.runtime

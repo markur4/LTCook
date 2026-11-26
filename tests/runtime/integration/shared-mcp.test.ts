@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ElicitRequestSchema, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { WORKSPACE_MCP_SERVER } from '../../../runtime/src/paseo-plugin/shared/workspace-tools.js';
 import {
@@ -212,7 +213,7 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
   const base = `http://${authority}`;
   const secret = 'fixture-runtime-authority';
   const createApi = async () => {
-    const api = new RuntimeApi(undefined, secret, authority);
+    const api = new RuntimeApi(undefined, secret, authority, new SessionActivation());
     const ried = new RiedService(path.join(root, 'cache'), undefined, () => ({ PATH: '' }));
     api.setWorkspaceMcp(new WorkspaceMcp(createTools(ried), authority));
     await api.listen();
@@ -474,7 +475,12 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
 test('MCP restart requires matching Paseo approval and MCP acceptance before queueing', async () => {
   const workspace = await mkdtemp(path.join(tmpdir(), 'ltcook-mcp-restart-'));
   const authority = await localAuthority();
-  const api = new RuntimeApi(undefined, 'fixture-runtime-authority', authority);
+  const api = new RuntimeApi(
+    undefined,
+    'fixture-runtime-authority',
+    authority,
+    new SessionActivation(),
+  );
   const queued: boolean[] = [];
   const mcp = new WorkspaceMcp(new ToolCatalog([]), authority, undefined, async (update) => {
     queued.push(update);
@@ -649,7 +655,7 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
   if (!address || typeof address === 'string') throw new Error('No fixture Ollama port.');
   const authority = await localAuthority();
   const secret = 'fixture-unshared-secret';
-  const api = new RuntimeApi(undefined, secret, authority);
+  const api = new RuntimeApi(undefined, secret, authority, new SessionActivation());
   const mcp = new WorkspaceMcp(
     createTools(new RiedService(path.join(root, 'cache'), undefined, () => ({ PATH: '' })), {
       endpoint: `http://127.0.0.1:${address.port}`,

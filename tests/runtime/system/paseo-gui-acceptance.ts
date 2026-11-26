@@ -15,6 +15,7 @@ import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import { ActivityPreferences } from '../../../runtime/src/integrations/activity-preferences.js';
 import {
   createWorktreeScopeResolver,
@@ -352,7 +353,8 @@ const colgrep = createColgrepProvider();
 const preferences = new ActivityPreferences(path.join(directory, 'activity-settings.json'));
 const worktrees = new SessionWorktrees(process.env.PATH ?? '');
 const resolveScope = createWorktreeScopeResolver((id) => runtime?.snapshot(id));
-const api = new RuntimeApi(undefined, secret, listen, environment, telemetry, {
+const activation = new SessionActivation(environment);
+const api = new RuntimeApi(undefined, secret, listen, activation, environment, telemetry, {
   activity: { colgrep, preferences },
   worktrees: { store: worktrees, resolveScope },
 });
@@ -430,7 +432,7 @@ try {
     });
   runtime = createController();
   api.setRuntime(runtime);
-  api.setOpenWorkspaceHandler(async (request) =>
+  activation.setWorkspaceActivator(async (request) =>
     runtime!.openSession({
       id: request.sessionId,
       workspaceRoot: request.workspaceRoot,
@@ -449,21 +451,8 @@ try {
     resolve: ({ teamSelection, workspaceRoot, alias, reasoning }) =>
       backend.resolveSelection(workspaceRoot, leaderFor(teamSelection), alias, reasoning ?? 'none'),
   });
-  api.setPrepareSessionHandler(async (request) => {
-    const snapshot = runtime!.snapshot(request.sessionId);
-    const member = snapshot.definition.members.find((member) => member.key === 'leader');
-    assert(member);
-    const prepared = await backend.prepare(
-      {
-        member,
-        sessionId: request.sessionId,
-        teamInstanceId: snapshot.session.teamInstanceId,
-        teamId: snapshot.session.teamId,
-        workspaceRoot: request.workspaceRoot,
-      },
-      request.leaderAgentId,
-      request.savedModel,
-    );
+  api.setPrepareSessionHandler(async (options, leaderAgentId, savedModel) => {
+    const prepared = await backend.prepare(options, leaderAgentId, savedModel);
     return {
       env: prepared.env,
       ...(prepared.mcpServers ? { mcpServers: prepared.mcpServers } : {}),

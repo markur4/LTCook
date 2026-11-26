@@ -6,6 +6,7 @@ import path from 'node:path';
 import { RiedService } from '../repository/discovery.js';
 import { createRuntime } from '../core/runtime.js';
 import { RuntimeApi, agentBearer } from '../integrations/runtime-api.js';
+import { SessionActivation } from '../integrations/session-activation.js';
 import { createPaseoAgentBackend, startPaseoHost } from '../integrations/paseo.js';
 import { loadTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
@@ -151,7 +152,8 @@ export async function executeEvaluationJob(job: EvaluationJob) {
   );
   await writeFile(path.join(piHome, 'web-search.json'), JSON.stringify(job.webConfiguration));
   const before = await workspaceState();
-  const api = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`, {});
+  const activation = new SessionActivation({});
+  const api = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`, activation, {});
   const endpoint = await api.listen();
   let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
   let runtime: ReturnType<typeof createRuntime> | undefined;
@@ -380,7 +382,7 @@ export async function executeEvaluationJob(job: EvaluationJob) {
       requireDelegation: job.scenario === 'targeted-fix' && delegate,
       requiresWrite: job.scenario === 'targeted-fix',
     });
-    api.setSession(workspace, sessionId);
+    activation.register(workspace, sessionId);
     const deadline = performance.now() + job.timeoutMs;
     waiting = telemetry.begin('wait.pass-completion', randomUUID(), 'wait');
     while (true) {

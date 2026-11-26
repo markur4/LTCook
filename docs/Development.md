@@ -121,6 +121,10 @@ The Activity HTTP routes live in `runtime/src/integrations/runtime-activity.ts`.
 The native tool routes, including the dedicated Session RIED operation, live in
 `runtime/src/integrations/runtime-tool-routes.ts`. RuntimeApi authenticates the
 caller and parses the request before delegating to these handlers.
+Session open, prepare, list, snapshot, Team catalog, and command requests
+use `runtime/src/integrations/runtime-session-routes.ts`. The
+`session-activation.ts` service owns active workspace registration and pending
+Session opens. Core owns the durable Sessions and native bindings.
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,

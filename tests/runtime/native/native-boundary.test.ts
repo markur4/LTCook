@@ -19,6 +19,7 @@ import {
 import { panelSnapshot } from '../../../runtime/src/paseo-plugin/shared/panel-snapshot.js';
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import { ActivityPreferences } from '../../../runtime/src/integrations/activity-preferences.js';
 import {
   createWorktreeScopeResolver,
@@ -122,7 +123,12 @@ describe('native runtime boundary', () => {
   test('applies Activity user authority and route validation before runtime readiness', async () => {
     const secret = 'activity-family-secret';
     const nativeAgentId = 'ordinary-agent';
-    const api = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`);
+    const api = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
     const endpoint = await api.listen();
     const post = (route: string, token: string, input: object) =>
       fetch(`${endpoint}/v1/activity/${route}`, {
@@ -178,6 +184,7 @@ describe('native runtime boundary', () => {
       undefined,
       secret,
       `127.0.0.1:${await freePort()}`,
+      new SessionActivation({}),
       {},
       undefined,
       {
@@ -207,9 +214,17 @@ describe('native runtime boundary', () => {
       expect(colgrep.isIndexingEnabled()).toBe(false);
       expect(memory.status(undefined, 'leader').summarization).toBe('paused');
       const restoredColgrep = createColgrepProvider({ deploymentDirectory: '' });
-      const restored = new RuntimeApi(undefined, secret, '127.0.0.1:0', {}, undefined, {
-        activity: { colgrep: restoredColgrep, preferences: new ActivityPreferences(preferences) },
-      });
+      const restored = new RuntimeApi(
+        undefined,
+        secret,
+        '127.0.0.1:0',
+        new SessionActivation({}),
+        {},
+        undefined,
+        {
+          activity: { colgrep: restoredColgrep, preferences: new ActivityPreferences(preferences) },
+        },
+      );
       restored.setSessionMemory(memory);
       expect(restoredColgrep.isIndexingEnabled()).toBe(false);
       expect(memory.status(undefined, 'leader').summarization).toBe('paused');
@@ -243,9 +258,17 @@ describe('native runtime boundary', () => {
     const memory = createMemory();
     const restoredMemory = createMemory();
     const colgrep = createColgrepProvider({ deploymentDirectory: '' });
-    const api = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`, {}, undefined, {
-      activity: { colgrep, preferences: new ActivityPreferences(preferences) },
-    });
+    const api = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation({}),
+      {},
+      undefined,
+      {
+        activity: { colgrep, preferences: new ActivityPreferences(preferences) },
+      },
+    );
     api.setSessionMemory(memory);
     const endpoint = await api.listen();
     const select = (token: string, body: object) =>
@@ -268,12 +291,20 @@ describe('native runtime boundary', () => {
         model: 'gpt-6-luna',
         reasoning: 'low',
       });
-      const restored = new RuntimeApi(undefined, secret, '127.0.0.1:0', {}, undefined, {
-        activity: {
-          colgrep: createColgrepProvider({ deploymentDirectory: '' }),
-          preferences: new ActivityPreferences(preferences),
+      const restored = new RuntimeApi(
+        undefined,
+        secret,
+        '127.0.0.1:0',
+        new SessionActivation({}),
+        {},
+        undefined,
+        {
+          activity: {
+            colgrep: createColgrepProvider({ deploymentDirectory: '' }),
+            preferences: new ActivityPreferences(preferences),
+          },
         },
-      });
+      );
       restored.setSessionMemory(restoredMemory);
       expect(restoredMemory.inferenceSelection()?.mode).toBe('hosted');
     } finally {
@@ -315,9 +346,17 @@ describe('native runtime boundary', () => {
       id === sessionId ? snapshot : undefined,
     );
     const report = createSessionWorktreeTool(store, resolveScope);
-    const api = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`, {}, undefined, {
-      worktrees: { store, resolveScope },
-    });
+    const api = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation({}),
+      {},
+      undefined,
+      {
+        worktrees: { store, resolveScope },
+      },
+    );
     const endpoint = await api.listen();
     const read = (nativeAgentId: string, token = secret) =>
       fetch(`${endpoint}/v1/session/worktrees`, {
@@ -376,7 +415,12 @@ describe('native runtime boundary', () => {
       },
     });
     const master = 'test-master-secret';
-    const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`);
+    const api = new RuntimeApi(
+      undefined,
+      master,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
     const endpoint = await api.listen();
     const post = (path: string, input: object, token = master) =>
       fetch(`${endpoint}/v1/activity/${path}`, {
@@ -465,7 +509,12 @@ describe('native runtime boundary', () => {
       },
     });
     const master = 'test-master-secret';
-    const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`);
+    const api = new RuntimeApi(
+      undefined,
+      master,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
     api.setSessionMemory(memory);
     const endpoint = await api.listen();
     const readPage = (body: object, token = master) =>
@@ -557,8 +606,9 @@ describe('native runtime boundary', () => {
       },
       close: async () => undefined,
     } as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
-    api.setSession('/workspace', 'session-1');
+    const activation = new SessionActivation();
+    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`, activation);
+    activation.register('/workspace', 'session-1');
     const endpoint = await api.listen();
     try {
       const command = {
@@ -641,7 +691,7 @@ describe('native runtime boundary', () => {
       },
     } as unknown as RuntimeController;
     const authority = `127.0.0.1:${await freePort()}`;
-    const api = new RuntimeApi(undefined, master, authority);
+    const api = new RuntimeApi(undefined, master, authority, new SessionActivation());
     const searchResult = {
       content: 'Search result',
       responseId: 'search-result',
@@ -741,7 +791,8 @@ describe('native runtime boundary', () => {
         return inventory;
       },
     } as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
+    const activation = new SessionActivation();
+    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`, activation);
     const endpoint = await api.listen();
     const call = (bearer: string, id = nativeAgentId, request: object = { operation: 'summary' }) =>
       fetch(`${endpoint}/v1/ried`, {
@@ -768,7 +819,7 @@ describe('native runtime boundary', () => {
       expect(agentResult.status).toBe(200);
       expect(await agentResult.json()).toEqual({ value: inventory });
 
-      api.setSession(snapshot.session.workspaceRoot, snapshot.session.id);
+      activation.register(snapshot.session.workspaceRoot, snapshot.session.id);
       const userResult = await call(master);
       expect(userResult.status).toBe(200);
       expect(await userResult.json()).toEqual({ value: inventory });
@@ -793,7 +844,12 @@ describe('native runtime boundary', () => {
       createdAt: '2026-01-01T00:00:00Z',
     });
     const controller = { snapshot: () => snapshot } as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
+    const api = new RuntimeApi(
+      controller,
+      master,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
     const endpoint = await api.listen();
     const request = (bearer = agentBearer(master, nativeAgentId), id = nativeAgentId) =>
       fetch(`${endpoint}/v1/evaluation/observe`, {
@@ -934,7 +990,12 @@ describe('native runtime boundary', () => {
         .snapshot(opened.session.id)
         .members.find((member) => member.member.key === 'explorer')?.binding?.nativeAgentId;
       if (!nativeAgentId) throw new Error('Readonly explorer was not bound');
-      api = new RuntimeApi(runtime, 'readonly-report-user-secret', `127.0.0.1:${await freePort()}`);
+      api = new RuntimeApi(
+        runtime,
+        'readonly-report-user-secret',
+        `127.0.0.1:${await freePort()}`,
+        new SessionActivation(),
+      );
       const endpoint = await api.listen();
       const denied = await fetch(`${endpoint}/v1/tool/authorize`, {
         method: 'POST',
@@ -1003,13 +1064,14 @@ describe('native runtime boundary', () => {
     ).toEqual({ A: 'original' });
   });
   test('stops on the authenticated idle route only after Paseo commits', async () => {
-    const api = new RuntimeApi(undefined, 'owner', `127.0.0.1:${await freePort()}`);
+    const activation = new SessionActivation();
+    const api = new RuntimeApi(undefined, 'owner', `127.0.0.1:${await freePort()}`, activation);
     const endpoint = await api.listen();
     const stopFinished = Promise.withResolvers<void>();
     let attempt = 0;
     let released = 0;
     let stopCalls = 0;
-    api.setOpenWorkspaceHandler(async () => {
+    activation.setWorkspaceActivator(async () => {
       throw new Error('lifecycle does not open a session');
     });
     api.setLifecycle(
@@ -1076,7 +1138,8 @@ describe('native runtime boundary', () => {
 
   test('requires user authentication and readiness for runtime status', async () => {
     const master = 'test-master-secret';
-    const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`);
+    const activation = new SessionActivation();
+    const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`, activation);
     const endpoint = await api.listen();
     try {
       expect(
@@ -1130,7 +1193,7 @@ describe('native runtime boundary', () => {
       });
       expect(stopBeforeHandler.status).toBe(503);
       expect(readyBeforeHandler.status).toBe(503);
-      api.setOpenWorkspaceHandler(async () => {
+      activation.setWorkspaceActivator(async () => {
         throw new Error('status does not open a session');
       });
       const ready = await fetch(`${endpoint}/v1/status`, {
@@ -1164,6 +1227,11 @@ describe('native runtime boundary', () => {
           },
           body: JSON.stringify(body),
         });
+      const openBeforeCore = await post('/v1/session/open', master, {});
+      expect(openBeforeCore.status).toBe(503);
+      expect(await openBeforeCore.json()).toEqual({
+        error: 'Runtime session activation is not ready',
+      });
       expect((await stop(master, '{')).status).toBe(400);
       expect((await stop(agentBearer(master, 'native-agent'), '{}')).status).toBe(401);
       expect((await stop(master, JSON.stringify({ instanceId: 'stale-runtime' }))).status).toBe(
@@ -1188,6 +1256,11 @@ describe('native runtime boundary', () => {
         teamSelection: 'default-minimal',
       });
       expect(sessionOpen.status).toBe(503);
+      expect(await sessionOpen.json()).toEqual({ error: 'LTCook runtime is stopping' });
+      const agentOpen = await post('/v1/session/open', agentBearer(master, 'native-agent'), {
+        nativeAgentId: 'native-agent',
+      });
+      expect(agentOpen.status).toBe(403);
       const command = {
         type: 'task.create',
         title: 'Task',
@@ -1228,15 +1301,23 @@ describe('native runtime boundary', () => {
       },
       execute: async () => undefined,
     } as unknown as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`, {
+    const startupEnvironment = {
       LTCOOK_SHELL_PROVENANCE: JSON.stringify({
         LTCOOK_API_TOKEN: 'original-shell-token',
         LTCOOK_TEAM: 'default-minimal',
         ORIGINAL_ONLY: 'startup',
       }),
       LTCOOK_TEAM: 'merged-project-team',
-    });
-    api.setOpenWorkspaceHandler(async (request) => {
+    };
+    const activation = new SessionActivation(startupEnvironment);
+    const api = new RuntimeApi(
+      controller,
+      master,
+      `127.0.0.1:${await freePort()}`,
+      activation,
+      startupEnvironment,
+    );
+    activation.setWorkspaceActivator(async (request) => {
       opened.push(request);
       const snapshot = snapshotFor(
         `native-${request.sessionId}`,
@@ -1369,8 +1450,9 @@ describe('native runtime boundary', () => {
         return snapshot;
       },
     } as unknown as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
-    api.setOpenWorkspaceHandler(async (request) => {
+    const activation = new SessionActivation();
+    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`, activation);
+    activation.setWorkspaceActivator(async (request) => {
       attempts += 1;
       if (attempts === 1) throw new Error('temporary activation failure');
       snapshot = snapshotFor('native-agent', true, request.sessionId, request.workspaceRoot);
@@ -1408,7 +1490,12 @@ describe('native runtime boundary', () => {
         return command;
       },
     } as unknown as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
+    const api = new RuntimeApi(
+      controller,
+      master,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
     const endpoint = await api.listen();
     const post = (command: unknown) =>
       fetch(`${endpoint}/v1/command`, {

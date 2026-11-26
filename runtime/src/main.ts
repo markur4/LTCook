@@ -87,6 +87,7 @@ async function run(): Promise<void> {
   const [
     { createRuntime },
     { RuntimeApi, agentBearer },
+    { SessionActivation },
     { captureShellEnvironment },
     { createPaseoAgentBackend, startPaseoHost },
     { Telemetry },
@@ -95,6 +96,7 @@ async function run(): Promise<void> {
   ] = await Promise.all([
     import('./core/runtime.js'),
     import('./integrations/runtime-api.js'),
+    import('./integrations/session-activation.js'),
     import('./integrations/shell-environment.js'),
     import('./integrations/paseo.js'),
     import('./diagnostics/telemetry.js'),
@@ -267,7 +269,8 @@ async function run(): Promise<void> {
     const worktrees = new SessionWorktrees(process.env.PATH ?? '');
     const resolveScope = createWorktreeScopeResolver((id) => runtime?.snapshot(id));
     const worktreeTool = createSessionWorktreeTool(worktrees, resolveScope);
-    api = new RuntimeApi(undefined, apiToken, apiListen, process.env, telemetry, {
+    const activation = new SessionActivation(process.env);
+    api = new RuntimeApi(undefined, apiToken, apiListen, activation, process.env, telemetry, {
       activity: { colgrep, preferences },
       worktrees: { store: worktrees, resolveScope },
     });
@@ -553,10 +556,10 @@ async function run(): Promise<void> {
     if (workspaceRoot && sessionId) {
       workspaceShellEnvironments.set(sessionId, captureShellEnvironment(process.env));
       initialSnapshot = await runtimeController.openSession({ id: sessionId, workspaceRoot });
-      api.setSession(workspaceRoot, initialSnapshot.session.id);
+      activation.register(workspaceRoot, initialSnapshot.session.id);
     }
     if (stopping) return;
-    api.setOpenWorkspaceHandler(async (request) => {
+    activation.setWorkspaceActivator(async (request) => {
       const targetWorkspace = path.resolve(request.workspaceRoot);
       const shellEnvironment = { ...request.shellEnvironment };
       delete shellEnvironment.LTCOOK_SHELL_PROVENANCE;
@@ -594,23 +597,8 @@ async function run(): Promise<void> {
         return backend.resolveSelection(workspaceRoot, leaderFor(teamSelection), alias, reasoning);
       },
     });
-    api.setPrepareSessionHandler(async (request) => {
-      const snapshot = runtimeController.snapshot(request.sessionId);
-      const leader = snapshot.definition.members.find(
-        (member) => member.key === snapshot.definition.leaderKey,
-      );
-      if (!leader) throw new Error('Selected Team has no Leader');
-      const prepared = await backend.prepare(
-        {
-          member: leader,
-          sessionId: snapshot.session.id,
-          teamInstanceId: snapshot.session.teamInstanceId,
-          teamId: snapshot.session.teamId,
-          workspaceRoot: snapshot.session.workspaceRoot,
-        },
-        request.leaderAgentId,
-        request.savedModel,
-      );
+    api.setPrepareSessionHandler(async (options, leaderAgentId, savedModel) => {
+      const prepared = await backend.prepare(options, leaderAgentId, savedModel);
       return {
         env: prepared.env,
         ...(prepared.mcpServers ? { mcpServers: prepared.mcpServers } : {}),

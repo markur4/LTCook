@@ -146,8 +146,20 @@ to both transports. Core still authorizes managed calls, and MCP still validates
 ordinary workspace grants. The dedicated RIED operation retains its Session
 binding and registration checks. The native boundary tests exercise managed
 invocation without MCP, readiness before Core or the catalog is attached,
-and RIED access from bound agents and registered user Sessions. Other route
-families, Core extraction, and failure handling remain open.
+and RIED access from bound agents and registered user Sessions.
+
+[Session activation](runtime/src/integrations/session-activation.ts) owns
+canonical workspace registration and in-flight Open requests. Runtime startup
+and the evaluation worker supply this owner to HTTP. Core still owns durable
+Sessions and native reconciliation. The
+[Session HTTP routes](runtime/src/integrations/runtime-session-routes.ts)
+use the registered workspace where required and keep saved-history reads
+independent of activation. Preparation passes the validated Session and Leader
+context to the backend from one snapshot. The boundary tests check concurrent
+Open requests, retry, and startup and shutdown authorization. The recovery
+test checks that a mismatched workspace never reaches native preparation.
+Model, lifecycle, grant, and evaluation routes, Core extraction, and failure
+handling remain open.
 
 ### CSC-03 — Session Memory concentrates recording, inference, retrieval, and handoff
 
@@ -306,10 +318,11 @@ instructions. Change existing documentation in place.
 
 **Observed information loss.** [RuntimeApi](runtime/src/integrations/runtime-api.ts)
 maps uncaught request failures to HTTP 400 and returns the exception
-message. The [Pi extension](runtime/src/integrations/pi-extension.ts) drops
-returned details for RIED and Session Memory while preserving them for repository
-search. [SessionMemory](runtime/src/session-memory/service.ts) records a generic
-update failure on unexpected errors.
+message. The [Pi extension](runtime/src/integrations/pi-extension.ts) reports
+only an HTTP status for RIED failures. Session Memory preserves a returned
+reason for HTTP 403, while repository search preserves reasons across error
+statuses. [SessionMemory](runtime/src/session-memory/service.ts) records a
+generic update failure on unexpected errors.
 
 Start with concrete failures where a caller can act on a safer detail. Preserve
 typed unavailable, partial, or paused outcomes where they express valid degraded
