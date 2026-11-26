@@ -437,6 +437,393 @@ async function eventually(predicate: () => boolean | Promise<boolean>) {
   expect(await predicate()).toBe(true);
 }
 
+test('redo a passage without changing later summaries, then redo from a selected cutoff', async () => {
+  const messages: MemorySourceMessage[] = [
+    { ...first, seq: 1, turnId: 'first' },
+    { ...longReply, seq: 2, turnId: 'first' },
+    { ...first, seq: 3, turnId: 'second' },
+    { ...longReply, seq: 4, turnId: 'second' },
+  ];
+  let generated = 0;
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    contextIndependent: true,
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type) {
+      const content = `Redo revision ${++generated} for ${type}.`;
+      return { type, text: content, content, complete: true, elapsedMs: 1 };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'first', outcome: 'completed' }, false);
+    memory.turn('leader', { turnId: 'second', outcome: 'completed' }, false);
+    await memory.settled();
+    const initial = await memory.readStoredSummaries('leader');
+    const originalLater = initial.summaries.find(({ position }) => position === 4)!;
+    const originalFirstText = initial.summaries.find(({ position }) => position === 2)!.parts[0]!
+      .content;
+    const originalCoverage = memory.status(undefined, 'leader').stored?.coveredThrough;
+
+    const passageRedo = memory.redoSummaries('leader', {
+      epoch: 'one',
+      scope: 'passage',
+      passage: { epoch: 'one', start: 1, position: 2, turnId: 'first' },
+    });
+    await memory.settled();
+    expect(memory.status(undefined, 'leader').redo).toEqual({
+      id: passageRedo.id,
+      state: 'completed',
+    });
+
+    const passageResult = await memory.readStoredSummaries('leader');
+    expect(
+      passageResult.summaries.find(({ position }) => position === 2)!.parts[0]!.content,
+    ).not.toEqual(originalFirstText);
+    expect(passageResult.summaries.find(({ position }) => position === 4)).toEqual(originalLater);
+    expect(memory.status(undefined, 'leader').stored?.coveredThrough).toEqual(originalCoverage);
+
+    const cutoffRedo = memory.redoSummaries('leader', {
+      epoch: 'one',
+      scope: 'from',
+      position: 2,
+    });
+    await memory.settled();
+    expect(memory.status(undefined, 'leader').redos).toEqual([
+      { id: passageRedo.id, state: 'completed' },
+      { id: cutoffRedo.id, state: 'completed' },
+    ]);
+    expect(memory.status(undefined, 'leader').redo).toEqual({
+      id: cutoffRedo.id,
+      state: 'completed',
+    });
+    const cutoffResult = await memory.readStoredSummaries('leader');
+    expect(cutoffResult.summaries.map(({ position }) => position).sort()).toEqual([2, 4]);
+    expect(
+      cutoffResult.summaries.every(({ parts }) =>
+        String(parts[0]?.content).includes('Redo revision'),
+      ),
+    ).toBe(true);
+    expect(generated).toBe(5);
+  } finally {
+    await memory.close();
+  }
+});
+
+test('reports a failed passage redo and preserves unrelated later summaries', async () => {
+  const messages: MemorySourceMessage[] = [
+    { ...first, seq: 1, turnId: 'first' },
+    { ...longReply, seq: 2, turnId: 'first' },
+    { ...first, seq: 3, turnId: 'second' },
+    { ...longReply, seq: 4, turnId: 'second' },
+  ];
+  let fail = false;
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    contextIndependent: true,
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type) {
+      if (fail) return { type, text: '', complete: false, elapsedMs: 1 };
+      return {
+        type,
+        text: 'Keep the passage.',
+        content: 'Keep the passage.',
+        complete: true,
+        elapsedMs: 1,
+      };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'first', outcome: 'completed' }, false);
+    memory.turn('leader', { turnId: 'second', outcome: 'completed' }, false);
+    await memory.settled();
+    const before = await memory.readStoredSummaries('leader');
+    const first = before.summaries.find(({ position }) => position === 2);
+    const later = before.summaries.find(({ position }) => position === 4);
+
+    fail = true;
+    const request = memory.redoSummaries('leader', {
+      epoch: 'one',
+      scope: 'passage',
+      passage: { epoch: 'one', start: 1, position: 2, turnId: 'first' },
+    });
+    await memory.settled();
+    expect(memory.status(undefined, 'leader').redo).toMatchObject({
+      id: request.id,
+      state: 'failed',
+    });
+    expect(memory.status(undefined, 'leader').redo?.error).toBeTruthy();
+    const after = await memory.readStoredSummaries('leader');
+    expect(after.summaries.find(({ position }) => position === 2)).toEqual(first);
+    expect(after.summaries.find(({ position }) => position === 4)).toEqual(later);
+  } finally {
+    await memory.close();
+  }
+});
+
+test('redo leaves the ingestion cursor in place so newer passages are still summarized', async () => {
+  const messages: MemorySourceMessage[] = [
+    { ...first, seq: 1, turnId: 'first' },
+    { ...longReply, seq: 2, turnId: 'first' },
+    { ...first, seq: 3, turnId: 'second' },
+    { ...longReply, seq: 4, turnId: 'second' },
+  ];
+  let generated = 0;
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    contextIndependent: true,
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type) {
+      const content = `Redo revision ${++generated} for ${type}.`;
+      return { type, text: content, content, complete: true, elapsedMs: 1 };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'first', outcome: 'completed' }, false);
+    memory.turn('leader', { turnId: 'second', outcome: 'completed' }, false);
+    await memory.settled();
+    const cursor = memory.status(undefined, 'leader').stored?.coveredThrough;
+
+    messages.push({ ...first, seq: 5, turnId: 'third' }, { ...longReply, seq: 6, turnId: 'third' });
+    const redo = memory.redoSummaries('leader', {
+      epoch: 'one',
+      scope: 'passage',
+      passage: { epoch: 'one', start: 1, position: 2, turnId: 'first' },
+    });
+    await memory.settled();
+    expect(memory.status(undefined, 'leader').redo).toEqual({ id: redo.id, state: 'completed' });
+    expect(memory.status(undefined, 'leader').stored?.coveredThrough).toEqual(cursor);
+    expect(
+      (await memory.readStoredSummaries('leader')).summaries
+        .map(({ position }) => position)
+        .sort((a, b) => a - b),
+    ).toEqual([2, 4]);
+
+    memory.turn('leader', { turnId: 'third', outcome: 'completed' }, false);
+    await memory.settled();
+    expect(
+      (await memory.readStoredSummaries('leader')).summaries
+        .map(({ position }) => position)
+        .sort((a, b) => a - b),
+    ).toEqual([2, 4, 6]);
+  } finally {
+    await memory.close();
+  }
+});
+
+test('keeps the redo queued through a pause and retries the same request', async () => {
+  const messages: MemorySourceMessage[] = [
+    { ...first, seq: 1, turnId: 'first' },
+    { ...longReply, seq: 2, turnId: 'first' },
+  ];
+  let calls = 0;
+  let inferenceStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    inferenceStarted = resolve;
+  });
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    contextIndependent: true,
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type, _prompt, signal) {
+      calls++;
+      if (calls === 2) {
+        inferenceStarted?.();
+        await new Promise<void>((resolve) =>
+          signal.addEventListener('abort', () => resolve(), { once: true }),
+        );
+      }
+      const content = `Redo revision ${calls} for ${type}.`;
+      return { type, text: content, content, complete: true, elapsedMs: 1 };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'first', outcome: 'completed' }, false);
+    await memory.settled();
+    const before = await memory.readStoredSummaries('leader');
+    const redo = memory.redoSummaries('leader', {
+      epoch: 'one',
+      scope: 'passage',
+      passage: { epoch: 'one', start: 1, position: 2, turnId: 'first' },
+    });
+    await started;
+    memory.setSummarizationEnabled(false);
+    await memory.settled();
+    expect(memory.status(undefined, 'leader').redo).toMatchObject({
+      id: redo.id,
+      state: 'queued',
+    });
+    expect((await memory.readStoredSummaries('leader')).summaries).toEqual(before.summaries);
+
+    messages.push(
+      { seq: 3, turnId: 'action', author: 'user', text: 'Run the focused test.' },
+      { seq: 4, turnId: 'action', author: 'tool', text: 'The focused test passed.' },
+    );
+    memory.turn('leader', { turnId: 'action', outcome: 'failed' }, false);
+    await memory.settled();
+    expect(memory.status(undefined, 'leader').redo).toMatchObject({
+      id: redo.id,
+      state: 'queued',
+    });
+    expect(
+      (await memory.readStoredSummaries('leader')).summaries.find(({ position }) => position === 4),
+    ).toMatchObject({ type: 'AAB', state: 'recorded' });
+
+    memory.setSummarizationEnabled(true);
+    await memory.settled();
+    expect(memory.status(undefined, 'leader').redo).toEqual({ id: redo.id, state: 'completed' });
+    expect(calls).toBe(3);
+  } finally {
+    await memory.close();
+  }
+});
+
+test('rejects a stale cutoff and preserves selected summaries when their source range is missing', async () => {
+  const messages: MemorySourceMessage[] = [
+    { ...first, seq: 1, turnId: 'first' },
+    { ...longReply, seq: 2, turnId: 'first' },
+  ];
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    contextIndependent: true,
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type) {
+      return {
+        type,
+        text: 'Original summary.',
+        content: 'Original summary.',
+        complete: true,
+        elapsedMs: 1,
+      };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'first', outcome: 'completed' }, false);
+    await memory.settled();
+    const before = await memory.readStoredSummaries('leader');
+
+    const stale = memory.redoSummaries('leader', {
+      epoch: 'one',
+      scope: 'from',
+      position: 3,
+    });
+    await memory.settled();
+    expect(memory.status(undefined, 'leader').redo).toMatchObject({
+      id: stale.id,
+      state: 'failed',
+    });
+    expect(memory.status(undefined, 'leader').redo?.error).toMatch(/cutoff/);
+    expect((await memory.readStoredSummaries('leader')).summaries).toEqual(before.summaries);
+
+    messages.splice(0, 1);
+    const missing = memory.redoSummaries('leader', {
+      epoch: 'one',
+      scope: 'from',
+      position: 2,
+    });
+    await memory.settled();
+    expect(memory.status(undefined, 'leader').redo).toMatchObject({
+      id: missing.id,
+      state: 'failed',
+    });
+    expect(memory.status(undefined, 'leader').redo?.error).toMatch(/original messages/);
+    expect((await memory.readStoredSummaries('leader')).summaries).toEqual(before.summaries);
+  } finally {
+    await memory.close();
+  }
+});
+
+test('rejects an epoch change between redo target selection and replay', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-redo-epoch-'));
+  const databasePath = path.join(directory, 'memory.sqlite');
+  const messagesOne: MemorySourceMessage[] = [
+    { ...first, seq: 1, turnId: 'first' },
+    { ...longReply, seq: 2, turnId: 'first' },
+  ];
+  const messagesTwo = messagesOne.map((message) => ({
+    ...message,
+    text: `A different conversation at the same position. ${message.text}`,
+  }));
+  let epoch = 'one';
+  let messages = messagesOne;
+  let switchAfterTail = false;
+  const source: MemorySource = {
+    async read(agentId, cursor, direction) {
+      const snapshot = { epoch, messages };
+      const page = await timeline(() => snapshot).read(agentId, cursor, direction);
+      if (direction === 'tail' && switchAfterTail) {
+        switchAfterTail = false;
+        epoch = 'two';
+        messages = messagesTwo;
+      }
+      return page;
+    },
+  };
+  let generated = 0;
+  const memory = new SessionMemory({
+    databasePath,
+    contextIndependent: true,
+    source,
+    async summarize(type) {
+      generated++;
+      return {
+        type,
+        text: `Protected summary ${generated}.`,
+        content: `Protected summary ${generated}.`,
+        complete: true,
+        elapsedMs: 1,
+      };
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'first', outcome: 'completed' }, false);
+    await memory.settled();
+    const seeded = new MemoryStore(databasePath);
+    let original: NonNullable<ReturnType<MemoryStore['summary']>>;
+    let replacementEpoch: NonNullable<ReturnType<MemoryStore['summary']>>;
+    try {
+      const selected = seeded.summaries('leader', 'one')[0];
+      expect(selected).toBeDefined();
+      original = selected!;
+      replacementEpoch = {
+        ...original,
+        epoch: 'two',
+        parts: original.parts.map((part) => ({
+          ...part,
+          content: 'Keep this replacement-epoch summary intact.',
+        })),
+      };
+      seeded.saveSummary(replacementEpoch);
+    } finally {
+      seeded.close();
+    }
+
+    switchAfterTail = true;
+    const redo = memory.redoSummaries('leader', {
+      epoch: 'one',
+      scope: 'from',
+      position: original.position,
+    });
+    await memory.settled();
+    expect(memory.status(undefined, 'leader').redo).toMatchObject({
+      id: redo.id,
+      state: 'failed',
+    });
+    expect(memory.status(undefined, 'leader').redo?.error).toMatch(/history changed/i);
+    expect(generated).toBe(1);
+
+    const verify = new MemoryStore(databasePath);
+    try {
+      expect(verify.summary('leader', 'one', original.id)).toEqual(original);
+      expect(verify.summary('leader', 'two', original.id)).toEqual(replacementEpoch);
+    } finally {
+      verify.close();
+    }
+  } finally {
+    await memory.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test.each([false, true])(
   'reports a safe recording failure and recovers on a new observation (known history error: %s)',
   async (known) => {

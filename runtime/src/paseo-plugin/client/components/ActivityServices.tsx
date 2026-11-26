@@ -6,6 +6,7 @@ import {
   activityToggleRpc,
   memoryDeviceRpc,
   memoryInferenceRpc,
+  memoryRedoRpc,
   type ActivitySnapshot,
   type MemoryUnitCounts,
 } from '../../shared/activity';
@@ -335,14 +336,82 @@ function StoredSummaryMetadata({
   theme,
   agentId,
   onOpenSummaries,
+  redoStatus,
+  redoStatuses,
+  redoEnabled,
 }: {
   theme: Theme;
   agentId: string;
   onOpenSummaries: () => void;
+  redoStatus: ActivitySnapshot['memory']['redo'];
+  redoStatuses: ActivitySnapshot['memory']['redos'];
+  redoEnabled: boolean;
 }) {
   const { page, error, loading, loadOlder, reload } = useStoredSummaries(agentId, false);
+  const startRedo = useRpc(memoryRedoRpc);
+  const [redoOpen, setRedoOpen] = useState(false);
+  const [selected, setSelected] = useState<{ epoch: string; position: number }>();
+  const [requestId, setRequestId] = useState<string>();
+  const sendingRedo = useRef(false);
+  const [sending, setSending] = useState(false);
+  const [redoError, setRedoError] = useState<string>();
+  const [redoComplete, setRedoComplete] = useState(false);
+  const activeRedo =
+    redoStatuses.find(({ state }) => state === 'queued' || state === 'running') ??
+    (redoStatus?.state === 'queued' || redoStatus?.state === 'running' ? redoStatus : undefined);
+  const requestStatus = requestId
+    ? (redoStatuses.find(({ id }) => id === requestId) ??
+      (redoStatus?.id === requestId ? redoStatus : undefined))
+    : undefined;
+  const busy = sending || !!requestId || !!activeRedo;
+
+  useEffect(() => {
+    if (!requestId || !requestStatus) return;
+    if (requestStatus.state === 'completed') {
+      reload();
+      setSelected(undefined);
+      setRedoComplete(true);
+      setRequestId(undefined);
+    } else if (requestStatus.state === 'failed') {
+      setRedoError(requestStatus.error ?? 'Session Memory could not complete this redo.');
+      setRequestId(undefined);
+    }
+  }, [requestStatus, reload, requestId]);
+
+  async function redoFromSelection() {
+    if (!selected || sendingRedo.current || busy || !redoEnabled) return;
+    sendingRedo.current = true;
+    setSending(true);
+    setRedoError(undefined);
+    setRedoComplete(false);
+    try {
+      const result = await startRedo({ agentId, scope: 'from', ...selected });
+      setRequestId(result.id);
+    } catch (cause) {
+      setRedoError(cause instanceof Error ? cause.message : 'Could not start Session Memory redo.');
+    } finally {
+      sendingRedo.current = false;
+      setSending(false);
+    }
+  }
+
   return (
     <>
+      <ActivityButton
+        theme={theme}
+        label="Redo summaries from a selected point"
+        expanded={redoOpen}
+        onPress={() => {
+          setRedoOpen(true);
+          setSelected(undefined);
+          setRedoError(undefined);
+          setRedoComplete(false);
+        }}
+      >
+        <ActivityText theme={theme} strong>
+          Redo
+        </ActivityText>
+      </ActivityButton>
       <ActivityButton theme={theme} label="Open stored summaries" onPress={onOpenSummaries}>
         <Icon name="ArrowUpRight" size={11} color={theme.colors.accent} />
         <ActivityText theme={theme}>Open stored summaries</ActivityText>
@@ -399,11 +468,101 @@ function StoredSummaryMetadata({
           <ActivityText theme={theme}>Load older summaries</ActivityText>
         </ActivityButton>
       )}
+      {!redoOpen && redoStatus?.state === 'queued' && (
+        <ActivityText theme={theme} tone="muted">
+          Redo queued…
+        </ActivityText>
+      )}
+      {!redoOpen && redoStatus?.state === 'running' && (
+        <ActivityText theme={theme} tone="running">
+          Redo in progress…
+        </ActivityText>
+      )}
+      {!redoOpen && redoStatus?.state === 'failed' && (
+        <ActivityText theme={theme} tone="danger">
+          {redoStatus.error ?? 'Session Memory redo failed.'}
+        </ActivityText>
+      )}
       {!loading && (
         <ActivityButton theme={theme} label="Reload stored summaries" onPress={reload}>
           <ActivityText theme={theme}>Reload stored summaries</ActivityText>
         </ActivityButton>
       )}
+      <Modal title="Redo summaries" open={redoOpen} onOpenChange={setRedoOpen}>
+        <Modal.Content contentContainerStyle={{ padding: 12, gap: 6 }}>
+          <ActivityText theme={theme}>
+            Choose where to start. The selected summary and later summaries will be rebuilt from the
+            original conversation history.
+          </ActivityText>
+          {page?.summaries.map((summary) => {
+            const date = new Date(summary.createdAt);
+            const label = `${summary.type} · ${Number.isNaN(date.valueOf()) ? 'Time unknown' : date.toLocaleString()} · Source #${summary.position}`;
+            return (
+              <Action
+                key={summary.id}
+                theme={theme}
+                title={label}
+                selected={
+                  selected?.epoch === summary.epoch && selected.position === summary.position
+                }
+                disabled={busy}
+                onPress={() => {
+                  setSelected({ epoch: summary.epoch, position: summary.position });
+                  setRedoError(undefined);
+                  setRedoComplete(false);
+                }}
+              />
+            );
+          })}
+          {loading && (
+            <ActivityText theme={theme} tone="muted">
+              Loading stored summaries…
+            </ActivityText>
+          )}
+          {error && (
+            <ActivityText theme={theme} tone="danger">
+              {error}
+            </ActivityText>
+          )}
+          {!loading && !error && page?.summaries.length === 0 && (
+            <ActivityText theme={theme} tone="muted">
+              No stored summaries to redo.
+            </ActivityText>
+          )}
+          {!loading && !error && page?.next && (
+            <ActivityButton theme={theme} label="Load older summaries" onPress={loadOlder}>
+              <ActivityText theme={theme}>Load older summaries</ActivityText>
+            </ActivityButton>
+          )}
+          {!redoEnabled && (
+            <ActivityText theme={theme} tone="warning">
+              Enable the Session Memory summarizer before redoing summaries.
+            </ActivityText>
+          )}
+          {!sending && (requestId || activeRedo) && (
+            <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.foregroundMuted }}>
+              {activeRedo?.state === 'running' ? 'Redo in progress…' : 'Redo queued…'}
+            </Text>
+          )}
+          {redoComplete && (
+            <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.statusSuccess }}>
+              Redo complete.
+            </Text>
+          )}
+          {redoError && (
+            <Text accessibilityRole="alert" style={{ color: theme.colors.statusDanger }}>
+              {redoError}
+            </Text>
+          )}
+          <Action
+            theme={theme}
+            title={sending ? 'Starting redo…' : 'Redo from selected summary'}
+            selected={false}
+            disabled={!selected || busy || !redoEnabled}
+            onPress={() => void redoFromSelection()}
+          />
+        </Modal.Content>
+      </Modal>
     </>
   );
 }
@@ -606,6 +765,9 @@ export function ActivityServices({
                 agentId={agentId}
                 theme={theme}
                 onOpenSummaries={onOpenSummaries}
+                redoStatus={memory.redo}
+                redoStatuses={memory.redos}
+                redoEnabled={memory.summarization !== 'paused'}
               />
             )}
           </>

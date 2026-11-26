@@ -867,6 +867,9 @@ try {
   const selectedGpu = { id: 'CUDA:fixture-4070', label: 'RTX 4070 Ti SUPER', mainGpu: 1 };
   const summaryContent = '## Discoveries\n\n- Background summary fixture';
   const summaryLink = 'https://example.com/cache/replay';
+  const showSummary = '[aria-label="Show summary"]';
+  const preview = '[data-testid="ltcook-passage-summary-preview"]';
+  const completeSummary = '[data-testid="ltcook-passage-summary-complete"]';
   const summaryStart = '## Discoveries\n\n- Live throughput passage summary\n\n';
   const latestSummary =
     summaryStart +
@@ -878,6 +881,7 @@ try {
   const longerPrompt =
     ' Keep this Session Memory fixture long enough to qualify for inference.'.repeat(18);
   const ambiguousReason = 'Ollama cannot select this device uniquely.';
+  let redoBackgroundContent: string | undefined;
   let deviceProbes = 0;
   const livePlacements: Array<{ cpuOnly?: boolean; mainGpu?: number }> = [];
   memory = new SessionMemory({
@@ -907,7 +911,8 @@ try {
     },
     async summarize(type, prompt, _signal, placement, onProgress) {
       const input = JSON.stringify(prompt);
-      if (input.includes('Summarize without Activity')) backgroundSummary = true;
+      const isBackgroundSummary = input.includes('Summarize without Activity');
+      if (isBackgroundSummary) backgroundSummary = true;
       const isLatest = input.includes('Measure live summary throughput');
       if (isLatest) {
         livePlacements.push(placement);
@@ -916,7 +921,11 @@ try {
         onProgress?.({ tokensPerSecond: 19, estimated: true });
         await Bun.sleep(2100);
       }
-      const content = isLatest ? latestSummary : summaryContent;
+      const content = isLatest
+        ? latestSummary
+        : isBackgroundSummary
+          ? (redoBackgroundContent ?? summaryContent)
+          : summaryContent;
       return {
         type,
         text: content,
@@ -1071,6 +1080,75 @@ try {
     '--fn',
     `document.querySelector(${JSON.stringify(summarizerSwitch)})?.checked === true`,
   );
+  stage = 'native-activity-memory-chat-redo';
+  await clickButton('Close Explorer sidebar');
+  await waitForComposer(mobileLeader.agent.title);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelectorAll(${JSON.stringify(showSummary)}).length > 0`,
+  );
+  await browser('click', showSummary);
+  await browser('wait', preview);
+  await browser('wait', '--text', 'Background summary fixture');
+  const firstStored = await memory.readStoredSummaries(mobileSession.id);
+  const backgroundRecord = firstStored.summaries.find(({ parts }) =>
+    parts.some(({ content }) => JSON.stringify(content) === JSON.stringify(summaryContent)),
+  );
+  assert(backgroundRecord);
+  redoBackgroundContent = `${summaryContent}\n\n- Passage redo regenerated this summary.`;
+  await browser('click', `${preview} [aria-label="Redo this passage summary"]`);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector(${JSON.stringify(preview)})?.textContent.includes(${JSON.stringify('Redo complete.')}) && document.querySelector(${JSON.stringify(preview)})?.textContent.includes(${JSON.stringify('Passage redo regenerated this summary.')})`,
+  );
+  const afterPassageRedo = await memory.readStoredSummaries(mobileSession.id);
+  assert(
+    afterPassageRedo.summaries
+      .find(({ id }) => id === backgroundRecord.id)
+      ?.parts.some(
+        ({ content }) => JSON.stringify(content) === JSON.stringify(redoBackgroundContent),
+      ),
+  );
+  await browser('scrollintoview', `${preview} [aria-label="Hide summary"]`);
+  await browser('click', `${preview} [aria-label="Hide summary"]`);
+  await browser('wait', preview, '--state', 'hidden');
+
+  await clickButton('Open Explorer sidebar');
+  await browser('wait', '--text', 'Recent conversation activity');
+  const sessionMemoryHeader = '[aria-label^="Session Memory,"]';
+  await browser(
+    'eval',
+    `(() => { const button = document.querySelector(${JSON.stringify(sessionMemoryHeader)}); if (button?.getAttribute('aria-expanded') !== 'true') button?.click(); })()`,
+  );
+  const storedAgent = '[aria-label^="Stored for this agent,"]';
+  await browser(
+    'eval',
+    `(() => { const button = document.querySelector(${JSON.stringify(storedAgent)}); if (button?.getAttribute('aria-expanded') !== 'true') button?.click(); })()`,
+  );
+  await clickButton('Redo summaries from a selected point');
+  await browser('wait', '--text', 'Choose where to start.');
+  await browser('wait', '[aria-label^="UAMP ·"]');
+  await browser(
+    'eval',
+    `(() => { const choices = [...document.querySelectorAll('button[aria-label^="UAMP ·"]')]; if (!choices.length) throw new Error('Expected a Discussion summary to redo.'); choices.at(-1).click(); })()`,
+  );
+  redoBackgroundContent = `${summaryContent}\n\n- Sidebar redo regenerated this summary.`;
+  await clickButton('Redo from selected summary');
+  await browser('wait', '--text', 'Redo complete.');
+  const afterSidebarRedo = await memory.readStoredSummaries(mobileSession.id);
+  assert(
+    afterSidebarRedo.summaries.some(({ parts }) =>
+      parts.some(
+        ({ content }) => JSON.stringify(content) === JSON.stringify(redoBackgroundContent),
+      ),
+    ),
+  );
+  await browser('press', 'Escape');
+  await browser('wait', '[role="dialog"]', '--state', 'hidden');
+  await browser('click', storedAgent);
+
   stage = 'native-activity-memory-live-rate';
   await host.api.agents
     .ref(mobileSession.id)
@@ -1131,9 +1209,6 @@ try {
   await waitForComposer(mobileLeader.agent.title);
   stage = 'native-activity-memory-chat-shortcut';
   await browser('set', 'viewport', '1100', '950');
-  const showSummary = '[aria-label="Show summary"]';
-  const preview = '[data-testid="ltcook-passage-summary-preview"]';
-  const completeSummary = '[data-testid="ltcook-passage-summary-complete"]';
   await browser(
     'wait',
     '--fn',
@@ -1156,6 +1231,38 @@ try {
   assert(earlier.includes('Background summary fixture'));
   assert(!earlier.includes('Live throughput passage summary'));
   assert(!earlier.includes('"findings"'), 'The chat preview is rendered as fields, not JSON');
+  const recordsBeforePassageRedo = await memory.readStoredSummaries(mobileSession.id);
+  const firstSummary = recordsBeforePassageRedo.summaries.find(({ parts }) =>
+    parts.some(({ content }) => JSON.stringify(content) === JSON.stringify(redoBackgroundContent)),
+  );
+  const laterSummary = recordsBeforePassageRedo.summaries.find(({ parts }) =>
+    parts.some(({ content }) => JSON.stringify(content) === JSON.stringify(latestSummary)),
+  );
+  assert(firstSummary && laterSummary);
+  redoBackgroundContent = `${summaryContent}\n\n- Passage redo regenerated this summary a second time.`;
+  await browser('click', `${preview} [aria-label="Redo this passage summary"]`);
+  await browser(
+    'wait',
+    '--fn',
+    `document.querySelector(${JSON.stringify(preview)})?.textContent.includes(${JSON.stringify('Redo complete.')}) && document.querySelector(${JSON.stringify(preview)})?.textContent.includes(${JSON.stringify('Passage redo regenerated this summary a second time.')})`,
+  );
+  const recordsAfterPassageRedo = await memory.readStoredSummaries(mobileSession.id);
+  assert(
+    recordsAfterPassageRedo.summaries
+      .find(({ id }) => id === firstSummary.id)
+      ?.parts.some(
+        ({ content }) => JSON.stringify(content) === JSON.stringify(redoBackgroundContent),
+      ),
+  );
+  assert.deepEqual(
+    recordsAfterPassageRedo.summaries.find(({ id }) => id === laterSummary.id),
+    laterSummary,
+  );
+  assert(
+    memory.status(undefined, mobileSession.id).redos.filter(({ state }) => state === 'completed')
+      .length >= 3,
+    'Completed redo request statuses remain available to slower UI subscribers.',
+  );
   await clickButton('Hide summary');
   await openPassage(1);
   await browser('wait', '--text', 'Live throughput passage summary');
@@ -1200,19 +1307,20 @@ try {
   assert(complete.includes('Final summary outcome remains visible.'));
   await browser('press', 'Escape');
   await browser('wait', completeSummary, '--state', 'hidden');
-  await browser('scrollintoview', '[aria-label="Hide summary"]');
+  await browser('scrollintoview', `${preview} [aria-label="Hide summary"]`);
   await browser(
     'wait',
     '--fn',
     `(() => {
-    const button = document.querySelector('[aria-label="Hide summary"]');
+    const button = document.querySelector(${JSON.stringify(`${preview} [aria-label="Hide summary"]`)});
     if (!button) return false;
     const bounds = button.getBoundingClientRect();
     return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
   })()`,
   );
-  await clickButton('Hide summary');
+  await browser('click', `${preview} [aria-label="Hide summary"]`);
   assert(!(await browser('snapshot')).includes('Final summary outcome remains visible.'));
+
   const memoryStore = new MemoryStore(path.join(directory, 'activity-memory.sqlite'));
   try {
     const catalog = await memory.readStoredSummaries(mobileSession.id);

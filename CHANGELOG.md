@@ -69,8 +69,11 @@ All notable changes to `ltcook` will be documented in this file.
   **Stored for this agent** to inspect summary timings, token estimates, and
   source positions. The **Stored Summaries** tab shows the storage path and
   syntax-colored JSON with clipboard export. **Show summary** in the chat
-  reveals the passage summary and can open its complete entry. The Session
-  Memory card shows live tokens per second during generation.
+  reveals the passage summary and can open its complete entry. Redo that
+  passage from the chat, or choose a stored summary in Activity to rebuild it
+  and all later summaries. The expanded chat summary also has **Hide summary**
+  at the bottom. The Session Memory card shows live tokens per second during
+  generation.
 
 - Activity links individual tool and skill occurrences to their chat rows in
   LTCook's Paseo web app. The details header opens skill documents in a workspace

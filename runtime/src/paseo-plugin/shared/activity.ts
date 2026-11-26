@@ -111,6 +111,20 @@ const sessionMemoryStatus = z.object({
     'disabled',
     'unknown',
   ]),
+  redo: z
+    .object({
+      id,
+      state: z.enum(['queued', 'running', 'completed', 'failed']),
+      error: z.string().optional(),
+    })
+    .nullable(),
+  redos: z.array(
+    z.object({
+      id,
+      state: z.enum(['queued', 'running', 'completed', 'failed']),
+      error: z.string().optional(),
+    }),
+  ),
   lastSummaryAt: timestamp.nullable(),
   stored: MemoryUnitCountsSchema.nullable(),
   pending: MemoryUnitCountsSchema.nullable(),
@@ -163,6 +177,14 @@ const summaryPassage = z.object({
   start: count,
   position: count,
   turnId: id.optional(),
+});
+export const memoryRedoRpc = defineRpc({
+  name: 'ltcook.activity.memory-redo',
+  input: z.discriminatedUnion('scope', [
+    z.object({ agentId: id, scope: z.literal('passage'), passage: summaryPassage }),
+    z.object({ agentId: id, scope: z.literal('from'), epoch: id, position: count }),
+  ]),
+  output: z.object({ id }),
 });
 export const MemorySummariesTimelineSchema = z.object({
   passage: summaryPassage.optional(),

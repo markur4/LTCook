@@ -11,6 +11,7 @@ import {
   memoryDeviceRpc,
   memoryEvidenceRpc,
   memoryInferenceRpc,
+  memoryRedoRpc,
   MemoryEvidenceReferencesSchema,
   MemoryDeviceSchema,
   MemoryHostedUsageSchema,
@@ -319,6 +320,20 @@ const activityServices = z.object({
         'failed',
         'unknown',
       ]),
+      redo: z
+        .object({
+          id: z.string(),
+          state: z.enum(['queued', 'running', 'completed', 'failed']),
+          error: z.string().optional(),
+        })
+        .nullable(),
+      redos: z.array(
+        z.object({
+          id: z.string(),
+          state: z.enum(['queued', 'running', 'completed', 'failed']),
+          error: z.string().optional(),
+        }),
+      ),
       lastSuccessfulSummaryAt: z.string().nullable(),
       lastError: z.object({ message: z.string() }).nullable(),
       stored: MemoryUnitCountsSchema.nullable(),
@@ -360,6 +375,12 @@ export default function contribute(server: PluginServerContext) {
       await runtimeJson('/v1/activity/memory-device', input, undefined, 20_000),
     ),
   );
+  server.handle(memoryRedoRpc, async (input, { paseo }) => {
+    const entry = await paseo.agents.ref(input.agentId).refresh();
+    if (!entry || entry.agent.archivedAt)
+      throw new Error('The Activity conversation is unavailable.');
+    return memoryRedoRpc.output.parse(await runtimeJson('/v1/activity/memory-redo', input));
+  });
   server.handle(storedSummariesRpc, async (input, { paseo }) => {
     const entry = await paseo.agents.ref(input.agentId).refresh();
     if (!entry || entry.agent.archivedAt)
@@ -488,6 +509,8 @@ export default function contribute(server: PluginServerContext) {
             summarization: services?.memoryDisabled
               ? 'disabled'
               : (memory?.summarization ?? 'unknown'),
+            redo: memory?.redo ?? null,
+            redos: memory?.redos ?? [],
             lastSummaryAt: memory?.lastSuccessfulSummaryAt
               ? observedTimestamp(memory.lastSuccessfulSummaryAt)
               : null,
