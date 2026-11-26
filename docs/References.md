@@ -367,6 +367,10 @@ document references, decisions, approvals and work results.
 TypeBox schema; public command types and agent-facing input schemas derive from it.
 The `ltcook_team` native tool uses that schema and Core enforces actor permissions.
 
+`pass.create` records a Pass. See [domain terminology](Explanations.md#domain-terminology)
+for the definitions of Pass and Task. Task acceptance and workflow delivery
+criteria are separate from those definitions.
+
 Scheduled Pass `task.create` requests use stable `requestId` values and may
 register `assigneeKey`, `dependencyIds`, `verificationRequirements`,
 `approvalScopes` (`{action, resourceId, revision}`), and `correctionOfTaskId`.

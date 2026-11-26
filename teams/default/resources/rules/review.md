@@ -1,6 +1,6 @@
 # Review
 
-Review the complete integrated Pass once after its Tasks finish; do not impose a separate review gate on each Task. Inspect the current combined change, directly fix concrete defects within the approved scope, and report evidence and impact. Record `review.create` for the Pass and its current revision after those fixes. Changes to covered work invalidate an older approval.
+Use one review Task for the Pass. Review the combined changes on the shared Pass checkout after implementation Tasks finish and before target integration. Directly fix concrete defects within the approved scope and report evidence and impact. Record `review.create` for the Pass and its current revision after those fixes. Changes to covered work invalidate an older approval.
 
 Do not treat self-inspection or review by a member assigned implementation in that Pass as independent review. When a declared reviewer is unavailable, record the blocker rather than creating an undeclared role or claiming approval. Review does not grant user approval for release, publication, deployment, or other scoped actions.
 

@@ -335,6 +335,11 @@ Project and User scopes. See [planning and guidance](docs/How-To-User-Guides.md#
 
 ## Develop with Bun
 
+LTCook develops and tests agent instructions and skills in Codex, with Codex
+in Paseo as the integration target. Pi is where LTCook adds runtime enforcement
+for settled policies when needed. See the
+[prototype workflow](docs/Development.md#prototype-workflow).
+
 Bun is the development runtime. The grouped Just module exposes
 `just runtime sync`, `dev`, `check`, `test` and `build`; there is no separate
 frontend or chat server. Start with the

@@ -20,6 +20,7 @@
   - [Domain terminology](#domain-terminology)
   - [Interchangeable teams](#interchangeable-teams)
   - [Guidance and planning](#guidance-and-planning)
+    - [Instruction sources in Codex and Pi](#instruction-sources-in-codex-and-pi)
   - [Context-aware Session Memory](#context-aware-session-memory)
   - [Coordination and recovery](#coordination-and-recovery)
   - [Web services and diagnostics](#web-services-and-diagnostics)
@@ -249,8 +250,8 @@ These terms describe work, not ten separate workflow engines or database tables:
 | Agent Action Batch (AAB) | Related AAs grouped for deterministic recording. Known Plan, Pass, Task, and Step identifiers apply to the AAB. |
 | Request | The native initiating message for work; a Task may reference its native message identifier. |
 | Plan | A document specifying intended work and integration strategy. LTCook references it rather than storing a second plan history. |
-| Pass | An explicitly created integration unit with a title and an optional Plan reference. |
-| Task | An owned piece of work, optionally associated with a Pass; standalone Tasks do not create a Pass. |
+| Pass | A Pass starts when the user requests implementation, continues while its Tasks are worked on, and ends when the agent or runtime stops because all its Tasks are finished. |
+| Task | A Task is an owned unit of work with an expected result. Tasks can stand alone or belong to a Pass. Review is a Task whenever review is required. |
 | Step | Persisted, ordered progress within a Task. |
 | Action | A tool call, message, or other action recorded by native Pi/Paseo history, not a second LTCook transcript. |
 | Goal | A completion criterion spanning Passes and potentially multiple Sessions. |
@@ -266,8 +267,13 @@ workspace root. Several Sessions can share that TeamInstance while retaining
 separate native agents and histories. Starting a chat does not create a new
 logical workspace team, and sharing a team must not merge chats.
 
-Worktree isolation belongs to a Task or Pass when the work needs it; a Project
-does not imply one shared sandbox. Phase names classify work rather than
+Pass and Task are reserved terms. Keep their meanings fixed across instructions,
+skills, plans, reports, and runtime adapters. Map native record labels to these
+terms. The workflow owns Task acceptance and the requirements for reporting Done.
+
+Each Pass uses one shared branch and worktree per repository it changes. Its
+Tasks, including review, share that checkout. A checkpoint or integration delay
+leaves the Pass and its checkout in place. Phase names classify work rather than
 orchestrate it: `implementation` changes intended behavior, `review` examines
 work, `verification` runs checks, and `integration` combines completed changes.
 The fix phases identify what prompted a correction: `review-fix` addresses review
@@ -321,12 +327,27 @@ Only authenticated CLI operations or correlated native user dialog responses can
 answer or approve. Agent reports, recommendations, cancellation and timeouts do
 not count as consent. Interrupted dialogs remain pending for CLI recovery.
 
-Before approval, native tools permit read-only investigation and writing the
+In a managed Pi Session, before approval native tools permit read-only investigation and writing the
 Design/Plan files in designated directories. Project edits, arbitrary shell
 execution and other mutations are blocked. After approval, an active Pass permits
 execution while member read-only restrictions remain. Unavailable runtime
 authorization fails closed. These controls are native tool/API boundaries; they
 are not an operating-system sandbox.
+
+### Instruction sources in Codex and Pi
+
+| Source | Concrete inputs and owner | Where it applies |
+| --- | --- | --- |
+| Project and shared skills | The repository's [`AGENTS.md`](../AGENTS.md) points to `CONTRIBUTING.md` and the development guides. Native loaders discover project skills and shared user skills from `~/.agents/skills`. A skill's instructions live in its `SKILL.md` and linked references. | Both harnesses, according to their native discovery and trust rules. |
+| Codex user guidance and overrides | Codex reads `AGENTS.md` or `AGENTS.override.md` in its home (usually `~/.codex`), then the applicable project instructions from the repository root through the launch directory. Its platform and developer instructions and active session settings apply to native tools. | Standalone Codex and ordinary Codex in Paseo. |
+| Paseo launch and LTCook workspace tools | LTCook's [Paseo integration](../runtime/src/integrations/paseo.ts) supplies `daemon.appendSystemPrompt` for workspace-tool usage. Paseo's Codex adapter starts `codex app-server` and sends launch guidance and mode overrides. The [LTCook plugin](../runtime/src/paseo-plugin/index.server.ts) attaches scoped workspace tools. | The daemon prompt and plugin apply to ordinary chats in LTCook's Paseo host. Codex resolves and enforces its command permissions. |
+| Managed Pi guidance | [`NativeGuidance`](../runtime/src/integrations/native-guidance.ts) composes [Core rules and skills](../runtime/resources/catalog.json), the selected Team's `definition.resources` filtered by member, and the AppRC User guidance directory (`guidance/rules` and `guidance/skills`). It hands these to Pi's native loader, which also supplies native project instructions and skills. | Managed LTCook Team sessions in Pi. The [guidance inspector](References.md#guidance-api) shows applicable and loaded resources. |
+| Managed workflow state | Core dispatches declared Tasks with their acceptance criteria, dependencies and recorded user approvals. The runtime and Pi tool guards enforce member and workflow permissions. | Managed LTCook Team sessions in Pi. |
+
+The [worktree tool](How-To-User-Guides.md#use-workspace-tools-in-pi-or-codex)
+reports the active checkout so Paseo's Changes view can follow it. Git creates
+and removes the checkout through the harness's native tools. The one-worktree
+policy currently relies on instructions and skills.
 
 ### Repository Core and RIED
 
@@ -403,15 +424,13 @@ assignment attempts, Task dependencies and gates, reports, whole-Pass reviews,
 scoped approvals, and native bindings.
 It is not a configuration database or transcript mirror.
 
-A Pass can reference a Plan document through `planRef`. Completing a Task does
-not require a separate reviewer. Completing a Pass requires its Tasks completed
-and, where the team's review policy requires it, an accepted review of the current
-whole-Pass revision. Task, Step, and report changes invalidate an earlier revision's
-approval. The full team requires independent review; the minimal team permits
-self-review without representing it as independent.
-A completed Pass is final and cannot be reopened or mutated; create another
-explicit Pass for later work. Starting a new Pass does not itself create a Plan
-or Task.
+The runtime's `pass.create` record tracks a Pass and can reference a Plan
+document through `planRef`. The runtime completes the record when the declared
+Tasks finish and the Team's review requirements are satisfied. Task, Step, and
+report changes invalidate an earlier revision's review. The full Team requires
+independent review, and the minimal Team permits self-review. A completed record
+is final. The workflow still owns the agreed delivery steps and the criteria for
+reporting Done, including remote integration when required.
 
 Scheduled Pass Tasks have stable request IDs, optional assignees, dependency IDs,
 named verification requirements, and exact approval scopes. Dependencies may
