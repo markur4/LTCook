@@ -790,6 +790,10 @@ reset approval; a material scope change requires an explicit new user decision.
 
 ## Configure guidance
 
+For ordinary Codex chats in Paseo, use Codex's native user and repository
+guidance. See [instruction sources in Codex and Pi](Explanations.md#instruction-sources-in-codex-and-pi)
+for what Paseo supplies and which resources apply to a managed Team.
+
 User guidance defaults to `<AppRC config>/guidance/rules/` and `skills/`. Set its
 global root through AppRC when needed:
 

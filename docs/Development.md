@@ -7,6 +7,7 @@ quick checks, and submission expectations. This page covers the deeper project
 layout, packaging boundary, verification limits, and current release workflow.
 
 - [Work in the project](#work-in-the-project)
+  - [Prototype workflow](#prototype-workflow)
   - [Maintainer environment](#maintainer-environment)
   - [Repository routing](#repository-routing)
   - [Workspace tool guidance](#workspace-tool-guidance)
@@ -27,6 +28,38 @@ layout, packaging boundary, verification limits, and current release workflow.
 <br>
 
 # Work in the project
+
+## Prototype workflow
+
+Develop and test instructions and skills in Codex first. Use ordinary Codex
+chats in Paseo to check that the project and personal guidance, shared skills,
+and LTCook workspace tools reach the agent together. Keep the policy in its
+owning instructions or skill and use the fixed
+[Pass and Task definitions](Explanations.md#domain-terminology). Pi is the
+target for additional runtime enforcement after the policy is settled and the
+behavior still needs enforcement. Existing Pi qualification and the
+[verification commands](#verification) continue to apply.
+
+Use one shared branch, worktree, and draft PR for each Pass that changes
+LTCook. Review is a Task on that checkout. A denied integration action leaves
+the integration Task and its dependents pending in the same Pass. Preserve the
+checkout and report the denied action, the reason, and the relevant user
+authorization. Leave the Pass open until the agreed integration succeeds.
+
+For an ordinary Codex chat in Paseo, start with **Default Permissions** when
+testing guidance with the user's command approval flow. That preset uses
+`on-request`, `workspace-write`, and the `user` reviewer. LTCook's pinned
+Paseo adapter defaults to **Auto-review** when the host Codex version supports
+it (0.115.0 and newer). Auto-review keeps the same policy and sandbox, and
+passes `approvalsReviewer: "auto_review"` to Codex app-server, overriding the
+user's reviewer setting for that chat. Check the effective mode when diagnosing
+a denial, including after resuming. [Pinned Paseo adapter](https://github.com/getpaseo/paseo/blob/23bae61535542a45ade7196a7b3c152705f16de3/packages/server/src/server/agent/providers/codex-app-server-agent.ts#L8012-L8032)
+
+The Codex command approval flow and the Team's code review Task have separate
+criteria and authority. In Codex 0.171.0, the app-server entry point supplies
+`vscode` as the thread source label even when Paseo launches it. Check the mode
+and approval settings to identify which reviewer resolved a request.
+[Codex app-server entry point](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/cli/src/main.rs#L1361-L1369) · [Instruction sources](Explanations.md#instruction-sources-in-codex-and-pi)
 
 ## Maintainer environment
 
@@ -1005,7 +1038,9 @@ verify the app, distribution, command, version, and source commit. The command
 caches the verified bundle under `.cache/apprc/releases/`, pushes `main` and
 the tag together, and publishes the matching GitHub Release. Run it again to
 retry the checked bundle. `just release VERSION` combines preparation and
-publication. Git pushes and release publication require explicit authorization.
+publication. Pushing the release commit and tag and publishing the release
+require explicit release authorization. An approved Pass authorizes its normal
+reviewed PR merge under the repository's execution permissions.
 
 GitHub marks beta and RC builds as prereleases. Publishing keeps the newest
 published beta and the newest published release candidate across target

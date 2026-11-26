@@ -90,6 +90,15 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 # 2026-11-26
 
+## P2 / E2 [Tooling] - *Make effective Codex approval settings visible in Paseo*
+
+- **Area:** Paseo's Codex app-server adapter and [LTCook's Paseo host configuration](runtime/src/integrations/paseo.ts).
+- **Observed while:** Investigating why a Codex command approval blocked default-branch integration.
+- **Why not fixed now:** The current Pass aligns instructions and documentation. A diagnostics or provider change needs its own scope.
+- **Evidence:** The affected Paseo agent had `modeId: "auto-review"` and its turn used `on-request` with `auto_review`. The pinned Paseo adapter defaults to Auto-review for Codex 0.115.0 and newer and forwards that preset to Codex. The affected session ran Codex 0.171.0. Codex app-server itself assigns the historical `vscode` source label.
+- **Context:** The active chat mode can override the user's CLI defaults. The historical records establish the effective mode, and the adapter source establishes the provider default. The original mode selection or inheritance for that chat remains unconfirmed.
+- **Suggested next step:** Trace how a fresh or resumed Codex chat obtains its mode. Verify the effective reviewer, approval policy, and sandbox for standalone Codex and Paseo's Default Permissions and Auto-review presets. Make the effective values and their sources visible through existing diagnostics.
+
 The [architectural CSC report](code-smells.md) records findings, accepted
 decisions, the Explorer fix status, and the order for the remaining passes.
 
