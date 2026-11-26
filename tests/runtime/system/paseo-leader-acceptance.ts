@@ -8,6 +8,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import {
@@ -281,7 +282,9 @@ try {
   runtime = createController();
   api.setRuntime(runtime);
   const memoryTool = createSessionMemoryTool(memory);
-  api.setWorkspaceMcp(new WorkspaceMcp([memoryTool], listen));
+  const tools = new ToolCatalog([memoryTool]);
+  api.setWorkspaceTools(tools);
+  api.setWorkspaceMcp(new WorkspaceMcp(tools, listen));
   api.setPastedDocuments(pastedDocuments);
   api.setOpenWorkspaceHandler(async (request) =>
     runtime!.openSession({
@@ -438,7 +441,9 @@ try {
   runtime = createController();
   api.setRuntime(runtime);
   const reopenedTool = createSessionMemoryTool(memory);
-  api.setWorkspaceMcp(new WorkspaceMcp([reopenedTool], listen));
+  const reopenedTools = new ToolCatalog([reopenedTool]);
+  api.setWorkspaceTools(reopenedTools);
+  api.setWorkspaceMcp(new WorkspaceMcp(reopenedTools, listen));
   await runtime.openSession({
     id: leaderId,
     workspaceRoot: workspace,

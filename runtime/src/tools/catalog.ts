@@ -8,7 +8,27 @@ import type { OllamaSettings } from '../integrations/ollama.js';
 import { createSessionMemoryTool } from './session-memory.js';
 import type { SessionMemory } from '../session-memory/service.js';
 import type { createColgrepProvider } from '../repository/providers/colgrep.js';
-import type { ToolDefinition } from './types.js';
+import type { ToolContext, ToolDefinition } from './types.js';
+
+export class ToolCatalog {
+  readonly definitions: readonly ToolDefinition[];
+  private readonly byName: ReadonlyMap<string, ToolDefinition>;
+
+  constructor(definitions: readonly ToolDefinition[]) {
+    this.definitions = [...definitions];
+    this.byName = new Map(this.definitions.map((tool) => [tool.name, tool]));
+  }
+
+  async invoke(
+    name: string,
+    input: unknown,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
+    const tool = this.byName.get(name);
+    if (!tool) throw new Error('Unknown LTCook tool.');
+    return tool.invoke(input, context);
+  }
+}
 
 export function createTools(
   ried: RiedService,
@@ -17,9 +37,9 @@ export function createTools(
   memory?: SessionMemory,
   colgrep?: ReturnType<typeof createColgrepProvider>,
   worktree?: ToolDefinition,
-): readonly ToolDefinition[] {
+): ToolCatalog {
   const repoSearch = createRepoSearchTool(colgrep);
-  return [
+  return new ToolCatalog([
     createRiedTool(ried),
     repoSearch,
     createRepoLocateTool(repoSearch),
@@ -29,5 +49,5 @@ export function createTools(
       : []),
     ...(memory ? [createSessionMemoryTool(memory)] : []),
     ...(web ? createWebTools(web) : []),
-  ];
+  ]);
 }

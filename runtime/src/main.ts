@@ -503,12 +503,9 @@ async function run(): Promise<void> {
               );
             })
         : undefined;
-    const workspaceMcp = new WorkspaceMcp(
-      createTools(ried, summarization, web, memory, colgrep, worktreeTool),
-      apiListen,
-      web,
-      requestRestart,
-    );
+    const tools = createTools(ried, summarization, web, memory, colgrep, worktreeTool);
+    const workspaceMcp = new WorkspaceMcp(tools, apiListen, web, requestRestart);
+    api.setWorkspaceTools(tools);
     api.setWorkspaceMcp(workspaceMcp);
     const backend = await createPaseoAgentBackend({
       telemetry,

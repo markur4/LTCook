@@ -13,6 +13,7 @@ import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
 import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { ActivityPreferences } from '../../../runtime/src/integrations/activity-preferences.js';
 import {
@@ -376,7 +377,9 @@ const evals = new EvalRunService(path.join(directory, 'eval-state'), async (requ
 });
 await evals.initialize();
 api.setEval(evals);
-api.setWorkspaceMcp(new WorkspaceMcp([], listen));
+const tools = new ToolCatalog([]);
+api.setWorkspaceTools(tools);
+api.setWorkspaceMcp(new WorkspaceMcp(tools, listen));
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 let memory: SessionMemory | undefined;
