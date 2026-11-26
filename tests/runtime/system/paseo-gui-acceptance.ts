@@ -11,8 +11,11 @@ import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
-import { MemoryStore } from '../../../runtime/src/session-memory/store.js';
-import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
+import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
+import { ClarifyService } from '../../../runtime/src/session-memory/clarify.js';
+import { ConversationInference } from '../../../runtime/src/session-memory/inference.js';
+import { openConversationProductStore } from '../../../runtime/src/session-memory/product-store.js';
+import { TrackerService } from '../../../runtime/src/session-memory/tracker.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
@@ -334,6 +337,7 @@ const environment = {
     ),
   ),
   PI_CODING_AGENT_DIR: piHome,
+  PASEO_WEB_UI_DIST_DIR: path.join(root, 'runtime/dist/paseo-web'),
   LTCOOK_PI_AUTH_DIR: authHome,
   PI_OFFLINE: '1',
   LTCOOK_MODEL_SMART: 'fixture/test',
@@ -385,8 +389,10 @@ api.setWorkspaceTools(tools);
 api.setWorkspaceMcp(new WorkspaceMcp(tools, listen));
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
-let memory: SessionMemory | undefined;
-let backgroundSummary = false;
+let memory: ConversationRecords | undefined;
+let products: ReturnType<typeof openConversationProductStore> | undefined;
+let inference: ConversationInference | undefined;
+let tracker: TrackerService | undefined;
 let activityRequests = 0;
 const paseoHome = path.join(deployment, 'paseo');
 try {
@@ -864,88 +870,73 @@ try {
   await waitForComposer(mobileLeader.agent.title);
   await browser('wait', '--text', 'RAG Index');
 
-  const selectedGpu = { id: 'CUDA:fixture-4070', label: 'RTX 4070 Ti SUPER', mainGpu: 1 };
-  const summaryContent = '## Discoveries\n\n- Background summary fixture';
-  const summaryLink = 'https://example.com/cache/replay';
-  const showSummary = '[aria-label="Show summary"]';
-  const preview = '[data-testid="ltcook-passage-summary-preview"]';
-  const completeSummary = '[data-testid="ltcook-passage-summary-complete"]';
-  const summaryStart = '## Discoveries\n\n- Live throughput passage summary\n\n';
-  const latestSummary =
-    summaryStart +
-    '- ' +
-    'Verified the cache result. '.repeat(41) +
-    `[Cache evidence](${summaryLink}).\n\n- Final summary outcome remains visible.`;
-  const linkStart = latestSummary.indexOf('[Cache evidence]');
-  assert(linkStart < 1200 && latestSummary.indexOf(summaryLink) + summaryLink.length > 1200);
-  const longerPrompt =
-    ' Keep this Session Memory fixture long enough to qualify for inference.'.repeat(18);
-  const ambiguousReason = 'Ollama cannot select this device uniquely.';
-  let redoBackgroundContent: string | undefined;
-  let deviceProbes = 0;
-  const livePlacements: Array<{ cpuOnly?: boolean; mainGpu?: number }> = [];
-  memory = new SessionMemory({
-    databasePath: path.join(directory, 'activity-memory.sqlite'),
-    source: createPaseoMemorySource(host.api, secret),
-    inference: {
-      hosted: { model: 'gpt-6-luna', reasoning: 'high' },
-      local: { model: 'fixture-local-memory', reasoning: 'none' },
+  const evidence = createPaseoMemorySource(host.api, secret);
+  products = openConversationProductStore(path.join(directory, 'conversation-products.sqlite'));
+  let clarificationRequests = 0;
+  inference = new ConversationInference(
+    {
+      hosted: async (product, prompt) => {
+        if (product === 'clarify') {
+          clarificationRequests++;
+          return { text: 'The public cursor hides its storage layout.', complete: true };
+        }
+        const decoded = JSON.parse(prompt.input) as {
+          current: { seq: number; text: string };
+          trackers: { id: string }[];
+        };
+        return {
+          complete: true,
+          text: JSON.stringify({
+            trackers: decoded.trackers.map(({ id }) => ({
+              trackerId: id,
+              changes: decoded.current.text.includes('Use an opaque public cursor.')
+                ? [
+                    {
+                      type: 'add',
+                      text: 'Keep the public cursor opaque.',
+                      sources: [decoded.current.seq],
+                    },
+                  ]
+                : [],
+            })),
+          }),
+        };
+      },
     },
-    hostedUsage: () => ({
-      requests: 1,
-      inputTokens: 321,
-      cachedInputTokens: 32,
-      outputTokens: 123,
-      reasoningTokens: 12,
-      lastLatencyMs: 250,
-    }),
-    async deviceCatalog() {
-      deviceProbes++;
-      return {
-        devices: [
-          { id: 'CUDA:fixture-5090', label: 'RTX 5090', mainGpu: 0 },
-          selectedGpu,
-          { id: 'ROCm:fixture-igpu', label: 'AMD integrated GPU', unavailable: ambiguousReason },
-        ],
-      };
-    },
-    async summarize(type, prompt, _signal, placement, onProgress) {
-      const input = JSON.stringify(prompt);
-      const isBackgroundSummary = input.includes('Summarize without Activity');
-      if (isBackgroundSummary) backgroundSummary = true;
-      const isLatest = input.includes('Measure live summary throughput');
-      if (isLatest) {
-        livePlacements.push(placement);
-        onProgress?.({ tokensPerSecond: 12.5, estimated: true });
-        await Bun.sleep(2100);
-        onProgress?.({ tokensPerSecond: 19, estimated: true });
-        await Bun.sleep(2100);
-      }
-      const content = isLatest
-        ? latestSummary
-        : isBackgroundSummary
-          ? (redoBackgroundContent ?? summaryContent)
-          : summaryContent;
-      return {
-        type,
-        text: content,
-        content,
-        complete: true,
-        elapsedMs: 1,
-      };
-    },
+    'hosted',
+  );
+  tracker = new TrackerService(products, evidence, inference, 8000);
+  tracker.observe(mobileSession.id, { baseline: true });
+  await tracker.settled();
+  api.setConversationInference(inference);
+  api.setClarify(new ClarifyService(products, evidence, inference, 8000));
+  api.setTracker(tracker);
+  memory = new ConversationRecords({
+    databasePath: path.join(directory, 'activity-conversation.sqlite'),
+    source: evidence,
+    onObserved: (id) => tracker?.observe(id),
   });
-  api.setSessionMemory(memory, () => ({ sessionId: mobileSession.id }));
+  api.setConversationRecords(memory, () => ({ scope: { sessionId: mobileSession.id } }));
   await clickButton('Close Explorer sidebar');
   await new Promise((resolve) => setTimeout(resolve, 1750));
   const requestsWhileHidden = activityRequests;
-  await host.api.agents
-    .ref(mobileSession.id)
-    .send('Summarize without Activity' + longerPrompt, { clientMessageId: randomUUID() });
-  for (let attempt = 0; attempt < 100 && !backgroundSummary; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  assert(backgroundSummary, 'Session Memory summarizes while Activity is hidden');
+  const hiddenLeader = host.api.agents.ref(mobileSession.id);
+  const hiddenPrompt = 'Exercise Activity tools while the panel is hidden.';
+  await hiddenLeader.send(hiddenPrompt, { clientMessageId: randomUUID() });
+  await hiddenLeader.waitForFinish(30_000);
+  await memory.finalize(mobileSession.id);
+  const hiddenEvidence = await memory.search(mobileSession.id, '', hiddenPrompt);
+  const hiddenMessage = hiddenEvidence.matches
+    .flatMap(({ entries }) => entries)
+    .find(({ author, text }) => author === 'user' && text === hiddenPrompt);
+  assert(hiddenMessage);
+  const actionBatches = (await memory.records(mobileSession.id)).batches;
+  assert(
+    actionBatches.some(({ sources }) =>
+      sources.some(({ author, seq }) => author === 'tool' && seq > hiddenMessage.seq),
+    ),
+    'Deterministic recording captures the hidden conversation’s tool actions',
+  );
   assert.equal(activityRequests, requestsWhileHidden, 'Hidden Activity releases observation');
   await clickButton('Open Explorer sidebar');
   await browser('wait', '--text', 'Recent conversation activity');
@@ -964,419 +955,50 @@ try {
   );
   assert.equal(colgrep.isIndexingEnabled(), true);
   await browser('click', '[aria-label^="RAG Index,"]');
-  stage = 'native-activity-memory-summaries';
-  await browser('wait', '[aria-label^="Session Memory,"][aria-label*="stored"]');
-  await browser('click', '[aria-label^="Session Memory,"]');
-  const summarizerSwitch = '[role="switch"][aria-label="Summarizer"]';
-  await browser('click', summarizerSwitch);
-  await browser('wait', '[aria-label^="Session Memory,"][aria-label$="Paused"]');
-  assert.equal(memory.status(undefined, mobileSession.id).summarization, 'paused');
-  await browser('click', summarizerSwitch);
+  stage = 'conversation-products';
+  await hiddenLeader.send('Use an opaque public cursor.', { clientMessageId: randomUUID() });
+  await hiddenLeader.waitForFinish(30_000);
   await browser(
     'wait',
     '--fn',
-    `document.querySelector(${JSON.stringify(summarizerSwitch)})?.checked === true`,
+    `document.querySelectorAll('[data-testid="ltcook-clarify-reply"]').length > 1`,
   );
-  assert.notEqual(memory.status(undefined, mobileSession.id).summarization, 'paused');
-  stage = 'native-activity-memory-device';
-  await browser('wait', '[aria-label="Inference device: Auto"]');
-  assert.equal(deviceProbes, 0, 'Opening the Activity card does not probe GPUs');
-  const deviceRow = JSON.parse(
-    await browser(
-      'eval',
-      `(() => {
-        const row = document.querySelector('[data-testid="ltcook-memory-device-row"]');
-        const trigger = row.querySelector('[aria-label="Inference device: Auto"]');
-        const label = [...row.querySelectorAll('div, span')].find(node => node.textContent === 'Inference device');
-        const rowHeight = row.getBoundingClientRect().height;
-        row.style.width = '174px';
-        const key = label.getBoundingClientRect();
-        const value = trigger.getBoundingClientRect();
-        const narrow = row.getBoundingClientRect();
-        row.style.removeProperty('width');
-        return {
-          rowHeight,
-          sameLine: key.right <= value.left + 1 && Math.abs(key.top + key.height / 2 - value.top - value.height / 2) <= 2,
-          reservedWidth: value.width / narrow.width,
-          fits: value.right <= narrow.right + 1,
-        };
-      })()`,
-    ),
-  ) as { rowHeight: number; sameLine: boolean; reservedWidth: number; fits: boolean };
-  assert(
-    deviceRow.sameLine &&
-      deviceRow.rowHeight < 32 &&
-      deviceRow.fits &&
-      deviceRow.reservedWidth > 0.5,
-    'The device label and control share one compact row',
+  const original = (await evidence.read(mobileSession.id, undefined, 'tail')).messages.findLast(
+    ({ author }) => author === 'agent',
   );
-  await clickButton('Inference device: Auto');
-  await browser('wait', '--text', 'RTX 5090');
-  await browser('wait', '--text', 'RTX 4070 Ti SUPER');
-  await browser('wait', '--text', ambiguousReason);
-  await browser('wait', '[aria-label="AMD integrated GPU"][aria-disabled="true"]');
-  assert(deviceProbes > 0, 'Opening the device list probes Ollama');
-  await clickButton('CPU');
-  await browser(
-    'wait',
-    '--fn',
-    `(() => {
-      const button = document.querySelector('[aria-label="Inference device: CPU"]');
-      if (!button) return false;
-      const bounds = button.getBoundingClientRect();
-      const hit = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-      return button.contains(hit);
-    })()`,
-  );
-  assert.equal(memory.status(undefined, mobileSession.id).device?.id, 'cpu');
-  await clickButton('Inference device: CPU');
-  await clickButton(selectedGpu.label);
-  await browser('wait', '[aria-label="Inference device: RTX 4070 Ti SUPER"]');
-  assert.equal(memory.status(undefined, mobileSession.id).device?.id, selectedGpu.id);
-  stage = 'native-activity-memory-inference';
-  await browser(
-    'wait',
-    '--fn',
-    `(() => {
-      const button = document.querySelector('[aria-label="Inference mode: Local"]');
-      if (!button) return false;
-      const bounds = button.getBoundingClientRect();
-      return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
-    })()`,
-  );
-  await clickButton('Inference mode: Local');
-  await browser(
-    'wait',
-    '--text',
-    'Hosted sends current prompts and included attachment text to OpenAI.',
-  );
-  await clickButton('Hosted');
-  await browser('wait', '[aria-label="Inference mode: Hosted"]');
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelector('[data-testid="ltcook-memory-device-row"]') === null`,
-  );
-  await browser('wait', '--text', 'gpt-6-luna');
-  await browser('wait', '--text', '321 (32 cached)');
-  await browser('wait', '--text', '123 (12 reasoning)');
-  await browser('click', summarizerSwitch);
-  const pausedHostedMemory =
-    '[aria-label^="Session Memory,"][aria-label*="gpt-6-luna · Reasoning high"][aria-label$="Paused"]';
-  await browser('wait', pausedHostedMemory);
-  await browser('click', pausedHostedMemory);
-  await browser('wait', '--text', 'Hosted · gpt-6-luna · Reasoning high');
-  await browser('click', pausedHostedMemory);
-  await clickButton('Inference mode: Hosted');
-  await clickButton('Local');
-  await browser(
-    'wait',
-    '[aria-label^="Session Memory,"][aria-label*="fixture-local-memory"][aria-label$="Paused"]',
-  );
-  await browser('wait', '[aria-label="Inference device: RTX 4070 Ti SUPER"]');
-  await browser('click', summarizerSwitch);
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelector(${JSON.stringify(summarizerSwitch)})?.checked === true`,
-  );
-  stage = 'native-activity-memory-chat-redo';
-  await clickButton('Close Explorer sidebar');
-  await waitForComposer(mobileLeader.agent.title);
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelectorAll(${JSON.stringify(showSummary)}).length > 0`,
-  );
-  await browser('click', showSummary);
-  await browser('wait', preview);
-  await browser('wait', '--text', 'Background summary fixture');
-  const firstStored = await memory.readStoredSummaries(mobileSession.id);
-  const backgroundRecord = firstStored.summaries.find(({ parts }) =>
-    parts.some(({ content }) => JSON.stringify(content) === JSON.stringify(summaryContent)),
-  );
-  assert(backgroundRecord);
-  redoBackgroundContent = `${summaryContent}\n\n- Passage redo regenerated this summary.`;
-  await browser('click', `${preview} [aria-label="Redo this passage summary"]`);
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelector(${JSON.stringify(preview)})?.textContent.includes(${JSON.stringify('Redo complete.')}) && document.querySelector(${JSON.stringify(preview)})?.textContent.includes(${JSON.stringify('Passage redo regenerated this summary.')})`,
-  );
-  const afterPassageRedo = await memory.readStoredSummaries(mobileSession.id);
-  assert(
-    afterPassageRedo.summaries
-      .find(({ id }) => id === backgroundRecord.id)
-      ?.parts.some(
-        ({ content }) => JSON.stringify(content) === JSON.stringify(redoBackgroundContent),
-      ),
-  );
-  await browser('scrollintoview', `${preview} [aria-label="Hide summary"]`);
-  await browser('click', `${preview} [aria-label="Hide summary"]`);
-  await browser('wait', preview, '--state', 'hidden');
-
-  await clickButton('Open Explorer sidebar');
-  await browser('wait', '--text', 'Recent conversation activity');
-  const sessionMemoryHeader = '[aria-label^="Session Memory,"]';
+  assert(original);
+  assert.equal(clarificationRequests, 0);
   await browser(
     'eval',
-    `(() => { const button = document.querySelector(${JSON.stringify(sessionMemoryHeader)}); if (button?.getAttribute('aria-expanded') !== 'true') button?.click(); })()`,
+    `[...document.querySelectorAll('[data-testid="ltcook-clarify-reply"]')]
+    .at(-1)?.setAttribute('data-clarify-fixture', 'selected')`,
   );
-  const storedAgent = '[aria-label^="Stored for this agent,"]';
-  await browser(
-    'eval',
-    `(() => { const button = document.querySelector(${JSON.stringify(storedAgent)}); if (button?.getAttribute('aria-expanded') !== 'true') button?.click(); })()`,
-  );
-  await clickButton('Redo summaries from a selected point');
-  await browser('wait', '--text', 'Choose where to start.');
-  await browser('wait', '[aria-label^="UAMP ·"]');
-  await browser(
-    'eval',
-    `(() => { const choices = [...document.querySelectorAll('button[aria-label^="UAMP ·"]')]; if (!choices.length) throw new Error('Expected a Discussion summary to redo.'); choices.at(-1).click(); })()`,
-  );
-  redoBackgroundContent = `${summaryContent}\n\n- Sidebar redo regenerated this summary.`;
-  await clickButton('Redo from selected summary');
-  await browser('wait', '--text', 'Redo complete.');
-  const afterSidebarRedo = await memory.readStoredSummaries(mobileSession.id);
-  assert(
-    afterSidebarRedo.summaries.some(({ parts }) =>
-      parts.some(
-        ({ content }) => JSON.stringify(content) === JSON.stringify(redoBackgroundContent),
-      ),
-    ),
-  );
-  await browser('press', 'Escape');
-  await browser('wait', '[role="dialog"]', '--state', 'hidden');
-  await browser('click', storedAgent);
-
-  stage = 'native-activity-memory-live-rate';
-  await host.api.agents
-    .ref(mobileSession.id)
-    .send('Measure live summary throughput. Exercise Activity tools.' + longerPrompt, {
-      clientMessageId: randomUUID(),
-    });
-  await browser('wait', '--text', '12.5 tokens/s');
-  await browser('wait', '--text', '19 tokens/s');
-  assert.deepEqual(livePlacements[0], { mainGpu: 1 });
-  let latestStored = false;
-  for (let attempt = 0; attempt < 100 && !latestStored; attempt++) {
-    const catalog = await memory.readStoredSummaries(mobileSession.id);
-    latestStored = catalog.summaries.some((summary) =>
-      summary.parts.some(
-        ({ content }) => JSON.stringify(content) === JSON.stringify(latestSummary),
-      ),
-    );
-    if (!latestStored) await Bun.sleep(100);
-  }
-  assert(latestStored, 'The live Session Memory summary completed before opening its catalog');
-  stage = 'native-activity-memory-catalog';
-  await browser('wait', '--text', 'Stored for this agent');
-  await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
-  await browser('wait', '--text', 'Est. tokens');
-  await browser('wait', '--text', 'Source #');
-  assert(
-    !(await browser('snapshot')).includes('Background summary fixture'),
-    'The narrow Explorer does not render summary bodies',
-  );
-  stage = 'native-activity-memory-records-tab';
-  await clickButton('Open stored summaries');
-  await browser('wait', '--text', 'Live throughput passage summary');
-  await browser('wait', '--text', 'Background summary fixture');
-  await browser('wait', '--text', 'activity-memory.sqlite');
-  const storedRecords = '[data-testid="ltcook-stored-summaries-records"]';
-  const headings = await browser(
-    'eval',
-    `[...document.querySelectorAll(${JSON.stringify(storedRecords + ' h2')})].map(node => node.textContent)`,
-  );
-  assert.match(headings, /Discoveries/, 'The Stored Summaries tab renders the Markdown heading');
-  await browser(
-    'eval',
-    `(() => {
-      const writeText = navigator.clipboard.writeText.bind(navigator.clipboard);
-      navigator.clipboard.writeText = async value => {
-        await writeText(value);
-        window.__ltcookCopiedSummaries = value;
-      };
-    })()`,
-  );
-  await clickButton('Copy JSON');
-  await browser('wait', '--text', 'Copied stored summaries');
-  const copiedRecords = JSON.parse(
-    await browser('eval', 'JSON.parse(window.__ltcookCopiedSummaries)'),
-  ) as { parts: { content: unknown }[] }[];
-  assert.equal(copiedRecords[0]?.parts[0]?.content, latestSummary);
-  await clickButton(mobileLeader.agent.title);
-  await waitForComposer(mobileLeader.agent.title);
-  stage = 'native-activity-memory-chat-shortcut';
-  await browser('set', 'viewport', '1100', '950');
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelectorAll(${JSON.stringify(showSummary)}).length === 2`,
-  );
-  async function openPassage(index: number) {
-    await browser(
-      'eval',
-      `(() => {
-      document.querySelectorAll('[data-ltcook-test-summary]').forEach(node => node.removeAttribute('data-ltcook-test-summary'));
-      document.querySelectorAll(${JSON.stringify(showSummary)})[${index}].setAttribute('data-ltcook-test-summary', '');
-    })()`,
-    );
-    await browser('click', '[data-ltcook-test-summary]');
-    await browser('wait', preview);
-  }
-  await openPassage(0);
-  await browser('wait', '--text', 'Background summary fixture');
-  const earlier = await browser('get', 'text', preview);
-  assert(earlier.includes('Background summary fixture'));
-  assert(!earlier.includes('Live throughput passage summary'));
-  assert(!earlier.includes('"findings"'), 'The chat preview is rendered as fields, not JSON');
-  const recordsBeforePassageRedo = await memory.readStoredSummaries(mobileSession.id);
-  const firstSummary = recordsBeforePassageRedo.summaries.find(({ parts }) =>
-    parts.some(({ content }) => JSON.stringify(content) === JSON.stringify(redoBackgroundContent)),
-  );
-  const laterSummary = recordsBeforePassageRedo.summaries.find(({ parts }) =>
-    parts.some(({ content }) => JSON.stringify(content) === JSON.stringify(latestSummary)),
-  );
-  assert(firstSummary && laterSummary);
-  redoBackgroundContent = `${summaryContent}\n\n- Passage redo regenerated this summary a second time.`;
-  await browser('click', `${preview} [aria-label="Redo this passage summary"]`);
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelector(${JSON.stringify(preview)})?.textContent.includes(${JSON.stringify('Redo complete.')}) && document.querySelector(${JSON.stringify(preview)})?.textContent.includes(${JSON.stringify('Passage redo regenerated this summary a second time.')})`,
-  );
-  const recordsAfterPassageRedo = await memory.readStoredSummaries(mobileSession.id);
-  assert(
-    recordsAfterPassageRedo.summaries
-      .find(({ id }) => id === firstSummary.id)
-      ?.parts.some(
-        ({ content }) => JSON.stringify(content) === JSON.stringify(redoBackgroundContent),
-      ),
-  );
+  await browser('click', '[data-clarify-fixture="selected"]');
+  await browser('wait', '--text', 'Clarify with Hosted inference');
+  assert.equal(clarificationRequests, 0);
+  await browser('click', '[data-clarify-fixture="selected"]');
+  await browser('wait', '--text', 'The public cursor hides its storage layout.');
+  assert.equal(clarificationRequests, 1);
+  await browser('click', '[data-clarify-fixture="selected"]');
+  await browser('click', '[data-clarify-fixture="selected"]');
+  await browser('wait', '--text', 'The public cursor hides its storage layout.');
+  assert.equal(clarificationRequests, 1);
   assert.deepEqual(
-    recordsAfterPassageRedo.summaries.find(({ id }) => id === laterSummary.id),
-    laterSummary,
-  );
-  assert(
-    memory.status(undefined, mobileSession.id).redos.filter(({ state }) => state === 'completed')
-      .length >= 3,
-    'Completed redo request statuses remain available to slower UI subscribers.',
-  );
-  await clickButton('Hide summary');
-  await openPassage(1);
-  await browser('wait', '--text', 'Live throughput passage summary');
-  const later = await browser('get', 'text', preview);
-  assert(later.includes('Live throughput passage summary'));
-  assert(later.includes('Final summary outcome remains visible.'));
-  assert.equal((await browser('get', 'attr', `${preview} a`, 'href')).trim(), summaryLink);
-  assert(!later.includes('Background summary fixture'));
-  const previewLayout = JSON.parse(
-    await browser(
-      'eval',
-      `(() => {
-        const card = document.querySelector(${JSON.stringify(preview)});
-        return {
-          headings: [...card.querySelectorAll('[role="heading"], h1, h2, h3, h4, h5, h6')].map(node => node.textContent),
-          fits: card.scrollWidth <= card.clientWidth + 1,
-        };
-      })()`,
+    (await evidence.read(mobileSession.id, undefined, 'tail')).messages.findLast(
+      ({ author }) => author === 'agent',
     ),
-  ) as { headings: string[]; fits: boolean };
-  assert(previewLayout.headings.some((heading) => heading.includes('Discoveries')));
-  assert(previewLayout.fits, 'Summary fields fit the narrow conversation');
-  await browser('screenshot', path.join(directory, 'passage-summary-preview.png'));
-  await browser('click', `${preview} [aria-label="Show execution details"]`);
-  const execution = `${preview} [data-testid="ltcook-execution-evidence"]`;
-  await browser('wait', execution);
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelector(${JSON.stringify(execution)})?.textContent.includes(${JSON.stringify(fixtureSkill)})`,
+    original,
   );
-  const hideDetails = `${preview} [aria-label="Hide execution details"]`;
-  await browser('scrollintoview', hideDetails);
-  await browser('click', hideDetails);
-  await clickButton('Open complete summary');
-  await browser('wait', completeSummary);
-  const complete = await browser('get', 'text', completeSummary);
-  assert(complete.includes('Live throughput passage summary'));
-  assert(!complete.includes('Background summary fixture'));
-  assert(!complete.includes('"findings"'), 'The complete entry is rendered as fields, not JSON');
-  await browser('screenshot', path.join(directory, 'passage-summary-complete.png'));
-  assert(complete.includes('Final summary outcome remains visible.'));
-  await browser('press', 'Escape');
-  await browser('wait', completeSummary, '--state', 'hidden');
-  await browser('scrollintoview', `${preview} [aria-label="Hide summary"]`);
-  await browser(
-    'wait',
-    '--fn',
-    `(() => {
-    const button = document.querySelector(${JSON.stringify(`${preview} [aria-label="Hide summary"]`)});
-    if (!button) return false;
-    const bounds = button.getBoundingClientRect();
-    return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
-  })()`,
-  );
-  await browser('click', `${preview} [aria-label="Hide summary"]`);
-  assert(!(await browser('snapshot')).includes('Final summary outcome remains visible.'));
-
-  const memoryStore = new MemoryStore(path.join(directory, 'activity-memory.sqlite'));
-  try {
-    const catalog = await memory.readStoredSummaries(mobileSession.id);
-    const action = catalog.summaries.find(
-      ({ type, discussionId }) =>
-        type === 'AAB' &&
-        discussionId === catalog.summaries.find(({ type }) => type === 'UAMP')?.id,
-    );
-    assert(action);
-    const record = memoryStore.summary(mobileSession.id, action.epoch, action.id);
-    assert(record?.action);
-    for (let index = 0; index < 8; index++) {
-      const checks = [{ seq: action.position, text: `Pagination evidence ${index}` }];
-      memoryStore.saveSummary({
-        ...record,
-        id: `!pagination-${index}`,
-        action: { ...record.action, checkCount: checks.length, checks },
-      });
-    }
-  } finally {
-    memoryStore.close();
-  }
-  await openPassage(1);
-  await clickButton('Open loaded summaries');
-  await browser('wait', completeSummary);
-  assert(!(await browser('get', 'text', completeSummary)).includes('Pagination evidence 0'));
-  await browser('press', 'Escape');
-  await browser('wait', completeSummary, '--state', 'hidden');
-  await clickButton('Load older passage records');
-  await browser('wait', '--text', 'Pagination evidence 0');
-  assert(
-    (await browser('get', 'text', preview)).includes('Final summary outcome remains visible.'),
-  );
-  await clickButton('Open complete summary');
-  await browser('wait', completeSummary);
-  await browser('press', 'Escape');
-  await browser('wait', completeSummary, '--state', 'hidden');
-  await clickButton('Hide summary');
-  await host.api.agents
-    .ref(mobileSession.id)
-    .send('Keep this reply short.', { clientMessageId: randomUUID() });
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelectorAll(${JSON.stringify(showSummary)}).length === 3`,
-  );
-  await openPassage(2);
-  await browser('wait', '--text', 'Not summarized, user-agent message pair is below 256 tokens.');
-  await clickButton('Hide summary');
-  await browser('set', 'viewport', '1440', '1000');
-  await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
-  await browser('wait', '--text', 'No acknowledged handoff available for this agent.');
-  await browser('click', '[aria-label^="Session Memory,"]');
-
+  await openExplorerPanel('Tracked Items');
+  await browser('wait', '--text', 'Design Decisions (1)');
+  await clickButton('Design Decisions (1)');
+  await browser('wait', '--text', 'Keep the public cursor opaque.');
+  await clickButton('Pause Tracker everywhere');
+  await browser('wait', '--text', 'Resume Tracker everywhere');
+  await clickButton('Resume Tracker everywhere');
+  await browser('wait', '--text', 'Pause Tracker everywhere');
   let acknowledgeMemory: (() => void) | undefined;
-  await memory.handoff(mobileSession.id, 'Summarize without Activity', undefined, (payload) => {
+  await memory.handoff(mobileSession.id, hiddenPrompt, undefined, (payload) => {
     acknowledgeMemory = memory!.prepareDelivery(mobileSession.id, adjutantId, payload);
   });
   assert(acknowledgeMemory, 'The Leader supplied a measured handoff');
@@ -1412,14 +1034,14 @@ try {
   await clickButton('Open conversation');
   await waitForComposer('Adjutant');
   await inspectStage('panel-direct-child-conversation');
-  stage = 'native-activity-memory-handoff';
+  stage = 'native-activity-delegation-handoff';
   await openActivityPanel();
-  await browser('wait', '[aria-label^="Session Memory,"][aria-label*="Handoff received"]');
-  await browser('click', '[aria-label^="Session Memory,"]');
-  await browser('wait', '--text', 'Summaries represented');
+  await browser('wait', '[aria-label^="Last delegation handoff,"]');
+  await browser('click', '[aria-label^="Last delegation handoff,"]');
+  await browser('wait', '--text', 'Action batches represented');
   const handoff = await browser('snapshot');
   assert(handoff.includes(mobileLeader.agent.title), 'Activity names the sending Leader');
-  await browser('click', '[aria-label^="Session Memory,"]');
+  await browser('click', '[aria-label^="Last delegation handoff,"]');
   await openExplorerPanel('Tasks');
   await browser('wait', '--text', 'Task Board');
   await inspectStage('contextual-task-board');
@@ -1502,6 +1124,9 @@ try {
   throw error;
 } finally {
   await browser('close').catch(() => undefined);
+  await tracker?.close();
+  await inference?.close();
+  products?.close();
   await memory?.close();
   await host?.close();
   await runtime?.close();

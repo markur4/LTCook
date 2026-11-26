@@ -7,7 +7,12 @@ import { canonicalWorkspace } from '../core/workspace.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { PaseoHost } from './paseo.js';
 import type { PaseoWorkspaceServices } from './paseo-workspace-services.js';
-import type { SessionMemory } from '../session-memory/service.js';
+import type { ConversationRecords } from '../session-memory/conversation.js';
+import type { ConversationInference } from '../session-memory/inference.js';
+import type { ClarifyService } from '../session-memory/clarify.js';
+import { clarifyReadRpc } from '../paseo-plugin/shared/clarify.js';
+import type { TrackerService } from '../session-memory/tracker.js';
+import { trackerModifyRpc, trackerSelection } from '../paseo-plugin/shared/tracker.js';
 import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import type { WorkspaceMcp } from './mcp.js';
@@ -83,8 +88,11 @@ interface RuntimeApiServices {
 
 export class RuntimeApi {
   private server: Server | undefined;
-  private memory?: SessionMemory;
-  private readonly memoryDisabled: boolean;
+  private memory?: ConversationRecords;
+  private conversationInference?: ConversationInference;
+  private clarify?: ClarifyService;
+  private tracker?: TrackerService;
+  private readonly localTurns = new Map<string, string>();
   private memoryContext?: (
     agentId: string,
   ) => { scope?: MemoryScope; task?: MemoryTaskContext } | undefined;
@@ -121,13 +129,28 @@ export class RuntimeApi {
   private stopping = false;
   private workspaceMcp: WorkspaceMcp | undefined;
   private workspaceTools: ToolCatalog | undefined;
-  setSessionMemory(memory: SessionMemory, context?: RuntimeApi['memoryContext']): void {
+  setConversationRecords(memory: ConversationRecords, context?: RuntimeApi['memoryContext']): void {
     this.memory = memory;
-    const preferences = this.services.activity?.preferences;
-    memory.setSummarizationEnabled(preferences?.enabled('summarizer') ?? true);
-    const mode = preferences?.memoryInferenceMode();
-    if (mode) memory.setInferenceMode(mode);
     this.memoryContext = context;
+  }
+
+  setConversationInference(inference: ConversationInference): void {
+    this.conversationInference = inference;
+  }
+
+  setClarify(service: ClarifyService): void {
+    this.clarify = service;
+  }
+
+  setTracker(service: TrackerService): void {
+    this.tracker = service;
+  }
+
+  private endLocalTurn(agentId: string, turnId?: string) {
+    const active = this.localTurns.get(agentId);
+    if (!active || (turnId !== undefined && turnId !== active)) return;
+    this.localTurns.delete(agentId);
+    this.conversationInference?.foregroundEnded(JSON.stringify([agentId, active]));
   }
   setPastedDocuments(documents: PastedDocuments): void {
     this.pastedDocuments = documents;
@@ -153,13 +176,11 @@ export class RuntimeApi {
     private readonly secret: string,
     private readonly listenAddress: string,
     private readonly activation: SessionActivation,
-    startupEnvironment: NodeJS.ProcessEnv = process.env,
+    _startupEnvironment: NodeJS.ProcessEnv = process.env,
     private readonly telemetry?: Telemetry,
     private readonly services: RuntimeApiServices = {},
   ) {
     this.runtime = runtime;
-    this.memoryDisabled =
-      Number(startupEnvironment.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000') === 0;
     const activity = services.activity;
     if (activity) activity.colgrep.setIndexingEnabled(activity.preferences.enabled('rag-index'));
   }
@@ -299,6 +320,10 @@ export class RuntimeApi {
         '/v1/runtime/stop',
         '/v1/session-memory/observe',
         '/v1/session-memory/paste',
+        '/v1/clarify/read',
+        '/v1/clarify/generate',
+        '/v1/tracker/snapshot',
+        '/v1/tracker/modify',
         '/v1/mcp/grant',
         '/v1/mcp/revoke',
         '/v1/evaluation/observe',
@@ -427,6 +452,56 @@ export class RuntimeApi {
         response.writeHead(401).end('{"error":"unauthorized"}');
         return;
       }
+      if (request.url === '/v1/clarify/read' || request.url === '/v1/clarify/generate') {
+        if (!isUser) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        if (!this.clarify || !this.conversationInference) {
+          response.writeHead(503).end('{"error":"Clarify is unavailable."}');
+          return;
+        }
+        const { agentId, ...reference } = clarifyReadRpc.input.parse(parsed);
+        const connection = new AbortController();
+        response.once('close', () => connection.abort());
+        const mode = this.conversationInference.selection();
+        const text =
+          request.url === '/v1/clarify/read'
+            ? await this.clarify.get(agentId, reference, connection.signal)
+            : await this.clarify.generate(agentId, reference, connection.signal);
+        if (!connection.signal.aborted) response.writeHead(200).end(JSON.stringify({ text, mode }));
+        return;
+      }
+      if (request.url === '/v1/tracker/snapshot' || request.url === '/v1/tracker/modify') {
+        if (!isUser) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        if (!this.tracker || !this.conversationInference) {
+          response.writeHead(503).end('{"error":"Tracker is unavailable."}');
+          return;
+        }
+        const change =
+          request.url === '/v1/tracker/modify' ? trackerModifyRpc.input.parse(parsed) : undefined;
+        const { agentId } = change ?? trackerSelection.parse(parsed);
+        if (change) {
+          const { modification } = change;
+          if (modification.type === 'pause') this.tracker.setPaused(modification.paused);
+          else if (modification.type === 'item')
+            this.tracker.editItem(
+              agentId,
+              modification.trackerId,
+              modification.itemId,
+              modification.text,
+            );
+          else this.tracker.configure(agentId, modification);
+        }
+        const snapshot = await this.tracker.snapshot(agentId);
+        response
+          .writeHead(200)
+          .end(JSON.stringify({ ...snapshot, mode: this.conversationInference.selection() }));
+        return;
+      }
       if (request.url === '/v1/session/worktrees') {
         if (!isUser) {
           response.writeHead(403).end('{}');
@@ -458,8 +533,7 @@ export class RuntimeApi {
         await handleActivityRoute(activityRoute, parsed, response, {
           activity: this.services.activity,
           workspaceServices: this.workspaceServices,
-          memoryDisabled: this.memoryDisabled,
-          readMemory: () => this.memory,
+          lastDelivered: (sessionId, agentId) => this.memory?.lastDelivered(sessionId, agentId),
           readSession: (id) => this.runtime?.snapshot(id),
           registeredWorkspace: (id) => this.activation.registeredWorkspace(id),
           readGrantedWorkspace: (id) => this.workspaceMcp?.repositorySearchWorkspace(id),
@@ -509,6 +583,7 @@ export class RuntimeApi {
         }
         const outcome = input.outcome;
         if (actor.kind === 'user' && input.closed === true) {
+          this.endLocalTurn(id);
           this.memory?.agentClosed(id);
         } else if (
           actor.kind === 'user' &&
@@ -519,15 +594,20 @@ export class RuntimeApi {
             outcome === 'failed' ||
             outcome === 'canceled')
         ) {
-          this.memory?.turn(
-            id,
-            { turnId: input.turnId, outcome, ...this.memoryContext?.(id) },
-            input.local === true,
-          );
+          if (outcome === 'running') {
+            this.endLocalTurn(id);
+            if (input.local === true) {
+              this.localTurns.set(id, input.turnId);
+              this.conversationInference?.foregroundStarted(JSON.stringify([id, input.turnId]));
+            }
+          } else {
+            this.endLocalTurn(id, input.turnId);
+          }
+          this.memory?.turn(id, { turnId: input.turnId, outcome, ...this.memoryContext?.(id) });
         } else {
           this.memory?.observe(id, actor.kind === 'user' && input.force === true);
         }
-        response.writeHead(202).end(JSON.stringify({ memoryEnabled: this.memory !== undefined }));
+        response.writeHead(202).end('{}');
         return;
       }
       if (request.url === '/v1/mcp/grant' || request.url === '/v1/mcp/revoke') {

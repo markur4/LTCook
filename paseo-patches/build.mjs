@@ -12,6 +12,7 @@ const patches = [
   'timeline-navigation.patch',
   'session-worktrees.patch',
   'workspace-activity.patch',
+  'clarify-reply-decoration.patch',
 ].map((name) => new URL(name, import.meta.url));
 const stampName = 'ltcook-paseo-build.json';
 const defaultOutput = fileURLToPath(new URL('../runtime/dist/paseo-web', import.meta.url));

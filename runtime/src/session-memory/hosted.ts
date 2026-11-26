@@ -2,8 +2,7 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
 import { useCodexOpenAiAuth } from '../integrations/codex-auth.js';
 import type { ResolvedModel } from '../models/aliases.js';
-import { MemorySummaryError, type HostedMemoryUsage } from './service.js';
-import type { MemorySummaryResult, summarizeMemory } from './summarization.js';
+import type { ConversationProvider } from './inference.js';
 
 const standardTier = 'default';
 const hostedResponse = z.object({
@@ -32,7 +31,7 @@ const hostedRequest = z.object({
 });
 
 /** Check the provider payload before it leaves the process. */
-export function validHostedMemoryRequest(
+export function validHostedConversationRequest(
   payload: unknown,
   model: string,
   system: string,
@@ -47,152 +46,97 @@ export function validHostedMemoryRequest(
   );
 }
 
-export function createHostedMemorySummarizer(selection: ResolvedModel) {
+export function hostedConversationProvider(selection: ResolvedModel): ConversationProvider {
   let runtime: Promise<ModelRuntime> | undefined;
-  const totals: HostedMemoryUsage = {
-    requests: 0,
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    outputTokens: 0,
-    reasoningTokens: 0,
-  };
-  return {
-    usage: () => ({ ...totals }),
-    async summarize(
-      type: MemorySummaryResult['type'],
-      prompt: Parameters<typeof summarizeMemory>[1],
-      signal: AbortSignal,
-    ): Promise<MemorySummaryResult> {
-      if (selection.provider !== 'openai-codex' || selection.reasoning !== 'low')
-        throw new MemorySummaryError(
-          'Hosted Session Memory requires an openai-codex model with low reasoning.',
-        );
-      const started = performance.now();
-      const bounded = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
-      const pi = await (runtime ??= ModelRuntime.create({
-        modelsPath: null,
-        refreshOnCreate: false,
-      })
-        .then(useCodexOpenAiAuth)
-        .catch((error: unknown) => {
-          runtime = undefined;
-          throw error;
-        }));
-      const model = pi.getModel('openai-codex', selection.model);
-      if (
-        !model ||
-        model.api !== 'openai-codex-responses' ||
-        model.baseUrl.replace(/\/$/, '') !== 'https://chatgpt.com/backend-api'
-      )
-        throw new MemorySummaryError(
-          'The selected hosted Session Memory model is unavailable in Pi.',
-        );
-      const [system, user] = prompt;
-      let submitted = false;
-      let invalidRequest = false;
-      let responseStatus: number | undefined;
-      let responseModel: string | undefined;
-      let responseTier: string | undefined;
-      const options = {
-        signal: bounded,
-        serviceTier: standardTier,
-        reasoningEffort: selection.reasoning,
-        transport: 'sse',
-        maxRetries: 0,
-        cacheRetention: 'none',
-        toolChoice: 'none',
-        onPayload(payload: unknown) {
-          if (!validHostedMemoryRequest(payload, model.id, system.content, user.content)) {
-            invalidRequest = true;
-            throw new Error('Hosted Session Memory request policy mismatch.');
-          }
-          submitted = true;
-          totals.requests++;
-        },
-        onProviderStreamEvent(event: unknown) {
-          const parsed = hostedResponse.safeParse(event);
-          if (parsed.success) {
-            responseModel = parsed.data.response.model;
-            responseTier = parsed.data.response.service_tier;
-          }
-        },
-        onResponse(response: { status: number }) {
-          responseStatus = response.status;
-        },
-      } as const;
-      try {
-        bounded.throwIfAborted();
-        const answer = await pi.complete(
-          model,
-          {
-            systemPrompt: system.content,
-            messages: [{ role: 'user', content: user.content, timestamp: Date.now() }],
-          },
-          options,
-        );
-        const elapsedMs = Math.round(performance.now() - started);
-        const usage = answer.usage;
-        if (submitted) {
-          totals.inputTokens += usage.input + usage.cacheRead + usage.cacheWrite;
-          totals.cachedInputTokens += usage.cacheRead;
-          totals.outputTokens += usage.output;
-          totals.reasoningTokens += usage.reasoning ?? 0;
+  return async (_product, { instructions, input }, signal) => {
+    if (selection.provider !== 'openai-codex' || selection.reasoning !== 'low')
+      throw new Error('Hosted conversation inference requires a Codex model with low reasoning.');
+    const bounded = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
+    const pi = await (runtime ??= ModelRuntime.create({
+      modelsPath: null,
+      refreshOnCreate: false,
+    })
+      .then(useCodexOpenAiAuth)
+      .catch((error: unknown) => {
+        runtime = undefined;
+        throw error;
+      }));
+    const model = pi.getModel('openai-codex', selection.model);
+    if (
+      !model ||
+      model.api !== 'openai-codex-responses' ||
+      model.baseUrl.replace(/\/$/, '') !== 'https://chatgpt.com/backend-api'
+    )
+      throw new Error('The selected Hosted conversation model is unavailable in Pi.');
+    let submitted = false;
+    let invalidRequest = false;
+    let responseStatus: number | undefined;
+    let responseModel: string | undefined;
+    let responseTier: string | undefined;
+    const options = {
+      signal: bounded,
+      serviceTier: standardTier,
+      reasoningEffort: selection.reasoning,
+      transport: 'sse',
+      maxRetries: 0,
+      cacheRetention: 'none',
+      toolChoice: 'none',
+      onPayload(payload: unknown) {
+        if (!validHostedConversationRequest(payload, model.id, instructions, input)) {
+          invalidRequest = true;
+          throw new Error('Hosted conversation request policy mismatch.');
         }
-        signal.throwIfAborted();
-        if (bounded.aborted) throw new MemorySummaryError('Hosted Session Memory timed out.');
-        if (invalidRequest)
-          throw new MemorySummaryError(
-            'Pi could not enforce the isolated prompt, Standard speed, and low reasoning for hosted Session Memory.',
-          );
-        if (
-          responseStatus === 429 ||
-          /(?:rate.limit|usage.limit|quota|usage.not.included)/i.test(answer.errorMessage ?? '')
-        )
-          throw new MemorySummaryError(
-            'Hosted Session Memory reached a subscription quota or rate limit.',
-          );
-        if (!submitted || responseStatus === 401 || responseStatus === 403)
-          throw new MemorySummaryError(
-            'Hosted Session Memory requires a valid Codex subscription sign-in.',
-          );
-        if (answer.stopReason === 'error' || answer.stopReason === 'aborted')
-          throw new MemorySummaryError('Hosted Session Memory inference failed.');
-        const text = answer.content
-          .flatMap((item) => (item.type === 'text' ? [item.text] : []))
-          .join('');
-        const actual = responseModel ?? answer.responseModel ?? answer.model;
-        const thinkingPresent = answer.content.some((item) => item.type === 'thinking');
-        if (actual !== model.id || (responseTier !== undefined && responseTier !== standardTier))
-          throw new MemorySummaryError(
-            'Hosted Session Memory received an unexpected model or speed.',
-          );
-        const result = {
-          type,
-          text,
-          elapsedMs,
-          hosted: {
-            model: actual,
-            serviceTier: standardTier,
-            reasoning: selection.reasoning,
-            providerModelVerified: Boolean(responseModel ?? answer.responseModel),
-            ...(responseTier ? { providerTier: responseTier } : {}),
-          } as const,
-          usage: {
-            inputTokens: usage.input + usage.cacheRead + usage.cacheWrite,
-            outputTokens: usage.output,
-          },
-          metrics: {
-            cachedInputTokens: usage.cacheRead,
-            reasoningTokens: usage.reasoning,
-            thinkingPresent,
-          },
-        };
-        return answer.stopReason === 'stop' && text.trim()
-          ? { ...result, complete: true, content: text }
-          : { ...result, complete: false };
-      } finally {
-        if (submitted) totals.lastLatencyMs = Math.round(performance.now() - started);
-      }
-    },
+        submitted = true;
+      },
+      onProviderStreamEvent(event: unknown) {
+        const parsed = hostedResponse.safeParse(event);
+        if (parsed.success) {
+          responseModel = parsed.data.response.model;
+          responseTier = parsed.data.response.service_tier;
+        }
+      },
+      onResponse(response: { status: number }) {
+        responseStatus = response.status;
+      },
+    } as const;
+    bounded.throwIfAborted();
+    const answer = await pi.complete(
+      model,
+      {
+        systemPrompt: instructions,
+        messages: [{ role: 'user', content: input, timestamp: Date.now() }],
+      },
+      options,
+    );
+    const usage = answer.usage;
+    signal.throwIfAborted();
+    if (bounded.aborted) throw new Error('Hosted conversation inference timed out.');
+    if (invalidRequest)
+      throw new Error(
+        'Pi could not enforce the isolated prompt, Standard speed, and low reasoning for Hosted inference.',
+      );
+    if (
+      responseStatus === 429 ||
+      /(?:rate.limit|usage.limit|quota|usage.not.included)/i.test(answer.errorMessage ?? '')
+    )
+      throw new Error('Hosted conversation inference reached a subscription quota or rate limit.');
+    if (!submitted || responseStatus === 401 || responseStatus === 403)
+      throw new Error('Hosted conversation inference requires a valid Codex subscription sign-in.');
+    if (answer.stopReason === 'error' || answer.stopReason === 'aborted')
+      throw new Error('Hosted conversation inference failed.');
+    const text = answer.content
+      .flatMap((item) => (item.type === 'text' ? [item.text] : []))
+      .join('');
+    const actual = responseModel ?? answer.responseModel ?? answer.model;
+    if (actual !== model.id || (responseTier !== undefined && responseTier !== standardTier))
+      throw new Error('Hosted conversation inference received an unexpected model or speed.');
+    return {
+      text,
+      complete: answer.stopReason === 'stop' && !!text.trim(),
+      usage: {
+        inputTokens: usage.input + usage.cacheRead + usage.cacheWrite,
+        outputTokens: usage.output,
+      },
+    };
   };
 }

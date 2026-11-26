@@ -18,7 +18,7 @@ import {
 } from '../../../runtime/src/integrations/paseo.js';
 import { catalogModelAliases } from '../../../runtime/src/models/aliases.js';
 import { TeamRegistry } from '../../../runtime/src/integrations/team-loader.js';
-import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
+import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
 import type { MemoryMessage } from '../../../runtime/src/paseo-plugin/server/memory-text.js';
 import { PastedDocuments } from '../../../runtime/src/session-memory/pasted-documents.js';
 import type { MemorySourceMessage } from '../../../runtime/src/session-memory/units.js';
@@ -57,7 +57,6 @@ const runtimeHandoff = 'Inspect the cobalt fixture for the acceptance case.';
 const memoryPrompt = 'Read the shared cobalt fixture requirement.';
 let peerMemoryRead = false;
 let attachmentReachedPi = false;
-let attachmentReachedUamp = false;
 let modelCalls = 0;
 let expectedModel = 'test';
 let providerError: unknown;
@@ -188,7 +187,7 @@ const api = new RuntimeApi(undefined, secret, listen, activation, environment);
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 let runtime: ReturnType<typeof createRuntime> | undefined;
-let memory: SessionMemory | undefined;
+let memory: ConversationRecords | undefined;
 let nativeUnavailable = false;
 const observedSources = new Map<string, MemoryMessage>();
 async function waitFor<T>(label: string, read: () => T | undefined | Promise<T | undefined>) {
@@ -250,9 +249,10 @@ try {
     });
   const startMemory = () => {
     const source = createPaseoMemorySource(host!.api, secret, pastedDocuments);
-    const instance = new SessionMemory({
-      databasePath: path.join(directory, 'session-memory.sqlite'),
+    const instance = new ConversationRecords({
+      databasePath: path.join(directory, 'conversation.sqlite'),
       source: {
+        ...source,
         async read(...args) {
           const page = await source.read(...args);
           for (const message of page.messages) {
@@ -264,20 +264,8 @@ try {
       },
       threshold: 1,
       peers: (agentId, workspaceRoot) => runtime?.memoryPeers(agentId, workspaceRoot) ?? [],
-      async summarize(type, prompt) {
-        attachmentReachedUamp ||=
-          type === 'UAMP' &&
-          prompt.some(({ content }) => content.includes('PASTE_REFERENCE_SENTINEL'));
-        return {
-          type,
-          text: 'Observed native conversation evidence.',
-          content: 'Observed native conversation evidence.',
-          complete: true,
-          elapsedMs: 0,
-        };
-      },
     });
-    api.setSessionMemory(instance);
+    api.setConversationRecords(instance);
     return instance;
   };
   memory = startMemory();
@@ -373,10 +361,6 @@ try {
   );
   assert.equal(source.author, 'user');
   assert.equal((source as MemorySourceMessage).attachments?.[0]?.text, pastedText);
-  await waitFor(
-    'the completed native UAMP with its attached source',
-    () => attachmentReachedUamp || undefined,
-  );
   const toolContext = {
     agentId: childId,
     workspaceRoot: workspace,
@@ -450,6 +434,7 @@ try {
     ...memoryReference,
     author: 'user',
     text: userRequirement,
+    attachments: [{ text: pastedText }],
   });
   nativeUnavailable = true;
   await leader.reload();

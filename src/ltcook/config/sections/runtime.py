@@ -48,13 +48,14 @@ class RuntimeSettings(rc.Config):
     )
     summarizer_keep_alive: int = rc.field("LTCOOK_SUMMARIZER_KEEP_ALIVE", default=-1)
     summarizer_generation: str = rc.field("LTCOOK_SUMMARIZER_GENERATION", default="")
-    session_memory_threshold: int = rc.field(
-        "LTCOOK_SESSION_MEMORY_THRESHOLD", default=3000
+    conversation_local_model: str = rc.field(
+        "LTCOOK_CONVERSATION_LOCAL_MODEL", default=""
     )
-    session_memory_model: str = rc.field("LTCOOK_SESSION_MEMORY_MODEL", default="")
-    session_memory_mode: str = rc.field("LTCOOK_SESSION_MEMORY_MODE", default="")
-    session_memory_input_tokens: int = rc.field(
-        "LTCOOK_SESSION_MEMORY_INPUT_TOKENS", default=8000
+    conversation_inference: str = rc.field(
+        "LTCOOK_CONVERSATION_INFERENCE", default="hosted"
+    )
+    conversation_input_tokens: int = rc.field(
+        "LTCOOK_CONVERSATION_INPUT_TOKENS", default=8000
     )
     session_memory_delegation: bool = rc.field(
         "LTCOOK_SESSION_MEMORY_DELEGATION", default=False

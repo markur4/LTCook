@@ -209,9 +209,9 @@ def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
     global_auth = tmp_path / "global-auth"
     (user_config / APP_RC.schema.user_dotenv_filename).write_text(
         f"LTCOOK_TEAM=global-team\nLTCOOK_PI_AUTH_DIR={global_auth}\n"
-        "LTCOOK_SESSION_MEMORY_THRESHOLD=1500\n"
-        "LTCOOK_SESSION_MEMORY_MODEL=fixture-memory-model\n"
-        "LTCOOK_SESSION_MEMORY_MODE=local\n"
+        "LTCOOK_CONVERSATION_INPUT_TOKENS=1500\n"
+        "LTCOOK_CONVERSATION_LOCAL_MODEL=fixture-memory-model\n"
+        "LTCOOK_CONVERSATION_INFERENCE=local\n"
         "LTCOOK_SESSION_MEMORY_DELEGATION=false\n",
         encoding="utf-8",
     )
@@ -221,12 +221,12 @@ def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
     global_launch = launch.resolve_launch(project, original_environment=environment)
 
     assert global_launch.environment["LTCOOK_TEAM"] == "global-team"
-    assert global_launch.environment["LTCOOK_SESSION_MEMORY_THRESHOLD"] == "1500"
+    assert global_launch.environment["LTCOOK_CONVERSATION_INPUT_TOKENS"] == "1500"
     assert (
-        global_launch.environment["LTCOOK_SESSION_MEMORY_MODEL"]
+        global_launch.environment["LTCOOK_CONVERSATION_LOCAL_MODEL"]
         == "fixture-memory-model"
     )
-    assert global_launch.environment["LTCOOK_SESSION_MEMORY_MODE"] == "local"
+    assert global_launch.environment["LTCOOK_CONVERSATION_INFERENCE"] == "local"
     assert global_launch.environment["LTCOOK_MODEL_LOCAL_CPU"] == "lfm3:1.7b-qad-q4_0"
     assert global_launch.environment["LTCOOK_MODEL_LOCAL_EVALS"] == "bonsai-2:27b"
     assert global_launch.environment["LTCOOK_SESSION_MEMORY_DELEGATION"] == "false"
@@ -417,10 +417,9 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
             local_evals_model="global-evals-model",
             summarizer_keep_alive=-1,
             summarizer_generation="",
-            session_memory_threshold=3000,
-            session_memory_model="",
-            session_memory_mode="",
-            session_memory_input_tokens=8000,
+            conversation_local_model="",
+            conversation_inference="hosted",
+            conversation_input_tokens=8000,
             session_memory_delegation=False,
         ),
         web=Section({"LTCOOK_CRAWL4AI_URL": ""}),
@@ -448,7 +447,7 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
     assert seen["workspace"] == tmp_path
     assert seen["environment"] == original
     assert result.environment["LTCOOK_TEAM"] == "workspace-team"
-    assert result.environment["LTCOOK_SESSION_MEMORY_INPUT_TOKENS"] == "8000"
+    assert result.environment["LTCOOK_CONVERSATION_INPUT_TOKENS"] == "8000"
     assert result.environment["LTCOOK_WORKSPACE"] == str(tmp_path.resolve())
     assert result.environment["LTCOOK_JS_ROOT"] == str(tmp_path / "source-root")
     assert result.environment["PATH"].split(os.pathsep)[1] == str(
@@ -458,7 +457,7 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
     assert result.environment["LTCOOK_MODEL_TINY_LOCAL"] == "fixture-model"
     assert result.environment["LTCOOK_MODEL_LOCAL_CPU"] == "global-cpu-model"
     assert result.environment["LTCOOK_MODEL_LOCAL_EVALS"] == "global-evals-model"
-    assert result.environment["LTCOOK_SESSION_MEMORY_MODE"] == ""
+    assert result.environment["LTCOOK_CONVERSATION_INFERENCE"] == "hosted"
     assert result.environment["SHELL_ONLY"] == "preserved"
     assert "LTCOOK_SHELL_PROVENANCE" not in result.environment
     next_launch = launch.resolve_launch(
@@ -497,10 +496,9 @@ def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_p
             local_evals_model="fixture-evals-model",
             summarizer_keep_alive=-1,
             summarizer_generation="",
-            session_memory_threshold=3000,
-            session_memory_model="",
-            session_memory_mode="",
-            session_memory_input_tokens=8000,
+            conversation_local_model="",
+            conversation_inference="hosted",
+            conversation_input_tokens=8000,
             session_memory_delegation=False,
         ),
         web=Section({}),

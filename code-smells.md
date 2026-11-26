@@ -402,7 +402,7 @@ expected sources. The measured search and handoff paths stayed inside their
 5-second and 500-ms deadlines. These warm loopback results show the scaling
 of small fixture messages. Installed latency under load and recall on other
 corpora remain open questions.
-See [Measure Session Memory retrieval scaling](BACKLOG.md#p3--e1-question---measure-session-memory-retrieval-scaling).
+See [Measure authorized conversation retrieval scaling](BACKLOG.md#p3--e1-question---measure-authorized-conversation-retrieval-scaling).
 
 ### Workspace preparation measurements
 

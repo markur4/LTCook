@@ -57,7 +57,7 @@ export interface MemorySource {
 export type MemorySearchEntry = {
   seq: number;
   author: string;
-  kind: 'user' | 'original-message';
+  kind: 'user' | 'original-message' | 'unattributed-prompt';
   text: string;
   tool?: MemorySourceMessage['tool'];
   truncated?: true;
@@ -68,7 +68,6 @@ export type MemoryHandoffObservation = {
   sourceAgentId: string;
   sourceEpoch: string;
   sourceGeneration: symbol;
-  uamp: number;
   aab: number;
 };
 
@@ -113,7 +112,9 @@ function reference({
 }
 
 function original({ seq, author, text, tool }: MemorySourceMessage): MemorySearchEntry {
-  return { seq, author, text, tool, kind: author === 'user' ? 'user' : 'original-message' };
+  const kind =
+    author === 'user' ? 'user' : author === 'unknown' ? 'unattributed-prompt' : 'original-message';
+  return { seq, author, text, tool, kind };
 }
 
 function originals(message: MemorySourceMessage): MemorySearchEntry[] {
@@ -251,8 +252,17 @@ export class ConversationRecords {
     this.observe(agentId, true);
   }
 
-  recover(ids: readonly string[]): void {
+  async recover(ids: readonly string[]): Promise<void> {
     for (const id of ids) {
+      if (this.abort.signal.aborted) return;
+      if (!this.store.cursor(id) && !this.revisions.has(id)) {
+        // > Start existing chats at their current tail when the fresh store has no receipts.
+        const tail = await this.source.read(id, undefined, 'tail').catch(() => undefined);
+        if (this.abort.signal.aborted) return;
+        if (!tail || tail.reset) continue;
+        if (!this.store.cursor(id) && !this.revisions.has(id))
+          this.store.save(id, { epoch: tail.epoch, seq: tail.latest, latest: tail.latest }, [], []);
+      }
       this.watch(id);
       this.observe(id, true);
     }
@@ -280,6 +290,7 @@ export class ConversationRecords {
 
   observe(id: string, force = false): void {
     if (this.abort.signal.aborted) return;
+    this.revision(id);
     this.pending.set(id, force || !!this.pending.get(id));
     this.options.onObserved?.(id);
     this.startDrain();
@@ -316,7 +327,7 @@ export class ConversationRecords {
     while (this.drain) await this.drain;
   }
 
-  private revision(id: string) {
+  private revision(id: string): { epoch?: string; latest?: number; generation: symbol } {
     const prior = this.revisions.get(id);
     if (prior) return prior;
     const next = { generation: Symbol() };
@@ -578,7 +589,9 @@ export class ConversationRecords {
       group.entries.push(entry);
       matches.set(id, group);
     }
-    const originalHistory = histories.every(({ availability }) => availability === 'unavailable')
+    const originalHistory: OriginalHistoryAvailability = histories.every(
+      ({ availability }) => availability === 'unavailable',
+    )
       ? 'unavailable'
       : histories.every(({ availability }) => availability === 'available')
         ? 'available'
@@ -675,7 +688,6 @@ export class ConversationRecords {
         sourceEpoch: history.epoch,
         sourceGeneration: this.revision(agentId).generation,
         aab,
-        uamp: 0,
       });
     }
     return { text, entries: [...evidence, ...(decision ? [decision] : [])], selection };

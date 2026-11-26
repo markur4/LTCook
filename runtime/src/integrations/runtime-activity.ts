@@ -1,15 +1,8 @@
 import type { ServerResponse } from 'node:http';
-import {
-  activityToggleRpc,
-  memoryDeviceRpc,
-  memoryInferenceRpc,
-  memoryRedoRpc,
-  memoryEvidenceRpc,
-  storedSummariesRpc,
-} from '../paseo-plugin/shared/activity.js';
+import { activityToggleRpc } from '../paseo-plugin/shared/activity.js';
 import type { createColgrepProvider } from '../repository/providers/colgrep.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
-import { MemorySummaryError, type SessionMemory } from '../session-memory/service.js';
+import type { ConversationRecords } from '../session-memory/conversation.js';
 import type { SessionSnapshot } from '../workflow-api/index.js';
 import type { ActivityPreferences } from './activity-preferences.js';
 import type { WorkspaceMcp } from './mcp.js';
@@ -28,8 +21,7 @@ export interface ActivityServices {
 interface ActivityDependencies {
   activity?: ActivityServices;
   workspaceServices?: PaseoWorkspaceServices;
-  memoryDisabled: boolean;
-  readMemory(): SessionMemory | undefined;
+  lastDelivered: ConversationRecords['lastDelivered'];
   readSession(sessionId: string): SessionSnapshot | undefined;
   registeredWorkspace(sessionId: string): string | undefined;
   readGrantedWorkspace(
@@ -71,93 +63,13 @@ const activityRoutes = {
   '/v1/activity/toggle'(parsed, response, dependencies) {
     const { feature, enabled } = activityToggleRpc.input.parse(parsed);
     const activity = dependencies.activity;
-    const memory = dependencies.readMemory();
-    if (!activity || (feature === 'summarizer' && !memory)) {
+    if (!activity) {
       response.writeHead(503).end('{"error":"This Activity control is unavailable."}');
       return;
     }
     activity.preferences.set(feature, enabled);
-    if (feature === 'summarizer') memory?.setSummarizationEnabled(enabled);
-    else activity.colgrep.setIndexingEnabled(enabled);
+    activity.colgrep.setIndexingEnabled(enabled);
     response.writeHead(200).end(JSON.stringify({ enabled }));
-  },
-  '/v1/activity/memory-inference'(parsed, response, dependencies) {
-    const { mode } = memoryInferenceRpc.input.parse(parsed);
-    const memory = dependencies.readMemory();
-    const preferences = dependencies.activity?.preferences;
-    if (!preferences || !memory?.inferenceSelection()) {
-      response.writeHead(503).end('{"error":"Session Memory inference is unavailable."}');
-      return;
-    }
-    preferences.setMemoryInferenceMode(mode);
-    response.writeHead(200).end(JSON.stringify(memory.setInferenceMode(mode)));
-  },
-  async '/v1/activity/memory-device'(parsed, response, dependencies) {
-    const { deviceId } = memoryDeviceRpc.input.parse(parsed);
-    const memory = dependencies.readMemory();
-    if (!memory) {
-      response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
-      return;
-    }
-    if (memory.inferenceSelection()?.mode === 'hosted') {
-      response
-        .writeHead(409)
-        .end('{"error":"Device selection is available for Local Session Memory."}');
-      return;
-    }
-    const device = await memory.device(deviceId);
-    response.writeHead(200).end(JSON.stringify(device));
-  },
-  async '/v1/activity/memory-redo'(parsed, response, dependencies) {
-    const input = memoryRedoRpc.input.parse(parsed);
-    const memory = dependencies.readMemory();
-    if (!memory) {
-      response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
-      return;
-    }
-    try {
-      const result =
-        input.scope === 'passage'
-          ? memory.redoSummaries(input.agentId, {
-              epoch: input.passage.epoch,
-              scope: 'passage',
-              passage: input.passage,
-            })
-          : memory.redoSummaries(input.agentId, {
-              epoch: input.epoch,
-              scope: 'from',
-              position: input.position,
-            });
-      response.writeHead(200).end(JSON.stringify(result));
-    } catch (error) {
-      const status = error instanceof MemorySummaryError ? 409 : 500;
-      response
-        .writeHead(status, { 'content-type': 'application/json' })
-        .end(JSON.stringify({ error: error instanceof Error ? error.message : 'Redo failed.' }));
-    }
-  },
-  async '/v1/activity/memory-evidence'(parsed, response, dependencies) {
-    const memory = dependencies.readMemory();
-    if (!memory) {
-      response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
-      return;
-    }
-    const { agentId, after, ...record } = memoryEvidenceRpc.input.parse(parsed);
-    const references = await memory.readEvidenceReferences(agentId, record, after);
-    response.writeHead(200).end(JSON.stringify(references));
-  },
-  async '/v1/activity/stored-summaries'(parsed, response, dependencies) {
-    const { agentId, before, includeContent, passage } = storedSummariesRpc.input.parse(parsed);
-    const memory = dependencies.readMemory();
-    if (!memory) {
-      response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
-      return;
-    }
-    const page = await memory.readStoredSummaries(agentId, before, {
-      includeContent,
-      passage,
-    });
-    response.writeHead(200).end(JSON.stringify(page));
   },
   async '/v1/activity/services'(parsed, response, dependencies) {
     const input = parsed as { nativeAgentId?: string; sessionId?: string };
@@ -166,10 +78,6 @@ const activityRoutes = {
       response.writeHead(400).end('{}');
       return;
     }
-    const timelineEpoch =
-      'timelineEpoch' in parsed && typeof parsed.timelineEpoch === 'string'
-        ? parsed.timelineEpoch
-        : undefined;
     const session = input.sessionId ? dependencies.readSession(input.sessionId) : undefined;
     if (
       session &&
@@ -199,7 +107,6 @@ const activityRoutes = {
           },
       dependencies.listProviderSubagents(agentId)?.catch(() => undefined),
     ]);
-    const memory = dependencies.readMemory()?.status(session?.session.id, agentId, timelineEpoch);
     const assignment = session?.assignments.find(
       (value) =>
         value.nativeAgentId === agentId && (value.status === 'sending' || value.status === 'sent'),
@@ -214,8 +121,7 @@ const activityRoutes = {
         task: task?.title,
         subagents,
         workspace: workspace && { root: workspace.root, identity: workspace.identity },
-        memory,
-        memoryDisabled: dependencies.memoryDisabled,
+        lastDelivered: session && dependencies.lastDelivered(session.session.id, agentId),
       }),
     );
   },

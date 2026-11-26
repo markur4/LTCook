@@ -17,7 +17,7 @@ layout, packaging boundary, verification limits, and current release workflow.
 - [Verify and release](#verify-and-release)
   - [Verification](#verification)
   - [Local Ollama and Agent Evals](#local-ollama-and-agent-evals)
-    - [Session Memory qualification](#session-memory-qualification)
+    - [Clarify and Tracker verification](#clarify-and-tracker-verification)
   - [Repository retrieval evaluation](#repository-retrieval-evaluation)
   - [Asset packaging](#asset-packaging)
   - [Integration and system procedures](#integration-and-system-procedures)
@@ -453,259 +453,34 @@ The qualification verdict belongs to the summarization report, independently
 of whether the runner completed. Existing elapsed-time history and fallback for
 the three agent cases still use their original attempts.
 
-### Session Memory qualification
+<a id="session-memory-qualification"></a>
 
-Production records source references for Discussions below 256 estimated tokens.
-At or above that threshold, it summarizes the current UAMP in structured Markdown.
-The qualification recipes below compare that policy with historical JSON and
-other experimental settings. For the current production behavior, see
-[Context-aware Session Memory](Explanations.md#context-aware-session-memory).
+### Clarify and Tracker verification
 
-Run the matched CPU comparison after suspending production inference:
+Use the existing Traditional Test suite for deterministic history, AAB
+recording, attachment handling, authorization, delegation, and concurrent
+inference. The focused tests for Tracker exercise manual edits and deletions,
+rewind, restart, pause gaps, input-budget outcomes, and independently valid
+changes across Trackers. Clarify tests cover exact reply identity, cache reuse,
+rewind during inference, and earlier context boundaries.
 
-```shell
-bun evals/session-memory-live.ts --simplified --production-suspended
-```
-
-The comparison uses the pinned LFM3 QAD Q4 model at seed 17. It compares the
-prior JSON pipeline, deterministic AABs and the short UAMP threshold with
-JSON, and the same pipeline with Markdown. The report gives request counts,
-CPU request time and provider prefill and generation measurements, along with
-storage and handoff size. The final arm must retain all critical facts assigned
-to generated UAMP summaries, all 14 critical facts across stored records, and
-all 14 in delegation handoffs. Ordinary retrieval of cited records counts
-toward record quality. The handoff may also recover missing evidence from
-other authorized originals. Critical contradictions fail each layer. Controls
-cover consecutive skipped Discussions before a Task approval and a large
-batch containing a failed check followed by a pass. The 30% reductions in
-requests and CPU wall time are optimization targets.
-
-Use the same CPU isolation for approval reference diagnostics and semantic
-qualification:
+Run the focused Hosted Agent Evals with a Codex subscription sign-in and
+`@tiny` resolving to GPT-6 Luna with low reasoning.
 
 ```shell
-bun evals/session-memory-live.ts --diagnose-approval --production-suspended
-bun evals/session-memory-live.ts --semantic --production-suspended
+bun evals/conversation-products.ts
 ```
 
-The approval diagnostic compares JSON and Markdown on one fixed current
-exchange. Each pair sees the same preceding context. The three pairs use
-generated context, original source for the preceding UAMP, and compact
-chronological context. With `--audit-output`, the report includes the exact
-rendered prompts and answers. Keep that output local. The semantic baseline
-requires each intended long UAMP to run the summarizer. It gates critical
-facts and contradictions in generated summaries, complete records and
-assembled handoffs. It uses the same pinned LFM3 model and seed 17.
+The fixtures use synthetic conversations. Tracker is graded on false approvals,
+older proposal citations, and correct decision replacements. Clarify is graded
+on stated facts, caveats, predictions, and earlier outcomes. Review the returned
+clarification for readability as well as fidelity.
 
-For progressive screening of the four smaller checkpoints against the
-qualified Session Memory code at `e7f1d60`, install the exact model tags and
-suspend production inference before running:
-
-```shell
-bun evals/session-memory-live.ts --screen-candidates --production-suspended
-```
-
-The screen runs export discovery, retry correction, manifest approval, and
-approval after skipped Discussions in that order. It stops a profile on the
-first failed gate. A complete, contradiction-free result that misses exactly
-one critical fact permits one temperature-0.1 retry from the first fixture.
-`--screen-profile=ID` selects one candidate and `--no-screen-retry` disables
-further retries for a focused replay. The screen grades generated summaries
-before original-source recovery and runs the matched CPU LFM3 comparison only
-for a fully qualifying profile. Reports include provider timings and token
-counts, model residency and runner peak RSS. The model aliases created during
-the screen are removed after use.
-
-Add `--mnn-approval-first` to test only MNN-Pocket at temperature 0.6. The
-screen starts with manifest approval and, if it passes, continues through
-export discovery, retry correction, and approval after skipped Discussions.
-This profile has no retry. A qualifying result runs LFM3 in the same order
-for the CPU comparison.
-
-Use `--screen-profile=mnn-pocket-q4-1` for the official MNN-Pocket Q4_1 QAT
-checkpoint at temperature 0.8. This runs the same manifest-first order at
-seed 17. It stops at the first failed fixture and runs a single profile.
-
-To diagnose MNN-Pocket's manifest approval failure on CPU, use:
-
-```shell
-bun evals/session-memory-live.ts --diagnose-mnn-approval --production-suspended
-```
-
-The evaluator uses both MNN-Pocket checkpoints at seed 17, reproduces each
-original approval prompt and changes one input at a time. The diagnostic
-reports generated-summary grades only. With `--audit-output`, keep the exact
-rendered system and user messages and generated answers local.
-
-To screen MNN-Pocket Q8_0 against the chronological handoff at `bbc9a3`,
-run `bun evals/session-memory-live.ts --qualify-mnn-local --production-suspended`.
-The two local prompts run on the realistic skipped-Discussions fixture and
-the remaining semantic fixtures. The report grades original-source fallback
-for incomplete summaries separately when a request fails.
-
-Use `--diagnose-minimal-approval --production-suspended` for the three
-replacement-prompt experiments on Q8_0 alone. The evaluator keeps the current
-source messages, Task context and full manifest acceptance criteria. An
-incomplete answer fails the gate and remains available in the local audit.
-
-Compare Immediate Context with the two context-independent arms on the
-manifest fixture first:
-
-```shell
-bun evals/session-memory-live.ts --compare-local-memory --production-suspended
-```
-
-The report grades local summarization, complete Session Memory records and
-the evidence in an assembled handoff separately. A passing MNN-Pocket arm
-in that report can be replayed alongside the existing baseline on the
-other semantic fixtures with `--validate-local-memory=PATH`. Keep production
-inference suspended for both CPU comparisons. Record both reports using
-`--audit-output` to run `--check-local-delegation=FIRST,SECOND`. The last
-command uses native Pi with GPT-6 Luna high reasoning and checks the worker's
-decisions from passing handoffs. Keep the audit reports local.
-
-For downstream qualification on a host without a usable GPU, use the same
-CPU production pause and the native Pi GPT-6 Luna high-reasoning worker:
-
-```shell
-bun evals/session-memory-edit-live.ts --simplified --production-suspended
-```
-
-The runner compares an original-source control with the real simplified
-handoff on both pinned edit fixtures. Both workers use the same provider and
-reasoning settings. Each must finish its turn and pass the executable checks.
-
-For a Hosted Discussion prompt change, run the matched compression evaluation
-with a Codex subscription sign-in:
-
-```shell
-bun evals/session-memory-live.ts --compare-hosted-compression
-```
-
-The report compares per-Discussion summary estimates with the original size,
-checks required facts before original-message recovery, and reports provider
-token usage separately. The evaluation uses synthetic inputs.
-
-Run `bun evals/session-memory-live.ts --context-aware` on the GPU host to
-compare authoritative Task context and Immediate Context on short cache
-recovery, an attachment on a turn with trailing tool evidence, a reference to
-a previous Discussion, and held-out index restore. The runner keeps source
-portions, the model, and sampling settings matched. Both Session Memory
-runners default to seed 17. Use `--seeds=43` to follow up on an ambiguous or
-failing result, `--fixture=ID` to select one fixture, or
-`--strategy=immediate` to focus one arm. Use `--full` for the expanded corpus
-or `--held-out` for the index fixture alone. The report checks that attached
-text reached the summarizer and grades exact named outcomes by source portion.
-Add `--audit-output` to include generated fixture summaries for manual
-hallucination and attribution review. Keep those reports local until reviewed.
-
-Run `bun evals/session-memory-live.ts --cpu-sample` on an idle Ollama listener
-to time one production-model cache-check summary. Repeat this measurement when
-the model, inference settings, or prompt size changes. Record CPU residency,
-model digest, source portion, input and output tokens, prefill and generation
-times, load time, and end-to-end latency.
-
-For handoff presentation changes, run `bun evals/session-memory-handoff-live.ts`
-to compare chronological and generated presentations of the same six excerpts
-in paired fresh Pi sessions. The first optional argument selects the Pi model.
-
-To replay the historical CPU extraction baseline, run
-`bun evals/session-memory-live.ts` on the fixed workflow corpus. The runner
-uses relevant original source as the native Pi control. It grades omissions,
-contradictions, attribution, categorization, and invalid output separately.
-It records model digests, reasoning token evidence, prefill and generation time,
-end-to-end request latency, CPU residency, available process peak RSS and Pi
-input-token changes. Positional arguments select the downstream Pi model,
-extractor tag, and estimated token threshold. Pass `--extract-only` to run
-the CPU extractor comparison without the Pi handoffs. Use `--include-cadence`
-to add the long transcript or `--cadence` to run it alone. Add `--task-aware`
-to test a task-focus prompt with the same input, model and batch settings.
-Pass `--recommended-sampling` to use Liquid AI's published sampling settings
-for each candidate. The report records the request configuration per model.
-Use `--output-cap=2048` or `--temperature=0.4` to override the response cap or
-sampling temperature for all selected candidates in an evaluation.
-Add `--reasoning-fallback` to try each extraction batch and native Pi
-handoff with reasoning off first. The runner retries failed batches and
-handoff checks once with the same model's thinking enabled. The output cap
-and temperature apply to both Pi handoff arms in this mode. The report keeps
-both request times and records whether the retry recovered the failed check.
-
-Save a JSON report from `--cadence` or `--include-cadence` and pass its path
-with `--luna-low-from=report.json` to retry failed cadence batches with
-GPT-6 Luna at low reasoning in native Pi. The replay uses the existing Codex
-sign-in and sends only the numbered excerpts of the synthetic evaluation
-fixture to the provider. It grades each batch on its own evidence.
-
-For changes affecting Pi handoffs, run the local GPU repository-edit
-qualification.
-
-```shell
-bun evals/session-memory-edit-live.ts --context-aware
-```
-
-The default Pi worker is the prepared local Bonsai model. The runner retrieves
-original evidence and the latest correction and gives them to Pi for the
-first edit. A passing control enables the Immediate Context edit. A failing
-control leaves the comparison inconclusive and skips its summary arm. Pi
-stops after three consecutive tool calls repeat known requests with unchanged
-results. Use `--fixture=trace-pairing` or `--fixture=workspace-preparation` for
-the affected edit, and `--strategy=original-search` to verify only its control.
-
-The edit report records implementation checks, normal Pi turn completion,
-and tool-loop stops independently. Qualification requires a scoped edit that
-passes the executable checks and a normally completed turn. Use
-`--audit-output` to inspect the exact fixture prompt, handoff, available files
-and tools, and tool arguments and results. Keep the raw audit local.
-Use `--compare-check-instructions` to replay a looping Immediate Context edit
-with the same evidence and a clarification that the evaluator runs the named
-checks. The report records the diagnostic result independently of the normal
-qualification result.
-Use `--compare-handoff-format` to compare the compact handoff with a
-decision-last JSON control. Both presentations use the same selected evidence,
-source citations, and worker instructions. The audit reports their shared
-evidence hash. This diagnostic comparison can run after a failed worker
-control when original evidence is complete. Qualification remains inconclusive
-for that fixture.
-
-To replay the historical extraction comparison on repository edits, run
-`bun evals/session-memory-edit-live.ts` with optional extractor and worker model
-tags. It compares conventional delegation, deterministic conversation search,
-and hybrid context. Pass `gpt-6-luna` as the worker to use the high-reasoning
-fallback in Pi through the existing Codex sign-in. Each Pi worker edits its own
-copy of the same files from a pinned LTCook commit. The runner checks the edits
-against the latest confirmed decisions and records tool calls and usage. See the
-[CPU and edit comparison](../evals/session-memory-budget-results.md), the
-[hybrid qualification](../evals/session-memory-hybrid-results.md), and the
-[initial qualification](../evals/session-memory-results.md).
-
-The runtime stores Session Memory records, native turn receipts, original
-user prompts and the Paseo checkpoint in `session-memory-v5.sqlite` under
-runtime state. This version starts a fresh derived store. To reset it, stop the
-LTCook instance, remove only that database and its SQLite sidecars from the
-instance's runtime state, and restart. Preserve Paseo's native history and
-the pasted attachment store. Older conversations remain available through
-authorized original search. Rebuilding UAMPs requires valid native turn
-receipts.
-
-Generated UAMP summaries use Markdown. The full response is retained for
-display and retrieval even when its headings are irregular. Truncated or
-failed requests do not become completed summaries. Short UAMPs and AABs store
-references without inference and continue while generation is paused. Rewind
-invalidates the affected record suffix.
-
-The previous extractive summarizer is limited to the Agent Evals baseline.
-The production default runs local LFM3 QAD Q4 at temperature 0.4 with
-reasoning disabled. In Activity, **Auto** delegates placement to Ollama.
-**CPU** forces CPU inference. Named selections use Ollama's `main_gpu` option
-where the device identity can be mapped to a usable index for the configured
-server. The picker requests discovery from the host's Ollama installation
-when opened. A server started with different device visibility settings can
-see a different inventory. The host stores identity and resolves the index
-for inference. Live throughput samples come from the
-background Ollama stream and are estimated when the provider omits token
-counts. Memory work starts when foreground local inference is idle. See the
-[architecture diagrams](Explanations.md#context-aware-session-memory) and the
-[CPU timing and GPU qualification results](context-aware-session-memory/QUALIFICATION.md#lean-single-seed-qualification).
+The fresh `conversation-records-v1.sqlite` holds deterministic receipts and
+AABs. `conversation-products-v1.sqlite` holds Clarify and Tracker state. Both
+are in runtime state. Preserve native Paseo history and the separate
+`pasted-documents` store. The application starts these databases fresh and
+ignores the old Session Memory records.
 
 ### Opt-in summarization utility comparison
 

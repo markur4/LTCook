@@ -4,7 +4,7 @@ import {
   MemoryHistoryUnavailableError,
   type MemoryCursor,
   type MemorySource,
-} from '../session-memory/service.js';
+} from '../session-memory/conversation.js';
 import type { MemorySourceMessage } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import { readMemoryMessages } from '../paseo-plugin/server/memory-source.js';

@@ -324,7 +324,7 @@ copies of the same LTCook source files from commit `53a615`. The two tasks are
 trace event pairing and workspace preparation cache invalidation. Each used
 an authored long transcript with interleaved work, an initial proposal, and a
 confirmed correction. The transcripts and required outcomes are fixed in the
-[edit fixtures](session-memory-edit-fixtures.ts). The edits ran against real
+[edit fixtures](https://github.com/markur4/LTCook/blob/b500ce32c8d2e3291aced42d2651fd5459fc1b29/evals/session-memory-edit-fixtures.ts). The edits ran against real
 LTCook source files and were graded by executable behavior checks and file
 scope.
 

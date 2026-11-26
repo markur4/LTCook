@@ -203,7 +203,6 @@ test.each(['explorer', 'explorer-tmp'])(
         LTCOOK_AGENT_API_TOKEN: 'fixture',
         LTCOOK_TEAM: 'default',
         LTCOOK_BROWSER_ENABLED: 'false',
-        LTCOOK_SESSION_MEMORY_THRESHOLD: '3000',
       });
       delete process.env.LTCOOK_EVAL_ARM;
       let guard!: (event: {
@@ -240,10 +239,6 @@ test.each(['explorer', 'explorer-tmp'])(
         { path: '/v1/workspace-tool', toolName: 'session-memory' },
         { path: '/v1/workspace-tool', toolName: 'session-memory' },
       ]);
-      process.env.LTCOOK_SESSION_MEMORY_THRESHOLD = '0';
-      tools.clear();
-      await activate(pi);
-      expect(tools.has('session-memory')).toBe(false);
     } finally {
       server.stop(true);
     }

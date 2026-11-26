@@ -292,17 +292,14 @@ def resolve_launch(
     environment["LTCOOK_SUMMARIZER_GENERATION"] = (
         global_config.runtime.summarizer_generation
     )
-    environment["LTCOOK_SESSION_MEMORY_THRESHOLD"] = str(
-        global_config.runtime.session_memory_threshold
+    environment["LTCOOK_CONVERSATION_LOCAL_MODEL"] = (
+        global_config.runtime.conversation_local_model
     )
-    environment["LTCOOK_SESSION_MEMORY_MODEL"] = (
-        global_config.runtime.session_memory_model
+    environment["LTCOOK_CONVERSATION_INFERENCE"] = (
+        global_config.runtime.conversation_inference
     )
-    environment["LTCOOK_SESSION_MEMORY_MODE"] = (
-        global_config.runtime.session_memory_mode
-    )
-    environment["LTCOOK_SESSION_MEMORY_INPUT_TOKENS"] = str(
-        global_config.runtime.session_memory_input_tokens
+    environment["LTCOOK_CONVERSATION_INPUT_TOKENS"] = str(
+        global_config.runtime.conversation_input_tokens
     )
     environment["LTCOOK_SESSION_MEMORY_DELEGATION"] = str(
         global_config.runtime.session_memory_delegation
