@@ -118,8 +118,9 @@ Session worktree store. The HTTP routes and workspace catalog use the same
 instances. The HTTP listener starts before its native host and Core controller
 are ready. Worktree reads and reports share Session and Pass scope resolution.
 The Activity HTTP routes live in `runtime/src/integrations/runtime-activity.ts`.
-RuntimeApi authenticates the caller and parses the request before delegating
-to those routes.
+The native tool routes, including the dedicated Session RIED operation, live in
+`runtime/src/integrations/runtime-tool-routes.ts`. RuntimeApi authenticates the
+caller and parses the request before delegating to these handlers.
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,
@@ -130,10 +131,11 @@ wheel and installer, not general build debris. See
 
 ## Workspace tool guidance
 
-Runtime tool names and capability checks live in `runtime/src/tools`. Core
-checks current Session bindings and Pass authority for managed calls, and the
-MCP adapter checks ordinary workspace grants. The installed Paseo plugin keeps
-its MCP server registration name within its copied source tree.
+Runtime tool names and capability checks live in `runtime/src/tools`.
+Runtime startup supplies one catalog to the native HTTP and ordinary MCP
+handlers. Core checks current Session bindings and Pass authority for managed
+calls, and the MCP adapter checks ordinary workspace grants. The installed
+Paseo plugin keeps its MCP server registration name within its copied source tree.
 
 When adding a workspace tool or changing what agents should use it for, ship
 concise agent-facing guidance with the registration. Explain when to choose the

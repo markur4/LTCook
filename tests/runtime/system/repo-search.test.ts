@@ -23,6 +23,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import {
   createRepoSearchTool,
   REPO_SEARCH_TOOL_NAME,
@@ -158,7 +159,7 @@ async function withWorkspaceMcp<T>(
     const address = listener.address();
     if (!address || typeof address === 'string') throw new Error('No MCP fixture port.');
     const authority = `127.0.0.1:${address.port}`;
-    mcp = new WorkspaceMcp([tool], authority);
+    mcp = new WorkspaceMcp(new ToolCatalog([tool]), authority);
     const token = await mcp.grant('authorized-pi', workspace, false, true);
     const transport = new StreamableHTTPClientTransport(new URL(`http://${authority}/mcp`), {
       requestInit: { headers: { authorization: `Bearer ${token}` } },

@@ -17,7 +17,7 @@ import {
   releaseOllamaModel,
   type OllamaUsage,
 } from '../../../runtime/src/integrations/ollama.js';
-import { createTools } from '../../../runtime/src/tools/catalog.js';
+import { createTools, ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import {
   summarizeMemory,
   type MemorySummaryProgress,
@@ -476,7 +476,7 @@ test('MCP restart requires matching Paseo approval and MCP acceptance before que
   const authority = await localAuthority();
   const api = new RuntimeApi(undefined, 'fixture-runtime-authority', authority);
   const queued: boolean[] = [];
-  const mcp = new WorkspaceMcp([], authority, undefined, async (update) => {
+  const mcp = new WorkspaceMcp(new ToolCatalog([]), authority, undefined, async (update) => {
     queued.push(update);
     return { status: 'queued', update };
   });

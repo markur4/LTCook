@@ -122,9 +122,9 @@ the authenticated Session lookup and ordinary MCP grants.
 created the ColGREP provider and worktree tool used by
 [main](runtime/src/main.ts) for the shared catalog. It also owned Activity
 preferences, routing, identity, body limits, and several readiness checks.
-The listener starts before the host and controller are ready. HTTP invokes
-the catalog via [WorkspaceMcp](runtime/src/integrations/mcp.ts), while ordinary
-MCP applies its workspace grant. Managed RIED has a dedicated Session route.
+The listener starts before the host and controller are ready. At baseline,
+HTTP invoked the catalog via [WorkspaceMcp](runtime/src/integrations/mcp.ts).
+Managed RIED used a dedicated Session route.
 
 Move shared service construction to composition or the relevant domain owner
 first. Then extract route families where they improve traversal. Preserve
@@ -138,8 +138,15 @@ uses the injected services. Worktree reads and reports share the
 [worktree scope resolver](runtime/src/integrations/session-worktrees.ts).
 The [Activity route module](runtime/src/integrations/runtime-activity.ts)
 owns its six existing operations and declares their paths once. RuntimeApi
-retains authentication, body limits, and response error handling. The native
-boundary tests cover user authorization and pre-ready responses. Other route
+retains authentication, body limits, and response error handling. The
+[tool route module](runtime/src/integrations/runtime-tool-routes.ts) owns native
+authorization, managed tool calls, and the dedicated RIED operation.
+[The catalog](runtime/src/tools/catalog.ts) supplies definitions and invocation
+to both transports. Core still authorizes managed calls, and MCP still validates
+ordinary workspace grants. The dedicated RIED operation retains its Session
+binding and registration checks. The native boundary tests exercise managed
+invocation without MCP, readiness before Core or the catalog is attached,
+and RIED access from bound agents and registered user Sessions. Other route
 families, Core extraction, and failure handling remain open.
 
 ### CSC-03 — Session Memory concentrates recording, inference, retrieval, and handoff
@@ -220,8 +227,8 @@ The authorization pass replaces two Session projections and the separate
 Planning binding read per managed HTTP invocation with a single Core lookup.
 Session Memory and worktree calls keep their native authorization round trip
 because Pi's call hook sees the tool name and input and lacks the selected
-handler's identity. The separate worktree Pass context still reads its
-projection.
+handler's identity. The separate worktree Pass context and the dedicated
+Session RIED route still read their Session projections.
 
 ### CSC-06B — Broad Memory search walks original history
 

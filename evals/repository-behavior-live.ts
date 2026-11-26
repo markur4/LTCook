@@ -13,6 +13,7 @@ import { WORKSPACE_MCP_SERVER } from '../runtime/src/paseo-plugin/shared/workspa
 import { createColgrepProvider } from '../runtime/src/repository/providers/colgrep.js';
 import type { RepositoryHit, RepositoryRetrieval } from '../runtime/src/repository/results.js';
 import { openRepositoryWorkspace } from '../runtime/src/repository/workspace.js';
+import { ToolCatalog } from '../runtime/src/tools/catalog.js';
 import { createRepoLocateTool, REPO_LOCATE_TOOL_NAME } from '../runtime/src/tools/repo-locate.js';
 import { createRepoSearchTool, REPO_SEARCH_TOOL_NAME } from '../runtime/src/tools/repo-search.js';
 import { repositoryEvidenceText } from '../runtime/src/tools/repository-evidence-text.js';
@@ -675,7 +676,7 @@ try {
   if (!piEvaluation) {
     const authority = await loopbackAuthority();
     api = new RuntimeApi(undefined, randomBytes(32).toString('base64url'), authority);
-    mcp = new WorkspaceMcp(toolDefinitions, authority);
+    mcp = new WorkspaceMcp(new ToolCatalog(toolDefinitions), authority);
     api.setWorkspaceMcp(mcp);
     endpoint = await api.listen();
   }

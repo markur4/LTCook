@@ -12,7 +12,7 @@ import { startPaseoHost } from '../../../runtime/src/integrations/paseo.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { ollamaEndpoint } from '../../../runtime/src/integrations/ollama.js';
-import { createTools } from '../../../runtime/src/tools/catalog.js';
+import { createTools, ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { RiedService } from '../../../runtime/src/repository/discovery.js';
 import { RepositoryLocateOutputSchema } from '../../../runtime/src/tools/repo-locate.js';
 import { RepositorySearchOutputSchema } from '../../../runtime/src/tools/repo-search.js';
@@ -372,7 +372,7 @@ const liveCalls = new Map<string, LiveCall[]>();
 const absentSymbol = 'releaseBackoffWindow';
 async function start() {
   api = new RuntimeApi(undefined, secret, authority);
-  const tools = createTools(
+  let tools = createTools(
     new RiedService(path.join(fixture, 'cache'), undefined, () => ({ PATH: '' })),
     {
       endpoint: new URL(endpoint).origin,
@@ -380,39 +380,35 @@ async function start() {
       keepAlive: -1,
     },
   );
-  api.setWorkspaceMcp(
-    new WorkspaceMcp(
-      liveModel
-        ? tools.map((tool) => ({
-            ...tool,
-            async invoke(input, context) {
-              const recorded = liveCalls.get(context.agentId);
-              if (!recorded) return tool.invoke(input, context);
-              const call: LiveCall = { tool: tool.name, searches: [] };
-              recorded.push(call);
-              const output = await tool.invoke(input, context);
-              const request = input as { paths?: string[]; query?: string };
-              const observe = (result: LiveSearch, query: string | undefined) => ({
-                ...result,
-                relevantToNegative:
-                  result.kind === 'exhaustive' &&
-                  query === absentSymbol &&
-                  (request.paths ?? []).every((value) => value === '.'),
-              });
-              if (Value.Check(RepositorySearchOutputSchema, output)) {
-                call.searches.push(observe(output, request.query));
-              } else if (Value.Check(RepositoryLocateOutputSchema, output)) {
-                call.searches.push(
-                  ...output.searches.map((result) => observe(result, result.query)),
-                );
-              }
-              return output;
-            },
-          }))
-        : tools,
-      authority,
-    ),
-  );
+  if (liveModel) {
+    tools = new ToolCatalog(
+      tools.definitions.map((tool) => ({
+        ...tool,
+        async invoke(input, context) {
+          const recorded = liveCalls.get(context.agentId);
+          if (!recorded) return tool.invoke(input, context);
+          const call: LiveCall = { tool: tool.name, searches: [] };
+          recorded.push(call);
+          const output = await tool.invoke(input, context);
+          const request = input as { paths?: string[]; query?: string };
+          const observe = (result: LiveSearch, query: string | undefined) => ({
+            ...result,
+            relevantToNegative:
+              result.kind === 'exhaustive' &&
+              query === absentSymbol &&
+              (request.paths ?? []).every((value) => value === '.'),
+          });
+          if (Value.Check(RepositorySearchOutputSchema, output)) {
+            call.searches.push(observe(output, request.query));
+          } else if (Value.Check(RepositoryLocateOutputSchema, output)) {
+            call.searches.push(...output.searches.map((result) => observe(result, result.query)));
+          }
+          return output;
+        },
+      })),
+    );
+  }
+  api.setWorkspaceMcp(new WorkspaceMcp(tools, authority));
   await api.listen();
   host = await startPaseoHost({
     node: process.env.LTCOOK_TEST_NODE ?? 'node',

@@ -19,12 +19,13 @@ import {
 import { panelSnapshot } from '../../../runtime/src/paseo-plugin/shared/panel-snapshot.js';
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
-import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { ActivityPreferences } from '../../../runtime/src/integrations/activity-preferences.js';
 import {
   createWorktreeScopeResolver,
   SessionWorktrees,
 } from '../../../runtime/src/integrations/session-worktrees.js';
+import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
+import type { RiedRequest } from '../../../runtime/src/repository/requests.js';
 import { createSessionWorktreeTool } from '../../../runtime/src/tools/session-worktree.js';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
@@ -640,7 +641,7 @@ describe('native runtime boundary', () => {
       },
     } as unknown as RuntimeController;
     const authority = `127.0.0.1:${await freePort()}`;
-    const api = new RuntimeApi(controller, master, authority);
+    const api = new RuntimeApi(undefined, master, authority);
     const searchResult = {
       content: 'Search result',
       responseId: 'search-result',
@@ -660,12 +661,11 @@ describe('native runtime boundary', () => {
     const repositorySearch = createRepoSearchTool(
       createColgrepProvider({ deploymentDirectory: '' }),
     );
-    api.setWorkspaceMcp(
-      new WorkspaceMcp(
-        [...createWebTools(service), repositorySearch, createRepoLocateTool(repositorySearch)],
-        authority,
-      ),
-    );
+    const tools = new ToolCatalog([
+      ...createWebTools(service),
+      repositorySearch,
+      createRepoLocateTool(repositorySearch),
+    ]);
     const endpoint = await api.listen();
     const call = (agentId: string = nativeAgentId, toolName = 'ltcook_web_search') =>
       fetch(`${endpoint}/v1/workspace-tool`, {
@@ -679,6 +679,16 @@ describe('native runtime boundary', () => {
         }),
       });
     try {
+      const preReady = await call();
+      expect(preReady.status).toBe(503);
+      expect(await preReady.json()).toEqual({ error: 'LTCook runtime is not ready' });
+      api.setRuntime(controller);
+      const noCatalog = await call();
+      expect(noCatalog.status).toBe(403);
+      expect(await noCatalog.text()).toBe('{}');
+      expect(authorized).toBe(0);
+      api.setWorkspaceTools(tools);
+
       const denied = await call();
       expect(denied.status).toBe(403);
       expect(await denied.json()).toEqual({ error: 'Tool budget exhausted' });
@@ -714,6 +724,58 @@ describe('native runtime boundary', () => {
       });
       expect((await call('unbound', 'ltcook_repo_locate')).status).toBe(403);
       expect(authorized).toBe(7);
+    } finally {
+      await api.close();
+    }
+  });
+  test('Session RIED requires a current agent binding or a registered user Session', async () => {
+    const master = 'ried-user-secret';
+    const nativeAgentId = 'ried-native-agent';
+    const snapshot = snapshotFor(nativeAgentId);
+    const calls: Array<{ sessionId: string; request: RiedRequest }> = [];
+    const inventory = { provider: 'ried' };
+    const controller = {
+      snapshot: () => snapshot,
+      async ried(sessionId: string, request: RiedRequest) {
+        calls.push({ sessionId, request });
+        return inventory;
+      },
+    } as RuntimeController;
+    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
+    const endpoint = await api.listen();
+    const call = (bearer: string, id = nativeAgentId, request: object = { operation: 'summary' }) =>
+      fetch(`${endpoint}/v1/ried`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bearer}` },
+        body: JSON.stringify({
+          sessionId: snapshot.session.id,
+          nativeAgentId: id,
+          ...request,
+        }),
+      });
+    try {
+      const inactive = await call(master);
+      expect(inactive.status).toBe(403);
+      expect(await inactive.json()).toEqual({ error: 'session is not active in this runtime' });
+      const unbound = await call(agentBearer(master, 'unbound'), 'unbound');
+      expect(unbound.status).toBe(403);
+      expect(await unbound.json()).toEqual({ error: 'native agent is not bound to this session' });
+      expect(calls).toEqual([]);
+
+      const bearer = agentBearer(master, nativeAgentId);
+      expect((await call(bearer, nativeAgentId, { operation: 'invalid' })).status).toBe(400);
+      const agentResult = await call(bearer);
+      expect(agentResult.status).toBe(200);
+      expect(await agentResult.json()).toEqual({ value: inventory });
+
+      api.setSession(snapshot.session.workspaceRoot, snapshot.session.id);
+      const userResult = await call(master);
+      expect(userResult.status).toBe(200);
+      expect(await userResult.json()).toEqual({ value: inventory });
+      expect(calls).toEqual([
+        { sessionId: snapshot.session.id, request: { operation: 'summary' } },
+        { sessionId: snapshot.session.id, request: { operation: 'summary' } },
+      ]);
     } finally {
       await api.close();
     }

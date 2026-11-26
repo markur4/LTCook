@@ -18,14 +18,9 @@ import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js'
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import type { WorkspaceMcp } from './mcp.js';
 import { handleActivityRoute, isActivityRoute, type ActivityServices } from './runtime-activity.js';
-import {
-  isRepositoryTool,
-  SESSION_MEMORY_TOOL_NAME,
-  REPO_SEARCH_TIMEOUT_MS,
-} from '../tools/workspace-tools.js';
-import { isManagedWorkspaceTool } from '../tools/capabilities.js';
+import { handleToolRoute, isToolRoute } from './runtime-tool-routes.js';
+import type { ToolCatalog } from '../tools/catalog.js';
 import type { SessionWorktrees, WorktreeScopeResolver } from './session-worktrees.js';
-import { validateRiedRequest } from '../repository/requests.js';
 import { z } from 'zod';
 import { ResolvedModelSchema, type ResolvedModel } from '../models/aliases.js';
 import {
@@ -140,6 +135,7 @@ export class RuntimeApi {
   private reservingIdleRestart = false;
   private stopping = false;
   private workspaceMcp: WorkspaceMcp | undefined;
+  private workspaceTools: ToolCatalog | undefined;
   setSessionMemory(memory: SessionMemory, context?: RuntimeApi['memoryContext']): void {
     this.memory = memory;
     const preferences = this.services.activity?.preferences;
@@ -154,6 +150,9 @@ export class RuntimeApi {
 
   setWorkspaceMcp(mcp: WorkspaceMcp): void {
     this.workspaceMcp = mcp;
+  }
+  setWorkspaceTools(catalog: ToolCatalog): void {
+    this.workspaceTools = catalog;
   }
   private evals: EvalRunService | undefined;
   private evaluationObserver:
@@ -315,8 +314,10 @@ export class RuntimeApi {
     }
     response.setHeader('content-type', 'application/json');
     const activityRoute = isActivityRoute(request.url) ? request.url : undefined;
+    const toolRoute = isToolRoute(request.url) ? request.url : undefined;
     const isPostRoute =
       activityRoute !== undefined ||
+      toolRoute !== undefined ||
       [
         '/v1/command',
         '/v1/snapshot',
@@ -328,9 +329,6 @@ export class RuntimeApi {
         '/v1/session/worktrees',
         '/v1/session/prepare',
         '/v1/runtime/stop',
-        '/v1/tool/authorize',
-        '/v1/ried',
-        '/v1/workspace-tool',
         '/v1/session-memory/observe',
         '/v1/session-memory/paste',
         '/v1/mcp/grant',
@@ -449,14 +447,11 @@ export class RuntimeApi {
         teamSelection?: string;
         leaderAgentId?: string;
         shellEnvironment?: unknown;
-        toolName?: unknown;
         force?: unknown;
         turnId?: unknown;
         outcome?: unknown;
         local?: unknown;
         closed?: unknown;
-        toolArgs?: unknown;
-        input?: unknown;
       };
       const isUser = equalToken(bearer, this.secret);
       const actor: RuntimeActor | undefined = isUser
@@ -663,6 +658,14 @@ export class RuntimeApi {
         response.writeHead(503).end('{"error":"LTCook runtime is not ready"}');
         return;
       }
+      if (toolRoute) {
+        await handleToolRoute(toolRoute, parsed, response, actor, {
+          runtime,
+          catalog: this.workspaceTools,
+          registeredWorkspace: (id) => this.sessions.get(id),
+        });
+        return;
+      }
       if (request.url === '/v1/model/catalog' || request.url === '/v1/model/resolve') {
         if (actor.kind !== 'user') {
           response.writeHead(403).end('{"error":"user authentication required"}');
@@ -769,87 +772,6 @@ export class RuntimeApi {
         }
         return;
       }
-      if (request.url === '/v1/workspace-tool') {
-        const toolName = input.toolName;
-        if (
-          actor.kind !== 'agent' ||
-          !input.sessionId ||
-          !this.workspaceMcp ||
-          !isManagedWorkspaceTool(toolName) ||
-          !input.toolArgs ||
-          typeof input.toolArgs !== 'object' ||
-          Array.isArray(input.toolArgs)
-        ) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const authorization = runtime.authorizeWorkspaceTool(
-          input.sessionId,
-          actor.nativeAgentId,
-          toolName,
-          input.toolArgs as Record<string, unknown>,
-        );
-        if (!authorization.allowed) {
-          response
-            .writeHead(403)
-            .end(authorization.unbound ? '{}' : JSON.stringify({ error: authorization.reason }));
-          return;
-        }
-        const controller = new AbortController();
-        const cancel = () => controller.abort();
-        response.once('close', cancel);
-        try {
-          const repositorySearch = isRepositoryTool(toolName);
-          const timeoutMs =
-            toolName === SESSION_MEMORY_TOOL_NAME
-              ? 5_000
-              : repositorySearch
-                ? REPO_SEARCH_TIMEOUT_MS + 5_000
-                : 120_000;
-          const result = await this.workspaceMcp.invokeTool(toolName, input.toolArgs, {
-            agentId: actor.nativeAgentId,
-            workspaceRoot: authorization.workspaceRoot,
-            sessionId: input.sessionId,
-            workspaceFileAccess: false,
-            repositorySearchAccess: repositorySearch,
-            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]),
-          });
-          response.writeHead(200).end(JSON.stringify(result));
-        } finally {
-          response.off('close', cancel);
-        }
-        return;
-      }
-      if (request.url === '/v1/ried') {
-        if (!input.sessionId) throw new Error('RIED requires a Session');
-        const {
-          sessionId: _sessionId,
-          nativeAgentId: _nativeAgentId,
-          ...toolArgs
-        } = parsed as Record<string, unknown>;
-        const inventoryRequest = validateRiedRequest(toolArgs);
-        const session = runtime.snapshot(input.sessionId);
-        if (actor.kind === 'agent') {
-          if (
-            !session.members.some(
-              (member) =>
-                member.binding?.nativeAgentId === actor.nativeAgentId &&
-                member.binding.state === 'bound',
-            )
-          ) {
-            response.writeHead(403).end('{"error":"native agent is not bound to this session"}');
-            return;
-          }
-        } else if (
-          this.sessions.get(input.sessionId) !== canonicalWorkspace(session.session.workspaceRoot)
-        ) {
-          response.writeHead(403).end('{"error":"session is not active in this runtime"}');
-          return;
-        }
-        const value = await runtime.ried(input.sessionId, inventoryRequest);
-        response.writeHead(200).end(JSON.stringify({ value }));
-        return;
-      }
       if (request.url === '/v1/snapshot') {
         if (actor.kind === 'user') {
           const requestedWorkspace = input.workspaceRoot
@@ -914,25 +836,6 @@ export class RuntimeApi {
           throw new Error('Native agent is not bound to this session');
         }
         response.writeHead(200).end(JSON.stringify(snapshot));
-        return;
-      }
-      if (request.url === '/v1/tool/authorize') {
-        if (
-          actor.kind !== 'agent' ||
-          !input.sessionId ||
-          typeof input.toolName !== 'string' ||
-          !input.input ||
-          typeof input.input !== 'object' ||
-          Array.isArray(input.input)
-        )
-          throw new Error('Bound agent, Session, toolName and input mapping required');
-        const authorization = runtime.authorizeTool(
-          input.sessionId,
-          actor.nativeAgentId,
-          input.toolName,
-          input.input as Record<string, unknown>,
-        );
-        response.writeHead(200).end(JSON.stringify(authorization));
         return;
       }
       if (!input.sessionId || !isRuntimeCommand(input.command))

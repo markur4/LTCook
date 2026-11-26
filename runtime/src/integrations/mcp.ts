@@ -12,7 +12,7 @@ import {
   type RequestId,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import type { ToolDefinition, ToolContext } from '../tools/types.js';
+import type { ToolCatalog } from '../tools/catalog.js';
 import { WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
 import { isRepositoryTool, WORKTREE_TOOL_NAME } from '../tools/workspace-tools.js';
 import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
@@ -72,17 +72,15 @@ export class WorkspaceMcp {
   private readonly tokens = new Map<string, Grant>();
   private readonly connections = new Map<string, Connection>();
   private readonly restartApprovals = new Map<string, RestartApproval>();
-  private readonly catalog: Tool[];
-  private readonly tools: Map<string, ToolDefinition>;
+  private readonly descriptors: Tool[];
 
   constructor(
-    tools: readonly ToolDefinition[],
+    private readonly tools: ToolCatalog,
     private readonly authority: string,
     private readonly web?: WebToolService,
     private readonly requestRestart?: (update: boolean) => Promise<Record<string, unknown>>,
   ) {
-    this.tools = new Map(tools.map((tool) => [tool.name, tool]));
-    this.catalog = tools.map(({ name, description, inputSchema, outputSchema }) =>
+    this.descriptors = tools.definitions.map(({ name, description, inputSchema, outputSchema }) =>
       ToolSchema.parse({
         name,
         description,
@@ -145,16 +143,6 @@ export class WorkspaceMcp {
           throw new Error('The repository search grant is no longer active.');
       },
     };
-  }
-
-  async invokeTool(
-    name: string,
-    args: unknown,
-    context: ToolContext,
-  ): Promise<Record<string, unknown>> {
-    const tool = this.tools.get(name);
-    if (!tool) throw new Error('Unknown LTCook tool.');
-    return tool.invoke(args, context);
   }
 
   async revoke(agentId: string): Promise<void> {
@@ -275,8 +263,8 @@ export class WorkspaceMcp {
     const connection = { id, server, transport, grant };
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       const tools = grant.repositorySearchAccess
-        ? this.catalog
-        : this.catalog.filter(({ name }) => !requiresRepositoryAccess(name));
+        ? this.descriptors
+        : this.descriptors.filter(({ name }) => !requiresRepositoryAccess(name));
       return {
         tools:
           this.requestRestart && server.getClientCapabilities()?.elicitation?.form
@@ -291,10 +279,9 @@ export class WorkspaceMcp {
         if (params.name === RESTART_TOOL.name) {
           output = await this.approveRestart(params.arguments ?? {}, connection, requestId, signal);
         } else {
-          const tool = this.tools.get(params.name);
-          if (!tool || (requiresRepositoryAccess(params.name) && !grant.repositorySearchAccess))
+          if (requiresRepositoryAccess(params.name) && !grant.repositorySearchAccess)
             throw new Error('Unknown LTCook tool.');
-          output = await tool.invoke(params.arguments ?? {}, {
+          output = await this.tools.invoke(params.name, params.arguments ?? {}, {
             agentId: grant.agentId,
             workspaceRoot: grant.workspaceRoot,
             workspaceFileAccess: grant.workspaceFileAccess,

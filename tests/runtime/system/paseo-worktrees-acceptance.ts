@@ -9,6 +9,7 @@ import { buildAgentDeepLinkRoute } from '@getpaseo/protocol/agent-deep-link';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import {
   createWorktreeScopeResolver,
@@ -95,7 +96,9 @@ const resolveScope = createWorktreeScopeResolver(() => undefined);
 const api = new RuntimeApi(undefined, secret, listen, environment, undefined, {
   worktrees: { store: worktrees, resolveScope },
 });
-api.setWorkspaceMcp(new WorkspaceMcp([createSessionWorktreeTool(worktrees, resolveScope)], listen));
+const tools = new ToolCatalog([createSessionWorktreeTool(worktrees, resolveScope)]);
+api.setWorkspaceTools(tools);
+api.setWorkspaceMcp(new WorkspaceMcp(tools, listen));
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 try {
