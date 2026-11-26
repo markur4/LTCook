@@ -113,6 +113,32 @@ export type HostedMemoryUsage = {
   reasoningTokens: number;
   lastLatencyMs?: number;
 };
+
+export type MemoryRedoStatus = {
+  id: string;
+  state: 'queued' | 'running' | 'completed' | 'failed';
+  error?: string;
+};
+
+type MemoryRedoRequest =
+  | {
+      id: string;
+      epoch: string;
+      scope: 'passage';
+      passage: MemorySummaryPassage;
+      targets?: string[];
+    }
+  | {
+      id: string;
+      epoch: string;
+      scope: 'from';
+      position: number;
+      targets?: string[];
+    };
+
+type PendingMemory = { force: boolean; queuedAt: number };
+type PendingMemoryRedo = { redo: MemoryRedoRequest; queuedAt: number };
+
 export class MemorySummaryError extends Error {}
 
 export type SessionMemoryStatus = {
@@ -120,6 +146,8 @@ export type SessionMemoryStatus = {
   inference?: MemoryInferenceSelection;
   hostedUsage?: HostedMemoryUsage;
   summarization: SummaryOutcome | 'paused' | 'queued' | 'summarizing';
+  redo: MemoryRedoStatus | null;
+  redos: MemoryRedoStatus[];
   rate: MemorySummaryProgress | null;
   lastSuccessfulSummaryAt: string | null;
   lastError: MemoryError | null;
@@ -425,7 +453,10 @@ export class SessionMemory {
   private readonly processing: MemoryProcessing;
   private readonly awaitingInference = new Set<string>();
   private readonly budgets: MemoryBudgets;
-  private readonly pending = new Map<string, { force: boolean; queuedAt: number }>();
+  private readonly pending = new Map<string, PendingMemory>();
+  private readonly pendingRedos = new Map<string, PendingMemoryRedo>();
+  private readonly redos = new Map<string, MemoryRedoStatus>();
+  private readonly redoHistory = new Map<string, MemoryRedoStatus[]>();
   private readonly foreground = new Set<string>();
   private readonly activeTurns = new Map<string, string>();
   private readonly watchers = new Map<string, () => void>();
@@ -563,9 +594,11 @@ export class SessionMemory {
           ? 'unknown'
           : summarizing
             ? 'summarizing'
-            : this.pending.has(agentId)
+            : this.pending.has(agentId) || this.pendingRedos.has(agentId)
               ? 'queued'
               : (activity?.outcome ?? 'unknown'),
+      redo: this.redos.get(agentId) ?? null,
+      redos: [...(this.redoHistory.get(agentId) ?? [])],
       rate: summarizing && inference.rate ? { ...inference.rate } : null,
       lastSuccessfulSummaryAt: activity?.lastSuccessfulSummaryAt ?? null,
       lastError: activity?.lastError ? { ...activity.lastError } : null,
@@ -798,6 +831,16 @@ export class SessionMemory {
     this.options.onFailure?.({ agentId, category });
   }
 
+  private noteRedoStatus(agentId: string, status: MemoryRedoStatus): void {
+    this.redos.set(agentId, status);
+    const history = this.redoHistory.get(agentId) ?? [];
+    const index = history.findIndex(({ id }) => id === status.id);
+    if (index < 0) history.push(status);
+    else history[index] = status;
+    if (history.length > 16) history.splice(0, history.length - 16);
+    this.redoHistory.set(agentId, history);
+  }
+
   private noteUpdateFailure(agentId: string, error: unknown, fallback: string): void {
     if (error instanceof MemoryHistoryUnavailableError) {
       this.noteFailure(
@@ -805,6 +848,8 @@ export class SessionMemory {
         'history-unavailable',
         'Session Memory could not read the conversation history. Check that it is available in Paseo.',
       );
+    } else if (error instanceof MemorySummaryError) {
+      this.noteFailure(agentId, 'unexpected-update', error.message);
     } else {
       this.noteFailure(agentId, 'unexpected-update', fallback);
     }
@@ -953,9 +998,14 @@ export class SessionMemory {
   }
 
   private startDrain(): void {
-    if (this.drain || !this.pending.size) return;
+    if (this.drain || (!this.pending.size && !this.pendingRedos.size)) return;
     const legacy = this.processing === 'legacy-json';
-    if (legacy && this.foreground.size) return;
+    const canRunRedo = !this.summarizationAbort.signal.aborted && !this.foreground.size;
+    if (
+      (legacy && this.foreground.size) ||
+      (!this.pending.size && (!this.pendingRedos.size || !canRunRedo))
+    )
+      return;
     const signal = legacy
       ? AbortSignal.any([this.abort.signal, this.summarizationAbort.signal])
       : this.abort.signal;
@@ -974,34 +1024,103 @@ export class SessionMemory {
     this.observe(agentId, true);
   }
 
+  redoSummaries(
+    agentId: string,
+    request:
+      | { epoch: string; scope: 'passage'; passage: MemorySummaryPassage }
+      | { epoch: string; scope: 'from'; position: number },
+  ) {
+    if (this.abort.signal.aborted) throw new MemorySummaryError('Session Memory is stopping.');
+    if (this.summarizationAbort.signal.aborted)
+      throw new MemorySummaryError('Enable Session Memory before redoing summaries.');
+    const current = this.redos.get(agentId);
+    if (current && (current.state === 'queued' || current.state === 'running'))
+      throw new MemorySummaryError('A Session Memory redo is already running for this agent.');
+    const redo = { ...request, id: randomUUID() } as MemoryRedoRequest;
+    const queuedAt = performance.now();
+    this.noteRedoStatus(agentId, { id: redo.id, state: 'queued' });
+    this.pendingRedos.set(agentId, { redo, queuedAt });
+    this.agentActivity(agentId).pending = undefined;
+    this.startDrain();
+    return { id: redo.id };
+  }
+
   recover(agentIds: readonly string[]): void {
     for (const id of agentIds) this.observe(id, this.store.state(id) !== undefined);
   }
 
   private async runPending(signal: AbortSignal): Promise<void> {
-    while (
-      this.pending.size &&
-      !signal.aborted &&
-      (this.processing !== 'legacy-json' || !this.foreground.size)
-    ) {
-      const [agentId, pending] = this.pending.entries().next().value!;
-      this.pending.delete(agentId);
+    while ((this.pending.size || this.pendingRedos.size) && !signal.aborted) {
+      const legacy = this.processing === 'legacy-json';
+      const runnable: {
+        agentId: string;
+        queuedAt: number;
+        kind: 'normal' | 'redo';
+        pending?: PendingMemory;
+        redoPending?: PendingMemoryRedo;
+      }[] = [
+        ...[...this.pending].map(([agentId, pending]) => ({
+          agentId,
+          queuedAt: pending.queuedAt,
+          kind: 'normal' as const,
+          pending,
+        })),
+        ...(!this.summarizationAbort.signal.aborted && !this.foreground.size
+          ? [...this.pendingRedos].map(([agentId, redoPending]) => ({
+              agentId,
+              queuedAt: redoPending.queuedAt,
+              kind: 'redo' as const,
+              redoPending,
+            }))
+          : []),
+      ]
+        .filter(() => !legacy || !this.foreground.size)
+        .sort((a, b) => a.queuedAt - b.queuedAt);
+      const next = runnable[0];
+      if (!next) break;
+      const { agentId } = next;
+      const pending =
+        next.kind === 'normal'
+          ? next.pending!
+          : { force: true, queuedAt: next.redoPending!.queuedAt };
+      let redo = next.redoPending?.redo;
+      if (redo) this.pendingRedos.delete(agentId);
+      else this.pending.delete(agentId);
       const activity = this.agentActivity(agentId);
       activity.outcome = 'unknown';
       activity.pending = undefined;
       let retry: boolean;
       try {
-        retry = await this.update(agentId, pending.force, pending.queuedAt, signal);
+        if (redo) {
+          this.noteRedoStatus(agentId, { id: redo.id, state: 'running' });
+          if (!redo.targets) redo = await this.prepareRedo(agentId, redo, signal);
+        }
+        retry = await this.update(agentId, pending.force, pending.queuedAt, signal, redo);
       } catch (error) {
         retry = signal.aborted;
         if (!retry) this.noteUpdateFailure(agentId, error, 'Session Memory update failed.');
       }
       if (retry && !this.abort.signal.aborted) {
         const next = this.pending.get(agentId);
-        this.pending.set(agentId, {
-          force: pending.force || !!next?.force,
-          queuedAt: pending.queuedAt,
-        });
+        if (redo) {
+          this.pendingRedos.set(agentId, { redo, queuedAt: pending.queuedAt });
+          this.noteRedoStatus(agentId, { id: redo.id, state: 'queued' });
+          if (this.summarizationAbort.signal.aborted || this.foreground.size) break;
+        } else {
+          this.pending.set(agentId, {
+            force: pending.force || !!next?.force,
+            queuedAt: pending.queuedAt,
+          });
+        }
+      } else if (redo && !this.abort.signal.aborted) {
+        const current = this.redos.get(agentId);
+        if (current?.id === redo.id && current.state !== 'completed') {
+          this.noteRedoStatus(agentId, {
+            id: redo.id,
+            state: 'failed',
+            error: activity.lastError?.message ?? 'Session Memory could not complete this redo.',
+          });
+        }
       }
     }
   }
@@ -1040,10 +1159,20 @@ export class SessionMemory {
     return { epoch, latest, through, messages, previous: state?.seq ?? -1 };
   }
 
-  private async currentHistory(agentId: string, epoch: string, last: number, signal: AbortSignal) {
+  private async currentHistory(
+    agentId: string,
+    epoch: string,
+    last: number,
+    signal: AbortSignal,
+    preserveRedoSources = false,
+  ) {
     const tail = await this.options.source.read(agentId, undefined, 'tail');
     signal.throwIfAborted();
     if (tail.reset || tail.epoch !== epoch || tail.latest < last) {
+      if (preserveRedoSources) {
+        this.noteTimeline(agentId, tail);
+        return undefined;
+      }
       await this.invalidate(
         agentId,
         epoch,
@@ -1064,18 +1193,96 @@ export class SessionMemory {
     await this.options.source.invalidateAttachments?.(agentId, epoch, from);
   }
 
+  private async prepareRedo(
+    agentId: string,
+    redo: MemoryRedoRequest,
+    signal: AbortSignal,
+  ): Promise<MemoryRedoRequest> {
+    const tail = await this.options.source.read(agentId, undefined, 'tail');
+    signal.throwIfAborted();
+    if (tail.reset || tail.epoch !== redo.epoch)
+      throw new MemorySummaryError('Conversation history changed. Reopen the stored summaries.');
+    this.noteTimeline(agentId, tail);
+    const stored = this.store.summaries(agentId, tail.epoch);
+    const earliest = tail.earliest ?? 0;
+    let targets: StoredMemorySummary[];
+    if (redo.scope === 'from') {
+      if (
+        !Number.isSafeInteger(redo.position) ||
+        redo.position < earliest ||
+        redo.position > tail.latest
+      )
+        throw new MemorySummaryError(
+          'The selected cutoff is outside the available conversation history.',
+        );
+      targets = stored.filter(({ position }) => position >= redo.position);
+      if (!stored.some(({ position }) => position === redo.position) || !targets.length)
+        throw new MemorySummaryError('The selected summary is no longer stored.');
+    } else {
+      const { passage } = redo;
+      if (
+        passage.epoch !== tail.epoch ||
+        !Number.isSafeInteger(passage.start) ||
+        !Number.isSafeInteger(passage.position) ||
+        passage.start < earliest ||
+        passage.start > passage.position ||
+        passage.position > tail.latest
+      )
+        throw new MemorySummaryError(
+          'The selected passage is outside the available conversation history.',
+        );
+      let before: MemorySummaryCursor | undefined;
+      targets = [];
+      do {
+        const page = this.store.summaryPage(
+          agentId,
+          tail.epoch,
+          tail.latest,
+          before,
+          false,
+          redo.passage,
+        );
+        targets.push(
+          ...page.summaries.flatMap(({ id }) => {
+            const summary = stored.find((value) => value.id === id);
+            return summary ? [summary] : [];
+          }),
+        );
+        before = page.next ?? undefined;
+      } while (before);
+      if (!targets.length)
+        throw new MemorySummaryError('This passage has no current stored summary to redo.');
+    }
+    if (targets.some(({ position }) => position > tail.latest))
+      throw new MemorySummaryError(
+        'A selected summary is outside the available conversation history.',
+      );
+    targets.sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+    return { ...redo, targets: targets.map(({ id }) => id) };
+  }
+
   private async update(
     agentId: string,
     force: boolean,
     queuedAt: number,
     signal: AbortSignal,
+    redo?: MemoryRedoRequest,
   ): Promise<boolean> {
-    const input = await this.readOutstanding(agentId, this.store.state(agentId), signal);
+    const state = this.store.state(agentId);
+    const input = await this.readOutstanding(agentId, redo ? undefined : state, signal);
     signal.throwIfAborted();
-    if (!input) return false;
+    if (!input) {
+      if (redo)
+        throw new MemorySummaryError('Conversation history changed. Reopen the stored summaries.');
+      return false;
+    }
     const { epoch, latest, through, messages, previous } = input;
     const activity = this.agentActivity(agentId);
+    if (redo && epoch !== redo.epoch)
+      throw new MemorySummaryError('Conversation history changed. Reopen the stored summaries.');
     if (through <= previous) {
+      if (redo)
+        throw new MemorySummaryError('No current conversation history is available to redo.');
       if (!activity.stored) {
         this.noteStored(agentId, epoch, previous, this.store.summaries(agentId, epoch));
       }
@@ -1086,9 +1293,9 @@ export class SessionMemory {
       }
       return false;
     }
-    if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+    if (!(await this.currentHistory(agentId, epoch, latest, signal, !!redo))) return true;
     signal.throwIfAborted();
-    this.store.savePrompts(agentId, epoch, messages);
+    if (!redo) this.store.savePrompts(agentId, epoch, messages);
     const turnIds = new Set(messages.flatMap(({ turnId }) => (turnId ? [turnId] : [])));
     const turns = this.store.turns(agentId, turnIds);
     const outcomes = new Map<string, MemoryTurnOutcome>();
@@ -1097,7 +1304,7 @@ export class SessionMemory {
     for (const [id, turn] of turns) {
       if (turn.epoch && turn.epoch !== epoch) continue;
       if (turn.outcome !== 'running') outcomes.set(id, turn.outcome);
-      this.store.saveTurn(agentId, { ...turn, epoch, lastSeq: lastByTurn.get(id) });
+      if (!redo) this.store.saveTurn(agentId, { ...turn, epoch, lastSeq: lastByTurn.get(id) });
     }
     for (const message of messages) {
       const turn = message.turnId ? turns.get(message.turnId) : undefined;
@@ -1110,16 +1317,20 @@ export class SessionMemory {
       message.task ??= context.task;
     }
     const stored = this.store.summaries(agentId, epoch);
-    this.noteStored(agentId, epoch, previous, stored);
+    this.noteStored(agentId, epoch, redo ? (state?.seq ?? -1) : previous, stored);
     const summaries = new Map(stored.map((summary) => [summary.id, summary]));
+    const targetIds = redo ? new Set(redo.targets ?? []) : undefined;
     const actions = new Set(
       stored
-        .filter(({ type }) => type === 'AAB')
+        .filter(({ type, id }) => type === 'AAB' && !targetIds?.has(id))
         .flatMap(({ sources }) => sources.map(({ seq }) => seq)),
     );
     const bySequence = new Map(messages.map((item) => [item.seq, item]));
-    const units = identifyMemoryUnits(messages, outcomes, this.threshold, force, actions);
+    const units = identifyMemoryUnits(messages, outcomes, this.threshold, force, actions).filter(
+      (unit) => !targetIds?.has(unitId(unit)),
+    );
     for (const summary of stored) {
+      if (targetIds?.has(summary.id)) continue;
       if (summary.complete || summary.position <= previous) continue;
       const sources = summary.sources.flatMap(({ seq }) => {
         const message = bySequence.get(seq);
@@ -1149,7 +1360,65 @@ export class SessionMemory {
         });
       }
     }
+    if (redo) {
+      const contextual = identifyMemoryUnits(messages, outcomes, this.threshold, true);
+      for (const id of redo.targets ?? []) {
+        const summary = summaries.get(id);
+        if (!summary)
+          throw new MemorySummaryError(
+            'A selected summary is no longer stored. Reopen the summaries.',
+          );
+        const resolved = await this.referencedMessages(
+          agentId,
+          epoch,
+          summary.sources,
+          signal,
+          messages,
+          undefined,
+          latest,
+        );
+        if (resolved.originalHistory !== 'available')
+          throw new MemorySummaryError(
+            'The original messages for a selected summary are no longer available.',
+          );
+        const context = contextual.find((unit) => unitId(unit) === summary.id);
+        const sources = resolved.messages;
+        const instructions =
+          context?.instructions ??
+          messages.filter((source) =>
+            sources.some(
+              (item) =>
+                item.turnId &&
+                item.turnId === source.turnId &&
+                source.seq < item.seq &&
+                isMemoryInstruction(source, item.task),
+            ),
+          );
+        const unit: MemoryUnit = {
+          type: summary.type,
+          messages: sources,
+          scope: summary.scope ?? context?.scope ?? sources[0]?.scope,
+          task: context?.task ?? sources[0]?.task,
+          instructions,
+        };
+        if (unitId(unit) !== summary.id)
+          throw new MemorySummaryError(
+            'The source range for a selected summary is no longer valid.',
+          );
+        units.push(unit);
+      }
+    }
+    const cutoff = redo?.scope === 'from' ? redo.position : undefined;
+    const scopedUnits = units.filter((unit) => {
+      if (targetIds && !targetIds.has(unitId(unit))) return false;
+      return cutoff === undefined || unit.messages.at(-1)!.seq >= cutoff;
+    });
+    units.splice(0, units.length, ...scopedUnits);
     units.sort((a, b) => a.messages.at(-1)!.seq - b.messages.at(-1)!.seq);
+    if (redo && scopedUnits.length !== redo.targets?.length)
+      throw new MemorySummaryError(
+        'The selected summaries no longer match their original source ranges.',
+      );
     const pendingUnits = new Map<string, MemoryUnit['type']>();
     for (const unit of units) {
       const id = unitId(unit);
@@ -1157,7 +1426,12 @@ export class SessionMemory {
     }
     const pendingCounts = countUnits(pendingUnits.values());
     const notePending = () => {
-      if (through === latest && activity.latest === latest && !this.pending.has(agentId))
+      if (
+        through === latest &&
+        activity.latest === latest &&
+        !this.pending.has(agentId) &&
+        !this.pendingRedos.has(agentId)
+      )
         activity.pending = { ...pendingCounts };
     };
     notePending();
@@ -1210,12 +1484,16 @@ export class SessionMemory {
     const format = this.processing === 'deterministic-markdown' ? 'markdown' : 'json';
     let deferred = false;
     this.awaitingInference.delete(agentId);
+    const redoReplacements = new Map<string, StoredMemorySummary>();
     const saveFinished = (summary: StoredMemorySummary) => {
-      this.store.saveSummary(summary);
+      if (redo) redoReplacements.set(summary.id, summary);
+      else this.store.saveSummary(summary);
       summaries.set(summary.id, summary);
       const count = summary.type === 'UAMP' ? 'uamp' : 'aab';
-      const stored = activity.stored;
-      if (stored?.epoch === epoch) stored[count]++;
+      if (!redo) {
+        const stored = activity.stored;
+        if (stored?.epoch === epoch) stored[count]++;
+      }
       if (pendingUnits.delete(summary.id)) pendingCounts[count]--;
       notePending();
     };
@@ -1223,7 +1501,8 @@ export class SessionMemory {
       if (legacy && this.foreground.size) return true;
       const id = unitId(unit);
       const existing = summaries.get(id);
-      if (existing?.complete) continue;
+      const redoTarget = targetIds?.has(id) ?? false;
+      if (existing?.complete && !redoTarget) continue;
       const position = unit.messages.at(-1)!.seq;
       const originalTokens = originalTokenCount(unit.messages);
       const record: StoredMemorySummary = {
@@ -1243,7 +1522,7 @@ export class SessionMemory {
         complete: false,
       };
       if (!legacy && (unit.type === 'AAB' || originalTokens < shortDiscussionTokens)) {
-        if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+        if (!(await this.currentHistory(agentId, epoch, latest, signal, !!redo))) return true;
         if (unit.type === 'AAB') {
           record.state = 'recorded';
           record.action = actionOverview(unit.messages);
@@ -1261,10 +1540,11 @@ export class SessionMemory {
       if (!legacy && (this.foreground.size || this.summarizationAbort.signal.aborted)) {
         retainCoverage(unit);
         deferred = true;
-        if (!existing) {
-          if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+        if (!existing && !redo) {
+          if (!(await this.currentHistory(agentId, epoch, latest, signal, !!redo))) return true;
           this.store.saveSummary({ ...record, state: 'pending' });
         }
+        if (redo) break;
         continue;
       }
       let history: Parameters<typeof prepareMemorySummaries>[1] = [];
@@ -1310,7 +1590,7 @@ export class SessionMemory {
             latest,
           );
         const confirmHistory = async () =>
-          (await this.currentHistory(agentId, epoch, latest, signal)) &&
+          (await this.currentHistory(agentId, epoch, latest, signal, !!redo)) &&
           activity.generation === historyGeneration;
         let skippedTokens = 0;
         for (const candidate of prior) {
@@ -1344,10 +1624,11 @@ export class SessionMemory {
         if (!(error instanceof MemoryInputBudgetError)) throw error;
         retainCoverage(unit);
         this.noteFailure(agentId, 'input-budget', error.message);
-        if (!legacy) {
-          if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+        if (!legacy && !redo) {
+          if (!(await this.currentHistory(agentId, epoch, latest, signal, !!redo))) return true;
           this.store.saveSummary({ ...record, state: 'failed' });
         }
+        if (redo) break;
         continue;
       }
       const historyHash = createHash('sha256')
@@ -1362,6 +1643,7 @@ export class SessionMemory {
           })
         : this.options.configuration;
       const reusable =
+        !redoTarget &&
         existing?.historyHash === historyHash &&
         existing.expectedParts === parts.length &&
         existing.model === model &&
@@ -1389,8 +1671,8 @@ export class SessionMemory {
         ? signal
         : AbortSignal.any([signal, this.summarizationAbort.signal, this.inferenceModeAbort.signal]);
       let failure = false;
-      if (!legacy && !existing) {
-        if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+      if (!legacy && !existing && !redo) {
+        if (!(await this.currentHistory(agentId, epoch, latest, signal, !!redo))) return true;
         this.store.saveSummary(summary);
       }
       for (const part of parts.slice(summary.parts.length)) {
@@ -1515,7 +1797,7 @@ export class SessionMemory {
             break;
           }
           // > Unconfirmed portions must not count as completed coverage.
-          if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+          if (!(await this.currentHistory(agentId, epoch, latest, signal, !!redo))) return true;
           signal.throwIfAborted();
           completed = result;
         } catch (error) {
@@ -1550,23 +1832,55 @@ export class SessionMemory {
         if (summary.complete) {
           if (!legacy) summary.state = 'summarized';
           saveFinished(summary);
-          activity.lastSuccessfulSummaryAt = new Date().toISOString();
+          if (!redo) activity.lastSuccessfulSummaryAt = new Date().toISOString();
         } else {
-          this.store.saveSummary(summary);
+          if (!redo) this.store.saveSummary(summary);
         }
       }
       if (!summary.complete) {
         if (failure && !legacy) summary.state = 'failed';
         retainCoverage(unit);
-        if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+        if (!(await this.currentHistory(agentId, epoch, latest, signal, !!redo))) return true;
         signal.throwIfAborted();
-        this.store.saveSummary(summary);
+        if (!redo) this.store.saveSummary(summary);
       }
       summaries.set(id, summary);
+      if (redo && (failure || deferred)) break;
     }
-    const tail = await this.currentHistory(agentId, epoch, latest, signal);
+    const tail = await this.currentHistory(agentId, epoch, latest, signal, !!redo);
     signal.throwIfAborted();
     if (!tail) return true;
+    if (redo) {
+      if (tail.latest > latest || activity.latest !== latest) this.observe(agentId);
+      if (deferred) {
+        this.awaitingInference.add(agentId);
+        return true;
+      }
+      const replacements = [...redoReplacements.values()];
+      if (
+        replacements.length !== redo.targets?.length ||
+        replacements.some(({ complete }) => !complete)
+      ) {
+        if (activity.outcome !== 'failed')
+          this.noteFailure(
+            agentId,
+            'unexpected-update',
+            'Session Memory could not replace every selected summary.',
+          );
+        return false;
+      }
+      this.store.saveSummaries(replacements);
+      const currentState = this.store.state(agentId);
+      this.noteStored(
+        agentId,
+        epoch,
+        currentState?.epoch === epoch ? currentState.seq : -1,
+        this.store.summaries(agentId, epoch),
+      );
+      this.noteRedoStatus(agentId, { id: redo.id, state: 'completed' });
+      activity.lastSuccessfulSummaryAt = new Date().toISOString();
+      return false;
+    }
     if (deferred) {
       this.awaitingInference.add(agentId);
       if (!this.foreground.size && !this.summarizationAbort.signal.aborted) return true;

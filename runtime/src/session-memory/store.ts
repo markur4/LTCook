@@ -322,6 +322,23 @@ export class MemoryStore {
       .run(summary.agentId, summary.epoch, summary.id, summary.position, JSON.stringify(summary));
   }
 
+  saveSummaries(summaries: readonly StoredMemorySummary[]) {
+    const save = this.database.prepare(
+      'INSERT INTO memory_summary VALUES (?, ?, ?, ?, ?) ON CONFLICT(agent, epoch, id) DO UPDATE SET value = excluded.value',
+    );
+    this.database.transaction(() => {
+      for (const summary of summaries) {
+        save.run(
+          summary.agentId,
+          summary.epoch,
+          summary.id,
+          summary.position,
+          JSON.stringify(summary),
+        );
+      }
+    })();
+  }
+
   prompts(agentId: string, epoch: string) {
     const rows = this.database
       .prepare('SELECT seq, text FROM memory_prompt WHERE agent = ? AND epoch = ? ORDER BY seq')

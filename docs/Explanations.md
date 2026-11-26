@@ -535,6 +535,14 @@ Tool outcomes describe historical work. Source references identify the agent,
 conversation epoch, and original sequence. Session Memory search reports
 pending summaries, result truncation, and original-history availability.
 
+In the chat, **Show summary** reveals the summary for that passage. Its **Redo**
+action rebuilds only that passage from authorized original messages; **Hide
+summary** is available at both the top and bottom of the expanded summary. In
+Activity's **Stored for this agent** view, **Redo** asks which stored summary to
+start from, then rebuilds that summary and every later one from the original
+history. This lets an agent recover a corrected summary without rebuilding
+unrelated earlier passages.
+
 The summarizer reads only the current UAMP and writes concise Markdown under
 the applicable headings. It groups shared outcomes and keeps details that
 affect follow-up, including the distinction between proposals, approvals, and

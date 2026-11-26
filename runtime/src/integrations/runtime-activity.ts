@@ -3,12 +3,13 @@ import {
   activityToggleRpc,
   memoryDeviceRpc,
   memoryInferenceRpc,
+  memoryRedoRpc,
   memoryEvidenceRpc,
   storedSummariesRpc,
 } from '../paseo-plugin/shared/activity.js';
 import type { createColgrepProvider } from '../repository/providers/colgrep.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
-import type { SessionMemory } from '../session-memory/service.js';
+import { MemorySummaryError, type SessionMemory } from '../session-memory/service.js';
 import type { SessionSnapshot } from '../workflow-api/index.js';
 import type { ActivityPreferences } from './activity-preferences.js';
 import type { WorkspaceMcp } from './mcp.js';
@@ -106,6 +107,34 @@ const activityRoutes = {
     }
     const device = await memory.device(deviceId);
     response.writeHead(200).end(JSON.stringify(device));
+  },
+  async '/v1/activity/memory-redo'(parsed, response, dependencies) {
+    const input = memoryRedoRpc.input.parse(parsed);
+    const memory = dependencies.readMemory();
+    if (!memory) {
+      response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
+      return;
+    }
+    try {
+      const result =
+        input.scope === 'passage'
+          ? memory.redoSummaries(input.agentId, {
+              epoch: input.passage.epoch,
+              scope: 'passage',
+              passage: input.passage,
+            })
+          : memory.redoSummaries(input.agentId, {
+              epoch: input.epoch,
+              scope: 'from',
+              position: input.position,
+            });
+      response.writeHead(200).end(JSON.stringify(result));
+    } catch (error) {
+      const status = error instanceof MemorySummaryError ? 409 : 500;
+      response
+        .writeHead(status, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ error: error instanceof Error ? error.message : 'Redo failed.' }));
+    }
   },
   async '/v1/activity/memory-evidence'(parsed, response, dependencies) {
     const memory = dependencies.readMemory();

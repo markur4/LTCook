@@ -143,6 +143,7 @@ describe('native runtime boundary', () => {
         'toggle',
         'memory-inference',
         'memory-device',
+        'memory-redo',
         'memory-evidence',
         'stored-summaries',
         'services',
@@ -156,6 +157,7 @@ describe('native runtime boundary', () => {
       expect((await fetch(`${endpoint}/v1/activity/services`)).status).toBe(404);
       expect((await post('memory-evidence', secret, {})).status).toBe(503);
       expect((await post('stored-summaries', secret, {})).status).toBe(400);
+      expect((await post('memory-redo', secret, {})).status).toBe(400);
       expect((await post('workspace-touch', secret, { workspaceId: 'workspace-1' })).status).toBe(
         503,
       );
@@ -540,6 +542,54 @@ describe('native runtime boundary', () => {
       expect(await updated.json()).toMatchObject({ device: { id: gpu.id, label: gpu.label } });
       const snapshot = await post('services', { nativeAgentId: 'another-agent' });
       expect(await snapshot.json()).toMatchObject({ memory: { device: { id: gpu.id } } });
+    } finally {
+      await api.close();
+      await memory.close();
+    }
+  });
+
+  test('only the user can queue a Session Memory redo for the current agent', async () => {
+    const memory = new SessionMemory({
+      databasePath: ':memory:',
+      source: {
+        async read() {
+          throw new Error('The missing selected summary should fail in the queue.');
+        },
+      },
+      async summarize() {
+        throw new Error('A missing summary must not invoke inference.');
+      },
+    });
+    const master = 'test-master-secret';
+    const api = new RuntimeApi(
+      undefined,
+      master,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
+    api.setSessionMemory(memory);
+    const endpoint = await api.listen();
+    const post = (input: object, token = master) =>
+      fetch(`${endpoint}/v1/activity/memory-redo`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+    try {
+      const input = {
+        agentId: 'selected',
+        nativeAgentId: 'selected',
+        scope: 'from',
+        epoch: 'one',
+        position: 1,
+      };
+      expect((await post(input, agentBearer(master, 'selected'))).status).toBe(403);
+      expect((await post({})).status).toBe(400);
+      const accepted = await post(input);
+      expect(accepted.status).toBe(200);
+      expect(await accepted.json()).toMatchObject({ id: expect.any(String) });
+      await memory.settled();
+      expect(memory.status(undefined, 'selected').redo).toMatchObject({ state: 'failed' });
     } finally {
       await api.close();
       await memory.close();
