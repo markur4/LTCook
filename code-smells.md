@@ -132,6 +132,13 @@ pre-ready, ready, and shutdown behavior, grant lifetime, and the native and MCP
 trust models. For any wire break, update the Python client, Pi, the Paseo plugin,
 and relevant tests together.
 
+The composition pass moves ColGREP, Activity preferences, and the Session
+worktree store and tool to [runtime startup](runtime/src/main.ts). The HTTP API
+uses the injected services. Worktree reads and reports share the
+[worktree scope resolver](runtime/src/integrations/session-worktrees.ts).
+The next passes still own route organization, Core extraction, and failure
+handling.
+
 ### CSC-03 — Session Memory concentrates recording, inference, retrieval, and handoff
 
 **Observed coupling.** [SessionMemory](runtime/src/session-memory/service.ts)

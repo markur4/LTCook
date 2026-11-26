@@ -2,12 +2,52 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { listGitWorktrees } from '../repository/providers/git.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
+import type { SessionSnapshot } from '../workflow-api/index.js';
 
 export interface WorktreeScope {
   sessionId: string;
   agentId: string;
   workspaceRoot: string;
   passId?: string;
+}
+
+export type WorktreeScopeResolver = (
+  context: { sessionId?: string; agentId: string; workspaceRoot: string },
+  requestedPassId?: string,
+) => WorktreeScope;
+
+export function createWorktreeScopeResolver(
+  readSnapshot: (sessionId: string) => SessionSnapshot | undefined,
+): WorktreeScopeResolver {
+  return ({ sessionId, agentId, workspaceRoot }, requestedPassId) => {
+    if (!sessionId) {
+      if (requestedPassId) throw new Error('This agent has no LTCook Pass.');
+      return { sessionId: agentId, agentId, workspaceRoot };
+    }
+    const snapshot = readSnapshot(sessionId);
+    if (
+      !snapshot?.members.some(
+        ({ binding }) => binding?.state === 'bound' && binding.nativeAgentId === agentId,
+      )
+    )
+      throw new Error('The agent is not bound to this session.');
+    if (requestedPassId && !snapshot.passes.some(({ id }) => id === requestedPassId))
+      throw new Error('The Pass does not belong to this session.');
+
+    const running = snapshot.passes.filter(({ status }) => status === 'running');
+    const runningIds = new Set(running.map(({ id }) => id));
+    const focused = new Set(
+      snapshot.assignments.flatMap((assignment) => {
+        if (assignment.nativeAgentId !== agentId || assignment.status === 'reported') return [];
+        const passId = snapshot.tasks.find(({ id }) => id === assignment.taskId)?.passId;
+        return passId && runningIds.has(passId) ? [passId] : [];
+      }),
+    );
+    const passId =
+      requestedPassId ??
+      (focused.size === 1 ? [...focused][0] : running.length === 1 ? running[0]?.id : undefined);
+    return { sessionId, agentId, workspaceRoot: snapshot.session.workspaceRoot, passId };
+  };
 }
 
 interface RegisteredWorktree {

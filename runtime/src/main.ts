@@ -8,6 +8,10 @@ import { RiedService } from './repository/discovery.js';
 import { createTools } from './tools/catalog.js';
 import { WebToolService } from './tools/web.js';
 import { WorkspaceMcp } from './integrations/mcp.js';
+import { ActivityPreferences } from './integrations/activity-preferences.js';
+import { createWorktreeScopeResolver, SessionWorktrees } from './integrations/session-worktrees.js';
+import { createColgrepProvider } from './repository/providers/colgrep.js';
+import { createSessionWorktreeTool } from './tools/session-worktree.js';
 import { isWithin } from './path-containment.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
 import { EvalRunService } from './evals/service.js';
@@ -255,9 +259,18 @@ async function run(): Promise<void> {
     const ried = new RiedService(riedCacheDirectory, process.env.LTCOOK_BRIEF_EXECUTABLE, (id) =>
       workspaceShellEnvironments.get(id),
     );
-    api = new RuntimeApi(undefined, apiToken, apiListen, process.env, telemetry);
     await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
-    api.setActivityPreferences(path.join(stateDirectory, 'activity-settings.json'));
+    const colgrep = createColgrepProvider();
+    const preferences = new ActivityPreferences(
+      path.join(stateDirectory, 'activity-settings.json'),
+    );
+    const worktrees = new SessionWorktrees(process.env.PATH ?? '');
+    const resolveScope = createWorktreeScopeResolver((id) => runtime?.snapshot(id));
+    const worktreeTool = createSessionWorktreeTool(worktrees, resolveScope);
+    api = new RuntimeApi(undefined, apiToken, apiListen, process.env, telemetry, {
+      activity: { colgrep, preferences },
+      worktrees: { store: worktrees, resolveScope },
+    });
     const sourceRuntime = process.versions.bun !== undefined;
     const web = new WebToolService(
       python,
@@ -491,7 +504,7 @@ async function run(): Promise<void> {
             })
         : undefined;
     const workspaceMcp = new WorkspaceMcp(
-      createTools(ried, summarization, web, memory, api.activityColgrep, api.worktreeTool),
+      createTools(ried, summarization, web, memory, colgrep, worktreeTool),
       apiListen,
       web,
       requestRestart,

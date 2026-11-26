@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -19,6 +20,12 @@ import { panelSnapshot } from '../../../runtime/src/paseo-plugin/shared/panel-sn
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { ActivityPreferences } from '../../../runtime/src/integrations/activity-preferences.js';
+import {
+  createWorktreeScopeResolver,
+  SessionWorktrees,
+} from '../../../runtime/src/integrations/session-worktrees.js';
+import { createSessionWorktreeTool } from '../../../runtime/src/tools/session-worktree.js';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
 import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
@@ -127,8 +134,17 @@ describe('native runtime boundary', () => {
         throw new Error('Toggle must not run inference.');
       },
     });
-    const first = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`);
-    first.setActivityPreferences(preferences);
+    const colgrep = createColgrepProvider({ deploymentDirectory: '' });
+    const first = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${await freePort()}`,
+      {},
+      undefined,
+      {
+        activity: { colgrep, preferences: new ActivityPreferences(preferences) },
+      },
+    );
     first.setSessionMemory(memory);
     const endpoint = await first.listen();
     const change = (body: object, token = secret) =>
@@ -143,18 +159,20 @@ describe('native runtime boundary', () => {
         agentBearer(secret, 'worker'),
       );
       expect(denied.status).toBe(403);
-      expect(first.activityColgrep.isIndexingEnabled()).toBe(true);
+      expect(colgrep.isIndexingEnabled()).toBe(true);
       for (const feature of ['rag-index', 'summarizer']) {
         const response = await change({ feature, enabled: false });
         expect(response.status).toBe(200);
         expect(await response.json()).toEqual({ enabled: false });
       }
-      expect(first.activityColgrep.isIndexingEnabled()).toBe(false);
+      expect(colgrep.isIndexingEnabled()).toBe(false);
       expect(memory.status(undefined, 'leader').summarization).toBe('paused');
-      const restored = new RuntimeApi(undefined, secret, '127.0.0.1:0');
-      restored.setActivityPreferences(preferences);
+      const restoredColgrep = createColgrepProvider({ deploymentDirectory: '' });
+      const restored = new RuntimeApi(undefined, secret, '127.0.0.1:0', {}, undefined, {
+        activity: { colgrep: restoredColgrep, preferences: new ActivityPreferences(preferences) },
+      });
       restored.setSessionMemory(memory);
-      expect(restored.activityColgrep.isIndexingEnabled()).toBe(false);
+      expect(restoredColgrep.isIndexingEnabled()).toBe(false);
       expect(memory.status(undefined, 'leader').summarization).toBe('paused');
     } finally {
       await first.close();
@@ -185,8 +203,10 @@ describe('native runtime boundary', () => {
       });
     const memory = createMemory();
     const restoredMemory = createMemory();
-    const api = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`);
-    api.setActivityPreferences(preferences);
+    const colgrep = createColgrepProvider({ deploymentDirectory: '' });
+    const api = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`, {}, undefined, {
+      activity: { colgrep, preferences: new ActivityPreferences(preferences) },
+    });
     api.setSessionMemory(memory);
     const endpoint = await api.listen();
     const select = (token: string, body: object) =>
@@ -209,13 +229,87 @@ describe('native runtime boundary', () => {
         model: 'gpt-6-luna',
         reasoning: 'low',
       });
-      const restored = new RuntimeApi(undefined, secret, '127.0.0.1:0');
-      restored.setActivityPreferences(preferences);
+      const restored = new RuntimeApi(undefined, secret, '127.0.0.1:0', {}, undefined, {
+        activity: {
+          colgrep: createColgrepProvider({ deploymentDirectory: '' }),
+          preferences: new ActivityPreferences(preferences),
+        },
+      });
       restored.setSessionMemory(restoredMemory);
       expect(restoredMemory.inferenceSelection()?.mode).toBe('hosted');
     } finally {
       await api.close();
       await Promise.all([memory.close(), restoredMemory.close()]);
+    }
+  });
+
+  test('shows reported worktrees in the authenticated Session view', async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'ltcook-native-worktree-')));
+    directories.push(directory);
+    const workspaceRoot = join(directory, 'repository');
+    const checkout = join(directory, 'linked');
+    mkdirSync(workspaceRoot);
+    const git = (...args: string[]) =>
+      execFileSync(
+        'git',
+        [
+          '-c',
+          'user.name=Fixture',
+          '-c',
+          'user.email=fixture@example.invalid',
+          '-c',
+          'core.hooksPath=',
+          ...args,
+        ],
+        { cwd: workspaceRoot, stdio: 'pipe' },
+      );
+    git('init', '-qb', 'main');
+    git('commit', '--allow-empty', '--no-gpg-sign', '-qm', 'Fixture');
+    git('worktree', 'add', '-qb', 'fixture-linked', checkout);
+
+    const secret = 'worktree-user-secret';
+    const agentId = 'bound-worktree-agent';
+    const sessionId = 'session-1';
+    const snapshot = snapshotFor(agentId, false, sessionId, workspaceRoot);
+    const store = new SessionWorktrees(process.env.PATH ?? '');
+    const resolveScope = createWorktreeScopeResolver((id) =>
+      id === sessionId ? snapshot : undefined,
+    );
+    const report = createSessionWorktreeTool(store, resolveScope);
+    const api = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`, {}, undefined, {
+      worktrees: { store, resolveScope },
+    });
+    const endpoint = await api.listen();
+    const read = (nativeAgentId: string, token = secret) =>
+      fetch(`${endpoint}/v1/session/worktrees`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ nativeAgentId, workspaceRoot: directory, sessionId }),
+      });
+    try {
+      const context = {
+        agentId,
+        workspaceRoot: directory,
+        sessionId,
+        workspaceFileAccess: false,
+        signal: new AbortController().signal,
+      };
+      await expect(
+        report.invoke({ operation: 'use', path: checkout, passId: 'foreign-pass' }, context),
+      ).rejects.toThrow('The Pass does not belong to this session.');
+      await report.invoke({ operation: 'use', path: checkout }, context);
+      expect((await read(agentId, agentBearer(secret, agentId))).status).toBe(403);
+      expect((await read('unbound-agent')).status).toBe(400);
+      const response = await read(agentId);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        original: workspaceRoot,
+        following: { path: checkout, branch: 'fixture-linked' },
+      });
+      await report.invoke({ operation: 'release', path: checkout }, context);
+      expect(await (await read(agentId)).json()).toMatchObject({ following: null });
+    } finally {
+      await api.close();
     }
   });
 

@@ -106,10 +106,10 @@ decisions, the Explorer fix status, and the order for the remaining passes.
 
 - **Area:** `runtime/src/main.ts`, `runtime/src/integrations/runtime-api.ts`, `runtime/src/integrations/mcp.ts`, and `runtime/src/core/runtime.ts`.
 - **Observed while:** Tracing shared tool construction, startup and scheduling.
-- **Why not fixed now:** The tool classification and member lookup provide a prerequisite for moving invocation ownership.
-- **Evidence:** The HTTP adapter constructs services used by the shared catalog. RuntimeController implements command policy, scheduling, native lifecycle, delivery, and snapshot projection. RIED and Session Memory lose returned error detail at the native boundary.
+- **Why not fixed now:** The composition pass moves shared construction. Route and Core extraction and correction of failure details remain open.
+- **Evidence:** Runtime startup now shares configured services with HTTP and the tool catalog. RuntimeController still implements command policy, scheduling, native lifecycle, delivery, and snapshot projection. RIED and Session Memory lose returned error detail at the native boundary.
 - **Context:** Preserve startup readiness, one coordination owner, uncertain-send protection, approval and review gates, and the existing user workflows.
-- **Suggested next step:** Move shared service construction first, extract cohesive Core responsibilities using the shared task gates, and fix evidenced error detail losses. See [CSC-02](code-smells.md#csc-02--http-constructs-services-also-used-by-the-tool-catalog), [CSC-04](code-smells.md#csc-04--runtimecontroller-concentrates-coordination-responsibilities), [CSC-09](code-smells.md#csc-09--adapters-discard-actionable-failure-detail), [tool classification and lookup](#p2--e1-code-smell---give-managed-tool-classification-and-bound-member-lookup-explicit-owners), and [model contract ownership](#p3--e3-code-smell---clarify-model-contract-and-documentation-ownership).
+- **Suggested next step:** Extract route families on the injected service boundary, then extract cohesive Core responsibilities using the shared task gates and fix evidenced error detail losses. See [CSC-02](code-smells.md#csc-02--http-constructs-services-also-used-by-the-tool-catalog), [CSC-04](code-smells.md#csc-04--runtimecontroller-concentrates-coordination-responsibilities), [CSC-09](code-smells.md#csc-09--adapters-discard-actionable-failure-detail), [tool classification and lookup](#p2--e1-code-smell---give-managed-tool-classification-and-bound-member-lookup-explicit-owners), and [model contract ownership](#p3--e3-code-smell---clarify-model-contract-and-documentation-ownership).
 
 ## P3 / E1 [Code smell] - *Decompose Session Memory after covering production recovery*
 

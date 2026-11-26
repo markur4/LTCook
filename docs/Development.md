@@ -113,6 +113,10 @@ requirement imposed on users of the application.
 The Python application resolves settings through AppRC. Keep native component
 translation in LTCook-owned paths and avoid a second hidden settings layer. The
 TypeScript runtime owns coordination; team packages use its public Team API v3.
+Runtime startup constructs the ColGREP provider, Activity preferences, and
+Session worktree store. The HTTP routes and workspace catalog use the same
+instances. The HTTP listener starts before its native host and Core controller
+are ready. Worktree reads and reports share Session and Pass scope resolution.
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,

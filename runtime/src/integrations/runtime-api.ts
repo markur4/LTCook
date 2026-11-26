@@ -17,7 +17,7 @@ import type { SessionMemory } from '../session-memory/service.js';
 import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import type { WorkspaceMcp } from './mcp.js';
-import { ActivityPreferences } from './activity-preferences.js';
+import type { ActivityPreferences } from './activity-preferences.js';
 import {
   activityToggleRpc,
   memoryDeviceRpc,
@@ -31,11 +31,9 @@ import {
   REPO_SEARCH_TIMEOUT_MS,
 } from '../tools/workspace-tools.js';
 import { isManagedWorkspaceTool } from '../tools/capabilities.js';
-import { createSessionWorktreeTool } from '../tools/session-worktree.js';
-import type { ToolContext } from '../tools/types.js';
-import { SessionWorktrees, type WorktreeScope } from './session-worktrees.js';
+import type { SessionWorktrees, WorktreeScopeResolver } from './session-worktrees.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
-import { createColgrepProvider } from '../repository/providers/colgrep.js';
+import type { createColgrepProvider } from '../repository/providers/colgrep.js';
 import { validateRiedRequest } from '../repository/requests.js';
 import { z } from 'zod';
 import { ResolvedModelSchema, type ResolvedModel } from '../models/aliases.js';
@@ -95,6 +93,17 @@ export function agentBearer(secret: string, nativeAgentId: string): string {
   return createHmac('sha256', secret).update(nativeAgentId).digest('base64url');
 }
 
+interface RuntimeApiServices {
+  activity?: {
+    preferences: ActivityPreferences;
+    colgrep: ReturnType<typeof createColgrepProvider>;
+  };
+  worktrees?: {
+    store: SessionWorktrees;
+    resolveScope: WorktreeScopeResolver;
+  };
+}
+
 export class RuntimeApi {
   private server: Server | undefined;
   private memory?: SessionMemory;
@@ -103,17 +112,6 @@ export class RuntimeApi {
     agentId: string,
   ) => { scope?: MemoryScope; task?: MemoryTaskContext } | undefined;
   private pastedDocuments?: PastedDocuments;
-  readonly activityColgrep = createColgrepProvider();
-  private activityPreferences?: ActivityPreferences;
-
-  setActivityPreferences(file: string): void {
-    const preferences = new ActivityPreferences(file);
-    this.activityPreferences = preferences;
-    this.activityColgrep.setIndexingEnabled(preferences.enabled('rag-index'));
-    this.memory?.setSummarizationEnabled(preferences.enabled('summarizer'));
-    const mode = preferences.memoryInferenceMode();
-    if (mode) this.memory?.setInferenceMode(mode);
-  }
   private providerSubagents?: PaseoHost['listProviderSubagents'];
 
   setProviderSubagents(list: PaseoHost['listProviderSubagents']): void {
@@ -154,12 +152,11 @@ export class RuntimeApi {
   private reservingIdleRestart = false;
   private stopping = false;
   private workspaceMcp: WorkspaceMcp | undefined;
-  private readonly sessionWorktrees: SessionWorktrees;
-  readonly worktreeTool: ReturnType<typeof createSessionWorktreeTool>;
   setSessionMemory(memory: SessionMemory, context?: RuntimeApi['memoryContext']): void {
     this.memory = memory;
-    memory.setSummarizationEnabled(this.activityPreferences?.enabled('summarizer') ?? true);
-    const mode = this.activityPreferences?.memoryInferenceMode();
+    const preferences = this.services.activity?.preferences;
+    memory.setSummarizationEnabled(preferences?.enabled('summarizer') ?? true);
+    const mode = preferences?.memoryInferenceMode();
     if (mode) memory.setInferenceMode(mode);
     this.memoryContext = context;
   }
@@ -185,53 +182,16 @@ export class RuntimeApi {
     private readonly listenAddress: string,
     startupEnvironment: NodeJS.ProcessEnv = process.env,
     private readonly telemetry?: Telemetry,
+    private readonly services: RuntimeApiServices = {},
   ) {
     this.runtime = runtime;
     this.memoryDisabled =
       Number(startupEnvironment.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000') === 0;
     this.startupShellEnvironment = captureShellEnvironment(startupEnvironment);
-    this.sessionWorktrees = new SessionWorktrees(startupEnvironment.PATH ?? '');
-    this.worktreeTool = createSessionWorktreeTool(this.sessionWorktrees, (context, passId) =>
-      this.worktreeScope(context, passId),
-    );
+    const activity = services.activity;
+    if (activity) activity.colgrep.setIndexingEnabled(activity.preferences.enabled('rag-index'));
   }
 
-  private worktreeScope(
-    {
-      sessionId,
-      agentId,
-      workspaceRoot,
-    }: Pick<ToolContext, 'sessionId' | 'agentId' | 'workspaceRoot'>,
-    requestedPassId?: string,
-  ): WorktreeScope {
-    if (!sessionId) {
-      if (requestedPassId) throw new Error('This agent has no LTCook Pass.');
-      return { sessionId: agentId, agentId, workspaceRoot };
-    }
-    const snapshot = this.runtime?.snapshot(sessionId);
-    if (
-      !snapshot?.members.some(
-        ({ binding }) => binding?.state === 'bound' && binding.nativeAgentId === agentId,
-      )
-    )
-      throw new Error('The agent is not bound to this session.');
-    if (requestedPassId && !snapshot.passes.some(({ id }) => id === requestedPassId))
-      throw new Error('The Pass does not belong to this session.');
-
-    const running = snapshot.passes.filter(({ status }) => status === 'running');
-    const runningIds = new Set(running.map(({ id }) => id));
-    const focused = new Set(
-      snapshot.assignments.flatMap((assignment) => {
-        if (assignment.nativeAgentId !== agentId || assignment.status === 'reported') return [];
-        const passId = snapshot.tasks.find(({ id }) => id === assignment.taskId)?.passId;
-        return passId && runningIds.has(passId) ? [passId] : [];
-      }),
-    );
-    const passId =
-      requestedPassId ??
-      (focused.size === 1 ? [...focused][0] : running.length === 1 ? running[0]?.id : undefined);
-    return { sessionId, agentId, workspaceRoot: snapshot.session.workspaceRoot, passId };
-  }
   setRuntime(runtime: RuntimeController): void {
     this.runtime = runtime;
   }
@@ -529,8 +489,13 @@ export class RuntimeApi {
           return;
         }
         const { nativeAgentId, ...requestScope } = worktreeRequest.parse(parsed);
-        const scope = this.worktreeScope({ ...requestScope, agentId: nativeAgentId });
-        const worktrees = await this.sessionWorktrees.read(scope, AbortSignal.timeout(3500));
+        const service = this.services.worktrees;
+        if (!service) {
+          response.writeHead(503).end('{"error":"Session worktrees are unavailable."}');
+          return;
+        }
+        const scope = service.resolveScope({ ...requestScope, agentId: nativeAgentId });
+        const worktrees = await service.store.read(scope, AbortSignal.timeout(3500));
         response.writeHead(200).end(
           JSON.stringify({
             agentId: scope.agentId,
@@ -547,13 +512,14 @@ export class RuntimeApi {
           return;
         }
         const { feature, enabled } = activityToggleRpc.input.parse(parsed);
-        if (!this.activityPreferences || (feature === 'summarizer' && !this.memory)) {
+        const activity = this.services.activity;
+        if (!activity || (feature === 'summarizer' && !this.memory)) {
           response.writeHead(503).end('{"error":"This Activity control is unavailable."}');
           return;
         }
-        this.activityPreferences.set(feature, enabled);
+        activity.preferences.set(feature, enabled);
         if (feature === 'summarizer') this.memory?.setSummarizationEnabled(enabled);
-        else this.activityColgrep.setIndexingEnabled(enabled);
+        else activity.colgrep.setIndexingEnabled(enabled);
         response.writeHead(200).end(JSON.stringify({ enabled }));
         return;
       }
@@ -564,11 +530,12 @@ export class RuntimeApi {
         }
         const { mode } = memoryInferenceRpc.input.parse(parsed);
         const memory = this.memory;
-        if (!this.activityPreferences || !memory?.inferenceSelection()) {
+        const preferences = this.services.activity?.preferences;
+        if (!preferences || !memory?.inferenceSelection()) {
           response.writeHead(503).end('{"error":"Session Memory inference is unavailable."}');
           return;
         }
-        this.activityPreferences.setMemoryInferenceMode(mode);
+        preferences.setMemoryInferenceMode(mode);
         response.writeHead(200).end(JSON.stringify(memory.setInferenceMode(mode)));
         return;
       }
@@ -678,9 +645,10 @@ export class RuntimeApi {
                 .catch(() => undefined)
             : undefined
           : await this.workspaceMcp?.repositorySearchWorkspace(agentId);
+        const colgrep = this.services.activity?.colgrep;
         const [rag, subagents] = await Promise.all([
-          workspace
-            ? this.activityColgrep.readStatus(workspace)
+          workspace && colgrep
+            ? colgrep.readStatus(workspace)
             : {
                 availability: 'unavailable',
                 activity: 'unknown',
@@ -699,7 +667,7 @@ export class RuntimeApi {
           JSON.stringify({
             rag: {
               ...rag,
-              indexingEnabled: this.activityPreferences?.enabled('rag-index') ?? null,
+              indexingEnabled: this.services.activity?.preferences.enabled('rag-index') ?? null,
             },
             task: task?.title,
             subagents,
