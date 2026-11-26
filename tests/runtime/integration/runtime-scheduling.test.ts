@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import defaultTeam from '@ltcook/team-default';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
-import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
+import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
 import { CoordinationStore } from '../../../runtime/src/storage/coordination.js';
 import team from '@ltcook/team-default-minimal';
 import {
@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe('approved Pass scheduling', () => {
-  async function fixture(selected = defaultTeam, memory?: SessionMemory) {
+  async function fixture(selected = defaultTeam, memory?: ConversationRecords) {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-scheduler-'));
     temporaryDirectories.push(directory);
     const agents = new FakeAgents();
@@ -100,15 +100,12 @@ describe('approved Pass scheduling', () => {
   }
 
   test('canceling a Pass during the Memory lookup prevents its pending dispatch', async () => {
-    const memory = new SessionMemory({
+    const memory = new ConversationRecords({
       databasePath: ':memory:',
       source: {
         async read() {
           return { epoch: 'fixture', latest: -1, through: -1, reset: false, messages: [] };
         },
-      },
-      async summarize(type) {
-        return { type, text: '', complete: false, elapsedMs: 0 };
       },
     });
     const f = await fixture(defaultTeam, memory);

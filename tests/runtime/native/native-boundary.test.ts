@@ -34,9 +34,7 @@ import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js'
 import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
 import { createWebTools, type WebToolService } from '../../../runtime/src/tools/web.js';
 import { captureShellEnvironment } from '../../../runtime/src/integrations/shell-environment.js';
-import { storedSummariesRpc } from '../../../runtime/src/paseo-plugin/shared/activity.js';
-import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
-import { MemoryStore } from '../../../runtime/src/session-memory/store.js';
+import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
 
 const directories: string[] = [];
 afterEach(() => {
@@ -139,25 +137,12 @@ describe('native runtime boundary', () => {
       });
     try {
       const agent = agentBearer(secret, nativeAgentId);
-      for (const route of [
-        'toggle',
-        'memory-inference',
-        'memory-device',
-        'memory-redo',
-        'memory-evidence',
-        'stored-summaries',
-        'services',
-        'workspace-touch',
-        'workspace-services',
-      ]) {
+      for (const route of ['toggle', 'services', 'workspace-touch', 'workspace-services']) {
         const denied = await post(route, agent, { nativeAgentId });
         expect(denied.status).toBe(403);
         expect(await denied.json()).toEqual({});
       }
       expect((await fetch(`${endpoint}/v1/activity/services`)).status).toBe(404);
-      expect((await post('memory-evidence', secret, {})).status).toBe(503);
-      expect((await post('stored-summaries', secret, {})).status).toBe(400);
-      expect((await post('memory-redo', secret, {})).status).toBe(400);
       expect((await post('workspace-touch', secret, { workspaceId: 'workspace-1' })).status).toBe(
         503,
       );
@@ -253,17 +238,6 @@ describe('native runtime boundary', () => {
     directories.push(directory);
     const preferences = join(directory, 'activity-settings.json');
     const secret = 'activity-control-secret';
-    const memory = new SessionMemory({
-      databasePath: ':memory:',
-      source: {
-        async read() {
-          throw new Error('Toggle must not load history.');
-        },
-      },
-      async summarize() {
-        throw new Error('Toggle must not run inference.');
-      },
-    });
     const colgrep = createColgrepProvider({ deploymentDirectory: '' });
     const first = new RuntimeApi(
       undefined,
@@ -276,7 +250,6 @@ describe('native runtime boundary', () => {
         activity: { colgrep, preferences: new ActivityPreferences(preferences) },
       },
     );
-    first.setSessionMemory(memory);
     const endpoint = await first.listen();
     const change = (body: object, token = secret) =>
       fetch(`${endpoint}/v1/activity/toggle`, {
@@ -291,13 +264,10 @@ describe('native runtime boundary', () => {
       );
       expect(denied.status).toBe(403);
       expect(colgrep.isIndexingEnabled()).toBe(true);
-      for (const feature of ['rag-index', 'summarizer']) {
-        const response = await change({ feature, enabled: false });
-        expect(response.status).toBe(200);
-        expect(await response.json()).toEqual({ enabled: false });
-      }
+      const response = await change({ feature: 'rag-index', enabled: false });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ enabled: false });
       expect(colgrep.isIndexingEnabled()).toBe(false);
-      expect(memory.status(undefined, 'leader').summarization).toBe('paused');
       const restoredColgrep = createColgrepProvider({ deploymentDirectory: '' });
       const restored = new RuntimeApi(
         undefined,
@@ -310,91 +280,9 @@ describe('native runtime boundary', () => {
           activity: { colgrep: restoredColgrep, preferences: new ActivityPreferences(preferences) },
         },
       );
-      restored.setSessionMemory(memory);
       expect(restoredColgrep.isIndexingEnabled()).toBe(false);
-      expect(memory.status(undefined, 'leader').summarization).toBe('paused');
     } finally {
       await first.close();
-      await memory.close();
-    }
-  });
-
-  test('only the user can switch and persist the Session Memory backend', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'ltcook-inference-mode-'));
-    directories.push(directory);
-    const preferences = join(directory, 'activity-settings.json');
-    const secret = 'activity-inference-secret';
-    const createMemory = () =>
-      new SessionMemory({
-        databasePath: ':memory:',
-        source: {
-          async read() {
-            throw new Error('Selection must not read history');
-          },
-        },
-        async summarize() {
-          throw new Error('Selection must not run inference');
-        },
-        inference: {
-          hosted: { model: 'gpt-6-luna', reasoning: 'low' },
-          local: { model: 'lfm3:1.7b-qad-q4_0', reasoning: 'off' },
-        },
-      });
-    const memory = createMemory();
-    const restoredMemory = createMemory();
-    const colgrep = createColgrepProvider({ deploymentDirectory: '' });
-    const api = new RuntimeApi(
-      undefined,
-      secret,
-      `127.0.0.1:${await freePort()}`,
-      new SessionActivation({}),
-      {},
-      undefined,
-      {
-        activity: { colgrep, preferences: new ActivityPreferences(preferences) },
-      },
-    );
-    api.setSessionMemory(memory);
-    const endpoint = await api.listen();
-    const select = (token: string, body: object) =>
-      fetch(`${endpoint}/v1/activity/memory-inference`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-    try {
-      expect(
-        (await select(agentBearer(secret, 'worker'), { nativeAgentId: 'worker', mode: 'hosted' }))
-          .status,
-      ).toBe(403);
-      expect(memory.inferenceSelection()?.mode).toBe('local');
-      expect((await select(secret, { mode: 'automatic' })).status).toBe(400);
-      const result = await select(secret, { mode: 'hosted' });
-      expect(result.status).toBe(200);
-      expect(await result.json()).toEqual({
-        mode: 'hosted',
-        model: 'gpt-6-luna',
-        reasoning: 'low',
-      });
-      const restored = new RuntimeApi(
-        undefined,
-        secret,
-        '127.0.0.1:0',
-        new SessionActivation({}),
-        {},
-        undefined,
-        {
-          activity: {
-            colgrep: createColgrepProvider({ deploymentDirectory: '' }),
-            preferences: new ActivityPreferences(preferences),
-          },
-        },
-      );
-      restored.setSessionMemory(restoredMemory);
-      expect(restoredMemory.inferenceSelection()?.mode).toBe('hosted');
-    } finally {
-      await api.close();
-      await Promise.all([memory.close(), restoredMemory.close()]);
     }
   });
 
@@ -473,256 +361,6 @@ describe('native runtime boundary', () => {
       expect(await (await read(agentId)).json()).toMatchObject({ following: null });
     } finally {
       await api.close();
-    }
-  });
-
-  test('only the user can change the host Session Memory device', async () => {
-    let probes = 0;
-    const gpu = { id: 'CUDA:device-1', label: 'Fixture CUDA GPU', mainGpu: 0 };
-    const ambiguous = {
-      id: 'ROCm:device-2',
-      label: 'Fixture AMD GPU',
-      unavailable: 'Ollama cannot select this device uniquely.',
-    };
-    const memory = new SessionMemory({
-      databasePath: ':memory:',
-      async deviceCatalog() {
-        probes++;
-        return { devices: [gpu, ambiguous] };
-      },
-      source: {
-        async read() {
-          throw new Error('Changing the inference device must not read conversation history.');
-        },
-      },
-      async summarize() {
-        throw new Error('Changing the inference device must not start inference.');
-      },
-    });
-    const master = 'test-master-secret';
-    const api = new RuntimeApi(
-      undefined,
-      master,
-      `127.0.0.1:${await freePort()}`,
-      new SessionActivation(),
-    );
-    const endpoint = await api.listen();
-    const post = (path: string, input: object, token = master) =>
-      fetch(`${endpoint}/v1/activity/${path}`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify(input),
-      });
-    try {
-      expect((await post('memory-device', { deviceId: 'cpu' })).status).toBe(503);
-      api.setSessionMemory(memory);
-      const nativeAgentId = 'selected';
-      for (const input of [{ nativeAgentId }, { nativeAgentId, deviceId: gpu.id }]) {
-        const rejected = await post('memory-device', input, agentBearer(master, nativeAgentId));
-        expect(rejected.status).toBe(403);
-      }
-      expect(probes).toBe(0);
-      expect((await post('memory-device', { deviceId: 0 })).status).toBe(400);
-      const inventory = await post('memory-device', {});
-      expect(inventory.status).toBe(200);
-      expect(await inventory.json()).toMatchObject({
-        device: { id: 'auto', label: 'Auto' },
-        devices: [
-          { id: 'auto', label: 'Auto' },
-          { id: 'cpu', label: 'CPU' },
-          { id: gpu.id, label: gpu.label },
-          ambiguous,
-        ],
-      });
-      const rejected = await post('memory-device', { deviceId: ambiguous.id });
-      expect(rejected.status).toBe(400);
-      expect(await rejected.json()).toMatchObject({ error: ambiguous.unavailable });
-      const updated = await post('memory-device', { deviceId: gpu.id });
-      expect(updated.status).toBe(200);
-      expect(await updated.json()).toMatchObject({ device: { id: gpu.id, label: gpu.label } });
-      const snapshot = await post('services', { nativeAgentId: 'another-agent' });
-      expect(await snapshot.json()).toMatchObject({ memory: { device: { id: gpu.id } } });
-    } finally {
-      await api.close();
-      await memory.close();
-    }
-  });
-
-  test('only the user can queue a Session Memory redo for the current agent', async () => {
-    const memory = new SessionMemory({
-      databasePath: ':memory:',
-      source: {
-        async read() {
-          throw new Error('The missing selected summary should fail in the queue.');
-        },
-      },
-      async summarize() {
-        throw new Error('A missing summary must not invoke inference.');
-      },
-    });
-    const master = 'test-master-secret';
-    const api = new RuntimeApi(
-      undefined,
-      master,
-      `127.0.0.1:${await freePort()}`,
-      new SessionActivation(),
-    );
-    api.setSessionMemory(memory);
-    const endpoint = await api.listen();
-    const post = (input: object, token = master) =>
-      fetch(`${endpoint}/v1/activity/memory-redo`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify(input),
-      });
-    try {
-      const input = {
-        agentId: 'selected',
-        nativeAgentId: 'selected',
-        scope: 'from',
-        epoch: 'one',
-        position: 1,
-      };
-      expect((await post(input, agentBearer(master, 'selected'))).status).toBe(403);
-      expect((await post({})).status).toBe(400);
-      const accepted = await post(input);
-      expect(accepted.status).toBe(200);
-      expect(await accepted.json()).toMatchObject({ id: expect.any(String) });
-      await memory.settled();
-      expect(memory.status(undefined, 'selected').redo).toMatchObject({ state: 'failed' });
-    } finally {
-      await api.close();
-      await memory.close();
-    }
-  });
-
-  test('only the user can page completed summaries for the requested agent and current history', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'ltcook-summary-reader-'));
-    directories.push(directory);
-    const databasePath = join(directory, 'memory.sqlite');
-    const store = new MemoryStore(databasePath);
-    try {
-      for (let position = 1; position <= 12; position++) {
-        store.saveSummary({
-          id: `summary-${position}`,
-          agentId: 'selected',
-          sessionId: 'session-1',
-          epoch: 'original',
-          type: position % 2 ? 'UAMP' : 'AAB',
-          position,
-          sources: [{ seq: position, author: 'agent', messageId: `native-${position}` }],
-          state: position === 10 ? 'recorded' : undefined,
-          createdAt: '2026-01-01T00:00:00Z',
-          historyHash: 'fixture',
-          parts: [
-            { content: { findings: [{ detail: `Stored body ${position}` }] }, sources: [position] },
-          ],
-          expectedParts: 1,
-          complete: position !== 11,
-        });
-      }
-      store.saveSummary({
-        ...store.summaries('selected', 'original')[0]!,
-        agentId: 'other-agent',
-        parts: [{ content: { findings: ['Other agent summary'] }, sources: [1] }],
-      });
-    } finally {
-      store.close();
-    }
-    let epoch = 'original';
-    const memory = new SessionMemory({
-      databasePath,
-      source: {
-        async read() {
-          return { epoch, latest: 11, through: 11, reset: false, messages: [] };
-        },
-      },
-      async summarize() {
-        throw new Error('Reading stored summaries must never invoke inference.');
-      },
-    });
-    const master = 'test-master-secret';
-    const api = new RuntimeApi(
-      undefined,
-      master,
-      `127.0.0.1:${await freePort()}`,
-      new SessionActivation(),
-    );
-    api.setSessionMemory(memory);
-    const endpoint = await api.listen();
-    const readPage = (body: object, token = master) =>
-      fetch(`${endpoint}/v1/activity/stored-summaries`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ agentId: 'selected', ...body }),
-      });
-    const readEvidence = (body: object, token = master) =>
-      fetch(`${endpoint}/v1/activity/memory-evidence`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ agentId: 'selected', ...body }),
-      });
-    try {
-      const record = { epoch, id: 'summary-10', position: 10 };
-      expect((await readEvidence(record, agentBearer(master, 'selected'))).status).toBe(401);
-      expect(await (await readEvidence(record)).json()).toEqual({
-        sources: [{ seq: 10, messageId: 'native-10', author: 'agent' }],
-        next: null,
-      });
-      for (const forged of [
-        { ...record, position: 9 },
-        { ...record, agentId: 'other-agent' },
-      ]) {
-        expect(await (await readEvidence(forged)).json()).toEqual({ sources: [], next: null });
-      }
-      const agent = await readPage({ nativeAgentId: 'selected' }, agentBearer(master, 'selected'));
-      expect(agent.status).toBe(403);
-      const firstResponse = await readPage({});
-      expect(firstResponse.status).toBe(200);
-      const first = storedSummariesRpc.output.parse(await firstResponse.json());
-      expect(first.summaries.map(({ id }) => id)).toEqual(
-        Array.from({ length: 8 }, (_, index) => `summary-${10 - index}`),
-      );
-      expect(first.summaries[0]).toMatchObject({
-        type: 'AAB',
-        parts: [{ content: { findings: [{ detail: 'Stored body 10' }] }, sources: [10] }],
-      });
-      expect(first.storagePath).toBe(databasePath);
-      const passage = storedSummariesRpc.output.parse(
-        await (await readPage({ passage: { epoch, start: 5, position: 5 } })).json(),
-      );
-      expect(passage.summaries.map(({ id }) => id)).toEqual(['summary-5']);
-      const oldPassage = await readPage({ passage: { epoch: 'prior', start: 5, position: 5 } });
-      expect(oldPassage.status).toBe(400);
-
-      expect(first.summaries[0]).toMatchObject({
-        position: 10,
-        originalTokens: null,
-        durationMs: null,
-      });
-      const metadataOnly = storedSummariesRpc.output.parse(
-        await (await readPage({ includeContent: false })).json(),
-      );
-      expect(metadataOnly.summaries.map(({ id }) => id)).toEqual(
-        first.summaries.map(({ id }) => id),
-      );
-      expect(metadataOnly.summaries.flatMap(({ parts }) => parts)).toEqual([]);
-      expect(metadataOnly.next).toEqual(first.next);
-      expect(first.next).not.toBeNull();
-      const second = storedSummariesRpc.output.parse(
-        await (await readPage({ before: first.next })).json(),
-      );
-      expect(second.summaries.map(({ id }) => id)).toEqual(['summary-2', 'summary-1']);
-      expect(second.next).toBeNull();
-      epoch = 'replacement';
-      expect(await (await readEvidence(record)).json()).toEqual({ sources: [], next: null });
-      expect((await readPage({ before: first.next })).status).toBe(400);
-      expect(storedSummariesRpc.output.parse(await (await readPage({})).json()).summaries).toEqual(
-        [],
-      );
-    } finally {
-      await api.close();
-      await memory.close();
     }
   });
 
@@ -1204,6 +842,25 @@ describe('native runtime boundary', () => {
     let attempt = 0;
     let released = 0;
     let stopCalls = 0;
+    let observing = 0;
+    const observationsAtCommit: number[] = [];
+    const records = new ConversationRecords({
+      databasePath: ':memory:',
+      source: {
+        async read() {
+          return { epoch: 'idle', latest: -1, through: -1, reset: false, messages: [] };
+        },
+        watch() {
+          observing++;
+          return async () => {
+            observing--;
+          };
+        },
+      },
+    });
+    records.turn('agent', { turnId: 'completed-turn', outcome: 'completed' });
+    await records.settled();
+    api.setConversationRecords(records);
     activation.setWorkspaceActivator(async () => {
       throw new Error('lifecycle does not open a session');
     });
@@ -1231,6 +888,7 @@ describe('native runtime boundary', () => {
             released += 1;
           },
           async commit() {
+            observationsAtCommit.push(observing);
             if (attempt === 2) throw new Error('Could not commit');
             return { status: 'committed' };
           },
@@ -1257,14 +915,19 @@ describe('native runtime boundary', () => {
       const busy = await stop('owner');
       expect(busy.status).toBe(423);
       expect(await busy.json()).toEqual({ status: 'busy', activeTurns: 3 });
+      expect(observing).toBe(1);
       expect((await stop('owner')).status).toBe(503);
       expect(released).toBe(1);
+      expect(observing).toBe(1);
       expect(stopCalls).toBe(0);
       expect((await stop('owner')).status).toBe(202);
       await stopFinished.promise;
       expect(stopCalls).toBe(1);
       expect(released).toBe(1);
+      expect(observationsAtCommit).toEqual([0, 0]);
+      expect(observing).toBe(0);
     } finally {
+      await records.close();
       await api.close();
     }
   });

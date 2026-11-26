@@ -19,15 +19,12 @@ import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
 import { EvalRunService } from './evals/service.js';
 import { createEvalEngine } from './evals/engine.js';
 import { createPaseoMemorySource } from './integrations/paseo-memory.js';
-import { releaseOllamaModel } from './integrations/ollama.js';
-import { createOllamaDeviceCatalog } from './integrations/ollama-devices.js';
-import { MemorySummaryError, SessionMemory } from './session-memory/service.js';
-import { createHostedMemorySummarizer } from './session-memory/hosted.js';
-import {
-  defaultMemoryBudgets,
-  sessionMemoryGeneration,
-  summarizeMemory,
-} from './session-memory/summarization.js';
+import { ConversationRecords } from './session-memory/conversation.js';
+import { hostedConversationProvider } from './session-memory/hosted.js';
+import { ConversationInference, localConversationProvider } from './session-memory/inference.js';
+import { ClarifyService } from './session-memory/clarify.js';
+import { TrackerService } from './session-memory/tracker.js';
+import { openConversationProductStore } from './session-memory/product-store.js';
 import { PastedDocuments } from './session-memory/pasted-documents.js';
 import { catalogModelAliases, resolveModel } from './models/aliases.js';
 const EX_TEMPFAIL = 75;
@@ -175,7 +172,10 @@ async function run(): Promise<void> {
   let apiListening = false;
   let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined;
   let evals: EvalRunService | undefined;
-  let memory: SessionMemory | undefined;
+  let memory: ConversationRecords | undefined;
+  let conversationInference: ConversationInference | undefined;
+  let conversationProducts: ReturnType<typeof openConversationProductStore> | undefined;
+  let tracker: TrackerService | undefined;
   let workspaceServices: PaseoWorkspaceServices | undefined;
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
@@ -215,6 +215,9 @@ async function run(): Promise<void> {
         }),
       );
       if (workspaceServices) await attempt(() => workspaceServices!.close());
+      if (tracker) await attempt(() => tracker!.close());
+      if (conversationInference) await attempt(() => conversationInference!.close());
+      if (conversationProducts) await attempt(() => conversationProducts!.close());
       if (memory) await attempt(() => memory!.close());
       if (runtime) await attempt(() => runtime!.close());
       if (evals) await attempt(() => evals!.close());
@@ -352,128 +355,94 @@ async function run(): Promise<void> {
       return;
     }
     api.setProviderSubagents(host.listProviderSubagents);
-    const threshold = Number(process.env.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000');
     const pastedDocuments = new PastedDocuments(
       path.join(stateDirectory, 'pasted-documents'),
       apiToken,
     );
     api.setPastedDocuments(pastedDocuments);
-    if (threshold !== 0) {
-      try {
-        const configuredLocal = process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || '@local-CPU';
-        const localModelError =
-          'Local Session Memory could not resolve its Ollama model. Configure LTCOOK_SESSION_MEMORY_MODEL with an Ollama alias or model tag.';
-        let localModel: string | undefined;
-        try {
-          const local = configuredLocal.startsWith('@')
-            ? resolveModel(configuredLocal, process.env)
-            : { provider: 'ollama', model: configuredLocal };
-          if (local.provider === 'ollama') localModel = local.model;
-        } catch {
-          // > Local model configuration is independent of Hosted inference and history.
-        }
-        let hosted: ReturnType<typeof resolveModel> | undefined;
-        try {
-          hosted = resolveModel('tiny', process.env);
-        } catch {
-          // > Hosted model configuration is independent of Local inference and history.
-        }
-        const hostedSummarizer = hosted && createHostedMemorySummarizer(hosted);
-        const mode = z
-          .enum(['hosted', 'local'])
-          .parse(process.env.LTCOOK_SESSION_MEMORY_MODE?.trim() || 'local');
-        const memorySettings = localModel
-          ? {
-              ...summarization,
-              model: localModel,
-              generation: JSON.stringify(sessionMemoryGeneration),
-            }
-          : undefined;
-        memory = new SessionMemory({
-          databasePath: path.join(stateDirectory, 'session-memory-v5.sqlite'),
-          source: createPaseoMemorySource(host.api, apiToken, pastedDocuments),
-          threshold,
-          contextIndependent: true,
-          inference: {
-            hosted: { model: hosted?.model ?? 'Unavailable', reasoning: 'low' },
-            local: { model: localModel ?? 'Unavailable', reasoning: 'off' },
-          },
-          hostedUsage: hostedSummarizer?.usage,
-          deviceCatalog: memorySettings
-            ? createOllamaDeviceCatalog(memorySettings.endpoint)
-            : async () => ({ devices: [], diagnostic: localModelError }),
-          async summarize(type, prompt, signal, placement, onProgress, format, mode) {
-            if (mode === 'hosted') {
-              if (!hostedSummarizer)
-                throw new MemorySummaryError(
-                  'Hosted Session Memory could not resolve @tiny. Configure LTCOOK_MODEL_SMOL with an openai-codex model that supports low reasoning.',
-                );
-              return hostedSummarizer.summarize(type, prompt, signal);
-            }
-            if (!memorySettings) throw new MemorySummaryError(localModelError);
-            return summarizeMemory(
-              { ...memorySettings, ...placement },
-              prompt,
-              signal,
-              type,
-              false,
-              onProgress,
-              format,
-            );
-          },
-          releaseCpuModel: memorySettings
-            ? (signal) => releaseOllamaModel(memorySettings, signal)
-            : undefined,
-          configuration: memorySettings?.generation,
-          budgets: {
-            input: Number(
-              process.env.LTCOOK_SESSION_MEMORY_INPUT_TOKENS ?? defaultMemoryBudgets.input,
-            ),
-          },
-          peers: (agentId, workspace) => runtime?.memoryPeers(agentId, workspace) ?? [],
-          onRequest: ({ result, ...request }) => {
-            void telemetry.log('info', 'session-memory.request', {
-              ...request,
-              complete: result.complete,
-              elapsedMs: result.elapsedMs,
-              inputCount: result.usage?.inputTokens,
-              outputCount: result.usage?.outputTokens,
-              cachedCount: result.metrics?.cachedInputTokens,
-              prefillMs: result.metrics?.prefillMs,
-              generationMs: result.metrics?.generationMs,
-              thinkingPresent: result.metrics?.thinkingPresent,
-              reasoningCount: result.metrics?.reasoningTokens,
-              hosted: result.hosted,
-            });
-          },
-          onDispatch: (data) => {
-            void telemetry.log('info', 'session-memory.dispatch', {
-              agentId: data.agentId,
-              elapsedMs: data.elapsedMs,
-              estimatedSize: data.estimatedTokens,
-            });
-          },
-          onFailure: ({ agentId, category }) => {
-            void telemetry.log('warn', 'session-memory.update_failed', { agentId, category });
-          },
-        });
-        memory.setInferenceMode(mode);
-        api.setSessionMemory(memory, (id) => runtime?.memoryContext(id));
-        const activeMemory = memory;
-        void host.api.agents
-          .list()
-          .then(({ entries }) => {
-            activeMemory.recover(
-              entries.flatMap(({ agent }) =>
-                ['ltcook', 'pi', 'codex'].includes(agent.provider) ? [agent.id] : [],
-              ),
-            );
-          })
-          .catch(() => {});
-      } catch {
-        void telemetry.log('warn', 'session-memory.unavailable', {});
-      }
+    const source = createPaseoMemorySource(host.api, apiToken, pastedDocuments);
+    memory = new ConversationRecords({
+      databasePath: path.join(stateDirectory, 'conversation-records-v1.sqlite'),
+      source,
+      onObserved: (id) => tracker?.observe(id),
+      peers: (agentId, workspace) => runtime?.memoryPeers(agentId, workspace) ?? [],
+      onDispatch: (event) => {
+        void telemetry.log('info', 'conversation.handoff', event);
+      },
+      onFailure: (event) => {
+        void telemetry.log('warn', 'conversation.observation_failed', event);
+      },
+    });
+    api.setConversationRecords(memory, (id) => runtime?.memoryContext(id));
+
+    const configuredLocal = process.env.LTCOOK_CONVERSATION_LOCAL_MODEL?.trim() || '@local-CPU';
+    let localModel: string | undefined;
+    try {
+      const local = configuredLocal.startsWith('@')
+        ? resolveModel(configuredLocal, process.env)
+        : { provider: 'ollama', model: configuredLocal };
+      if (local.provider === 'ollama') localModel = local.model;
+    } catch {
+      // > History and Hosted inference remain available when Local configuration fails.
     }
+    let hosted: ReturnType<typeof resolveModel> | undefined;
+    try {
+      hosted = resolveModel('tiny', process.env);
+    } catch {
+      // > History and Local inference remain available when Hosted configuration fails.
+    }
+    const inferenceMode = z
+      .enum(['hosted', 'local'])
+      .parse(process.env.LTCOOK_CONVERSATION_INFERENCE?.trim() || 'hosted');
+    conversationInference = new ConversationInference(
+      {
+        hosted: hosted && hostedConversationProvider(hosted),
+        local:
+          (localModel && localConversationProvider({ ...summarization, model: localModel })) ||
+          undefined,
+      },
+      inferenceMode,
+      (event) => {
+        void telemetry.log('info', 'conversation.inference', event);
+      },
+    );
+    api.setConversationInference(conversationInference);
+    conversationProducts = openConversationProductStore(
+      path.join(stateDirectory, 'conversation-products-v1.sqlite'),
+    );
+    const conversationInputTokens = z.coerce
+      .number()
+      .int()
+      .positive()
+      .parse(process.env.LTCOOK_CONVERSATION_INPUT_TOKENS ?? '8000');
+    api.setClarify(
+      new ClarifyService(
+        conversationProducts,
+        source,
+        conversationInference,
+        conversationInputTokens,
+      ),
+    );
+    const tracking = new TrackerService(
+      conversationProducts,
+      source,
+      conversationInference,
+      conversationInputTokens,
+    );
+    tracker = tracking;
+    api.setTracker(tracking);
+    const recording = memory;
+    void host.api.agents
+      .list()
+      .then(({ entries }) => {
+        const conversations = entries.flatMap(({ agent }) =>
+          ['ltcook', 'pi', 'codex'].includes(agent.provider) ? [agent.id] : [],
+        );
+        for (const id of conversations) tracking.observe(id, { baseline: true });
+        return recording.recover(conversations);
+      })
+      .catch(() => {});
+
     const receipt = JSON.parse(
       await fs
         .readFile(path.join(canonicalDeploymentRoot, 'runtime.json'), 'utf8')
@@ -525,7 +494,15 @@ async function run(): Promise<void> {
               );
             })
         : undefined;
-    const tools = createTools(ried, summarization, web, memory, colgrep, worktreeTool);
+    const tools = createTools(
+      ried,
+      summarization,
+      web,
+      memory,
+      colgrep,
+      worktreeTool,
+      conversationInference,
+    );
     const workspaceMcp = new WorkspaceMcp(tools, apiListen, web, requestRestart);
     api.setWorkspaceTools(tools);
     api.setWorkspaceMcp(workspaceMcp);

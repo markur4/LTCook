@@ -31,8 +31,8 @@ import { allowsRestrictedTool } from '../tools/capabilities.js';
 import {
   memoryDispatchDeadlineMs,
   type MemoryHandoffObservation,
-  type SessionMemory,
-} from '../session-memory/service.js';
+  type ConversationRecords,
+} from '../session-memory/conversation.js';
 import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
 import { unavailableMemoryHandoff } from '../session-memory/handoff.js';
 
@@ -43,7 +43,7 @@ type RuntimeOptions = {
   agents: AgentBackend;
   stateDirectory?: string;
   ried?: RiedService;
-  memory?: SessionMemory;
+  memory?: ConversationRecords;
   memoryDelegation?: boolean;
   onEvent?: (event: RuntimeEvent) => void;
   evaluation?: { sessionId: string; toolBudget?: number };

@@ -6,8 +6,9 @@
   - [Install a release](#install-a-release)
   - [Install from a checkout](#install-from-a-checkout)
   - [Run the first command](#run-the-first-command)
+  - [Use Clarify and Tracked Items](#use-clarify-and-tracked-items)
   - [Use workspace tools in Pi or Codex](#use-workspace-tools-in-pi-or-codex)
-    - [Search Session Memory](#search-session-memory)
+    - [Search conversation evidence](#search-conversation-evidence)
     - [Attach pasted text](#attach-pasted-text)
   - [Enable an Intel iGPU for Ollama on WSL](#enable-an-intel-igpu-for-ollama-on-wsl)
   - [Run Agent Evals](#run-agent-evals)
@@ -189,7 +190,7 @@ whenever you need them.
   or skill to see its observed occurrences. **Show in Chat** jumps to the exact
   occurrence in LTCook's bundled Paseo web app. The details header offers
   **Open skill in new tab** when the skill document is available. Skills loaded
-  during a turn also appear beside **Show summary** in the chat. Select a skill
+  during a turn also appear in the chat. Select a skill
   for an inline preview or use **Open in new tab** to read the full document.
   The conversation button opens a subagent's native chat.
   For Codex, Activity recognizes successful direct reads of `SKILL.md` with
@@ -226,38 +227,33 @@ Paseo host. Ranked searches can still use a complete existing index, and lexical
 search remains available. Standalone Pi and independently launched ColGREP
 manage their own index updates.
 
-**Session Memory** shows the selected agent's background summaries and last
-acknowledged delegation handoff. Stored and pending counts describe that
-agent's conversation. Turn off **Summarizer** to pause generation. Existing
-summaries remain available. Session Memory still records actions and short
-Discussions. Pending generation resumes when you turn it back on.
-Both switches apply across conversations and persist across runtime restarts.
-The Session Memory card shows the resolved summarization model and reasoning
-setting, including while paused. Select **Hosted** to send the current user
-messages, agent replies, and any included attachment text to OpenAI. Hosted
-uses the Codex subscription sign-in at Standard speed with low reasoning.
-Authentication, quota, and inference failures appear on the card. Hosted usage
-shows the LTCook runtime's own request and token totals since startup.
+**Last delegation handoff** shows the sending agent, receipt time, payload size,
+and number of action batches represented. The agent card shows model context
+usage when Paseo reports it.
 
-Select **Local** to summarize through Ollama. Use **Inference device** to
-choose Auto, CPU, or an available GPU. The saved backend choice applies
-across conversations. Original messages and deterministic execution records
-remain available while summaries are paused or the selected provider is
-unavailable.
+## Use Clarify and Tracked Items
 
-Expand **Stored for this agent** to open the record viewer. It shows Markdown
-summaries, a notice when a short Discussion skipped generation, and execution
-cards. **Show summary** displays the full Markdown for each loaded Discussion
-record in the conversation. Select **Load older passage records** when more
-records are available. Expand an execution card to see compact tool outcomes and
-intermediate agent messages from the original Paseo timeline. Each entry shows
-its source sequence. Reload the viewer to see newly stored records.
+In LTCook's bundled Paseo web app, select **Clarify** below a completed
+reply to read a clearer version. In Hosted mode, the control shows which
+content will be sent to OpenAI and asks you to confirm generation. You can
+hide and reopen the saved clarification from the same reply. The original
+reply stays available above it. The additive reply control is supplied by the
+bundled web app.
 
-The handoff shows the sending agent, receipt time, payload size, and the number
-of summaries represented. A handoff can also carry original user instructions
-and tool evidence. The agent card shows model context usage when Paseo reports
-it. Summarization and search continue independently of whether the panel is
-visible.
+Open **Tracked Items** in the Explorer sidebar for the focused conversation.
+Expand **Design Decisions** to see decisions you've made or explicitly
+accepted. Select an item's source to reveal its original message where the
+client supports timeline navigation. You can edit or remove items, and create
+Trackers by writing plain-language criteria in **Add Tracker**. For example,
+enter “Track open architecture questions and retire them when the user
+resolves them.”
+
+Use **Pause Tracker everywhere** to stop extraction across conversations.
+Resuming processes new messages. **Coverage** shows which messages were
+processed and which had an incomplete, failed, or skipped extraction. In
+Hosted mode, new user messages, relevant earlier text, and existing item text
+can be sent to OpenAI through the Codex subscription. You can select Local
+Ollama through the [conversation inference settings](References.md#environment-variables).
 
 ## Use workspace tools in Pi or Codex
 
@@ -301,7 +297,7 @@ and shells use their harness permissions for operations in other checkouts.
   Locate to follow a local import, re-export, or wrapper. For a multi-file
   investigation, ask the agent to use Locate trace for the behavior, relevant
   settings, and tests in one call. For example, ask “Trace how the launcher
-  enables Session Memory and how the runtime handles a stale citation. Cite the
+  configures Tracker and how the runtime handles a stale citation. Cite the
   configuration and the test assertion.” For Search and Locate,
   name a local Git base to prioritize changed files and related tests. Reopen the
   chat through Paseo after launching the updated runtime. See the
@@ -325,27 +321,19 @@ hosted chats work without Spark. AppRC's global
 starts. A keep-alive of `-1` keeps the model resident after use. Set it to `0`
 to unload after a request or to a positive number of seconds for timed residency.
 
-### Search Session Memory
+<a id="search-session-memory"></a>
 
-Ask the agent to call `session-memory` with a short `query` after resuming a
-conversation or starting work that depends on an earlier decision. Results
-include UAMP summaries, short Discussions, execution records, and original
-conversation messages. Summary results list source sequences and
-identify the original user sources. Use `source` with its `agentId`, `epoch`
-and `seq` to inspect a full original message. A result with `truncated: true`
-is a preview.
+### Search conversation evidence
 
-An ordinary Paseo chat can read its own Session Memory. Managed agents can
-read conversations bound to their authorized TeamInstance in the same
-workspace. A resumed conversation may contain a prompt whose original author
-cannot be verified. Search lists it as `unattributed-prompt`. Follow the latest
-cited user instruction when it differs from a summary.
+Ask the agent to call `session-memory` with a short `query` when a Task depends
+on an earlier decision. Use `source` with the returned `agentId`, `epoch`, and
+`seq` to reopen an exact original. A result with `truncated: true` is an excerpt.
+Search has access to the current conversation and authorized conversations in
+the same managed TeamInstance and workspace.
 
-Automatic enrichment is opt-in. Set `LTCOOK_SESSION_MEMORY_DELEGATION=true`
-in global AppRC and restart LTCook. The receiving agent uses chronological
-handoff evidence to resolve references to earlier Discussions. Agent work can
-proceed with original messages while a summary is pending.
-See the [Session Memory settings](References.md#environment-variables).
+Set `LTCOOK_SESSION_MEMORY_DELEGATION=true` in global AppRC and restart LTCook
+to add relevant original evidence to automatic handoffs. This works while
+Tracker is paused and before any clarifications are generated.
 
 ### Attach pasted text
 

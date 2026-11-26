@@ -22,7 +22,7 @@
   - [Interchangeable teams](#interchangeable-teams)
   - [Guidance and planning](#guidance-and-planning)
     - [Instruction sources in Codex and Pi](#instruction-sources-in-codex-and-pi)
-  - [Context-aware Session Memory](#context-aware-session-memory)
+  - [Clarify, Tracker, and conversation evidence](#clarify-tracker-and-conversation-evidence)
   - [Coordination and recovery](#coordination-and-recovery)
   - [Workspace Organizer and Renamer](#workspace-organizer-and-renamer)
   - [Web services and diagnostics](#web-services-and-diagnostics)
@@ -250,6 +250,9 @@ Paseo or AppRC; their meanings differ as described [below](#paseo-and-apprc-term
 | Project | A logical collection of declared roots, repositories, Sessions, and Goals. It is not a filesystem sandbox. |
 | Session | A user-facing chat with its own native conversation history and bindings. |
 | Discussion | A conversation between a user and an agent within a Session. |
+| Agent>User Message Pair (AUMP) | A user message and, where available, the agent reply it follows. The user message triggers Tracker. Earlier originals can supply evidence for explicit references. |
+| Tracker | An enabled or disabled natural-language instruction for maintaining a collection of Tracked Items in a Discussion. |
+| Tracked Item | A concise statement maintained by a Tracker or edited by the user. It can cite original conversation evidence. |
 | User>Agent Message Pair (UAMP) | A user message and its corresponding completed agent response. Native steering messages are additional sources. |
 | Agent Action (AA) | An operation performed by an agent and recorded as an Action by native Pi or Paseo history. |
 | Agent Action Batch (AAB) | Related AAs grouped for deterministic recording. Known Plan, Pass, Task, and Step identifiers apply to the AAB. |
@@ -510,58 +513,44 @@ state when starting a new store. No conversion, compatibility layer or
 chat-history import is performed. Native Pi/Paseo histories and authentication
 remain separate from coordination state.
 
-## Context-aware Session Memory
+<a id="context-aware-session-memory"></a>
 
-The runtime records completed UAMPs as Discussion and groups observed AAs at
-execution boundaries and an estimated token threshold. A UAMP includes its user
-messages, final agent replies and supplied attachment text. When their combined
-size is below 256 estimated tokens, the runtime records references to the
-originals. Larger UAMPs receive a Markdown summary. Portions that exceed the
-input budget are summarized separately under the same UAMP.
+## Clarify, Tracker, and conversation evidence
 
-AAB records contain bounded previews, counts, and references to the original
-actions and intermediate messages. Their compact tool projection preserves
-typed outcomes, file paths, exit codes, and recognized verification lines.
-The execution details show compact tool outcomes and cite the original
-Paseo timeline entries. Tools without a specialized projection show their
-name and status. AABs that span native turns are shown once. Session
-Memory continues recording AABs and short UAMPs while generation is paused.
+Paseo owns the original conversation. LTCook reads its canonical timeline and
+records deterministic Agent Action Batches (AABs) with Task scope, tool
+outcomes, and references to originals. AAB recording and authorized source
+retrieval work independently of inference. The opt-in delegation handoff uses
+bounded original evidence and reports when access is partial. Evidence links
+identify the conversation epoch and original sequence.
 
-Native user messages remain authoritative for goals and decisions. An opt-in
-delegation handoff uses stored records and can recover additional evidence
-from authorized original history. Current Task scope guides the selection.
-The latest applicable original user instruction follows the older evidence.
-Tool outcomes describe historical work. Source references identify the agent,
-conversation epoch, and original sequence. Session Memory search reports
-pending summaries, result truncation, and original-history availability.
+**Clarify** rewrites a selected completed reply for readability. It uses the
+exact reply and can include a relevant excerpt from earlier conversation
+history. It carries forward the agent's stated rationale, predictions,
+caveats, and reported outcomes. The saved clarification belongs to that exact
+reply and becomes invalid when its source changes.
 
-In the chat, **Show summary** reveals the summary for that passage. Its **Redo**
-action rebuilds only that passage from authorized original messages; **Hide
-summary** is available at both the top and bottom of the expanded summary. In
-Activity's **Stored for this agent** view, **Redo** asks which stored summary to
-start from, then rebuilds that summary and every later one from the original
-history. This lets an agent recover a corrected summary without rebuilding
-unrelated earlier passages.
+**Tracker** processes genuine user messages in order for each conversation.
+An AUMP can provide the preceding agent reply. Bounded earlier evidence
+helps resolve explicit references, and a decision accepted by reference cites
+both the acceptance and the proposal. Each enabled Tracker receives the new
+message and its active items. An inference result can add, update, or retire
+items, or leave them as they are. The runtime reports incomplete coverage
+when an affected Tracker's evidence exceeds the input budget. Attachment
+references are available while attached document contents stay out of Tracker
+requests.
 
-The summarizer reads only the current UAMP and writes concise Markdown under
-the applicable headings. It groups shared outcomes and keeps details that
-affect follow-up, including the distinction between proposals, approvals, and
-completed work. The receiving agent gets earlier Discussions and
-Task instructions through the chronological handoff. The handoff can include
-original messages from intervening short Discussions so the receiver can resolve
-an approval by reference and distinguish it from earlier proposal status.
-In Hosted mode the current UAMP, including any attachment content in the
-prompt, goes to OpenAI through the Codex subscription with low reasoning.
-Local mode uses Ollama.
+Tracker revisions let LTCook reverse conversation-derived changes on rewind.
+Manual deletions survive replay. A manually edited item's text survives as a
+manual item if its original evidence disappears. The sidebar shows current
+items and processing coverage, including pending, incomplete, failed, and
+paused events.
 
-Recognized headings and bullets supply individually retrievable statements.
-The raw Markdown remains available for reading and retrieval when formatting
-varies. The original attachment supplied to a tool-only turn stays citable
-through the AAB's reference to the initiating instruction.
-
-Rewind invalidates affected summaries and receipts that were tied to the
-replaced history. The runtime rebuilds from authorized original messages.
-Paseo still owns the original conversation and the native lifecycle metadata.
+Clarify and Tracker share inference transport and scheduling. Hosted uses the
+Codex subscription and `@tiny`, which defaults to GPT-6 Luna with low reasoning.
+Hosted requests can run during an agent turn. Local requests yield to foreground
+Local work. Clarify has priority among queued requests. See [Use Clarify and
+Tracked Items](How-To-User-Guides.md#use-clarify-and-tracked-items).
 
 ## Workspace Organizer and Renamer
 

@@ -6,7 +6,8 @@ import { createSummarizeTool } from './summarize.js';
 import { createWebTools, type WebToolService } from './web.js';
 import type { OllamaSettings } from '../integrations/ollama.js';
 import { createSessionMemoryTool } from './session-memory.js';
-import type { SessionMemory } from '../session-memory/service.js';
+import type { ConversationRecords } from '../session-memory/conversation.js';
+import type { ConversationInference } from '../session-memory/inference.js';
 import type { createColgrepProvider } from '../repository/providers/colgrep.js';
 import type { ToolContext, ToolDefinition } from './types.js';
 
@@ -34,9 +35,10 @@ export function createTools(
   ried: RiedService,
   ollama?: OllamaSettings,
   web?: WebToolService,
-  memory?: SessionMemory,
+  memory?: ConversationRecords,
   colgrep?: ReturnType<typeof createColgrepProvider>,
   worktree?: ToolDefinition,
+  conversationInference?: ConversationInference,
 ): ToolCatalog {
   const repoSearch = createRepoSearchTool(colgrep);
   return new ToolCatalog([
@@ -45,7 +47,13 @@ export function createTools(
     createRepoLocateTool(repoSearch),
     ...(worktree ? [worktree] : []),
     ...(ollama
-      ? [createSummarizeTool(ollama, undefined, memory && (() => memory.holdForeground()))]
+      ? [
+          createSummarizeTool(
+            ollama,
+            undefined,
+            conversationInference && (() => conversationInference.holdForeground()),
+          ),
+        ]
       : []),
     ...(memory ? [createSessionMemoryTool(memory)] : []),
     ...(web ? createWebTools(web) : []),

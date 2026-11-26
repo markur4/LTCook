@@ -47,6 +47,12 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- **Clarify** in the bundled Paseo web app rewrites an individual completed
+  reply on demand and saves the result against that exact source.
+- **Tracked Items** in the Explorer sidebar maintains a conversation-specific
+  notebook with configurable Trackers, original evidence, manual editing,
+  and extraction coverage.
+
 - Workspace Organizer maintains the standard Feature, Bugfix, CSC, and Research
   labels in blue, red, amber, and violet. It classifies new workspaces and
   rechecks changed workspaces every 12 hours, preserving other labels, with one
@@ -403,6 +409,11 @@ All notable changes to `ltcook` will be documented in this file.
 <br>
 
 ### 🔥 Removed
+
+- **Breaking:** 💥 Continuous Session Memory summaries and redo controls
+  are replaced by Clarify and Tracker. Fresh stores hold deterministic
+  conversation evidence and product state. Native Paseo history and pasted
+  attachments remain available. Delegation uses authorized originals.
 
 <br>
 
