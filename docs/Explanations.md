@@ -497,13 +497,16 @@ Tool outcomes describe historical work. Source references identify the agent,
 conversation epoch, and original sequence. Session Memory search reports
 pending summaries, result truncation, and original-history availability.
 
-The summarizer reads only the current UAMP and writes concise Markdown under
-the applicable headings. It groups shared outcomes and keeps details that
-affect follow-up, including the distinction between proposals, approvals, and
-completed work. The receiving agent gets earlier Discussions and
-Task instructions through the chronological handoff. The handoff can include
-original messages from intervening short Discussions so the receiver can resolve
-an approval by reference and distinguish it from earlier proposal status.
+Each summary records facts from its current source unit. Its prompt can also
+include current Task scope and requirements, plus bounded context from an
+earlier relevant Discussion. That earlier context may resolve references in the
+current messages, but it does not make earlier work part of the new summary.
+UAMP summaries use concise Markdown under the applicable headings and preserve
+the distinction between proposals, approvals, and completed work. A later
+delegation handoff gives the receiving agent earlier Discussions and Task
+instructions in chronological order. It can also include original messages from
+intervening short Discussions so the receiver can resolve an approval by
+reference and distinguish it from an earlier proposal.
 In Hosted mode the current UAMP, including any attachment content in the
 prompt, goes to OpenAI through the Codex subscription with low reasoning.
 Local mode uses Ollama.
