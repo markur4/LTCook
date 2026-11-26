@@ -460,6 +460,7 @@ _ci-check-python version environment:
     #!/usr/bin/env bash
     set -euo pipefail
     export UV_PROJECT_ENVIRONMENT="{{environment}}"
+    export UV_PYTHON={{quote(version)}}
     export UV_LINK_MODE=copy
     unset VIRTUAL_ENV
     echo "Python {{version}}: preparing isolated release environment..."

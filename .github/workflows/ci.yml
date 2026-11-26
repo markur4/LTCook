@@ -34,6 +34,14 @@ jobs:
         if: github.ref_type == 'tag' && github.event_name != 'workflow_dispatch'
         with:
           just-version: "1.56.0"
+      - name: Install Python for stable tag evidence
+        if: >-
+          github.ref_type == 'tag' && github.event_name != 'workflow_dispatch' &&
+          !contains(github.ref_name, 'b') && !contains(github.ref_name, 'rc')
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: false
       - id: profile
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,7 +61,8 @@ jobs:
               fi
             elif [[ "$GITHUB_REF_NAME" =~ ^v${version}rc[1-9][0-9]*$ ]] ||
                  { [[ "$GITHUB_REF_NAME" =~ ^v${version}$ ]] &&
-                   ! PYTHONPATH=src python3 -m ltcook_dev.packaging.release_assets reuse-rc \
+                   ! PYTHONPATH=src uv run --no-project --python 3.13 python \
+                     -m ltcook_dev.packaging.release_assets reuse-rc \
                      --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME"; }; then
               extended=true
             fi
