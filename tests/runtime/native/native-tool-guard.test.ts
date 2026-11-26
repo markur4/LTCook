@@ -171,6 +171,63 @@ test('every native call requires runtime authorization and runtime failures bloc
   }
 });
 
+test.each(['explorer', 'explorer-tmp'])(
+  'managed Pi lets %s use Session Memory when the runtime authorizes it',
+  async (memberKey) => {
+    let allowed = false;
+    const authorizations: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const body = (await request.json()) as { toolName: string };
+        authorizations.push(body.toolName);
+        return Response.json({ allowed, reason: 'Native identity is not bound to this Session' });
+      },
+    });
+    try {
+      Object.assign(process.env, {
+        LTCOOK_NATIVE_AGENT_ID: 'native',
+        LTCOOK_SESSION_ID: 'session',
+        LTCOOK_TEAM_INSTANCE_ID: 'team-instance',
+        LTCOOK_TEAM_ID: '@ltcook/team-default',
+        LTCOOK_MEMBER_KEY: memberKey,
+        LTCOOK_RUNTIME_API_URL: `http://127.0.0.1:${server.port}`,
+        LTCOOK_AGENT_API_TOKEN: 'fixture',
+        LTCOOK_TEAM: 'default',
+        LTCOOK_BROWSER_ENABLED: 'false',
+        LTCOOK_SESSION_MEMORY_THRESHOLD: '3000',
+      });
+      delete process.env.LTCOOK_EVAL_ARM;
+      let guard!: (event: {
+        toolName: string;
+        input: Record<string, unknown>;
+      }) => Promise<{ block: boolean; reason: string } | undefined>;
+      const tools = new Set<string>();
+      await activate({
+        on(name: string, handler: unknown) {
+          if (name === 'tool_call') guard = handler as typeof guard;
+        },
+        registerTool(tool: Parameters<ExtensionAPI['registerTool']>[0]) {
+          tools.add(tool.name);
+        },
+      } as unknown as ExtensionAPI);
+
+      expect(tools.has('session-memory')).toBe(true);
+      const call = { toolName: 'session-memory', input: { query: 'prior decisions' } };
+      expect(await guard(call)).toEqual({
+        block: true,
+        reason: 'Native identity is not bound to this Session',
+      });
+      allowed = true;
+      expect(await guard(call)).toBeUndefined();
+      expect((await guard({ toolName: 'write', input: { path: 'project.ts' } }))?.block).toBe(true);
+      expect(authorizations).toEqual(['session-memory', 'session-memory']);
+    } finally {
+      server.stop(true);
+    }
+  },
+);
+
 test('managed Pi exposes search sources and response IDs in its model-facing tool content', async () => {
   const search = {
     content: 'Search result',

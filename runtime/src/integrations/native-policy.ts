@@ -1,4 +1,7 @@
-import { REPOSITORY_TOOL_NAMES } from '../paseo-plugin/shared/workspace-tools.js';
+import {
+  REPOSITORY_TOOL_NAMES,
+  SESSION_MEMORY_TOOL_NAME,
+} from '../paseo-plugin/shared/workspace-tools.js';
 const READ_ONLY_TOOLS = new Set([
   'read',
   'grep',
@@ -12,6 +15,7 @@ const READ_ONLY_TOOLS = new Set([
   'ltcook_team',
   'ltcook_ried',
   ...REPOSITORY_TOOL_NAMES,
+  SESSION_MEMORY_TOOL_NAME,
   'web_enable',
   'ltcook_web_search',
   'ltcook_web_fetch',
