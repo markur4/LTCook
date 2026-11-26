@@ -1,7 +1,8 @@
 # Workspace organization and naming
 
-Status: Implementation complete; final verification and draft PR preparation on
-`codex/workspace-organizer-renamer`.
+Status: Implementation and local verification complete. Ready for review in
+[draft PR #80](https://github.com/markur4/LTCook/pull/80) on
+`codex/workspace-organizer-renamer`. No installation or deployment performed.
 
 ## Outcome
 
@@ -46,5 +47,33 @@ part of this Pass.
 - [x] Implement Organizer and Renamer with durable local schedules.
 - [x] Connect native labels, names, activity, archive guards, and runtime lifecycle.
 - [x] Expose declared configuration and document native archive recovery.
-- [ ] Run relevant checks and review the combined diff.
-- [ ] Prepare the draft PR with exact verification and remaining limitations.
+- [x] Run relevant checks and review the combined diff.
+- [x] Prepare the draft PR with exact verification and remaining limitations.
+
+## Verification results
+
+- `bun run check`: formatting and runtime, Team, and evaluation TypeScript checks passed.
+- `bun run test`: 505 Traditional Tests passed, 3 existing opt-in skips, 0 failures;
+  3,323 assertions in 22.74 seconds.
+- `bun run build`: runtime and both Team builds passed. Packaged maintenance
+  hooks match their source files.
+- `bun run build:paseo-web`: the complete patched Paseo web build passed on
+  Node 26.13.1 and Bun 1.4.4. Its source revision, builder checksum, and all three
+  patch checksums match the current source. The emitted bundle includes the
+  workspace-activity hook. Earlier attempts exhausted memory; the successful
+  build used a disk-backed temporary directory, a 4 GiB Node heap, and two CPU
+  cores, which limits Metro to one bundling worker.
+- Python launch/configuration tests: 55 passed with six workers. Focused
+  documentation and service-setting tests passed. Ruff and Pyright passed.
+- The pinned upstream activity reporter passed all 5 tests. Native archive
+  tests exercised real Git worktrees, late file writes, and competing prompt,
+  terminal, and setup admission. Client tests rejected stale capabilities and
+  malformed preservation responses without a destructive fallback.
+- Independent review completed with no remaining must-fix findings. GitHub's
+  standard Linux checks passed on implementation commit `b748bab`.
+
+Agent Evals, live model requests, installed-application checks, and native
+Windows/macOS execution were not run. The documented observation limits remain:
+other Paseo clients do not report focus-only activity, and external-only changes
+in ordinary-directory projects or ignored files do not reset inactivity. Pin
+those workspaces when needed. Automatic archival keeps the working directory.
