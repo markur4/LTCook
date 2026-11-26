@@ -51,8 +51,8 @@ export function createPaseoMemorySource(
           event.type === 'replacement' ||
           event.type === 'subscription_restored' ||
           (event.type === 'timeline' &&
-            event.item.type === 'tool_call' &&
-            event.item.status !== 'running')
+            (event.item.type === 'user_message' ||
+              (event.item.type === 'tool_call' && event.item.status !== 'running')))
         )
           notify();
       });
