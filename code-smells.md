@@ -23,7 +23,8 @@ work. The following checklist is an index.
   TypeScript runtime owns coordination and the coordination database. Core owns
   dispatch and consent. Teams declare routing. Pi/Paseo own native history.
   Session Memory owns derived records. Paseo panels project runtime and native
-  state. Ordinary Pi and Codex use MCP. Managed Team execution uses Pi.
+  state. Ordinary Pi and Codex receive workspace tools through MCP. Managed
+  Team execution uses Pi.
 - **Compatibility.** Internal APIs, the public Team API, module boundaries,
   names, wiring and persisted formats may change where that improves ownership.
   Preserve intended user workflows and GUI layout, controls, and navigation.
@@ -31,14 +32,15 @@ work. The following checklist is an index.
   production paths once supported callers use the replacement.
 - **State.** Keep existing formats where they fit. Cross-version Session
   recovery is optional. Follow the prototype's fresh-store policy for
-  incompatible state, with a clear diagnostic and reset instructions. Skip
-  migrations, legacy readers, and compatibility layers for historical prototype
-  state. Verify resets with disposable data. Resetting an actual installation
-  requires separate authorization.
+  incompatible state. Reject that state unchanged and give a clear diagnostic
+  and reset instructions. Skip migrations, legacy readers, and compatibility
+  layers for historical prototype state. Verify resets with disposable data.
+  Resetting an actual installation requires separate authorization.
 - **Public Team packages.** If the Team API changes, version it explicitly,
   update bundled Teams, document adaptation and rebuild for managed local
   packages, and verify a representative local package in a newly created
-  Session. Its previous Sessions may need replacement.
+  Session. Its previous Sessions may need replacement. Remove superseded Team
+  API implementations and adapters after the cutover.
 - **Authorization.** Test successful calls and rejection for all three scopes.
   Managed tools require a current binding to the requested Session and reject
   stale or mismatched bindings. Ordinary MCP requires a valid workspace grant
@@ -64,9 +66,10 @@ work. The following checklist is an index.
 1. **Explorer fix (CSC-01).** Independent change `176b072` is reviewed in
    [draft PR #62](https://github.com/markur4/LTCook/pull/62). The two role
    variants passed the focused native guard regression, and the reviewer
-   approved the three-file patch. At this report's baseline the fix still awaits
-   remote main integration. Confirm the PR's state before repeating or
-   including the fix in another pass.
+   approved the three-file patch. The fix is merged into local `main` as
+   `4698a1`. At this report's baseline, publication to remote `main` still
+   requires separate authorization. Check the target and PR state before
+   repeating or including the fix in another pass.
 2. **Next milestone (CSC-01, CSC-05, CSC-06A).** Establish ownership of tool
    classification and a targeted bound-member lookup. This removes the
    dependency on the full Session projection and gives runtime composition
@@ -74,8 +77,9 @@ work. The following checklist is an index.
    coverage (CSC-03 and CSC-07) may land in parallel when its scope is independent.
 3. **Runtime composition and coordination (CSC-02, CSC-04, CSC-09).** Move
    shared service construction out of HTTP and extract Core responsibilities
-   in focused passes. Preserve startup and native client contracts at each
-   intermediate step. Fix lost error details where callers can use them.
+   in focused passes. Preserve supported startup and native client behavior
+   by updating affected callers whenever their contracts change. Fix lost
+   error details where callers can use them.
 4. **Session Memory (CSC-03, CSC-07).** Once production recovery is covered,
    extract responsibilities incrementally and isolate qualification variants
    while preserving their runnable baselines. Verify packaged plugin loading
@@ -266,7 +270,7 @@ instructions. Change existing documentation in place.
 ### CSC-09 — Adapters discard actionable failure detail
 
 **Observed information loss.** [RuntimeApi](runtime/src/integrations/runtime-api.ts)
-maps uncaught request failures to a generic HTTP status and returns the exception
+maps uncaught request failures to HTTP 400 and returns the exception
 message. The [Pi extension](runtime/src/integrations/pi-extension.ts) drops
 returned details for RIED and Session Memory while preserving them for repository
 search. [SessionMemory](runtime/src/session-memory/service.ts) records a generic
