@@ -385,6 +385,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- ColGREP keeps a complete cached index available when an interrupted refresh
+  leaves a stale build marker and the index is demonstrably unlocked.
+
 - Read-only Explorer agents can use Session Memory when it is enabled and
   authorized by the runtime.
 
