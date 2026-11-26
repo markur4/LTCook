@@ -113,6 +113,11 @@ requirement imposed on users of the application.
 The Python application resolves settings through AppRC. Keep native component
 translation in LTCook-owned paths and avoid a second hidden settings layer. The
 TypeScript runtime owns coordination; team packages use its public Team API v3.
+The Pass scheduler in `runtime/src/core/pass-scheduler.ts` owns each
+Session's scheduling queue and selects scheduled assignments. It delegates
+native delivery to RuntimeController. The Session projection in
+`runtime/src/core/session-snapshot.ts` uses the same dependency and approval
+rules as the scheduler and controller, from `runtime/src/core/task-gates.ts`.
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,
