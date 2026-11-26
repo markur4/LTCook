@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import team from '../../../teams/default/src/index.js';
 import type {
   AgentBackend,
@@ -36,7 +37,8 @@ const runtime = createRuntime({
   team,
   agents: backend,
 });
-const api = new RuntimeApi(runtime, 'offline-system-fixture-token', listen);
+const activation = new SessionActivation();
+const api = new RuntimeApi(runtime, 'offline-system-fixture-token', listen, activation);
 let stopping: Promise<void> | undefined;
 function stop(): Promise<void> {
   stopping ??= (async () => {
@@ -86,5 +88,5 @@ process.on('SIGTERM', () => void stop());
 process.on('disconnect', () => void stop());
 await api.listen();
 await runtime.openSession({ id: sessionId, workspaceRoot: workspace });
-api.setSession(workspace, sessionId);
+activation.register(workspace, sessionId);
 process.send({ kind: 'ready', snapshot: runtime.snapshot(sessionId) });

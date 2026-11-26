@@ -11,6 +11,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import {
   createWorktreeScopeResolver,
   SessionWorktrees,
@@ -93,9 +94,17 @@ const listen = `127.0.0.1:${address.port}`;
 const endpoint = `http://${listen}`;
 const worktrees = new SessionWorktrees(process.env.PATH ?? '');
 const resolveScope = createWorktreeScopeResolver(() => undefined);
-const api = new RuntimeApi(undefined, secret, listen, environment, undefined, {
-  worktrees: { store: worktrees, resolveScope },
-});
+const api = new RuntimeApi(
+  undefined,
+  secret,
+  listen,
+  new SessionActivation(environment),
+  environment,
+  undefined,
+  {
+    worktrees: { store: worktrees, resolveScope },
+  },
+);
 const tools = new ToolCatalog([createSessionWorktreeTool(worktrees, resolveScope)]);
 api.setWorkspaceTools(tools);
 api.setWorkspaceMcp(new WorkspaceMcp(tools, listen));

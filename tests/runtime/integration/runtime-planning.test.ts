@@ -1,5 +1,6 @@
 import { createServer } from 'node:net';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -422,8 +423,9 @@ describe('authoritative planning workflow', () => {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       );
-      const api = new RuntimeApi(f.runtime, 'approval-cli-secret', `127.0.0.1:${port}`);
-      api.setSession(f.directory, f.snapshot.session.id);
+      const activation = new SessionActivation();
+      const api = new RuntimeApi(f.runtime, 'approval-cli-secret', `127.0.0.1:${port}`, activation);
+      activation.register(f.directory, f.snapshot.session.id);
       const endpoint = await api.listen();
       const approve = () =>
         fetch(`${endpoint}/v1/command`, {
@@ -629,7 +631,12 @@ describe('authoritative planning workflow', () => {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );
-    const api = new RuntimeApi(reopened, 'cli-recovery-secret', `127.0.0.1:${port}`);
+    const api = new RuntimeApi(
+      reopened,
+      'cli-recovery-secret',
+      `127.0.0.1:${port}`,
+      new SessionActivation(),
+    );
     const endpoint = await api.listen();
     const post = (command: unknown, token = 'cli-recovery-secret') =>
       fetch(`${endpoint}/v1/command`, {

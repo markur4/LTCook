@@ -11,6 +11,7 @@ import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import {
   createPaseoAgentBackend,
   startPaseoHost,
@@ -182,7 +183,8 @@ const environment = {
   LTCOOK_CODESEARCH_ENABLED: 'false',
   LTCOOK_CONTEXT7_ENABLED: 'false',
 };
-const api = new RuntimeApi(undefined, secret, listen, environment);
+const activation = new SessionActivation(environment);
+const api = new RuntimeApi(undefined, secret, listen, activation, environment);
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 let runtime: ReturnType<typeof createRuntime> | undefined;
@@ -286,7 +288,7 @@ try {
   api.setWorkspaceTools(tools);
   api.setWorkspaceMcp(new WorkspaceMcp(tools, listen));
   api.setPastedDocuments(pastedDocuments);
-  api.setOpenWorkspaceHandler(async (request) =>
+  activation.setWorkspaceActivator(async (request) =>
     runtime!.openSession({
       id: request.sessionId,
       workspaceRoot: request.workspaceRoot,
@@ -305,21 +307,8 @@ try {
     resolve: ({ teamSelection, workspaceRoot, alias, reasoning }) =>
       backend.resolveSelection(workspaceRoot, leaderFor(teamSelection), alias, reasoning),
   });
-  api.setPrepareSessionHandler(async (request) => {
-    const snapshot = runtime!.snapshot(request.sessionId);
-    const member = snapshot.definition.members.find((member) => member.key === 'leader');
-    assert(member);
-    const prepared = await backend.prepare(
-      {
-        member,
-        sessionId: request.sessionId,
-        teamInstanceId: snapshot.session.teamInstanceId,
-        teamId: snapshot.session.teamId,
-        workspaceRoot: request.workspaceRoot,
-      },
-      request.leaderAgentId,
-      request.savedModel,
-    );
+  api.setPrepareSessionHandler(async (options, leaderAgentId, savedModel) => {
+    const prepared = await backend.prepare(options, leaderAgentId, savedModel);
     return {
       env: prepared.env,
       ...(prepared.mcpServers ? { mcpServers: prepared.mcpServers } : {}),

@@ -10,6 +10,7 @@ import {
 import { EVAL_CONTEXT_WINDOW, EVAL_MODEL_COMPAT } from '../../../runtime/src/evals/setup.js';
 import { startPaseoHost } from '../../../runtime/src/integrations/paseo.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { ollamaEndpoint } from '../../../runtime/src/integrations/ollama.js';
 import { createTools, ToolCatalog } from '../../../runtime/src/tools/catalog.js';
@@ -371,7 +372,7 @@ type LiveCall = { tool: string; searches: LiveSearch[] };
 const liveCalls = new Map<string, LiveCall[]>();
 const absentSymbol = 'releaseBackoffWindow';
 async function start() {
-  api = new RuntimeApi(undefined, secret, authority);
+  api = new RuntimeApi(undefined, secret, authority, new SessionActivation());
   let tools = createTools(
     new RiedService(path.join(fixture, 'cache'), undefined, () => ({ PATH: '' })),
     {

@@ -1,12 +1,14 @@
 import { TeamRegistry } from '../../../runtime/src/integrations/team-loader.js';
 import { createServer } from 'node:net';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import defaultTeam from '@ltcook/team-default';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
+import type { CreateAgentOptions } from '../../../runtime/src/workflow-api/index.js';
 import team from '@ltcook/team-default-minimal';
 import {
   Gate,
@@ -823,8 +825,9 @@ test('catalog, list, adoption and preparation APIs enforce explicit authenticate
   await new Promise<void>((resolve, reject) =>
     socket.close((error) => (error ? reject(error) : resolve())),
   );
-  let api = new RuntimeApi(runtime, 'local-user-secret', `127.0.0.1:${address.port}`);
-  api.setOpenWorkspaceHandler((request) =>
+  let activation = new SessionActivation();
+  let api = new RuntimeApi(runtime, 'local-user-secret', `127.0.0.1:${address.port}`, activation);
+  activation.setWorkspaceActivator((request) =>
     runtime.openSession({
       id: request.sessionId,
       workspaceRoot: request.workspaceRoot,
@@ -832,9 +835,9 @@ test('catalog, list, adoption and preparation APIs enforce explicit authenticate
       leaderAgentId: request.leaderAgentId,
     }),
   );
-  let preparations = 0;
-  api.setPrepareSessionHandler(async () => {
-    preparations++;
+  const preparations: Array<{ options: CreateAgentOptions; leaderAgentId: string }> = [];
+  api.setPrepareSessionHandler(async (options, leaderAgentId) => {
+    preparations.push({ options, leaderAgentId });
     return { env: { LTCOOK_AGENT_API_TOKEN: 'scoped-agent-secret' } };
   });
   const endpoint = await api.listen();
@@ -867,9 +870,22 @@ test('catalog, list, adoption and preparation APIs enforce explicit authenticate
     expect((await post('session/prepare', { ...identity, workspaceRoot: '/other' })).status).toBe(
       400,
     );
-    expect(preparations).toBe(0);
+    expect(preparations).toHaveLength(0);
     expect((await post('session/prepare', identity)).status).toBe(200);
-    expect(preparations).toBe(1);
+    expect(preparations).toEqual([
+      {
+        leaderAgentId: identity.leaderAgentId,
+        options: {
+          member: team.definition.members.find(
+            (member) => member.key === team.definition.leaderKey,
+          ),
+          sessionId: identity.sessionId,
+          teamId: identity.teamSelection,
+          teamInstanceId: JSON.parse(safe).teamInstanceId,
+          workspaceRoot: identity.workspaceRoot,
+        },
+      },
+    ]);
     expect(
       (
         (await (await post('session/list', { workspaceRoot: '/workspace' })).json()) as {
@@ -917,7 +933,8 @@ test('catalog, list, adoption and preparation APIs enforce explicit authenticate
     const saved = runtime.snapshot(identity.sessionId);
     await runtime.close();
     runtime = createRuntime({ ...options, teams: new TeamRegistry([team]) });
-    api = new RuntimeApi(runtime, 'local-user-secret', `127.0.0.1:${address.port}`);
+    activation = new SessionActivation();
+    api = new RuntimeApi(runtime, 'local-user-secret', `127.0.0.1:${address.port}`, activation);
     await api.listen();
     expect((await post('snapshot', { sessionId: identity.sessionId })).status).toBe(400);
     expect((await post('snapshot', identity, 'wrong-token')).status).toBe(401);
@@ -991,7 +1008,7 @@ test('catalog, list, adoption and preparation APIs enforce explicit authenticate
       ).status,
     ).toBe(403);
     expect(runtime.snapshot(identity.sessionId).passes).toHaveLength(0);
-    api.setSession(identity.workspaceRoot, identity.sessionId);
+    activation.register(identity.workspaceRoot, identity.sessionId);
     expect((await post('snapshot', { sessionId: identity.sessionId })).status).toBe(200);
     expect(
       (await post('snapshot', { sessionId: identity.sessionId, workspaceRoot: '/other' })).status,
