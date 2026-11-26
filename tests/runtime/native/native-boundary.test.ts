@@ -1277,6 +1277,54 @@ describe('native runtime boundary', () => {
       await api.close();
     }
   });
+  test('coalesces pending Session opens and rejects a conflicting workspace', async () => {
+    const activation = new SessionActivation({});
+    const nativeOpen = Promise.withResolvers<SessionSnapshot>();
+    const request = {
+      workspaceRoot: '/workspace',
+      sessionId: 'opening-session',
+      teamSelection: 'default-minimal',
+    };
+    const snapshot = snapshotFor('native-agent', true, request.sessionId, request.workspaceRoot);
+    const runtime: Pick<RuntimeController, 'snapshot' | 'teamCatalog'> = {
+      snapshot: () => snapshot,
+      teamCatalog: () => [
+        {
+          origin: 'bundled',
+          selection: request.teamSelection,
+          teamId: snapshot.session.teamId,
+          name: snapshot.definition.name,
+          description: '',
+          status: 'installed',
+          leader: { key: 'worker', name: 'Worker' },
+          persistentMembers: 1,
+          temporaryMembers: 0,
+        },
+      ],
+    };
+    let nativeOpens = 0;
+    activation.setWorkspaceActivator(() => {
+      nativeOpens++;
+      return nativeOpen.promise;
+    });
+
+    const results = Promise.all([
+      activation.open(runtime, request),
+      activation.open(runtime, request),
+      activation.open(runtime, { ...request, workspaceRoot: '/other-workspace' }),
+    ]);
+    const workspaceBeforeOpen = activation.registeredWorkspace(request.sessionId);
+    nativeOpen.resolve(snapshot);
+
+    expect(await results).toEqual([
+      { snapshot },
+      { snapshot },
+      { conflict: 'Session initialization is already requested for a different workspace' },
+    ]);
+    expect(nativeOpens).toBe(1);
+    expect(workspaceBeforeOpen).toBeUndefined();
+    expect(activation.registeredWorkspace(request.sessionId)).toBe(request.workspaceRoot);
+  });
   test('opens same-team Sessions across projects with single-flight and authority boundaries', async () => {
     const master = 'test-master-secret';
     const shellEnvironment = {
