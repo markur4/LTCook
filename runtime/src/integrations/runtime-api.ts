@@ -17,14 +17,7 @@ import type { SessionMemory } from '../session-memory/service.js';
 import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import type { WorkspaceMcp } from './mcp.js';
-import type { ActivityPreferences } from './activity-preferences.js';
-import {
-  activityToggleRpc,
-  memoryDeviceRpc,
-  memoryInferenceRpc,
-  memoryEvidenceRpc,
-  storedSummariesRpc,
-} from '../paseo-plugin/shared/activity.js';
+import { handleActivityRoute, isActivityRoute, type ActivityServices } from './runtime-activity.js';
 import {
   isRepositoryTool,
   SESSION_MEMORY_TOOL_NAME,
@@ -32,8 +25,6 @@ import {
 } from '../tools/workspace-tools.js';
 import { isManagedWorkspaceTool } from '../tools/capabilities.js';
 import type { SessionWorktrees, WorktreeScopeResolver } from './session-worktrees.js';
-import { openRepositoryWorkspace } from '../repository/workspace.js';
-import type { createColgrepProvider } from '../repository/providers/colgrep.js';
 import { validateRiedRequest } from '../repository/requests.js';
 import { z } from 'zod';
 import { ResolvedModelSchema, type ResolvedModel } from '../models/aliases.js';
@@ -94,10 +85,7 @@ export function agentBearer(secret: string, nativeAgentId: string): string {
 }
 
 interface RuntimeApiServices {
-  activity?: {
-    preferences: ActivityPreferences;
-    colgrep: ReturnType<typeof createColgrepProvider>;
-  };
+  activity?: ActivityServices;
   worktrees?: {
     store: SessionWorktrees;
     resolveScope: WorktreeScopeResolver;
@@ -326,42 +314,39 @@ export class RuntimeApi {
       response.once('close', finish);
     }
     response.setHeader('content-type', 'application/json');
-    if (!(
-      (request.method === 'POST' &&
-        [
-          '/v1/command',
-          '/v1/snapshot',
-          '/v1/session/open',
-          '/v1/team/catalog',
-          '/v1/model/catalog',
-          '/v1/model/resolve',
-          '/v1/session/list',
-          '/v1/session/worktrees',
-          '/v1/session/prepare',
-          '/v1/runtime/stop',
-          '/v1/tool/authorize',
-          '/v1/ried',
-          '/v1/workspace-tool',
-          '/v1/session-memory/observe',
-          '/v1/session-memory/paste',
-          '/v1/activity/services',
-          '/v1/activity/toggle',
-          '/v1/activity/memory-evidence',
-          '/v1/activity/memory-device',
-          '/v1/activity/memory-inference',
-          '/v1/activity/stored-summaries',
-          '/v1/mcp/grant',
-          '/v1/mcp/revoke',
-          '/v1/evaluation/observe',
-          '/v1/evals/start',
-          '/v1/evals/status',
-          '/v1/evals/list',
-          '/v1/evals/report',
-          '/v1/evals/cancel',
-          '/v1/evals/delete',
-        ].includes(request.url ?? '')) ||
-      (request.method === 'GET' && request.url === '/v1/status')
-    )) {
+    const activityRoute = isActivityRoute(request.url) ? request.url : undefined;
+    const isPostRoute =
+      activityRoute !== undefined ||
+      [
+        '/v1/command',
+        '/v1/snapshot',
+        '/v1/session/open',
+        '/v1/team/catalog',
+        '/v1/model/catalog',
+        '/v1/model/resolve',
+        '/v1/session/list',
+        '/v1/session/worktrees',
+        '/v1/session/prepare',
+        '/v1/runtime/stop',
+        '/v1/tool/authorize',
+        '/v1/ried',
+        '/v1/workspace-tool',
+        '/v1/session-memory/observe',
+        '/v1/session-memory/paste',
+        '/v1/mcp/grant',
+        '/v1/mcp/revoke',
+        '/v1/evaluation/observe',
+        '/v1/evals/start',
+        '/v1/evals/status',
+        '/v1/evals/list',
+        '/v1/evals/report',
+        '/v1/evals/cancel',
+        '/v1/evals/delete',
+      ].includes(request.url ?? '');
+    if (
+      !(request.method === 'POST' && isPostRoute) &&
+      !(request.method === 'GET' && request.url === '/v1/status')
+    ) {
       response.writeHead(404).end('{}');
       return;
     }
@@ -506,88 +491,20 @@ export class RuntimeApi {
         );
         return;
       }
-      if (request.url === '/v1/activity/toggle') {
+      if (activityRoute) {
         if (!isUser) {
           response.writeHead(403).end('{}');
           return;
         }
-        const { feature, enabled } = activityToggleRpc.input.parse(parsed);
-        const activity = this.services.activity;
-        if (!activity || (feature === 'summarizer' && !this.memory)) {
-          response.writeHead(503).end('{"error":"This Activity control is unavailable."}');
-          return;
-        }
-        activity.preferences.set(feature, enabled);
-        if (feature === 'summarizer') this.memory?.setSummarizationEnabled(enabled);
-        else activity.colgrep.setIndexingEnabled(enabled);
-        response.writeHead(200).end(JSON.stringify({ enabled }));
-        return;
-      }
-      if (request.url === '/v1/activity/memory-inference') {
-        if (!isUser) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const { mode } = memoryInferenceRpc.input.parse(parsed);
-        const memory = this.memory;
-        const preferences = this.services.activity?.preferences;
-        if (!preferences || !memory?.inferenceSelection()) {
-          response.writeHead(503).end('{"error":"Session Memory inference is unavailable."}');
-          return;
-        }
-        preferences.setMemoryInferenceMode(mode);
-        response.writeHead(200).end(JSON.stringify(memory.setInferenceMode(mode)));
-        return;
-      }
-      if (request.url === '/v1/activity/memory-device') {
-        if (!isUser) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const { deviceId } = memoryDeviceRpc.input.parse(parsed);
-        if (!this.memory) {
-          response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
-          return;
-        }
-        if (this.memory.inferenceSelection()?.mode === 'hosted') {
-          response
-            .writeHead(409)
-            .end('{"error":"Device selection is available for Local Session Memory."}');
-          return;
-        }
-        const device = await this.memory.device(deviceId);
-        response.writeHead(200).end(JSON.stringify(device));
-        return;
-      }
-      if (request.url === '/v1/activity/memory-evidence') {
-        if (!isUser) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        if (!this.memory) {
-          response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
-          return;
-        }
-        const { agentId, after, ...record } = memoryEvidenceRpc.input.parse(parsed);
-        const references = await this.memory.readEvidenceReferences(agentId, record, after);
-        response.writeHead(200).end(JSON.stringify(references));
-        return;
-      }
-      if (request.url === '/v1/activity/stored-summaries') {
-        if (!isUser) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const { agentId, before, includeContent, passage } = storedSummariesRpc.input.parse(parsed);
-        if (!this.memory) {
-          response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
-          return;
-        }
-        const page = await this.memory.readStoredSummaries(agentId, before, {
-          includeContent,
-          passage,
+        await handleActivityRoute(activityRoute, parsed, response, {
+          activity: this.services.activity,
+          memoryDisabled: this.memoryDisabled,
+          readMemory: () => this.memory,
+          readSession: (id) => this.runtime?.snapshot(id),
+          registeredWorkspace: (id) => this.sessions.get(id),
+          readGrantedWorkspace: (id) => this.workspaceMcp?.repositorySearchWorkspace(id),
+          listProviderSubagents: (id) => this.providerSubagents?.(id),
         });
-        response.writeHead(200).end(JSON.stringify(page));
         return;
       }
       if (request.url === '/v1/session-memory/paste') {
@@ -611,71 +528,6 @@ export class RuntimeApi {
         } else {
           response.writeHead(200).end(JSON.stringify(await this.pastedDocuments.draft(input.text)));
         }
-        return;
-      }
-      if (request.url === '/v1/activity/services') {
-        if (actor.kind !== 'user') {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const agentId = input.nativeAgentId;
-        if (typeof agentId !== 'string' || !agentId) {
-          response.writeHead(400).end('{}');
-          return;
-        }
-        const timelineEpoch =
-          'timelineEpoch' in parsed && typeof parsed.timelineEpoch === 'string'
-            ? parsed.timelineEpoch
-            : undefined;
-        const session = input.sessionId ? this.runtime?.snapshot(input.sessionId) : undefined;
-        if (
-          session &&
-          !session.members.some(
-            ({ binding }) => binding?.state === 'bound' && binding.nativeAgentId === agentId,
-          )
-        ) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const registeredWorkspace = session && this.sessions.get(session.session.id);
-        const workspace = session
-          ? registeredWorkspace === session.session.workspaceRoot
-            ? await openRepositoryWorkspace(registeredWorkspace)
-                .then((opened) => (opened.root === registeredWorkspace ? opened : undefined))
-                .catch(() => undefined)
-            : undefined
-          : await this.workspaceMcp?.repositorySearchWorkspace(agentId);
-        const colgrep = this.services.activity?.colgrep;
-        const [rag, subagents] = await Promise.all([
-          workspace && colgrep
-            ? colgrep.readStatus(workspace)
-            : {
-                availability: 'unavailable',
-                activity: 'unknown',
-                diagnostic: 'Repository search scope is unavailable.',
-              },
-          this.providerSubagents?.(agentId).catch(() => undefined),
-        ]);
-        const memory = this.memory?.status(session?.session.id, agentId, timelineEpoch);
-        const assignment = session?.assignments.find(
-          (value) =>
-            value.nativeAgentId === agentId &&
-            (value.status === 'sending' || value.status === 'sent'),
-        );
-        const task = session?.tasks.find((value) => value.id === assignment?.taskId);
-        response.writeHead(200).end(
-          JSON.stringify({
-            rag: {
-              ...rag,
-              indexingEnabled: this.services.activity?.preferences.enabled('rag-index') ?? null,
-            },
-            task: task?.title,
-            subagents,
-            workspace: workspace && { root: workspace.root, identity: workspace.identity },
-            memory,
-            memoryDisabled: this.memoryDisabled,
-          }),
-        );
         return;
       }
       if (request.url === '/v1/session-memory/observe') {
