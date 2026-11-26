@@ -1,12 +1,13 @@
 import path from 'node:path';
 import { TeamRegistry } from '../integrations/team-loader.js';
 import { PlanningWorkflow } from './planning.js';
+import { PassScheduler } from './pass-scheduler.js';
+import { projectSessionSnapshot } from './session-snapshot.js';
+import { taskGateBlockers } from './task-gates.js';
 import type { WorkType } from '../team-api/index.js';
 import type {
   AgentBackend,
   Assignment,
-  Approval,
-  MemberSnapshot,
   NativeAgent,
   NativeBinding,
   RuntimeActor,
@@ -17,9 +18,7 @@ import type {
   SessionSnapshot,
   TeamPackage,
   PlanningRecord,
-  Report,
   DecisionPresentation,
-  Task,
   ToolAuthorization,
   WorkspaceToolAuthorization,
 } from '../workflow-api/index.js';
@@ -72,7 +71,7 @@ export class RuntimeController implements RuntimeControllerContract {
   private readonly riedService: RiedService | undefined;
   private readonly initializedSessions = new Set<string>();
   private readonly initializingSessions = new Map<string, Promise<void>>();
-  private readonly scheduling = new Map<string, Promise<void>>();
+  private readonly scheduler: PassScheduler;
   constructor(private readonly options: RuntimeOptions) {
     this.defaultTeam = options.team;
     this.teams = options.teams ?? new TeamRegistry(options.team ? [options.team] : []);
@@ -90,6 +89,13 @@ export class RuntimeController implements RuntimeControllerContract {
       executionAllowed: (sessionId, passId) => this.executionAllowed(sessionId, passId),
       dispatch: (session, record, stage) => this.dispatchPlanning(session, record, stage),
       scheduleExecution: (session, record) => this.scheduleExecution(session, record),
+    });
+    this.scheduler = new PassScheduler(this.store, {
+      isClosed: () => this.closed,
+      executionAllowed: (sessionId, passId) => this.executionAllowed(sessionId, passId),
+      teamFor: (session) => this.teamFor(session),
+      deliverAssignment: (assignment) => this.deliverAssignment(assignment),
+      emit: (event) => this.emit(event),
     });
   }
 
@@ -153,7 +159,7 @@ The production scheduler dispatches the registered Task and manages Pass status.
 Task to register: ${input.description}`,
     });
     await this.deliverAssignment(assignment);
-    await this.schedule(this.session(input.sessionId));
+    await this.scheduler.schedule(this.session(input.sessionId));
     return this.snapshot(input.sessionId);
   }
 
@@ -161,14 +167,6 @@ Task to register: ${input.description}`,
     return (
       (this.evaluationPass?.sessionId === sessionId && this.evaluationPass.passId === passId) ||
       this.planning.approvedPass(sessionId, passId)
-    );
-  }
-
-  private activeExecutionPass(sessionId: string, passId: string | undefined): boolean {
-    return (
-      passId !== undefined &&
-      this.store.getPass(sessionId, passId).status === 'running' &&
-      this.executionAllowed(sessionId, passId)
     );
   }
 
@@ -243,7 +241,7 @@ Task to register: ${input.description}`,
       await this.reconcile(session);
       await this.planning.recover(session);
       this.initializedSessions.add(session.id);
-      await this.schedule(session);
+      await this.scheduler.schedule(session);
     })();
     this.initializingSessions.set(session.id, initialization);
     try {
@@ -261,90 +259,13 @@ Task to register: ${input.description}`,
   snapshot(sessionId: string): SessionSnapshot {
     this.assertOpen();
     const session = this.session(sessionId);
-    const bindings = this.store.listBindings(sessionId);
-    const bindingsByMember = new Map(bindings.map((binding) => [binding.memberKey, binding]));
-    const members: MemberSnapshot[] = this.teamFor(sessionId).definition.members.map((member) => {
-      const binding = bindingsByMember.get(member.key) ?? null;
-      return {
-        member,
-        binding,
-        nativeStatus:
-          binding?.state === 'bound' && binding.nativeAgentId
-            ? (this.nativeById.get(binding.nativeAgentId)?.status ?? null)
-            : null,
-      };
-    });
-    const assignments = this.store.listAssignments(sessionId);
-    const tasks = this.store.listTasks(sessionId);
-    const approvals = this.store.listApprovals(sessionId);
-    const tasksById = new Map(tasks.map((task) => [task.id, task]));
-    const handoffsByPass = new Map<string | undefined, Task>();
-    for (const task of tasks) {
-      if (task.requestId?.endsWith(':execution-handoff') && !handoffsByPass.has(task.passId))
-        handoffsByPass.set(task.passId, task);
-    }
-    const blockers = bindings
-      .filter(
-        (binding) =>
-          binding.state === 'missing' ||
-          binding.state === 'uncertain' ||
-          binding.state === 'creating',
-      )
-      .map((binding) => `${binding.memberKey}: ${binding.blocker ?? binding.state}`);
-    for (const task of tasks) {
-      if (task.scheduled && !['completed', 'failed', 'cancelled'].includes(task.status)) {
-        const barrier = handoffsByPass.get(task.passId);
-        if (barrier?.status !== 'completed')
-          blockers.push(
-            `Task ${task.id}: Waiting for Leader to complete initial Task registration`,
-          );
-        if (task.phase === 'review' && task.assigneeKey === undefined)
-          blockers.push(`Task ${task.id}: Waiting for an available declared Pass reviewer`);
-        blockers.push(
-          ...this.taskGates(sessionId, task, { tasks: tasksById, approvals }).map(
-            (reason) => `Task ${task.id}: ${reason}`,
-          ),
-        );
-        if (task.assigneeKey) {
-          const binding = bindingsByMember.get(task.assigneeKey);
-          if (binding?.state !== 'bound')
-            blockers.push(
-              `Task ${task.id}: Member ${task.assigneeKey} is unavailable (${binding?.state ?? 'not spawned'})`,
-            );
-          else if (
-            assignments.some(
-              (item) =>
-                item.memberKey === task.assigneeKey &&
-                item.taskId !== task.id &&
-                item.status !== 'reported',
-            )
-          )
-            blockers.push(`Task ${task.id}: Member ${task.assigneeKey} has an active assignment`);
-        }
-      }
-      if (task.requestId?.endsWith(':execution-handoff') && task.status === 'blocked')
-        blockers.push(`Scheduling Task ${task.id}: ${task.blocker ?? 'blocked'}`);
-    }
-    for (const assignment of assignments) {
-      if (assignment.status === 'uncertain')
-        blockers.push(`Assignment ${assignment.id} may have been delivered; it was not resent`);
-    }
-    return {
+    return projectSessionSnapshot({
       session,
-      definition: this.teamFor(sessionId).definition,
-      members,
-      passes: this.store.listPasses(sessionId),
-      tasks,
-      steps: this.store.listSteps(sessionId),
-      assignments,
-      reports: this.store.listReports(sessionId),
-      reviews: this.store.listReviews(sessionId),
-      approvals,
-      documentsDirectory: this.planning.documentsDirectory,
-      blockers,
-      planning: this.planning.list(sessionId),
-      decisions: this.planning.decisions(sessionId),
-    };
+      teamDefinition: () => this.teamFor(session).definition,
+      store: this.store,
+      planning: this.planning,
+      nativeStatus: (id) => this.nativeById.get(id)?.status,
+    });
   }
 
   async execute(sessionId: string, actor: RuntimeActor, command: RuntimeCommand): Promise<unknown> {
@@ -356,7 +277,7 @@ Task to register: ${input.description}`,
       command.type !== 'guidance.inspect' &&
       this.initializedSessions.has(sessionId)
     )
-      await this.schedule(this.session(sessionId));
+      await this.scheduler.schedule(this.session(sessionId));
     return result;
   }
 
@@ -441,7 +362,7 @@ Task to register: ${input.description}`,
       return this.planning.execute(session, actor, command);
 
     const executionPass = (passId: string | undefined) => {
-      if (!this.activeExecutionPass(sessionId, passId))
+      if (!this.scheduler.isActiveExecutionPass(sessionId, passId))
         throw new Error('Execution work requires an active approved Pass');
     };
     if (command.type === 'assignment.create') {
@@ -789,7 +710,7 @@ Task to register: ${input.description}`,
       const assignment = this.store.getAssignment(sessionId, command.assignmentId);
       if (assignment.taskId !== gate.id || assignment.nativeAgentId !== actor.nativeAgentId)
         throw new Error('Only the assigned Pass reviewer may submit this review');
-      if (command.outcome === 'accepted' && this.taskGates(sessionId, gate).length)
+      if (command.outcome === 'accepted' && taskGateBlockers(this.store, sessionId, gate).length)
         throw new Error('Pass review has unmet dependencies or approval gates');
       if (
         this.store
@@ -825,228 +746,6 @@ Task to register: ${input.description}`,
       nativeAgentId: actor.nativeAgentId,
       kind: selfReview ? 'self' : 'independent',
     });
-  }
-
-  /** Serializes dispatch decisions while native members perform their work concurrently. */
-  private schedule(session: Session): Promise<void> {
-    const previous = this.scheduling.get(session.id) ?? Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(async () => {
-        this.emit({ type: 'scheduler.start', sessionId: session.id });
-        try {
-          await this.advanceSession(session);
-        } finally {
-          this.emit({ type: 'scheduler.end', sessionId: session.id });
-        }
-      });
-    this.scheduling.set(session.id, next);
-    return next.finally(() => {
-      if (this.scheduling.get(session.id) === next) this.scheduling.delete(session.id);
-    });
-  }
-
-  private taskGates(
-    sessionId: string,
-    task: Task,
-    snapshot?: { tasks: Map<string, Task>; approvals: Approval[] },
-  ): string[] {
-    const reasons: string[] = [];
-    for (const dependencyId of task.dependencyIds ?? []) {
-      const dependency =
-        snapshot?.tasks.get(dependencyId) ?? this.store.getTask(sessionId, dependencyId);
-      if (dependency.status !== 'completed')
-        reasons.push(`Dependency ${dependency.id} is ${dependency.status}`);
-    }
-    for (const scope of task.approvalScopes ?? []) {
-      const approval = (snapshot?.approvals ?? this.store.listApprovals(sessionId))
-        .filter(
-          (item) =>
-            item.scope.action === scope.action &&
-            item.scope.resourceId === scope.resourceId &&
-            item.scope.revision === scope.revision,
-        )
-        .at(-1);
-      if (approval?.decision !== 'approved')
-        reasons.push(`Approval required: ${scope.action} ${scope.resourceId} ${scope.revision}`);
-    }
-    return reasons;
-  }
-
-  private async advanceSession(session: Session): Promise<void> {
-    if (this.closed) return;
-    for (const pass of this.store.listPasses(session.id)) {
-      if (pass.status !== 'running' || !this.executionAllowed(session.id, pass.id)) continue;
-      const tasks = this.store.listTasks(session.id).filter((task) => task.passId === pass.id);
-      const barrier = tasks.find((task) => task.requestId?.endsWith(':execution-handoff'));
-      if (!barrier || barrier.status !== 'completed') continue;
-      const readDispatchState = () => {
-        const assignments = new Map<string, Assignment[]>();
-        for (const assignment of this.store.listAssignments(session.id)) {
-          const items = assignments.get(assignment.taskId) ?? [];
-          items.push(assignment);
-          assignments.set(assignment.taskId, items);
-        }
-        const reports = new Map<string, Report>();
-        for (const report of this.store.listReports(session.id))
-          if (!reports.has(report.assignmentId)) reports.set(report.assignmentId, report);
-        return { assignments, reports };
-      };
-      let dispatchState = readDispatchState();
-      for (const task of tasks.filter((item) => item.scheduled && item.phase !== 'review')) {
-        if (['completed', 'failed', 'cancelled'].includes(task.status)) continue;
-        const gates = this.taskGates(session.id, task);
-        const assignment = (dispatchState.assignments.get(task.id) ?? [])
-          .filter((item) => (item.attempt ?? 1) === (task.attempt ?? 1))
-          .at(-1);
-        const report = assignment && dispatchState.reports.get(assignment.id);
-        if (report?.outcome === 'success' && gates.length === 0) {
-          this.store.updateTask(session.id, { taskId: task.id, status: 'completed' });
-          continue;
-        }
-        const failedDependency = (task.dependencyIds ?? []).some((id) =>
-          ['failed', 'cancelled'].includes(this.store.getTask(session.id, id).status),
-        );
-        if (!assignment && failedDependency) {
-          if (task.status !== 'blocked')
-            this.store.updateTask(session.id, {
-              taskId: task.id,
-              status: 'blocked',
-              blocker: gates.join('; '),
-            });
-          continue;
-        }
-        if (!assignment && task.status === 'blocked' && gates.length === 0)
-          this.store.updateTask(session.id, { taskId: task.id, status: 'pending' });
-        if (gates.length === 0 && !report) {
-          await this.dispatchScheduled(session, this.store.getTask(session.id, task.id));
-          // > Other commands may commit assignments or reports during the awaited send.
-          dispatchState = readDispatchState();
-        }
-      }
-      if (!this.activeExecutionPass(session.id, pass.id)) continue;
-      const current = this.store.listTasks(session.id).filter((task) => task.passId === pass.id);
-      const work = current.filter((task) => task.phase !== 'review');
-      if (
-        !current.some((task) => task.scheduled) ||
-        !work.every(
-          (task) => task.status === 'completed' && this.taskGates(session.id, task).length === 0,
-        )
-      )
-        continue;
-      let gate = current.find((task) => task.scheduled && task.phase === 'review');
-      const policy = this.teamFor(session).definition.reviewPolicy;
-      if (!gate && policy.required) {
-        gate = this.store.createTask(session.id, {
-          passId: pass.id,
-          workType: 'task.execute',
-          phase: 'review',
-          requestId: `${pass.id}:review`,
-          title: `Review Pass: ${pass.title}`,
-          description:
-            'Review the complete Pass. Fix in-scope findings before acceptance, or request changes. Record review.create with this assignmentId and the current Pass revision.',
-          acceptance: 'Current-revision Pass-wide acceptance by the declared reviewer',
-        });
-      }
-      if (gate) {
-        if (this.taskGates(session.id, gate).length) continue;
-        if (gate.status !== 'completed') {
-          if (gate.status !== 'failed') await this.dispatchScheduled(session, gate);
-          continue;
-        }
-        const latest = this.store
-          .listReviews(session.id)
-          .filter((review) => review.passId === pass.id)
-          .at(-1);
-        if (
-          latest?.outcome !== 'accepted' ||
-          latest.revision !== this.store.getPass(session.id, pass.id).revision
-        )
-          continue;
-      }
-      this.store.updatePass(session.id, { passId: pass.id, status: 'completed' });
-    }
-  }
-
-  private async dispatchScheduled(session: Session, task: Task): Promise<void> {
-    if (
-      !task.passId ||
-      !this.activeExecutionPass(session.id, task.passId) ||
-      this.taskGates(session.id, task).length
-    )
-      return;
-    const assignments = this.store.listAssignments(session.id);
-    const previous = assignments
-      .filter((item) => item.taskId === task.id && (item.attempt ?? 1) === (task.attempt ?? 1))
-      .at(-1);
-    if (previous && previous.status !== 'pending') return;
-    const policy = this.teamFor(session).definition.reviewPolicy;
-    const review = task.phase === 'review';
-    const eligible = this.teamFor(session).definition.members.filter((member) => {
-      if (!member.workTypes.includes('task.execute')) return false;
-      if (!review) return true;
-      if (policy.mode === 'self') return member.key === this.teamFor(session).definition.leaderKey;
-      return (
-        policy.reviewerKeys.includes(member.key) &&
-        member.key !== this.teamFor(session).definition.leaderKey &&
-        !assignments.some(
-          (assignment) =>
-            assignment.memberKey === member.key &&
-            this.store.getTask(session.id, assignment.taskId).passId === task.passId &&
-            this.store.getTask(session.id, assignment.taskId).phase !== 'review' &&
-            this.store.getTask(session.id, assignment.taskId).correctionOfTaskId !== task.id,
-        )
-      );
-    });
-    let selected = task.assigneeKey;
-    if (!selected) {
-      selected = review
-        ? (eligible.find((member) => member.lifetime === 'persistent')?.key ?? eligible[0]?.key)
-        : ((await this.teamFor(session).selectAssignee?.(
-            Object.freeze({
-              workType: 'task.execute',
-              sessionId: session.id,
-              workspaceRoot: session.workspaceRoot,
-            }),
-            Object.freeze(eligible.map((member) => Object.freeze({ ...member }))),
-          )) ?? this.teamFor(session).definition.routing['task.execute']);
-      if (!selected) return;
-      if (!eligible.some((member) => member.key === selected))
-        throw new Error(
-          `Selected member is not eligible for ${review ? 'Pass review' : 'task.execute'}`,
-        );
-      this.store.setTaskAssignee(session.id, task.id, selected);
-    }
-    // > A routing hook may yield while a new blocking decision is recorded.
-    if (
-      !this.activeExecutionPass(session.id, task.passId) ||
-      this.taskGates(session.id, this.store.getTask(session.id, task.id)).length
-    )
-      return;
-    if (!eligible.some((member) => member.key === selected))
-      throw new Error(
-        `Selected member is not eligible for ${review ? 'Pass review' : 'task.execute'}`,
-      );
-    if (
-      assignments.some(
-        (item) =>
-          item.memberKey === selected && item.id !== previous?.id && item.status !== 'reported',
-      )
-    )
-      return;
-    const binding = this.store.listBindings(session.id).find((item) => item.memberKey === selected);
-    if (binding?.state !== 'bound' || !binding.nativeAgentId) return;
-    const assignment =
-      previous ??
-      this.store.createAssignment(session.id, {
-        taskId: task.id,
-        memberKey: selected,
-        nativeAgentId: binding.nativeAgentId,
-        message: `${review ? 'Pass-wide review' : 'Scheduled Task'} ${task.id} in Pass ${task.passId}. ${task.description} Acceptance: ${task.acceptance}. Verification requirements: ${JSON.stringify(task.verificationRequirements)}. ${review ? 'Submit review.create with assignmentId and the current Pass revision.' : 'Submit report.create with outcome success or failure and named verification entries with evidence.'}`,
-      });
-    if (task.status !== 'running')
-      this.store.updateTask(session.id, { taskId: task.id, status: 'running' });
-    await this.deliverAssignment(assignment);
   }
 
   private requireLeader(actor: RuntimeActor, leader: boolean): void {
@@ -1328,10 +1027,10 @@ Task to register: ${input.description}`,
         recipient.nativeAgentId !== assignment.nativeAgentId ||
         ['cancelled', 'completed', 'failed'].includes(current.status) ||
         (current.workType === 'task.execute' &&
-          !this.activeExecutionPass(session.id, current.passId)) ||
+          !this.scheduler.isActiveExecutionPass(session.id, current.passId)) ||
         (current.scheduled &&
           ((current.attempt ?? 1) !== (assignment.attempt ?? 1) ||
-            this.taskGates(session.id, current).length))
+            taskGateBlockers(this.store, session.id, current).length))
       )
         return;
     }
@@ -1604,7 +1303,7 @@ Task to register: ${input.description}`,
     if (!this.initializedSessions.has(input.sessionId))
       throw new Error('Session native bindings have not been reconciled');
     await this.planning.resolve(this.session(input.sessionId), input);
-    await this.schedule(this.session(input.sessionId));
+    await this.scheduler.schedule(this.session(input.sessionId));
   }
   private session(sessionId: string): Session {
     const cached = this.sessions.get(sessionId);

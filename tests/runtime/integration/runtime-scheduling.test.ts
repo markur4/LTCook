@@ -143,6 +143,71 @@ describe('approved Pass scheduling', () => {
     }
   });
 
+  test('a blocking decision recorded during assignee selection prevents dispatch', async () => {
+    const selecting = new Gate();
+    const resumeSelection = new Gate();
+    const f = await fixture({
+      ...defaultTeam,
+      async selectAssignee({ workType }) {
+        if (workType === 'task.execute') {
+          selecting.resolve();
+          await resumeSelection.wait();
+        }
+        return defaultTeam.definition.routing[workType];
+      },
+    });
+    let releasing: Promise<void> | undefined;
+    let recording: Promise<unknown> | undefined;
+    try {
+      const task = await f.create('blocked-during-selection');
+      const snapshot = f.runtime.snapshot(f.id);
+      const plan = snapshot.planning.find(({ passId }) => passId === f.pass.id)!;
+      const sendsBefore = f.agents.sends.length;
+      releasing = f.release();
+      await selecting.wait();
+      recording = f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        {
+          type: 'decision.create',
+          planId: plan.id,
+          category: 'other',
+          prompt: 'Confirm the new requirement?',
+          blocking: true,
+        },
+      );
+      expect(
+        f.runtime
+          .snapshot(f.id)
+          .decisions.some(
+            ({ prompt, blocking, answer }) =>
+              prompt === 'Confirm the new requirement?' && blocking && answer === undefined,
+          ),
+      ).toBe(true);
+      resumeSelection.resolve();
+      await releasing;
+      const decision = (await recording) as { id: string };
+      expect(f.runtime.snapshot(f.id).assignments.some(({ taskId }) => taskId === task.id)).toBe(
+        false,
+      );
+      expect(f.agents.sends).toHaveLength(sendsBefore);
+
+      await f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        { type: 'decision.answer', planId: plan.id, decisionId: decision.id, answer: 'Proceed' },
+      );
+      expect(
+        f.runtime.snapshot(f.id).assignments.filter(({ taskId }) => taskId === task.id),
+      ).toHaveLength(1);
+      expect(f.agents.sends).toHaveLength(sendsBefore + 1);
+    } finally {
+      resumeSelection.resolve();
+      await Promise.allSettled([releasing, recording]);
+      await f.runtime.close();
+    }
+  });
+
   test('snapshots reuse task and approval reads while preserving dependency blockers', async () => {
     const f = await fixture(team);
     let tasksRead: ReturnType<typeof spyOn> | undefined;
