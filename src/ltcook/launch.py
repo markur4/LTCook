@@ -709,13 +709,14 @@ def prepare_native_command(
                 "environment": launch.environment,
                 "dependencies": sorted(map(str, inputs.dependencies)),
                 "identityPaths": sorted(map(str, inputs.identity_paths)),
+                "outputHashes": {str(path): digest for path, digest in outputs.items()},
                 "reusable": inputs.reusable,
             }
         )
     )
 
 
-def _write_launch_pi_config(launch: LaunchConfig) -> tuple[Path, ...]:
+def _write_launch_pi_config(launch: LaunchConfig) -> dict[Path, str]:
     """Write native files from the same effective settings sent to Pi."""
     environment = launch.environment
     return write_pi_config(

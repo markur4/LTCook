@@ -111,8 +111,9 @@ immutable `<deployment>/app` tree; `PI_CODING_AGENT_DIR` must resolve inside
 the deployment. An invalid path is rejected with its variable name. The Node
 host is the sole writer of `<PASEO_HOME>/config.json`; it uses the final
 AppRC-resolved `PASEO_HOME`, even when `LTCOOK_JS_ROOT` points to source.
-Python's `write-native-config` command writes only the private
-`<PI_CODING_AGENT_DIR>/web-search.json`; it does not write Paseo configuration.
+Python's `write-native-config` command writes the private `models.json` and
+`web-search.json` inside `PI_CODING_AGENT_DIR`. Native startup and web-tool
+bootstrap use the same Python writer.
 
 The mutable Paseo home defaults to `<LTCOOK_DEPLOYMENT_DIR>/paseo`, outside the
 replaceable `<LTCOOK_DEPLOYMENT_DIR>/app` bundle. Pi homes default to

@@ -1,4 +1,5 @@
 import errno
+import hashlib
 import json
 import os
 import urllib.error
@@ -8,9 +9,11 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from filelock import FileLock
 from typer.testing import CliRunner
 
 from ltcook import launch
+from ltcook.config import pi_config
 from ltcook.config.bundle import LtcookConfig
 from ltcook.config.pi_config import pi_documents, write_pi_config
 
@@ -47,9 +50,12 @@ def test_native_preparation_reports_configuration_inputs_and_outputs(
     assert str(config / APP_RC.schema.apprc_toml_filename) in inputs
     assert result["environment"]["LTCOOK_MODEL_SMART"] == "fixture-model"
     pi_home = Path(result["environment"]["PI_CODING_AGENT_DIR"])
-    for filename in ("models.json", "web-search.json"):
-        assert str(pi_home / filename) in inputs
-        assert (pi_home / filename).is_file()
+    output_paths = {pi_home / "models.json", pi_home / "web-search.json"}
+    assert inputs.issuperset(map(str, output_paths))
+    assert result["outputHashes"] == {
+        str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in output_paths
+    }
 
 
 def test_native_preparation_tracks_installed_authority_and_disables_unknown_guards(
@@ -504,6 +510,44 @@ def test_pi_writer_preserves_unrelated_local_models(tmp_path):
     models = json.loads(models_path.read_text())
     assert "custom" in models["providers"]
     assert "ollama" in models["providers"]
+
+
+def test_pi_writer_waits_for_canonical_home_before_reading_or_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _native_config()
+    deployment = tmp_path / "deployment"
+    pi_home = deployment / "pi"
+    pi_home.mkdir(parents=True)
+    aliased_home = deployment / "unused" / ".." / "pi"
+    models_path = pi_home / "models.json"
+    web_path = pi_home / "web-search.json"
+    models_path.write_text("invalid JSON until the holder finishes", encoding="utf-8")
+    web_path.write_text("held configuration", encoding="utf-8")
+
+    def immediate_lock(path: Path, *, timeout: int, mode: int) -> FileLock:
+        return FileLock(path, timeout=0, mode=mode)
+
+    monkeypatch.setattr(pi_config, "FileLock", immediate_lock)
+    with FileLock(pi_home / ".ltcook-pi-config.lock"):
+        with pytest.raises(
+            ValueError, match="Timed out waiting to write Pi configuration"
+        ):
+            write_pi_config(config, owned_dir=deployment / "app", pi_home=aliased_home)
+        assert web_path.read_text(encoding="utf-8") == "held configuration"
+        models_path.write_text(
+            json.dumps({"providers": {"custom": {"models": []}}}), encoding="utf-8"
+        )
+
+    written = write_pi_config(
+        config, owned_dir=deployment / "app", pi_home=aliased_home
+    )
+    assert written == {
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (models_path, web_path)
+    }
+    models = json.loads(models_path.read_text(encoding="utf-8"))
+    assert models["providers"]["custom"] == {"models": []}
 
 
 def test_pi_writer_retains_the_prior_local_model_after_alias_edit(tmp_path):

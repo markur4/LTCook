@@ -5,9 +5,11 @@ import type { ProviderSubagentDescriptorPayload } from '@getpaseo/protocol/messa
 import { createPaseoApi, type PaseoApi } from '@getpaseo/client';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { chmod, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import path from 'node:path';
+import { z } from 'zod';
 import type {
   AgentBackend,
   CreateAgentOptions,
@@ -26,8 +28,41 @@ import { agentEnvironment } from './native-policy.js';
 import { configurePiExtensions } from './pi-settings.js';
 import { isWithin } from '../path-containment.js';
 import { memoryDispatchId } from './paseo-memory.js';
-import { WorkspacePreparationCache } from './workspace-preparation.js';
+import { WorkspacePreparationCache, type WorkspacePreparation } from './workspace-preparation.js';
 import { connectIdleRestart, type IdleRestartReservation } from './paseo-idle-restart.js';
+
+const exec = promisify(execFile);
+const workspacePreparationResponse = z.object({
+  workspaceRoot: z.string(),
+  environment: z.record(z.string(), z.string()),
+  dependencies: z.array(z.string()),
+  identityPaths: z.array(z.string()),
+  outputHashes: z.record(z.string(), z.string().regex(/^[0-9a-f]{64}$/)),
+  reusable: z.boolean(),
+});
+
+function readWorkspacePreparation(response: unknown, workspaceRoot: string): WorkspacePreparation {
+  const parsed = workspacePreparationResponse.safeParse(response);
+  if (!parsed.success) throw new Error('AppRC did not report workspace preparation dependencies');
+  const { workspaceRoot: reportedWorkspace, ...preparation } = parsed.data;
+  if (path.resolve(reportedWorkspace) !== path.resolve(workspaceRoot))
+    throw new Error('AppRC resolved a different native-agent workspace');
+  const outputs = Object.keys(preparation.outputHashes);
+  const [firstOutput] = outputs;
+  if (!firstOutput || !path.isAbsolute(firstOutput) || outputs.length !== 2)
+    throw new Error('AppRC did not report the generated Pi configuration');
+  const home = path.dirname(firstOutput);
+  for (const name of ['models.json', 'web-search.json']) {
+    const output = path.join(home, name);
+    if (
+      !Object.hasOwn(preparation.outputHashes, output) ||
+      !preparation.dependencies.includes(output)
+    )
+      throw new Error('AppRC did not report the generated Pi configuration');
+  }
+  return preparation;
+}
+
 export interface PaseoHost {
   api: PaseoApi;
   listen: string;
@@ -311,6 +346,7 @@ export async function createPaseoAgentBackend(input: {
     sessionId: string,
   ): Record<string, string> | undefined;
   preparedEnvironment?: Record<string, string>;
+  workspacePreparationSignal?: AbortSignal;
   thinking?: string;
   telemetry?: Telemetry;
   identity(agentId: string): AgentRpcIdentity;
@@ -350,52 +386,46 @@ export async function createPaseoAgentBackend(input: {
   });
   const helperEnvironment = (workspaceRoot: string, sessionId: string): NodeJS.ProcessEnv => {
     const shell = input.originalShellEnvironment?.(path.resolve(workspaceRoot), sessionId);
-    return shell ? { ...process.env, LTCOOK_SHELL_PROVENANCE: JSON.stringify(shell) } : process.env;
+    return { ...process.env, ...(shell && { LTCOOK_SHELL_PROVENANCE: JSON.stringify(shell) }) };
   };
-  const preparations = new WorkspacePreparationCache();
+  const signal = input.workspacePreparationSignal;
+  const preparations = new WorkspacePreparationCache({ signal });
   const environmentFor = async (workspaceRoot: string, sessionId: string) => {
+    signal?.throwIfAborted();
+    if (input.preparedEnvironment) return input.preparedEnvironment;
     const helperEnv = helperEnvironment(workspaceRoot, sessionId);
     const shellIdentity = createHash('sha256')
       .update(JSON.stringify(helperEnv.LTCOOK_SHELL_PROVENANCE ?? helperEnv))
       .digest('hex');
     const cacheKey = JSON.stringify([path.resolve(workspaceRoot), sessionId, shellIdentity]);
-    return (
-      input.preparedEnvironment ??
-      (
-        await preparations.get(cacheKey, () => {
-          const result = spawnSync(
-            input.python,
-            ['-m', 'ltcook.launch', 'prepare-native', '--workspace', workspaceRoot],
-            { encoding: 'utf8', env: helperEnv, windowsHide: true },
-          );
-          if (result.status !== 0)
-            throw new Error('AppRC could not prepare the selected native-agent workspace');
-          const response = JSON.parse(result.stdout) as {
-            workspaceRoot: string;
-            environment: Record<string, string>;
-            dependencies: string[];
-            identityPaths: string[];
-            reusable: boolean;
-          };
-          if (path.resolve(response.workspaceRoot) !== path.resolve(workspaceRoot))
-            throw new Error('AppRC resolved a different native-agent workspace');
-          if (
-            !Array.isArray(response.dependencies) ||
-            !response.dependencies.every((file) => typeof file === 'string') ||
-            !Array.isArray(response.identityPaths) ||
-            !response.identityPaths.every((file) => typeof file === 'string') ||
-            typeof response.reusable !== 'boolean'
-          )
-            throw new Error('AppRC did not report workspace preparation dependencies');
-          return {
-            environment: response.environment,
-            dependencies: response.dependencies,
-            identityPaths: response.identityPaths,
-            reusable: response.reusable,
-          };
-        })
-      ).environment
-    );
+    const preparation = await preparations.get(cacheKey, async () => {
+      let response: unknown;
+      try {
+        const { stdout } = await exec(
+          input.python,
+          ['-m', 'ltcook.launch', 'prepare-native', '--workspace', workspaceRoot],
+          {
+            encoding: 'utf8',
+            env: helperEnv,
+            signal,
+            timeout: 15000,
+            windowsHide: true,
+            maxBuffer: 1024 * 1024,
+          },
+        );
+        response = JSON.parse(stdout);
+      } catch {
+        signal?.throwIfAborted();
+        throw new Error('AppRC could not prepare the selected native-agent workspace');
+      }
+      return readWorkspacePreparation(response, workspaceRoot);
+    });
+    // > Response validation requires both outputs under the same canonical Pi home.
+    const [firstOutput] = Object.keys(preparation.outputHashes);
+    return {
+      ...preparation.environment,
+      PI_CODING_AGENT_DIR: path.dirname(firstOutput!),
+    };
   };
   const prepare = async (
     options: CreateAgentOptions,
@@ -403,6 +433,7 @@ export async function createPaseoAgentBackend(input: {
     savedModel?: ResolvedModel,
   ) => {
     const workspaceEnv = await environmentFor(options.workspaceRoot, options.sessionId);
+    signal?.throwIfAborted();
     const model =
       savedModel ??
       resolveModel(options.member.modelAlias, workspaceEnv, {
@@ -412,12 +443,14 @@ export async function createPaseoAgentBackend(input: {
     const identity = input.identity(nativeAgentId);
     const agentHome = workspaceEnv.PI_CODING_AGENT_DIR || input.piHome;
     await mkdir(agentHome, { recursive: true, mode: 0o700 });
+    signal?.throwIfAborted();
     const settingsPath = path.join(agentHome, 'settings.json');
     const browserEnabled =
       input.browserAvailable && workspaceEnv.LTCOOK_BROWSER_ENABLED !== 'false';
     const codeSearchEnabled = workspaceEnv.LTCOOK_CODESEARCH_ENABLED === 'true';
     const ownedExtensions = codeSearchEnabled ? codeSearchExtensions : [];
     await configurePiExtensions(settingsPath, ownedExtensions);
+    signal?.throwIfAborted();
     const browserHome =
       workspaceEnv.LTCOOK_BROWSER_HOME || path.join(path.dirname(agentHome), 'browser-home');
     const appBin = path.join(input.appNodeModules, '.bin');
@@ -485,6 +518,7 @@ export async function createPaseoAgentBackend(input: {
       try {
         const nativeAgentId = randomUUID();
         const { env: agentEnv, model, mcpServers } = await prepare(options, nativeAgentId);
+        signal?.throwIfAborted();
         const thinkingOptionId = piThinking(model.reasoning);
         const handle = await input.api.agents.create({
           agentId: nativeAgentId,

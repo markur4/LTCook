@@ -170,6 +170,7 @@ async function run(): Promise<void> {
   let memory: SessionMemory | undefined;
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
+  const nativePreparation = new AbortController();
   let shutdownPromise: Promise<void> | undefined;
   let disconnectPlanningDialogs: (() => void) | undefined;
   let serviceStartup: Promise<unknown> | undefined;
@@ -185,6 +186,7 @@ async function run(): Promise<void> {
   };
   const cleanup = (signal: string, exitCode: number): Promise<void> => {
     stopping = true;
+    nativePreparation.abort(new Error('LTCook runtime is stopping.'));
     startup.end();
     shutdownPromise ??= (async () => {
       const failures: unknown[] = [];
@@ -509,6 +511,7 @@ async function run(): Promise<void> {
       deploymentNode: node,
       browserAvailable: receipt.browser_available === true,
       browserExecutable: receipt.browser_executable,
+      workspacePreparationSignal: nativePreparation.signal,
       originalShellEnvironment(_workspace, currentSessionId) {
         return workspaceShellEnvironments.get(currentSessionId);
       },
@@ -542,7 +545,13 @@ async function run(): Promise<void> {
     api.setRuntime(runtimeController);
     if (workspaceRoot && sessionId) {
       workspaceShellEnvironments.set(sessionId, captureShellEnvironment(process.env));
-      initialSnapshot = await runtimeController.openSession({ id: sessionId, workspaceRoot });
+      try {
+        initialSnapshot = await runtimeController.openSession({ id: sessionId, workspaceRoot });
+      } catch (error) {
+        if (nativePreparation.signal.aborted) return;
+        throw error;
+      }
+      if (stopping) return;
       api.setSession(workspaceRoot, initialSnapshot.session.id);
     }
     if (stopping) return;
