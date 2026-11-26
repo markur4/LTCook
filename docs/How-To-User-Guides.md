@@ -47,7 +47,7 @@ Building an asset does not prove installation or native Windows/macOS support.
 
 ## Install from a checkout
 
-Start with Python 3.12+, Node matching `.node-version`, Bun, uv, Git and just.
+Start with Python 3.13+, Node matching `.node-version`, Bun, uv, Git and just.
 From the repository root:
 
 ```shell

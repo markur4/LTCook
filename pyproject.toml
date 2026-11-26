@@ -9,7 +9,7 @@ description = "A Paseo-backed agent runtime with coordinated interchangeable tea
 authors = [{ name = "markur4" }]
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
     "apprc-core @ git+https://github.com/HisQu/apprc.git@26aa613b3a0de5e1b63a3dc30a7ae3c42fa7c9b1",
     "apprc @ git+https://github.com/HisQu/apprc.git@26aa613b3a0de5e1b63a3dc30a7ae3c42fa7c9b1#subdirectory=src/apprc_dev/packaging/terminal",
@@ -52,7 +52,7 @@ apprc-reference = "ltcook.config.app:APP_RC"
 project-path = "."
 distribution-path = "src/ltcook_distr"
 command-name = "ltcook"
-runtime-python = "3.12"
+runtime-python = "3.13"
 display-name = "LTCook"
 bootstrap-env-prefix = "LTCOOK"
 maintenance-group-name = "app"
@@ -78,7 +78,7 @@ ltcook = "ltcook.main:main"
 
 [tool.pyright]
 typeCheckingMode = "basic"
-pythonVersion = "3.12"
+pythonVersion = "3.13"
 pythonPlatform = "All"
 venvPath = "."
 venv = ".venv"

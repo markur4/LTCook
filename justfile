@@ -388,7 +388,7 @@ alias install := sync
 # Examples:
 #   just lock                   # resolve using current constraints
 #   just lock --upgrade         # allow upgrades while resolving
-#   just lock --python 3.12     # resolve for a specific interpreter
+#   just lock --python 3.13     # resolve for a specific interpreter
 
 # Creates uv.lock based on pyproject.toml and exports pylock.toml.
 lock *ARGS:
@@ -544,7 +544,7 @@ build-release-inputs notes_file="":
     uv lock --check
     just _release-artifact-check dist/release-notes.md true {{quote(notes_file)}}
 
-# Smoke one built wheel in an isolated Python 3.12 tool environment.
+# Smoke one built wheel in an isolated Python 3.13 tool environment.
 release-wheel-smoke:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -557,7 +557,7 @@ release-wheel-smoke:
     smoke_script="$(realpath src/ltcook_dev/packaging/install_smoke.py)"
     smoke_root="$(mktemp -d)"
     trap 'rm -rf "$smoke_root"' EXIT
-    (cd "$smoke_root"; uv run --isolated --python 3.12 --with "ltcook @ $artifact_uri" python "$smoke_script" --expected-version "$version")
+    (cd "$smoke_root"; uv run --isolated --python 3.13 --with "ltcook @ $artifact_uri" python "$smoke_script" --expected-version "$version")
 
 release-install-smoke setup="dist/ltcook-setup-linux-x86_64":
     test -f {{quote(setup)}}
@@ -573,8 +573,8 @@ release-check:
     just sync
     {{quote(BUN)}} run check
     {{quote(BUN)}} run test
-    for python_version in 3.12 3.13; do just _ci-check-python "$python_version" "$check_root/python-${python_version}/.venv"; done
-    UV_PROJECT_ENVIRONMENT="$check_root/artifacts/.venv" just _release-artifact-check ""
+    just _ci-check-python 3.13 "$check_root/python-3.13/.venv"
+    UV_PYTHON=3.13 UV_PROJECT_ENVIRONMENT="$check_root/artifacts/.venv" just _release-artifact-check ""
     echo "Local release rehearsal passed. No refs or artifacts were published."
 
 

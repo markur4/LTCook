@@ -7,9 +7,9 @@ All notable changes to `ltcook` will be documented in this file.
 > This changelog follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) and
 > [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0/).
 >
-> Keep one cumulative section per target version. Start with `## [X.Y.Z] - YYYY-MM-DD (b1)`,
-> update the date, entries, and marker for `rc1`, and remove the marker for
-> stable. The notes describe what ships since the previous stable version.
+> Keep one cumulative section per target version. Use `## [X.Y.Z] - YYYY-MM-DD`
+> for stable and append `(b1)` or `(rc1)` for an optional preview. The notes
+> describe what ships since the previous stable version.
 > Link the section to that stable tag once one exists. Include only stable
 > `X.Y.0` releases in the table of contents.
 >
@@ -116,7 +116,7 @@ All notable changes to `ltcook` will be documented in this file.
   stages and verifies Linux assets locally, with a separately configurable
   hosted CI gate. GitHub keeps the latest beta, the latest release candidate,
   and all stable releases. Routine CI runs on pull requests and main with
-  Python 3.12. Release candidates and stable tags without equivalent candidate
+  Python 3.13. Release candidates and stable tags without equivalent candidate
   results receive extended checks.
 
 - Shared model aliases for Teams, Paseo, and the native Pi and Codex launcher.
@@ -227,6 +227,11 @@ All notable changes to `ltcook` will be documented in this file.
   unchanged, and redirected output stays uncolored.
 
 ### 🛠️ Changed
+
+- **Breaking:** 💥 LTCook requires Python 3.13 or newer. Create the checkout
+  environment with Python 3.13 before registering an editable installation.
+  Native setup provisions Python 3.13. The local release check uses Python 3.13
+  as its sole test environment.
 
 - **Breaking:** 💥 The shared Spark model alias is now `@local-tiny`. Use that
   spelling in Team and launch selections. The shared list includes `@local-CPU`

@@ -117,12 +117,12 @@ def _release_inputs(root: Path, *, wrong_field: str | None = None) -> dict[str, 
 
     (root / "pyproject.toml").write_text(
         '[project]\nname = "ltcook"\nversion = "0.1.0"\n'
-        'requires-python = ">=3.12"\n'
+        'requires-python = ">=3.13"\n'
         '[project.scripts]\nltcook = "ltcook.main:main"\n'
         '[tool.apprc.distribution]\napp-id = "ltcook"\n'
         'apprc-reference = "ltcook.config.app:APP_RC"\n'
         'project-path = "."\ndistribution-path = "src/ltcook_distr"\n'
-        'command-name = "ltcook"\nruntime-python = "3.12"\n',
+        'command-name = "ltcook"\nruntime-python = "3.13"\n',
         encoding="utf-8",
     )
     (root / "src/ltcook_distr").mkdir(parents=True)
@@ -144,7 +144,7 @@ def _release_inputs(root: Path, *, wrong_field: str | None = None) -> dict[str, 
         display_name="LTCook",
         version=VERSION,
         source=ProjectSnapshot("0" * 64, "1" * 64, COMMIT),
-        selection=RuntimeSelection("3.12"),
+        selection=RuntimeSelection("3.13"),
         capabilities=AppCapabilities(),
         layout=Layout.native(),
         bootstrap_env_prefix="LTCOOK",

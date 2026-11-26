@@ -30,12 +30,12 @@ layout, packaging boundary, verification limits, and current release workflow.
 
 ## Maintainer environment
 
-Use Python 3.12+, Bun 1.4.4+, the Node version in `.node-version`, uv, and just.
+Use Python 3.13+, Bun 1.4.4+, the Node version in `.node-version`, uv, and just.
 The root [sync recipe](../justfile) is the supported locked full setup. Create the
 checkout's virtual environment explicitly when selecting an interpreter:
 
 ```shell
-uv venv --python 3.12 .venv
+uv venv --python 3.13 .venv
 just sync
 ```
 
@@ -903,10 +903,10 @@ from WSL.
 
 ## Releases
 
-Hosted CI runs the Linux Python 3.12 source checks on pull requests and pushes
+Hosted CI runs the Linux Python 3.13 source checks on pull requests and pushes
 to `main`. A new commit cancels stale CI for the same PR or ref. Routine CI
 checks the Bun workspaces and runs the quick Python suite directly from source.
-Release candidates add Python 3.13, package builds, and offline native
+Release candidates add Python 3.14, package builds, and offline native
 acceptance. Stable tags run the same extended checks unless a same-version
 ancestor release candidate passed its tag CI with identical source and
 dependencies. An equivalent stable promotion still runs the source checks.
@@ -921,23 +921,23 @@ test jobs with this setting. Set it to `true` to run the source checks on beta
 tags and require successful hosted CI on the exact release tag and commit.
 `RELEASE_PYPI` is independently set to `false`, so publication goes to GitHub.
 
-Keep one cumulative changelog section per target version. Start the section
-with a heading such as `## [0.2.0] - YYYY-MM-DD (b1)`, then update the same
-heading and entries for `(rc1)`. Remove the stage marker for the stable
-version. One beta and one release candidate are the default. Use `b2` or
-`rc2` when a fix needs another preview. Move the entries out of `[Unreleased]`
-before preparing the release. Each tag preserves its changelog snapshot.
+Keep one cumulative changelog section per target version. For a stable release,
+use a heading such as `## [0.2.0] - YYYY-MM-DD`. For an optional preview, append
+`(b1)` or `(rc1)` to that heading and update the same section for later previews
+or stable. Use `b2` or `rc2` when a fix needs another preview. Move the entries
+out of `[Unreleased]` before preparing the release. Each tag preserves its
+changelog snapshot.
 
 ```shell
 just release-check
-just release-prepare 0.2.0rc1
-just release-push v0.2.0rc1
+just release-prepare 0.2.0
+just release-push v0.2.0
 ```
 
-`release-check` runs the source checks and verifies the built wheel and source
-archive. `release-prepare` accepts an explicit version or `patch`, `minor`,
-and `major`. It validates the prepared notes, updates project metadata and locks,
-and creates an annotated local tag on the version commit.
+`release-check` runs the source checks on Python 3.13 and verifies the built
+wheel and source archive. `release-prepare` accepts an explicit version or
+`patch`, `minor`, and `major`. It validates the prepared notes, updates project
+metadata and locks, and creates an annotated local tag on the version commit.
 
 `release-push` runs the local checks, builds the committed Linux setup, and
 smoke-tests the staged installer. It uses its embedded binding and checksum to
