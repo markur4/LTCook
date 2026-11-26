@@ -98,7 +98,7 @@ decisions, the Explorer fix status, and the order for the remaining passes.
 - **Area:** `runtime/src/tools`, `runtime/src/core`, `runtime/src/integrations/native-policy.ts`, and `runtime/src/integrations/runtime-api.ts`.
 - **Observed while:** Reviewing the managed Pi Session Memory denial and its server authorization path.
 - **Why not fixed now:** Explorer restoration is tracked in PR #62. This pass covers classification and bound-member lookup. The timeline decoder and neutral Memory contract remain with the Session Memory pass.
-- **Evidence:** Three policy paths classify many of the same tools. Managed workspace-tool authorization builds two Session snapshots, and the Session Memory hook adds an authorization round trip. Tool metadata also crosses the deployed plugin boundary.
+- **Evidence:** The authorization pass consolidates classification and replaces two Session snapshots with one binding lookup per managed HTTP invocation. Session Memory and worktree calls retain the native precheck because Pi's call hook lacks the selected handler's identity.
 - **Context:** The next milestone depends on explicit tool classification and a current binding lookup. Keep role, Pass approval, workspace grants, and Memory peer scope distinct.
 - **Suggested next step:** Use the scoped invocation authority in the transport decomposition, then finish Memory-specific ownership with the Session Memory pass. See [CSC-01](code-smells.md#csc-01--tool-classification-and-authorization-disagree), [CSC-05](code-smells.md#csc-05--backend-contracts-sit-under-the-paseo-plugin), [CSC-06A](code-smells.md#csc-06a--managed-authorization-repeats-broad-reads), and the [runtime decomposition](#p3--e1-code-smell---separate-runtime-composition-transport-and-coordination) entry.
 

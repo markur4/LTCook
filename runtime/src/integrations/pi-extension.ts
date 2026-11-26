@@ -14,6 +14,7 @@ import { createRepoLocateTool } from '../tools/repo-locate.js';
 import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
 import type { ToolDefinition } from '../tools/types.js';
 import {
+  isRepositoryTool,
   REPO_LOCATE_TOOL_NAME,
   REPO_SEARCH_TIMEOUT_MS,
   SESSION_MEMORY_TOOL_NAME,
@@ -22,8 +23,7 @@ import {
 } from '../tools/workspace-tools.js';
 import { sessionMemoryDescription, sessionMemoryInput } from '../tools/session-memory.js';
 import { worktreeToolInput } from '../tools/session-worktree.js';
-import { isManagedWorkspaceTool } from '../tools/capabilities.js';
-import { webDefinitions } from '../tools/web.js';
+import { isWebTool, webDefinitions } from '../tools/web.js';
 import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
@@ -381,13 +381,8 @@ export default async function activate(
   pi.on('tool_call', async (event, ctx) => {
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
-    // > The shared HTTP endpoint authorizes these calls once for every native caller.
-    if (
-      isManagedWorkspaceTool(event.toolName) &&
-      (event.toolName !== SESSION_MEMORY_TOOL_NAME || memoryEnabled) &&
-      (event.toolName !== WORKTREE_TOOL_NAME || !evaluation)
-    )
-      return;
+    // > Repository and web tools use their existing invocation-time authorization.
+    if (isWebTool(event.toolName) || isRepositoryTool(event.toolName)) return;
     try {
       // > Native new/resume may change cwd; authorize exactly the path the tool will use.
       const input =

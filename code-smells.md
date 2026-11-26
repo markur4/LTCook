@@ -207,9 +207,11 @@ stale, mismatched, and uninitialized binding cases and measure query count befor
 claiming a latency improvement.
 
 The authorization pass replaces two Session projections and the separate
-Planning binding read with a single lookup in Core. Pi dispatches registered
-managed catalog tools through the invocation-time authorization boundary.
-The separate worktree Pass context still reads the projection it needs.
+Planning binding read per managed HTTP invocation with a single Core lookup.
+Session Memory and worktree calls keep their native authorization round trip
+because Pi's call hook sees the tool name and input and lacks the selected
+handler's identity. The separate worktree Pass context still reads its
+projection.
 
 ### CSC-06B — Broad Memory search walks original history
 
