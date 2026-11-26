@@ -244,8 +244,9 @@ unavailable.
 
 Expand **Stored for this agent** to open the record viewer. It shows Markdown
 summaries, a notice when a short Discussion skipped generation, and execution
-cards. **Show summary** opens the records for that passage inside the
-conversation. Expand an execution card to see compact tool outcomes and
+cards. **Show summary** displays the full Markdown for each loaded Discussion
+record in the conversation. Select **Load older passage records** when more
+records are available. Expand an execution card to see compact tool outcomes and
 intermediate agent messages from the original Paseo timeline. Each entry shows
 its source sequence. Reload the viewer to see newly stored records.
 

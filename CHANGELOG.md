@@ -391,6 +391,9 @@ All notable changes to `ltcook` will be documented in this file.
 - The Session Memory execution details show compact tool outcomes instead of
   raw tool payloads.
 
+- **Show summary** displays full Discussion summaries in chat. New summaries
+  group related facts and preserve the details needed for follow-up.
+
 - Changed files start collapsed when reviewing a linked worktree in Paseo.
 
 - Activity can show observed Codex skill reads in idle and active chats.
