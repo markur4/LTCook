@@ -319,22 +319,6 @@ export async function inspectColgrepIndex(
   const scope = activities.get(key);
   const locked = currentPid !== undefined && (index.bound || ownsLock(scope, currentPid));
   const operation = operationStatus(scope);
-  // > A completed vector store remains usable if a later refresh left its marker behind.
-  if (
-    vector &&
-    state?.version === INDEX_FORMAT_VERSION &&
-    !state.dirty &&
-    (!marker || knownUnlocked)
-  ) {
-    const currentScope = rememberScope(key);
-    currentScope.observedIndex = { directory: index.directory, identity: index.identity };
-    currentScope.readyIndex = vector;
-    return {
-      availability: 'ready',
-      ...(locked ? { activity: 'checking' as const, diagnostic: null } : operation),
-    };
-  }
-
   if (marker) {
     let { activity, diagnostic } = operation;
     if (locked) activity = 'indexing';
@@ -345,6 +329,15 @@ export async function inspectColgrepIndex(
     return { availability: 'not-ready', activity, diagnostic };
   }
 
+  if (vector && state?.version === INDEX_FORMAT_VERSION && !state.dirty) {
+    const currentScope = rememberScope(key);
+    currentScope.observedIndex = { directory: index.directory, identity: index.identity };
+    currentScope.readyIndex = vector;
+    return {
+      availability: 'ready',
+      ...(locked ? { activity: 'checking', diagnostic: null } : operation),
+    };
+  }
   if (state?.dirty && locked) {
     const previouslyReady = vector && scope?.readyIndex === vector;
     return {

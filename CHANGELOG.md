@@ -419,8 +419,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
-- ColGREP keeps a complete cached index available when an interrupted refresh
-  leaves a stale build marker and the index is demonstrably unlocked.
+- Locate traces use complete cached ColGREP indexes, so their short deadline
+  can no longer interrupt a build. A regular ranked search can resume an
+  interrupted index.
 
 - Read-only Explorer agents can use Session Memory when it is enabled and
   authorized by the runtime.

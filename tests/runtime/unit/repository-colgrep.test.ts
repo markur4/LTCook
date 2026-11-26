@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
+import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
 
 async function fixture(run: (root: string, source: string) => Promise<void>) {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), 'ltcook-retrieval-')));
@@ -114,6 +115,31 @@ if (process.argv.includes('blocked index update')) {
       });
       const workspace = await openRepositoryWorkspace(source);
       const signal = new AbortController().signal;
+      const tool = createRepoSearchTool(provider);
+      const context = {
+        agentId: 'fixture',
+        workspaceRoot: source,
+        workspaceFileAccess: false,
+        repositorySearchAccess: true,
+        signal,
+      };
+      const locate = createRepoLocateTool(tool);
+      const trace = () =>
+        locate.invoke(
+          {
+            trace: {
+              question: 'Find the cache implementation',
+              leads: [
+                { query: 'cached read', mode: 'hybrid' },
+                { query: 'class Cache', mode: 'literal' },
+              ],
+            },
+          },
+          context,
+        );
+      const cold = await trace();
+      expect(cold.trace?.leads[0]?.gaps).toContain('unavailable');
+      expect(cold.trace?.leads[1]?.evidenceIds.length).toBeGreaterThan(0);
       expect(await provider.readStatus(workspace)).toEqual({
         availability: 'not-ready',
         activity: 'idle',
@@ -159,14 +185,6 @@ if (process.argv.includes('blocked index update')) {
       ]);
       expect(JSON.stringify(result)).not.toContain(outside);
 
-      const tool = createRepoSearchTool(provider);
-      const context = {
-        agentId: 'fixture',
-        workspaceRoot: source,
-        workspaceFileAccess: false,
-        repositorySearchAccess: true,
-        signal,
-      };
       for (const [query, code] of [
         ['large output', 'output-limit'],
         ['large diagnostics', 'diagnostic-limit'],
@@ -218,7 +236,6 @@ if (process.argv.includes('blocked index update')) {
         value: { status: 'unavailable' },
         diagnostics: [{ code: 'indexing-paused' }],
       });
-      await rm(path.join(directory, '.building'));
       await writeFile(
         path.join(directory, 'state.json'),
         JSON.stringify({ cli_version: '1.8.5', index_format_version: 3, dirty: false }),
@@ -237,6 +254,15 @@ if (process.argv.includes('blocked index update')) {
         '0.residuals.npy',
       ])
         await writeFile(path.join(index, file), 'fixture');
+      provider.setIndexingEnabled(true);
+      expect(await provider.readStatus(workspace)).toMatchObject({
+        availability: 'not-ready',
+        activity: 'interrupted',
+      });
+      expect((await trace()).trace?.leads[0]?.gaps).toContain('unavailable');
+      await rm(path.join(directory, '.building'));
+      expect((await trace()).trace?.leads[0]?.gaps).toEqual(['no-matches']);
+      provider.setIndexingEnabled(false);
       expect(await provider.search(workspace, { query: 'cached read' }, signal)).toMatchObject({
         value: { status: 'ready' },
         freshness: 'cached',

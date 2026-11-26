@@ -565,9 +565,13 @@ Supply up to four independent `{mode, query}` leads. Use `hybrid` for a behavior
 `exact` for an identifier, and `literal` for an exact string such as an RPC route
 or environment variable. Without explicit leads, Locate searches up to four
 question clauses separated by question marks or semicolons. Searches run in
-parallel. Ranked results can seed bounded exact lookups for verified callable
-or class names. Trace follows up to three verified JavaScript or TypeScript
-connections per path, including direct calls whose bindings can be resolved.
+parallel. Hybrid trace leads use a complete cached index and report an
+unavailable gap if none exists. Run a ranked repository search with index
+updates enabled to build or resume that index. Exact and literal trace leads
+work independently of ColGREP. Ranked results can seed bounded exact lookups
+for verified callable or class names. Trace follows up to three verified
+JavaScript or TypeScript connections per path, including direct calls whose
+bindings can be resolved.
 An explicit `follow` is unnecessary for trace requests.
 
 Each `trace.evidence` entry has an ID and a source range. Tools render its

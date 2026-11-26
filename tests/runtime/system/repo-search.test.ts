@@ -395,7 +395,7 @@ test.skipIf(!deploymentDirectory)(
           });
         try {
           const indexes = await workspaceIndexDirectory(cacheDirectory, workspace);
-          await waitForInitialBuild(indexes, pi);
+          const index = await waitForInitialBuild(indexes, pi);
           expect((await searchMcp()).structuredContent).toMatchObject({
             status: 'indexing',
             partial: true,
@@ -412,6 +412,16 @@ test.skipIf(!deploymentDirectory)(
             status: 'ready',
             results: [{ path: 'checksum.ts' }],
           });
+          await expect(stat(path.join(index, '.building'))).rejects.toHaveProperty(
+            'code',
+            'ENOENT',
+          );
+          const observer = createColgrepProvider({ deploymentDirectory, cacheDirectory });
+          expect(await observer.readStatus(await openRepositoryWorkspace(workspace))).toMatchObject(
+            {
+              availability: 'ready',
+            },
+          );
         } finally {
           pi.cancel();
           await pi.child.exited;

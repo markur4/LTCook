@@ -58,6 +58,7 @@ interface ColgrepOptions {
 interface RepositorySearchRequest {
   query: string;
   mode?: 'hybrid' | 'semantic';
+  updateIndex?: boolean;
   pattern?: string;
   paths?: string[];
   limit?: number;
@@ -589,7 +590,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       source = new RepositorySourceReader(workspace),
     ): Promise<RepositoryRetrieval> {
       callerSignal.throwIfAborted();
-      const indexUpdates = indexing?.signal;
+      const indexUpdates = input.updateIndex === false ? undefined : indexing?.signal;
       if (!input.query.trim() || input.query.includes('\0') || input.pattern?.includes('\0')) {
         throw new Error('ColGREP queries and regular expressions must be nonempty text.');
       }
@@ -624,6 +625,11 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
             (await inspectColgrepIndex(indices, assets.model, assets.binding, workspace))
               .availability !== 'ready')
         ) {
+          if (input.updateIndex === false) {
+            throw new Error(
+              'ColGREP has no complete cached index. Run a ranked repository search with index updates enabled.',
+            );
+          }
           throw new ColgrepIndexingPausedError(
             'ColGREP indexing is paused and there is no complete index. Enable indexing or use a lexical search.',
           );
