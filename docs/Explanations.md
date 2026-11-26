@@ -489,24 +489,24 @@ Paseo timeline entries. Tools without a specialized projection show their
 name and status. AABs that span native turns are shown once. Session
 Memory continues recording AABs and short UAMPs while generation is paused.
 
-Native user messages remain authoritative for goals and decisions. An opt-in
-delegation handoff uses stored records and can recover additional evidence
-from authorized original history. Current Task scope guides the selection.
-The latest applicable original user instruction follows the older evidence.
-Tool outcomes describe historical work. Source references identify the agent,
-conversation epoch, and original sequence. Session Memory search reports
-pending summaries, result truncation, and original-history availability.
+Native user messages remain authoritative for goals and decisions. Production
+summary generation is context-independent: a UAMP summarizer receives the
+current UAMP's original messages and supplied attachment text, without earlier
+Discussions or separately supplied Task scope and instructions. It writes
+concise Markdown under the applicable headings and preserves the distinction
+between proposals, approvals, and completed work. Its instructions tell it to
+preserve unresolved references rather than guess.
 
-Each summary records facts from its current source unit. Its prompt can also
-include current Task scope and requirements, plus bounded context from an
-earlier relevant Discussion. That earlier context may resolve references in the
-current messages, but it does not make earlier work part of the new summary.
-UAMP summaries use concise Markdown under the applicable headings and preserve
-the distinction between proposals, approvals, and completed work. A later
-delegation handoff gives the receiving agent earlier Discussions and Task
-instructions in chronological order. It can also include original messages from
-intervening short Discussions so the receiver can resolve an approval by
-reference and distinguish it from an earlier proposal.
+Context-aware selection happens later, during an opt-in delegation handoff.
+Current Task scope guides which stored records and authorized original messages
+can supply earlier evidence. The handoff presents selected supplemental
+Discussions in source order, after the formal Task assignment, and places the
+latest applicable original user instruction after older evidence. It can
+include original messages from intervening short Discussions so the receiving
+agent can resolve an approval by reference and distinguish it from an earlier
+proposal. Tool outcomes describe historical work. Source references identify
+the agent, conversation epoch, and original sequence. Session Memory search
+reports pending summaries, result truncation, and original-history availability.
 In Hosted mode the current UAMP, including any attachment content in the
 prompt, goes to OpenAI through the Codex subscription with low reasoning.
 Local mode uses Ollama.
