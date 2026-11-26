@@ -10,6 +10,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import {
+  createWorktreeScopeResolver,
+  SessionWorktrees,
+} from '../../../runtime/src/integrations/session-worktrees.js';
+import { createSessionWorktreeTool } from '../../../runtime/src/tools/session-worktree.js';
 import { startPaseoHost } from '../../../runtime/src/integrations/paseo.js';
 
 const root = path.resolve(import.meta.dir, '../../..');
@@ -85,8 +90,12 @@ await new Promise<void>((resolve) => socket.close(() => resolve()));
 assert(address && typeof address !== 'string');
 const listen = `127.0.0.1:${address.port}`;
 const endpoint = `http://${listen}`;
-const api = new RuntimeApi(undefined, secret, listen, environment);
-api.setWorkspaceMcp(new WorkspaceMcp([api.worktreeTool], listen));
+const worktrees = new SessionWorktrees(process.env.PATH ?? '');
+const resolveScope = createWorktreeScopeResolver(() => undefined);
+const api = new RuntimeApi(undefined, secret, listen, environment, undefined, {
+  worktrees: { store: worktrees, resolveScope },
+});
+api.setWorkspaceMcp(new WorkspaceMcp([createSessionWorktreeTool(worktrees, resolveScope)], listen));
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 try {

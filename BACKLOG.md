@@ -93,6 +93,15 @@ Treat this as the parking lot for actionable problems discovered while working b
 The [architectural CSC report](code-smells.md) records findings, accepted
 decisions, the Explorer fix status, and the order for the remaining passes.
 
+## P3 / E2 [Tooling] - *Investigate the native Activity live-rate timeout*
+
+- **Area:** `tests/runtime/system/paseo-gui-acceptance.ts`, `native-activity-memory-live-rate` stage.
+- **Observed while:** Running the offline Paseo browser team-flow acceptance during the runtime composition pass.
+- **Why not fixed now:** The matching timeout predates the composition change. Its cause remains unknown.
+- **Evidence:** Both the composition tree and the equivalent pre-change runtime and fixture inputs timed out waiting for `12.5 tokens/s`.
+- **Context:** The fixture uses scripted Session Memory inference to check whether Activity displays a live rate. The timeout leaves that part of the browser flow unverified.
+- **Suggested next step:** Trace the scripted rate sample through the runtime Activity response and browser during a targeted fixture run.
+
 ## P2 / E1 [Code smell] - *Give managed tool classification and bound-member lookup explicit owners*
 
 - **Area:** `runtime/src/tools`, `runtime/src/core`, `runtime/src/integrations/native-policy.ts`, and `runtime/src/integrations/runtime-api.ts`.
@@ -106,10 +115,10 @@ decisions, the Explorer fix status, and the order for the remaining passes.
 
 - **Area:** `runtime/src/main.ts`, `runtime/src/integrations/runtime-api.ts`, `runtime/src/integrations/mcp.ts`, and `runtime/src/core/runtime.ts`.
 - **Observed while:** Tracing shared tool construction, startup and scheduling.
-- **Why not fixed now:** The tool classification and member lookup provide a prerequisite for moving invocation ownership.
-- **Evidence:** The HTTP adapter constructs services used by the shared catalog. RuntimeController implements command policy, scheduling, native lifecycle, delivery, and snapshot projection. RIED and Session Memory lose returned error detail at the native boundary.
+- **Why not fixed now:** The composition pass moves shared construction. Route and Core extraction and correction of failure details remain open.
+- **Evidence:** Runtime startup now shares configured services with HTTP and the tool catalog. RuntimeController still implements command policy, scheduling, native lifecycle, delivery, and snapshot projection. RIED and Session Memory lose returned error detail at the native boundary.
 - **Context:** Preserve startup readiness, one coordination owner, uncertain-send protection, approval and review gates, and the existing user workflows.
-- **Suggested next step:** Move shared service construction first, extract cohesive Core responsibilities using the shared task gates, and fix evidenced error detail losses. See [CSC-02](code-smells.md#csc-02--http-constructs-services-also-used-by-the-tool-catalog), [CSC-04](code-smells.md#csc-04--runtimecontroller-concentrates-coordination-responsibilities), [CSC-09](code-smells.md#csc-09--adapters-discard-actionable-failure-detail), [tool classification and lookup](#p2--e1-code-smell---give-managed-tool-classification-and-bound-member-lookup-explicit-owners), and [model contract ownership](#p3--e3-code-smell---clarify-model-contract-and-documentation-ownership).
+- **Suggested next step:** Extract route families on the injected service boundary, then extract cohesive Core responsibilities using the shared task gates and fix evidenced error detail losses. See [CSC-02](code-smells.md#csc-02--http-constructs-services-also-used-by-the-tool-catalog), [CSC-04](code-smells.md#csc-04--runtimecontroller-concentrates-coordination-responsibilities), [CSC-09](code-smells.md#csc-09--adapters-discard-actionable-failure-detail), [tool classification and lookup](#p2--e1-code-smell---give-managed-tool-classification-and-bound-member-lookup-explicit-owners), and [model contract ownership](#p3--e3-code-smell---clarify-model-contract-and-documentation-ownership).
 
 ## P3 / E1 [Code smell] - *Decompose Session Memory after covering production recovery*
 

@@ -14,6 +14,12 @@ import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo
 import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { ActivityPreferences } from '../../../runtime/src/integrations/activity-preferences.js';
+import {
+  createWorktreeScopeResolver,
+  SessionWorktrees,
+} from '../../../runtime/src/integrations/session-worktrees.js';
+import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import {
   createPaseoAgentBackend,
   startPaseoHost,
@@ -340,8 +346,15 @@ const environment = {
 };
 const tracePath = path.join(directory, 'gui.perfetto.json');
 const telemetry = new Telemetry(path.join(directory, 'gui.events.jsonl'), tracePath);
-const api = new RuntimeApi(undefined, secret, listen, environment, telemetry);
-api.setActivityPreferences(path.join(directory, 'activity-settings.json'));
+let runtime: ReturnType<typeof createRuntime> | undefined;
+const colgrep = createColgrepProvider();
+const preferences = new ActivityPreferences(path.join(directory, 'activity-settings.json'));
+const worktrees = new SessionWorktrees(process.env.PATH ?? '');
+const resolveScope = createWorktreeScopeResolver((id) => runtime?.snapshot(id));
+const api = new RuntimeApi(undefined, secret, listen, environment, telemetry, {
+  activity: { colgrep, preferences },
+  worktrees: { store: worktrees, resolveScope },
+});
 const evals = new EvalRunService(path.join(directory, 'eval-state'), async (request) => {
   assert.equal(request.preset, 'full');
   assert.equal(request.setup, 'synthetic');
@@ -366,7 +379,6 @@ api.setEval(evals);
 api.setWorkspaceMcp(new WorkspaceMcp([], listen));
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
-let runtime: ReturnType<typeof createRuntime> | undefined;
 let memory: SessionMemory | undefined;
 let backgroundSummary = false;
 let activityRequests = 0;
@@ -933,14 +945,14 @@ try {
   const indexingSwitch = '[role="switch"][aria-label="Index updates"]';
   await browser('click', indexingSwitch);
   await browser('wait', '[aria-label^="RAG Index,"][aria-label*="Index updates off"]');
-  assert.equal(api.activityColgrep.isIndexingEnabled(), false);
+  assert.equal(colgrep.isIndexingEnabled(), false);
   await browser('click', indexingSwitch);
   await browser(
     'wait',
     '--fn',
     `document.querySelector(${JSON.stringify(indexingSwitch)})?.checked === true`,
   );
-  assert.equal(api.activityColgrep.isIndexingEnabled(), true);
+  assert.equal(colgrep.isIndexingEnabled(), true);
   await browser('click', '[aria-label^="RAG Index,"]');
   stage = 'native-activity-memory-summaries';
   await browser('wait', '[aria-label^="Session Memory,"][aria-label*="stored"]');
