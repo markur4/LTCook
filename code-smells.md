@@ -348,6 +348,7 @@ expected sources. The measured search and handoff paths stayed inside their
 5-second and 500-ms deadlines. These warm loopback results show the scaling
 of small fixture messages. Installed latency under load and recall on other
 corpora remain open questions.
+See [Measure Session Memory retrieval scaling](BACKLOG.md#p3--e1-question---measure-session-memory-retrieval-scaling).
 
 ### Workspace preparation measurements
 
@@ -358,8 +359,10 @@ helper time remained close to 200 ms on both paths. The original cache retained
 entries and checks generated outputs after concurrent writes to the same Pi
 home. Earlier timing evidence predates the source-version check.
 
-The final draft reproduced stale reuse after a same-size edit and a transient
-workspace marker. The corrected fixture verifies Python-emitted guards through
-the TypeScript parser and cache. Stable input still reuses the prepared
-environment. Installed cold overhead and hit rates remain unmeasured.
-[Workspace preparation](https://github.com/markur4/LTCook/pull/75)
+The regression tests reproduced stale reuse in the earlier implementation after
+a same-size edit or a transient workspace marker. The corrected fixture verifies
+Python-emitted guards through the TypeScript parser and cache. Stable input
+still reuses the prepared environment. Installed cold overhead and hit rates
+remain unmeasured. [Workspace preparation](https://github.com/markur4/LTCook/pull/75)
+
+See [Measure live workspace preparation and cache growth](BACKLOG.md#p3--e2-question---measure-live-workspace-preparation-and-cache-growth).
