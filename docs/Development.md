@@ -113,6 +113,12 @@ requirement imposed on users of the application.
 The Python application resolves settings through AppRC. Keep native component
 translation in LTCook-owned paths and avoid a second hidden settings layer. The
 TypeScript runtime owns coordination; team packages use its public Team API v3.
+Model alias policy and strict runtime validation live in
+`runtime/src/models/aliases.ts`. The `@ltcook/model-contracts` workspace
+owns the shared model fields, reasoning values, and catalog schema. Asset
+staging includes the package and its compiled entry so the installed Paseo
+plugin can resolve it. The plugin projects native model changes onto that
+shared contract.
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,
@@ -378,6 +384,11 @@ of whether the runner completed. Existing elapsed-time history and fallback for
 the three agent cases still use their original attempts.
 
 ### Session Memory qualification
+
+Production records the current Discussion in structured Markdown. The
+qualification recipes below compare that policy with historical JSON and
+other experimental settings. The current production behavior is described in
+[Context-aware Session Memory](Explanations.md#context-aware-session-memory).
 
 Run the matched CPU comparison after suspending production inference:
 

@@ -27,6 +27,11 @@ REQUIRED_RUNTIME_ENTRIES = (
     "dist/guidance-api/index.js",
     "dist/workflow-api/index.js",
 )
+REQUIRED_MODEL_CONTRACT_ASSETS = (
+    "runtime/src/models/contracts/package.json",
+    "runtime/src/models/contracts/index.ts",
+    "runtime/src/models/contracts/dist/index.js",
+)
 REQUIRED_PASEO_WEB_ASSETS = ("index.html", "ltcook-paseo-build.json")
 REQUIRED_PASEO_PLUGIN_ASSETS = (
     "paseo-plugin.json",
@@ -125,6 +130,13 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
             raise FileNotFoundError(
                 f"Compiled runtime entry is required before staging: {entry}"
             )
+    for asset in REQUIRED_MODEL_CONTRACT_ASSETS:
+        path = root / asset
+        _no_links(path)
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Required model contract asset is missing: {asset}"
+            )
     web_directory = root / "runtime/dist/paseo-web"
     for name in REQUIRED_PASEO_WEB_ASSETS:
         asset = web_directory / name
@@ -174,6 +186,10 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
                 staging / "runtime/src" / boundary,
                 required=True,
             )
+        for asset in REQUIRED_MODEL_CONTRACT_ASSETS:
+            target = staging / asset
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(root / asset, target)
         _copy_tree(
             root / "runtime/resources", staging / "runtime/resources", required=True
         )
@@ -229,6 +245,7 @@ def validate_bundle(archive: Path) -> tuple[str, ...]:
         ),
         "runtime/src/workflow-api/commands.ts",
         *(f"runtime/{entry}" for entry in REQUIRED_RUNTIME_ENTRIES),
+        *REQUIRED_MODEL_CONTRACT_ASSETS,
         *(f"runtime/dist/paseo-plugin/{name}" for name in REQUIRED_PASEO_PLUGIN_ASSETS),
         *(f"runtime/dist/paseo-web/{name}" for name in REQUIRED_PASEO_WEB_ASSETS),
         "services/compose.yaml",

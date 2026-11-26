@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { ModelAliasSchema, ReasoningEffortSchema } from '../models/aliases.js';
+import { ModelAliasSchema, ReasoningEffortSchema } from '@ltcook/model-contracts';
 import type { TeamPackage } from '../team-api/index.js';
 
 export interface TeamCatalogEntry {

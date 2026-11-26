@@ -1,5 +1,6 @@
 import { ollamaEndpoint } from '../integrations/ollama.js';
-import type { ReasoningEffort, ResolvedModel } from './aliases.js';
+import type { ReasoningEffort } from '@ltcook/model-contracts';
+import type { ResolvedModel } from './aliases.js';
 
 export function piThinking(
   effort: ReasoningEffort | undefined,

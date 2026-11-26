@@ -1,41 +1,21 @@
+import {
+  MODEL_ALIASES,
+  ModelAliasSchema,
+  ReasoningEffortSchema,
+  ResolvedModelDtoSchema,
+  type ModelAlias,
+  type ReasoningEffort,
+} from '@ltcook/model-contracts';
 import { z } from 'zod';
-
-export const MODEL_ALIASES = [
-  'smol',
-  'tiny',
-  'local-CPU',
-  'local-tiny',
-  'local-evals',
-  'smart',
-  'plan',
-  'expensive',
-  'review-art',
-] as const;
-export const ModelAliasSchema = z.enum(MODEL_ALIASES);
-export type ModelAlias = z.infer<typeof ModelAliasSchema>;
-
-export const ReasoningEffortSchema = z.enum([
-  'none',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-]);
-export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
 
 const providerId = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 const modelId =
   /^[a-zA-Z0-9][a-zA-Z0-9._+-]*(?:\/[a-zA-Z0-9][a-zA-Z0-9._+-]*)*(?::[a-zA-Z0-9][a-zA-Z0-9._+-]*)?$/;
 
-export const ResolvedModelSchema = z.object({
+export const ResolvedModelSchema = ResolvedModelDtoSchema.extend({
   alias: ModelAliasSchema,
   provider: z.string().regex(providerId),
   model: z.string().regex(modelId),
-  reasoning: ReasoningEffortSchema.optional(),
-  preset: ReasoningEffortSchema.optional(),
-  reasoningSource: z.enum(['session', 'team', 'alias', 'default']),
 });
 export type ResolvedModel = z.infer<typeof ResolvedModelSchema>;
 

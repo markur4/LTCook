@@ -49,6 +49,13 @@ def _asset_source(root: Path) -> Path:
     (root / "runtime/src/workflow-api/commands.ts").write_text(
         "export {};", encoding="utf-8"
     )
+    contracts = root / "runtime/src/models/contracts"
+    (contracts / "dist").mkdir(parents=True)
+    (contracts / "package.json").write_text(
+        '{"name":"@ltcook/model-contracts"}', encoding="utf-8"
+    )
+    (contracts / "index.ts").write_text("export {};", encoding="utf-8")
+    (contracts / "dist/index.js").write_text("export {};", encoding="utf-8")
     for resource in ("rules/planning.md", "skills/ltcook-planning/SKILL.md"):
         path = root / "runtime/resources" / resource
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,6 +127,9 @@ def test_bundle_archive_is_deterministic_and_excludes_development_installs(
     assert "runtime/dist/tools/web-mcp.js" in names
     assert "runtime/dist/tools/pi-web-access.LICENSE" in names
     assert "runtime/dist/workflow-api/index.js" in names
+    assert "runtime/src/models/contracts/package.json" in names
+    assert "runtime/src/models/contracts/index.ts" in names
+    assert "runtime/src/models/contracts/dist/index.js" in names
     assert "runtime/resources/skills/ltcook-planning/SKILL.md" in names
     assert "teams/default-minimal/dist/index.js" in names
     assert all("node_modules" not in name for name in names)

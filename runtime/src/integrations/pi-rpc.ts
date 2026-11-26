@@ -8,7 +8,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EVAL_MODEL } from '../evals/setup.js';
-import { ReasoningEffortSchema, ResolvedModelSchema } from '../models/aliases.js';
+import { ReasoningEffortSchema } from '@ltcook/model-contracts';
+import { ResolvedModelSchema } from '../models/aliases.js';
 import { piThinking } from '../models/adapters.js';
 import { useCodexOpenAiAuth } from './codex-auth.js';
 import {
