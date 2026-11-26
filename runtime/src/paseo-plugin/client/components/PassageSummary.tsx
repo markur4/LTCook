@@ -48,6 +48,9 @@ function PassageSummaryCard({
   const request = useRef(0);
   const summaries = result?.status === 'ready' ? result.summaries : [];
   const empty = result?.status === 'ready' && summaries.length === 0;
+  const hasOlderRecords = result?.status === 'ready' && !!result.next;
+  const openLabel = hasOlderRecords ? 'Open loaded summaries' : 'Open complete summary';
+  const modalTitle = hasOlderRecords ? 'Loaded passage summaries' : 'Complete passage summary';
   const toggleLabel = expanded ? 'Hide summary' : 'Show summary';
 
   async function loadSummary(older = false) {
@@ -174,7 +177,7 @@ function PassageSummaryCard({
               </ActivityButton>
             </View>
           )}
-          {result?.status === 'ready' && result.next && (
+          {hasOlderRecords && (
             <View style={{ alignItems: 'flex-start' }}>
               <ActivityButton
                 theme={theme}
@@ -187,14 +190,14 @@ function PassageSummaryCard({
           )}
           {summaries.length > 0 && (
             <>
-              <MemoryRecords agentId={agentId} records={summaries} theme={theme} preview />
+              <MemoryRecords agentId={agentId} records={summaries} theme={theme} />
               <View style={{ alignItems: 'flex-start' }}>
                 <ActivityButton
                   theme={theme}
-                  label="Open complete summary"
+                  label={openLabel}
                   onPress={() => setCompleteOpen(true)}
                 >
-                  <Text style={{ color: theme.colors.foreground }}>Open complete summary</Text>
+                  <Text style={{ color: theme.colors.foreground }}>{openLabel}</Text>
                 </ActivityButton>
               </View>
             </>
@@ -202,7 +205,7 @@ function PassageSummaryCard({
         </View>
       )}
       {completeOpen && (
-        <Modal title="Complete passage summary" open={completeOpen} onOpenChange={setCompleteOpen}>
+        <Modal title={modalTitle} open={completeOpen} onOpenChange={setCompleteOpen}>
           <Modal.Content contentContainerStyle={{ padding: 12 }}>
             <View testID="ltcook-passage-summary-complete">
               <MemoryRecords agentId={agentId} records={summaries} theme={theme} />

@@ -507,6 +507,17 @@ The runner compares an original-source control with the real simplified
 handoff on both pinned edit fixtures. Both workers use the same provider and
 reasoning settings. Each must finish its turn and pass the executable checks.
 
+For a Hosted Discussion prompt change, run the matched compression evaluation
+with a Codex subscription sign-in:
+
+```shell
+bun evals/session-memory-live.ts --compare-hosted-compression
+```
+
+The report compares per-Discussion summary estimates with the original size,
+checks required facts before original-message recovery, and reports provider
+token usage separately. The evaluation uses synthetic inputs.
+
 Run `bun evals/session-memory-live.ts --context-aware` on the GPU host to
 compare authoritative Task context and Immediate Context on short cache
 recovery, an attachment on a turn with trailing tool evidence, a reference to

@@ -65,6 +65,11 @@ try {
     const report = regradeHostedAsymmetric(saved);
     console.log(JSON.stringify(report, null, 2));
     if (!report.passed) process.exitCode = 1;
+  } else if (args.includes('--compare-hosted-compression')) {
+    const { compareHostedCompression } = await import('./session-memory-compression.js');
+    const report = await compareHostedCompression(controller.signal, console.error);
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.passed) process.exitCode = 1;
   } else if (args.includes('--qualify-hosted-memory') || hostedReplay !== undefined) {
     if (hostedReplay !== undefined && !hostedReplay)
       throw new Error('Supply the saved hosted qualification report path.');

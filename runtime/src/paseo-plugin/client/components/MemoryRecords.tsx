@@ -223,15 +223,7 @@ function ExecutionCard({
   );
 }
 
-function Discussion({
-  record,
-  theme,
-  preview,
-}: {
-  record: MemoryRecord;
-  theme: Theme;
-  preview: boolean;
-}) {
+function Discussion({ record, theme }: { record: MemoryRecord; theme: Theme }) {
   const status = {
     skipped: 'Not summarized, user-agent message pair is below 256 tokens.',
     pending: 'Summary pending.',
@@ -250,26 +242,17 @@ function Discussion({
     .trim();
   if (!markdown)
     return <Text style={{ color: theme.colors.foregroundMuted }}>No details were recorded.</Text>;
-  const previewLimit = 1_200;
-  return (
-    <Markdown>
-      {preview && markdown.length > previewLimit
-        ? markdown.slice(0, previewLimit).trimEnd() + '\n\n…'
-        : markdown}
-    </Markdown>
-  );
+  return <Markdown>{markdown}</Markdown>;
 }
 
 export function MemoryRecords({
   agentId,
   records,
   theme,
-  preview = false,
 }: {
   agentId: string;
   records: readonly MemoryRecord[];
   theme: Theme;
-  preview?: boolean;
 }) {
   const discussions = new Set(records.filter(({ type }) => type === 'UAMP').map(({ id }) => id));
   const batches = new Map<string, MemoryRecord[]>();
@@ -287,7 +270,7 @@ export function MemoryRecords({
         <View key={`${record.epoch}:${record.id}`} style={{ gap: 6 }}>
           {record.type === 'UAMP' ? (
             <>
-              <Discussion record={record} theme={theme} preview={preview} />
+              <Discussion record={record} theme={theme} />
               {batches
                 .get(record.id)
                 ?.slice()
