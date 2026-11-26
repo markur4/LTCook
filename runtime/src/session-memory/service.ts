@@ -1250,8 +1250,6 @@ export class SessionMemory {
         );
         before = page.next ?? undefined;
       } while (before);
-      if (!targets.some(({ position }) => position === passage.position))
-        throw new MemorySummaryError('The selected passage is no longer stored.');
       if (!targets.length)
         throw new MemorySummaryError('This passage has no current stored summary to redo.');
     }

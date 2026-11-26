@@ -610,6 +610,61 @@ test('redo leaves the ingestion cursor in place so newer passages are still summ
   }
 });
 
+test('chat redo includes an action batch that ends before the passage marker', async () => {
+  const scope = { sessionId: 'snapshot', taskId: 'task' };
+  const messages: MemorySourceMessage[] = [
+    { seq: 1, turnId: 'task', author: 'user', scope, text: 'Review the task.' },
+    {
+      seq: 2,
+      turnId: 'task',
+      author: 'tool',
+      scope,
+      text: 'A completed tool result with enough detail. '.repeat(20),
+      tool: { kind: 'shell', name: 'test', status: 'completed', exitCode: 0 },
+    },
+    {
+      seq: 3,
+      turnId: 'task',
+      author: 'tool',
+      scope,
+      text: 'A trailing small action.',
+      tool: { kind: 'shell', name: 'status', status: 'completed', exitCode: 0 },
+    },
+  ];
+  const memory = new SessionMemory({
+    databasePath: ':memory:',
+    contextIndependent: true,
+    threshold: 20,
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(): Promise<never> {
+      throw new Error('Action batches are recorded without model inference.');
+    },
+  });
+  try {
+    memory.turn('leader', { turnId: 'task', outcome: 'completed', scope }, false);
+    await memory.settled();
+    const passage = { epoch: 'one', start: 1, position: 3, turnId: 'task' };
+    const visible = await memory.readStoredSummaries('leader', undefined, { passage });
+    expect(visible.summaries.map(({ type, position }) => ({ type, position }))).toEqual([
+      { type: 'AAB', position: 2 },
+    ]);
+
+    const redo = memory.redoSummaries('leader', {
+      epoch: 'one',
+      scope: 'passage',
+      passage,
+    });
+    await memory.settled();
+    expect(memory.status(undefined, 'leader').redo).toEqual({ id: redo.id, state: 'completed' });
+    const rebuilt = await memory.readStoredSummaries('leader', undefined, { passage });
+    expect(
+      rebuilt.summaries.map(({ type, position, state }) => ({ type, position, state })),
+    ).toEqual([{ type: 'AAB', position: 2, state: 'recorded' }]);
+  } finally {
+    await memory.close();
+  }
+});
+
 test('keeps the redo queued through a pause and retries the same request', async () => {
   const messages: MemorySourceMessage[] = [
     { ...first, seq: 1, turnId: 'first' },
