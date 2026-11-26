@@ -87,6 +87,7 @@ export function createRepoSearchTool(
       source?: RepositorySourceReader;
       collection?: RipgrepCollection;
       priority?: RepositorySearchPriority;
+      updateIndex?: boolean;
     } = {},
   ): Promise<Static<typeof RepositorySearchOutputSchema>> {
     signal.throwIfAborted();
@@ -111,7 +112,14 @@ export function createRepoSearchTool(
       ? ripgrep.search(workspace, { query, mode, paths, limit }, signal, source, collection)
       : colgrep.search(
           workspace,
-          { query, mode, pattern, paths, limit: prioritize ? COLGREP_MAX_RESULTS : limit },
+          {
+            query,
+            mode,
+            pattern,
+            paths,
+            limit: prioritize ? COLGREP_MAX_RESULTS : limit,
+            updateIndex: options.updateIndex,
+          },
           signal,
           source,
         ));
