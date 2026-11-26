@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import Database from 'libsql';
 import {
   estimateMemoryTokens,
   mergeMemoryEntries,
@@ -14,6 +15,7 @@ import {
   type MemoryMessage,
 } from '../../../runtime/src/evals/session-memory-extractive.js';
 import {
+  MemoryHistoryUnavailableError,
   MemorySummaryError,
   SessionMemory,
   type MemorySource,
@@ -434,6 +436,253 @@ async function eventually(predicate: () => boolean | Promise<boolean>) {
   }
   expect(await predicate()).toBe(true);
 }
+
+test.each([false, true])(
+  'reports a safe recording failure and recovers on a new observation (known history error: %s)',
+  async (known) => {
+    const messages = [
+      { ...first, turnId: 'one' },
+      { ...finding, turnId: 'one' },
+    ];
+    const source = timeline(() => ({ epoch: 'one', messages }));
+    const privateDetail = 'Untrusted timeline response with a credential and a private path';
+    let failure: Error | undefined = known
+      ? new MemoryHistoryUnavailableError()
+      : new Error(privateDetail);
+    const failures: unknown[] = [];
+    const memory = new SessionMemory({
+      databasePath: ':memory:',
+      contextIndependent: true,
+      source: {
+        async read(...args) {
+          if (failure) throw failure;
+          return source.read(...args);
+        },
+      },
+      async summarize(): Promise<never> {
+        throw new Error('A short Discussion should be recorded by reference.');
+      },
+      onFailure: (diagnostic) => failures.push(diagnostic),
+    });
+    try {
+      memory.turn('leader', { turnId: 'one', outcome: 'completed' }, false);
+      await memory.settled();
+      const status = memory.status(undefined, 'leader');
+      expect(status.summarization).toBe('failed');
+      expect(status.lastError?.message).toBe(
+        known
+          ? 'Session Memory could not read the conversation history. Check that it is available in Paseo.'
+          : 'Session Memory update failed.',
+      );
+      expect(failures).toEqual([
+        { agentId: 'leader', category: known ? 'history-unavailable' : 'unexpected-update' },
+      ]);
+
+      failure = undefined;
+      memory.observe('leader');
+      await memory.settled();
+      expect(memory.status(undefined, 'leader')).toMatchObject({
+        summarization: 'up-to-date',
+        lastError: null,
+        stored: { uamp: 1, coveredThrough: finding.seq },
+      });
+      expect(failures).toHaveLength(1);
+    } finally {
+      await memory.close();
+    }
+  },
+);
+
+test('retains a pending checkpoint when history fails after inference and recovers on restart', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-history-checkpoint-'));
+  const databasePath = path.join(directory, 'memory.sqlite');
+  const messages = [
+    { ...first, turnId: 'one', messageId: 'prompt' },
+    { ...longReply, turnId: 'one', messageId: 'reply' },
+  ];
+  const source = timeline(() => ({ epoch: 'one', messages }));
+  const content = '## Resolution\n\nKeep the cobalt cursor.';
+  let requests = 0;
+  let failNextTail = false;
+  const failures: unknown[] = [];
+  const interruptedSource: MemorySource = {
+    async read(agentId, cursor, direction) {
+      if (direction === 'tail' && failNextTail) {
+        failNextTail = false;
+        throw new MemoryHistoryUnavailableError();
+      }
+      return source.read(agentId, cursor, direction);
+    },
+  };
+  const options = {
+    databasePath,
+    contextIndependent: true,
+    source: interruptedSource,
+    async summarize(type: 'UAMP' | 'AAB') {
+      failNextTail = ++requests === 1;
+      return { type, text: content, content, complete: true as const, elapsedMs: 1 };
+    },
+    onFailure: (diagnostic: unknown) => failures.push(diagnostic),
+  };
+  let memory = new SessionMemory(options);
+  try {
+    memory.turn('leader', { turnId: 'one', outcome: 'completed' }, false);
+    await memory.settled();
+    expect(memory.status(undefined, 'leader')).toMatchObject({
+      summarization: 'failed',
+      pendingUamp: 1,
+    });
+    expect(failures).toEqual([{ agentId: 'leader', category: 'history-unavailable' }]);
+    const store = new MemoryStore(databasePath);
+    try {
+      expect(store.state('leader')).toMatchObject({ epoch: 'one', seq: first.seq - 1 });
+      expect(store.summaries('leader', 'one')).toMatchObject([
+        { state: 'failed', complete: false, parts: [] },
+      ]);
+    } finally {
+      store.close();
+    }
+
+    await memory.close();
+    memory = new SessionMemory(options);
+    memory.recover(['leader']);
+    await memory.settled();
+    expect(requests).toBe(2);
+    expect(memory.status(undefined, 'leader')).toMatchObject({
+      summarization: 'up-to-date',
+      lastError: null,
+      stored: { uamp: 1, coveredThrough: longReply.seq },
+      pendingUamp: 0,
+    });
+    const { summaries } = await memory.readStoredSummaries('leader');
+    expect(summaries).toMatchObject([
+      {
+        state: 'summarized',
+        parts: [{ content, format: 'markdown', sources: [first.seq, longReply.seq] }],
+      },
+    ]);
+    expect(
+      await memory.sourceMessage('leader', '', { agentId: 'leader', epoch: 'one', seq: first.seq }),
+    ).toMatchObject({
+      lookup: 'found',
+      source: { author: 'user', messageId: 'prompt', text: first.text },
+    });
+    expect(failures).toHaveLength(1);
+  } finally {
+    await memory.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('keeps durable coverage when SQLite rejects a completed summary and retries on restart', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-write-failure-'));
+  const databasePath = path.join(directory, 'memory.sqlite');
+  const messages: MemorySourceMessage[] = [
+    { ...first, turnId: 'short' },
+    { ...finding, turnId: 'short' },
+  ];
+  const original = { ...first, seq: 3, turnId: 'long', messageId: 'long-prompt' };
+  const reply = { ...longReply, seq: 4, turnId: 'long', messageId: 'long-reply' };
+  const content = '## Resolution\n\nKeep the cobalt cursor.';
+  let requests = 0;
+  const failures: unknown[] = [];
+  const options = {
+    databasePath,
+    contextIndependent: true,
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type: 'UAMP' | 'AAB') {
+      requests++;
+      return { type, text: content, content, complete: true as const, elapsedMs: 1 };
+    },
+    onFailure: (diagnostic: unknown) => failures.push(diagnostic),
+  };
+  function changeTrigger(sql: string) {
+    const database = new Database(databasePath);
+    try {
+      database.exec(sql);
+    } finally {
+      database.close();
+    }
+  }
+  let memory: SessionMemory | undefined = new SessionMemory(options);
+  try {
+    memory.turn('leader', { turnId: 'short', outcome: 'completed' }, false);
+    await memory.settled();
+    expect(memory.status(undefined, 'leader')).toMatchObject({
+      summarization: 'up-to-date',
+      lastSuccessfulSummaryAt: null,
+      stored: { uamp: 1, coveredThrough: finding.seq },
+    });
+    expect(requests).toBe(0);
+
+    changeTrigger(`
+      CREATE TRIGGER reject_completed_discussion
+      BEFORE UPDATE OF value ON memory_summary
+      WHEN json_extract(NEW.value, '$.complete') = 1
+      BEGIN SELECT RAISE(ABORT, 'synthetic completed summary write failure'); END;
+    `);
+    messages.push(original, reply);
+    memory.turn('leader', { turnId: 'long', outcome: 'completed' }, false);
+    await memory.settled();
+    const store = new MemoryStore(databasePath);
+    try {
+      expect(store.state('leader')).toMatchObject({ epoch: 'one', seq: finding.seq });
+      expect(store.summaries('leader', 'one')).toMatchObject([
+        { position: finding.seq, state: 'skipped', complete: true },
+        { position: reply.seq, state: 'pending', complete: false, parts: [] },
+      ]);
+    } finally {
+      store.close();
+    }
+    expect(memory.status(undefined, 'leader')).toMatchObject({
+      summarization: 'failed',
+      lastSuccessfulSummaryAt: null,
+      lastError: { message: 'Session Memory update failed.' },
+      stored: { uamp: 1, coveredThrough: finding.seq },
+      pendingUamp: 1,
+    });
+    expect(requests).toBe(1);
+    expect(failures).toEqual([{ agentId: 'leader', category: 'unexpected-update' }]);
+
+    await memory.close();
+    memory = undefined;
+    changeTrigger('DROP TRIGGER reject_completed_discussion');
+    memory = new SessionMemory(options);
+    memory.recover(['leader']);
+    await memory.settled();
+    expect(requests).toBe(2);
+    expect(memory.status(undefined, 'leader')).toMatchObject({
+      summarization: 'up-to-date',
+      lastSuccessfulSummaryAt: expect.any(String),
+      lastError: null,
+      stored: { uamp: 2, coveredThrough: reply.seq },
+      pendingUamp: 0,
+    });
+    const { summaries } = await memory.readStoredSummaries('leader');
+    expect(summaries).toMatchObject([
+      {
+        position: reply.seq,
+        state: 'summarized',
+        parts: [{ content, format: 'markdown', sources: [original.seq, reply.seq] }],
+      },
+      { position: finding.seq, state: 'skipped' },
+    ]);
+    expect(
+      await memory.sourceMessage('leader', '', {
+        agentId: 'leader',
+        epoch: 'one',
+        seq: original.seq,
+      }),
+    ).toMatchObject({
+      lookup: 'found',
+      source: { messageId: original.messageId, text: original.text },
+    });
+    expect(failures).toHaveLength(1);
+  } finally {
+    await memory?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test('persists device identity, resolves its current index, and releases a CPU runner once', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-device-'));
