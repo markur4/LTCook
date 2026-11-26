@@ -377,6 +377,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- LTCook’s bundled Paseo plugin loads its Session Memory text helper, restoring
+  the sidebar panels in installed builds.
+
 - The Session Memory execution details show compact tool outcomes instead of
   raw tool payloads.
 

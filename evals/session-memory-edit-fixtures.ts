@@ -3,7 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { MemoryFixture } from '../runtime/src/evals/session-memory-fixtures.js';
 import type { MemorySourceMessage } from '../runtime/src/session-memory/units.js';
-import type { MemoryMessage } from '../runtime/src/session-memory/text.js';
+import type { MemoryMessage } from '../runtime/src/paseo-plugin/server/memory-text.js';
 
 export const editBase = '53a615798b8ca04a63c70e2d3b9503b01a97ddf3';
 

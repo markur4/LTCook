@@ -17,7 +17,7 @@ import {
 import { catalogModelAliases } from '../../../runtime/src/models/aliases.js';
 import { TeamRegistry } from '../../../runtime/src/integrations/team-loader.js';
 import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
-import type { MemoryMessage } from '../../../runtime/src/session-memory/text.js';
+import type { MemoryMessage } from '../../../runtime/src/paseo-plugin/server/memory-text.js';
 import { PastedDocuments } from '../../../runtime/src/session-memory/pasted-documents.js';
 import type { MemorySourceMessage } from '../../../runtime/src/session-memory/units.js';
 import { createSessionMemoryTool } from '../../../runtime/src/tools/session-memory.js';

@@ -16,7 +16,7 @@ import {
   memoryIdentifierMatches,
   memoryIdentifiers,
   memoryPreview,
-} from './text.js';
+} from '../paseo-plugin/server/memory-text.js';
 import type { MemoryScope, MemorySourceMessage, MemoryUnit } from './units.js';
 
 export const sessionMemoryModel = 'lfm3:1.7b-qad-q4_0';
