@@ -81,7 +81,7 @@ const fixtures = [
         fact(
           2,
           'integrate remotely before cleanup',
-          /(?:remote|integrat\w*|merg\w*).{0,100}(?:clean\w*|remov\w*|delet\w*)|(?:clean\w*|remov\w*|delet\w*).{0,100}(?:remote|integrat\w*|merg\w*)/i,
+          /\b(?:integrat\w*|merg\w*)\b.{0,65}\b(?:before|then)\b.{0,35}\b(?:clean(?:up| up)|remov\w*|delet\w*)\b|\b(?:clean(?:up| up)|remov\w*|delet\w*)\b.{0,65}\b(?:after|once|until|pending|await\w*)\b.{0,65}\b(?:integrat\w*|merg\w*)\b/i,
         ),
         fact(
           2,
@@ -124,6 +124,7 @@ const fixtures = [
           1,
           'user approved the CACHE_LOCK change',
           /(?:approv\w*|authoriz\w*|agreed).{0,100}CACHE_LOCK|CACHE_LOCK.{0,100}(?:approv\w*|authoriz\w*|agreed)/i,
+          /(?:not (?:yet )?(?:approv\w*|authoriz\w*)|unapproved|reject\w*|declin\w*)[^.\n]{0,90}CACHE_LOCK|CACHE_LOCK[^.\n]{0,90}(?:not (?:yet )?(?:approv\w*|authoriz\w*)|unapproved|reject\w*|declin\w*|pending approval|await\w* approval)/i,
         ),
         fact(2, 'snapshot check failed', /CACHE_SNAPSHOT_CHECK.{0,18}fail/i),
         fact(
