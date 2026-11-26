@@ -13,6 +13,11 @@ import type { SessionSnapshot } from '../workflow-api/index.js';
 import type { ActivityPreferences } from './activity-preferences.js';
 import type { WorkspaceMcp } from './mcp.js';
 import type { PaseoHost } from './paseo.js';
+import type { PaseoWorkspaceServices } from './paseo-workspace-services.js';
+import {
+  workspaceActivityRpc,
+  workspaceServicesRpc,
+} from '../paseo-plugin/shared/workspace-services.js';
 
 export interface ActivityServices {
   preferences: ActivityPreferences;
@@ -21,6 +26,7 @@ export interface ActivityServices {
 
 interface ActivityDependencies {
   activity?: ActivityServices;
+  workspaceServices?: PaseoWorkspaceServices;
   memoryDisabled: boolean;
   readMemory(): SessionMemory | undefined;
   readSession(sessionId: string): SessionSnapshot | undefined;
@@ -40,6 +46,27 @@ type ActivityHandler = (
 ) => void | Promise<void>;
 
 const activityRoutes = {
+  async '/v1/activity/workspace-touch'(parsed, response, dependencies) {
+    const { workspaceId } = workspaceActivityRpc.input.parse(parsed);
+    const service = dependencies.workspaceServices;
+    if (!service) {
+      response.writeHead(503).end('{"error":"Workspace Services are unavailable."}');
+      return;
+    }
+    await service.recordActivity(workspaceId);
+    response.writeHead(200).end(JSON.stringify({ recorded: true }));
+  },
+  '/v1/activity/workspace-services'(parsed, response, dependencies) {
+    workspaceServicesRpc.input.parse(parsed);
+    const service = dependencies.workspaceServices;
+    if (!service) {
+      response.writeHead(503).end('{"error":"Workspace Services are unavailable."}');
+      return;
+    }
+    response
+      .writeHead(200)
+      .end(JSON.stringify(workspaceServicesRpc.output.parse(service.status())));
+  },
   '/v1/activity/toggle'(parsed, response, dependencies) {
     const { feature, enabled } = activityToggleRpc.input.parse(parsed);
     const activity = dependencies.activity;

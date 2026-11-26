@@ -149,7 +149,11 @@ test('Core guidance catalog keeps functional resources required', () => {
   expect(byPath.size).toBe(catalog.length);
   for (const resource of catalog)
     expect(existsSync(resolve(resourcesRoot, resource.path))).toBe(true);
-  for (const path of ['rules/planning.md', 'rules/web-research.md']) {
+  for (const path of [
+    'rules/workspace-terminology.md',
+    'rules/planning.md',
+    'rules/web-research.md',
+  ]) {
     expect(byPath.get(path)).toMatchObject({ kind: 'rule', required: true });
   }
   for (const path of [

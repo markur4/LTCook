@@ -21,6 +21,7 @@ import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import { ActivityPreferences } from '../../../runtime/src/integrations/activity-preferences.js';
+import type { PaseoWorkspaceServices } from '../../../runtime/src/integrations/paseo-workspace-services.js';
 import {
   createWorktreeScopeResolver,
   SessionWorktrees,
@@ -145,6 +146,8 @@ describe('native runtime boundary', () => {
         'memory-evidence',
         'stored-summaries',
         'services',
+        'workspace-touch',
+        'workspace-services',
       ]) {
         const denied = await post(route, agent, { nativeAgentId });
         expect(denied.status).toBe(403);
@@ -153,11 +156,91 @@ describe('native runtime boundary', () => {
       expect((await fetch(`${endpoint}/v1/activity/services`)).status).toBe(404);
       expect((await post('memory-evidence', secret, {})).status).toBe(503);
       expect((await post('stored-summaries', secret, {})).status).toBe(400);
+      expect((await post('workspace-touch', secret, { workspaceId: 'workspace-1' })).status).toBe(
+        503,
+      );
+      expect((await post('workspace-services', secret, {})).status).toBe(503);
       const services = await post('services', secret, { nativeAgentId });
       expect(services.status).toBe(200);
       expect(await services.json()).toMatchObject({
         rag: { availability: 'unavailable', activity: 'unknown', indexingEnabled: null },
       });
+    } finally {
+      await api.close();
+    }
+  });
+
+  test('records workspace use only with user authority and rejects client timestamps', async () => {
+    const secret = 'workspace-service-secret';
+    const nativeAgentId = 'ordinary-agent';
+    const activity: string[] = [];
+    const serviceStatus = {
+      enabled: true,
+      running: false,
+      lastRunAt: null,
+      lastSuccessAt: null,
+      processed: 0,
+    };
+    const status = {
+      organizer: serviceStatus,
+      renamer: serviceStatus,
+      autoArchive: true,
+      renameWorkspaces: false,
+      renameTabs: true,
+      archiveBlocked: [{ workspaceId: 'protected', reason: 'Checkout has unpreserved files.' }],
+    };
+    const api = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
+    api.setWorkspaceServices({
+      async recordActivity(workspaceId: string) {
+        await Promise.resolve();
+        activity.push(workspaceId);
+      },
+      status: () => status,
+    } as unknown as PaseoWorkspaceServices);
+    const endpoint = await api.listen();
+    const post = (route: string, token: string, input: object) =>
+      fetch(`${endpoint}/v1/activity/${route}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+    try {
+      expect(
+        (await post('workspace-touch', 'invalid', { workspaceId: 'workspace-1' })).status,
+      ).toBe(401);
+      expect(
+        (
+          await post('workspace-touch', agentBearer(secret, nativeAgentId), {
+            nativeAgentId,
+            workspaceId: 'workspace-1',
+          })
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await post('workspace-touch', secret, {
+            workspaceId: 'workspace-1',
+            lastActivityAt: Date.now(),
+          })
+        ).status,
+      ).toBe(400);
+      expect((await post('workspace-touch', secret, { workspaceId: '' })).status).toBe(400);
+      expect(activity).toEqual([]);
+
+      const recorded = await post('workspace-touch', secret, { workspaceId: 'workspace-1' });
+      expect(recorded.status).toBe(200);
+      expect(await recorded.json()).toEqual({ recorded: true });
+      expect(activity).toEqual(['workspace-1']);
+      const read = await post('workspace-services', secret, {});
+      expect(read.status).toBe(200);
+      expect(await read.json()).toEqual(status);
+      expect(activity).toEqual(['workspace-1']);
+      expect((await post('workspace-services', secret, { enabled: false })).status).toBe(400);
     } finally {
       await api.close();
     }

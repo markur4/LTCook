@@ -10,6 +10,7 @@ import { createTools } from './tools/catalog.js';
 import { WebToolService } from './tools/web.js';
 import { WorkspaceMcp } from './integrations/mcp.js';
 import { ActivityPreferences } from './integrations/activity-preferences.js';
+import { PaseoWorkspaceServices } from './integrations/paseo-workspace-services.js';
 import { createWorktreeScopeResolver, SessionWorktrees } from './integrations/session-worktrees.js';
 import { createColgrepProvider } from './repository/providers/colgrep.js';
 import { createSessionWorktreeTool } from './tools/session-worktree.js';
@@ -175,6 +176,7 @@ async function run(): Promise<void> {
   let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined;
   let evals: EvalRunService | undefined;
   let memory: SessionMemory | undefined;
+  let workspaceServices: PaseoWorkspaceServices | undefined;
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
   const nativePreparation = new AbortController();
@@ -212,6 +214,7 @@ async function run(): Promise<void> {
           sessionId: initialSnapshot?.session.id,
         }),
       );
+      if (workspaceServices) await attempt(() => workspaceServices!.close());
       if (memory) await attempt(() => memory!.close());
       if (runtime) await attempt(() => runtime!.close());
       if (evals) await attempt(() => evals!.close());
@@ -661,6 +664,49 @@ async function run(): Promise<void> {
       () => cleanup('API stop', 0),
       reserveIdleRestart,
     );
+    workspaceServices = new PaseoWorkspaceServices({
+      api: host.api,
+      mutations: host.workspaceMutations,
+      archiveWorkspacePreservingFiles: host.archiveWorkspacePreservingFiles,
+      listProviderSubagents: host.listProviderSubagents,
+      stateDirectory,
+      isQueued(agents) {
+        const sessions = new Set(
+          agents.flatMap((agent) => {
+            const id = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
+            return id ? [id] : [];
+          }),
+        );
+        for (const id of sessions) {
+          try {
+            const snapshot = runtimeController.snapshot(id);
+            if (
+              snapshot.assignments.some(({ status }) => status !== 'reported') ||
+              snapshot.tasks.some(
+                ({ scheduled, status }) =>
+                  scheduled && ['pending', 'running', 'ready'].includes(status),
+              ) ||
+              snapshot.decisions.some(({ blocking, answeredAt }) => blocking && !answeredAt) ||
+              snapshot.planning.some(({ stage }) => stage === 'awaiting-approval')
+            )
+              return true;
+          } catch {
+            // A missing managed binding is not evidence that its work has finished.
+            return true;
+          }
+        }
+        return false;
+      },
+      onError(service, error, workspaceId) {
+        void telemetry.log('warn', 'workspace-services.update-failed', {
+          service,
+          workspaceId,
+          message: safeErrorMessage(error),
+        });
+      },
+    });
+    api.setWorkspaceServices(workspaceServices);
+    workspaceServices.start();
     if (stopping) return;
     const summary = initialSnapshot
       ? `${teamSelection}, ${initialSnapshot.members.length} declared members, ` +

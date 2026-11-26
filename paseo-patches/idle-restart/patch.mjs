@@ -122,6 +122,44 @@ function patchAgentPrompt(source, { gateUrl }) {
   return importGate(source, gateUrl);
 }
 
+function patchWorkspaceArchive(source, { gateUrl }) {
+  source = addAtOpening(
+    source,
+    'async function archiveByScopeWithPriority(dependencies, request)',
+    `    const preserveDirectory = typeof request.requestId === "string" &&
+        request.requestId.startsWith(workspaceArchiveRequestPrefix);
+    if (preserveDirectory && request.scope.kind !== "workspace") {
+        throw new WorkspaceArchiveBlockedError("Preserving archive requires workspace scope");
+    }`,
+  );
+  source = replaceOnce(
+    source,
+    '    await stopWorkspaceSetups(dependencies, target.setupWorkspaceIds, request.requestId);',
+    '    if (!preserveDirectory) await stopWorkspaceSetups(dependencies, target.setupWorkspaceIds, request.requestId);',
+  );
+  const archiveRecords =
+    '        const { archivedAgents, archivedWorkspaceIds } = await archiveTargetRecords(dependencies, targetWorkspaceIds, { requestId: request.requestId, checkpoint, archivedAt });';
+  source = replaceOnce(
+    source,
+    archiveRecords,
+    `        if (preserveDirectory) {
+            const activeTurns = dependencies.agentManager.ltcookIdleRestartActiveTurns?.();
+            if (!Number.isFinite(activeTurns) || activeTurns !== 0) {
+                throw new WorkspaceArchiveBlockedError("Paseo has active or pending agent work");
+            }
+        }
+${archiveRecords}`,
+  );
+  // Skip the entire branch: worktree teardown hooks can delete files before
+  // deletePaseoWorktree runs. File cleanliness is deliberately irrelevant.
+  source = replaceOnce(
+    source,
+    '        if (target.backing !== null) {',
+    '        if (!preserveDirectory && target.backing !== null) {',
+  );
+  return `import { WorkspaceArchiveBlockedError, workspaceArchiveRequestPrefix } from ${JSON.stringify(gateUrl)};\n${source}`;
+}
+
 export const patches = {
   'dist/scripts/supervisor-entrypoint.js': {
     sha256: '935ea7f386cb464f1aacd111901370b7c7b11ef4c9e6a1ce5fe378dee78cd3bb',
@@ -138,6 +176,26 @@ export const patches = {
   'dist/server/server/bootstrap.js': {
     sha256: '5e3418aef47924bdcb1644e51e850ee52e86e29d71b0fdf25932c31ca7139713',
     apply(source, { gateUrl }) {
+      const terminalAnchor =
+        '    applyTerminalAgentHookSetting({ store: daemonConfigStore, logger });';
+      source = replaceOnce(
+        source,
+        terminalAnchor,
+        `    const ltcookCreateTerminal = terminalManager.createTerminal.bind(terminalManager);
+    terminalManager.createTerminal = (...args) => idleRestart.run(() => ltcookCreateTerminal(...args));
+${terminalAnchor}`,
+      );
+      const setupAnchor = '    const workspaceSetupRuntime = new WorkspaceSetupRuntime();';
+      source = replaceOnce(
+        source,
+        setupAnchor,
+        `${setupAnchor}
+    const ltcookStartWorkspaceSetup = workspaceSetupRuntime.start.bind(workspaceSetupRuntime);
+    workspaceSetupRuntime.start = (...args) => {
+        idleRestart.assertOpen();
+        return ltcookStartWorkspaceSetup(...args);
+    };`,
+      );
       const anchor =
         '    app.post("/api/terminal-activity", express.json(), createTerminalActivityRouteHandler(terminalManager));';
       source = replaceOnce(
@@ -149,13 +207,43 @@ export const patches = {
         authorizeIdleRestart(isLoopbackRemoteAddress, process.env.LTCOOK_RUNTIME_USER_TOKEN),
         express.json({ limit: "1kb" }),
         idleRestartHandler(
-            () => Math.max(agentManager.ltcookIdleRestartActiveTurns(), wsServer?.agentMessages.hasAnyPending() ? 1 : 0),
+            () => Math.max(agentManager.ltcookIdleRestartActiveTurns(), wsServer?.agentMessages.hasAnyPending() ? 1 : 0, workspaceSetupRuntime.runs.size > 0 ? 1 : 0),
             config.onLifecycleIntent,
+            { workspaceArchive: "preserve-directory-v1" },
         ),
+    );
+    app.post(
+        workspaceArchivePath,
+        authorizeIdleRestart(isLoopbackRemoteAddress, process.env.LTCOOK_RUNTIME_USER_TOKEN),
+        express.json({ limit: "1kb" }),
+        workspaceArchiveHandler({
+            getWorkspace: (workspaceId) => workspaceRegistry.get(workspaceId),
+            isSetupRunning: (workspaceId) => {
+                if (!(workspaceSetupRuntime.runs instanceof Map)) {
+                    throw new Error("Cannot inspect workspace setup state");
+                }
+                return workspaceSetupRuntime.runs.has(workspaceId);
+            },
+            listTerminals: async (workspaceId) => {
+                if (terminalManager.getUnavailableError?.()) {
+                    throw new Error("Cannot inspect workspace terminals");
+                }
+                const lists = await Promise.all(terminalManager.listDirectories().map(
+                    (cwd) => terminalManager.getTerminals(cwd, { workspaceId }),
+                ));
+                return lists.flat().filter((terminal) => terminal.workspaceId === workspaceId);
+            },
+            countActiveTurns: () => Math.max(agentManager.ltcookIdleRestartActiveTurns(), wsServer?.agentMessages.hasAnyPending() ? 1 : 0, workspaceSetupRuntime.runs.size > 0 ? 1 : 0),
+            archiveWorkspace: (workspaceId, requestId) => archiveWorkspaceByIdExternal(workspaceId, requestId),
+        }),
     );`,
       );
-      return `import { authorizeIdleRestart, idleRestartHandler, idleRestartPath } from ${JSON.stringify(gateUrl)};\n${source}`;
+      return `import { authorizeIdleRestart, idleRestart, idleRestartHandler, idleRestartPath, workspaceArchiveHandler, workspaceArchivePath } from ${JSON.stringify(gateUrl)};\n${source}`;
     },
+  },
+  'dist/server/server/workspace-archive-service.js': {
+    sha256: '62fff0b4eca1567103fb9a553cc52d71195b9851d749b7b4e57d306b9deccfdb',
+    apply: patchWorkspaceArchive,
   },
   'dist/server/server/agent/agent-manager.js': {
     sha256: '9e448f74df5ac6bfcc273eef6dc553c9c751dc2aa0ed9f08f2804ac02d9b2751',

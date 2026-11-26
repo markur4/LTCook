@@ -47,14 +47,21 @@ the runtime, and interchangeable teams connect. Use
 
 Use these names consistently:
 
+Qualify Project and Workspace when referring to Paseo or AppRC. The
+[terminology glossary](Explanations.md#paseo-and-apprc-terminology) distinguishes
+their directory, configuration, and UI meanings, and explains the default of
+one main user-facing session per Paseo workspace.
+
 | Name | Implementation | Responsibility |
 | --- | --- | --- |
-| AppRC | `ltcook.config.app.APP_RC` | One settings, workspace, secret-file, and path declaration. |
+| AppRC | `ltcook.config.app.APP_RC` | One settings, AppRC workspace, secret-file, and path declaration. |
 | `AppSettings` | `ltcook.config.sections.app.AppSettings` | Selects team, session, workspace, and deployment. |
 | `LtcookConfig` | `ltcook.config.bundle.LtcookConfig` | Groups LTCook's registered AppRC settings sections. |
 | Launch helper | `ltcook.launch.resolve_launch()` | Resolves global settings or optional project overrides from original shell inputs. |
 | `ltcook` CLI | `ltcook.cli.app.app` | Exposes AppRC commands, runtime launch, and native Pi authentication. |
 | Runtime | `runtime/src/main.ts` | Starts the idle Paseo host and opens project Sessions on explicit user request. |
+| Workspace Organizer | `runtime/src/services/workspace-organizer.ts` | Maintains standard workspace labels and eligible automatic archival. |
+| Renamer | `runtime/src/services/renamer.ts` | Maintains short workspace and agent-session titles. |
 | Pi authentication | `ltcook auth` and native Pi's SDK | Shares Pi-managed credentials while keeping project settings and histories separate. |
 | Team package | `TeamPackage` in `runtime/src/team-api/index.ts` | Provides versioned member, guidance and work-routing declarations. |
 | Deployment bundle | `src/ltcook_distr/bundle.zip` | Canonical archive of runtime, team, resource, service and lock assets for installation. |

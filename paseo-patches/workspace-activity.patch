@@ -1,0 +1,229 @@
+diff --git a/packages/app/src/app/_layout.tsx b/packages/app/src/app/_layout.tsx
+index b4ca122f7..4f14ff693 100644
+--- a/packages/app/src/app/_layout.tsx
++++ b/packages/app/src/app/_layout.tsx
+@@ -10,6 +10,7 @@ import {
+ import { AddHostProvider, AddHostFlowHost } from "@/hosts/add-host";
+ import { useSafeAreaInsets } from "react-native-safe-area-context";
+ import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
++import { useLtcookWorkspaceActivity } from "@/hooks/use-ltcook-workspace-activity";
+ import { useIsExplorerSidebarOpen } from "@/workspace-tabs/explorer-sidebar";
+ import { ComposerEditingSessionsProvider } from "@/composer/editing-session";
+ import { SheetHostScope } from "@/components/ui/isolated-bottom-sheet-modal";
+@@ -452,4 +453,5 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
+   const activeWorkspace = useActiveWorkspaceSelection();
++  useLtcookWorkspaceActivity(activeWorkspace);
+   const explorerVisible = useIsExplorerSidebarOpen({
+     isCompact: isCompactLayout,
+     workspaceKey: activeWorkspace
+diff --git a/packages/app/src/hooks/ltcook-workspace-activity.test.ts b/packages/app/src/hooks/ltcook-workspace-activity.test.ts
+new file mode 100644
+index 000000000..e1b38c477
+--- /dev/null
++++ b/packages/app/src/hooks/ltcook-workspace-activity.test.ts
+@@ -0,0 +1,85 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import {
++  createWorkspaceActivityReporter,
++  WORKSPACE_ACTIVITY_INTERVAL_MS,
++} from "./ltcook-workspace-activity";
++
++describe("LTCook workspace activity", () => {
++  beforeEach(() => {
++    vi.useFakeTimers();
++    vi.setSystemTime(0);
++  });
++  afterEach(() => vi.useRealTimers());
++
++  it("reports the first interaction immediately and never refreshes idle activity", () => {
++    const report = vi.fn();
++    const activity = createWorkspaceActivityReporter(report);
++    vi.advanceTimersByTime(14 * 24 * 60 * 60 * 1_000);
++    expect(report).not.toHaveBeenCalled();
++    activity.record();
++    expect(report).toHaveBeenCalledTimes(1);
++    vi.advanceTimersByTime(14 * 24 * 60 * 60 * 1_000);
++    expect(report).toHaveBeenCalledTimes(1);
++    activity.dispose();
++    expect(report).toHaveBeenCalledTimes(1);
++  });
++
++  it("coalesces scrolling while retaining its final interaction", () => {
++    const report = vi.fn();
++    const activity = createWorkspaceActivityReporter(report);
++    activity.record();
++    for (let index = 0; index < 59; index += 1) {
++      vi.advanceTimersByTime(1_000);
++      activity.record();
++    }
++    expect(report).toHaveBeenCalledTimes(1);
++    vi.advanceTimersByTime(1_000);
++    expect(report).toHaveBeenCalledTimes(2);
++    vi.advanceTimersByTime(WORKSPACE_ACTIVITY_INTERVAL_MS * 2);
++    expect(report).toHaveBeenCalledTimes(2);
++    activity.dispose();
++  });
++
++  it("flushes pending use of the old workspace before navigation disposes it", () => {
++    const report = vi.fn();
++    const oldWorkspace = createWorkspaceActivityReporter(() => report("old"));
++    oldWorkspace.record();
++    vi.advanceTimersByTime(1_000);
++    oldWorkspace.record();
++    oldWorkspace.dispose();
++    const newWorkspace = createWorkspaceActivityReporter(() => report("new"));
++    newWorkspace.record();
++    oldWorkspace.record();
++    vi.advanceTimersByTime(WORKSPACE_ACTIVITY_INTERVAL_MS);
++    expect(report.mock.calls).toEqual([["old"], ["old"], ["new"]]);
++    newWorkspace.dispose();
++  });
++
++  it("flushes on hiding without creating activity when nothing changed", () => {
++    const report = vi.fn();
++    const activity = createWorkspaceActivityReporter(report);
++    activity.record();
++    vi.advanceTimersByTime(500);
++    activity.record();
++    activity.flush();
++    activity.flush();
++    vi.advanceTimersByTime(WORKSPACE_ACTIVITY_INTERVAL_MS);
++    expect(report).toHaveBeenCalledTimes(2);
++    activity.dispose();
++  });
++
++  it("contains missing-plugin and disconnected-host failures without retries", async () => {
++    const report = vi.fn().mockRejectedValue(new Error("Plugin unavailable"));
++    const activity = createWorkspaceActivityReporter(report);
++    activity.record();
++    await Promise.resolve();
++    vi.advanceTimersByTime(WORKSPACE_ACTIVITY_INTERVAL_MS * 10);
++    expect(report).toHaveBeenCalledTimes(1);
++    activity.dispose();
++    const stopped = createWorkspaceActivityReporter(() => {
++      throw new Error("Stopped");
++    });
++    expect(() => stopped.record()).not.toThrow();
++    stopped.dispose();
++  });
++});
+diff --git a/packages/app/src/hooks/ltcook-workspace-activity.ts b/packages/app/src/hooks/ltcook-workspace-activity.ts
+new file mode 100644
+index 000000000..11942fadb
+--- /dev/null
++++ b/packages/app/src/hooks/ltcook-workspace-activity.ts
+@@ -0,0 +1,42 @@
++export const WORKSPACE_ACTIVITY_INTERVAL_MS = 60_000;
++
++/** Coalesce real interactions; an idle clock never creates an activity report. */
++export function createWorkspaceActivityReporter(
++  report: () => void | Promise<unknown>,
++) {
++  let lastReportAt = -Infinity;
++  let pending = false;
++  let timer: ReturnType<typeof setTimeout> | null = null;
++  let disposed = false;
++
++  function flush(): void {
++    if (timer !== null) clearTimeout(timer);
++    timer = null;
++    if (!pending) return;
++    pending = false;
++    lastReportAt = Date.now();
++    // Activity must not interrupt navigation when a plugin stops or its host disconnects.
++    try {
++      void Promise.resolve(report()).catch(() => undefined);
++    } catch {
++      // A removed plugin may reject before returning its RPC promise.
++    }
++  }
++
++  return {
++    record(): void {
++      if (disposed) return;
++      pending = true;
++      const remaining =
++        WORKSPACE_ACTIVITY_INTERVAL_MS - (Date.now() - lastReportAt);
++      if (remaining <= 0) flush();
++      else if (timer === null) timer = setTimeout(flush, remaining);
++    },
++    flush,
++    dispose(): void {
++      if (disposed) return;
++      flush();
++      disposed = true;
++    },
++  };
++}
+diff --git a/packages/app/src/hooks/use-ltcook-workspace-activity.ts b/packages/app/src/hooks/use-ltcook-workspace-activity.ts
+new file mode 100644
+index 000000000..c584d095c
+--- /dev/null
++++ b/packages/app/src/hooks/use-ltcook-workspace-activity.ts
+@@ -0,0 +1,66 @@
++import { useEffect, useRef } from "react";
++import { useInstalledPlugin } from "@/plugins/registry";
++import {
++  useHostRuntimeClient,
++  useHostRuntimeIsConnected,
++} from "@/runtime/host-runtime";
++import type { ActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
++import { createWorkspaceActivityReporter } from "./ltcook-workspace-activity";
++
++/** The embedded web app reports use of the workspace, including file and diff tabs. */
++export function useLtcookWorkspaceActivity(
++  selection: ActiveWorkspaceSelection | null,
++): void {
++  const serverId = selection?.serverId ?? "";
++  const workspaceId = selection?.workspaceId ?? null;
++  const plugin = useInstalledPlugin(serverId, "ltcook");
++  const client = useHostRuntimeClient(serverId);
++  const connected = useHostRuntimeIsConnected(serverId);
++  const pendingOpen = useRef(false);
++
++  useEffect(() => {
++    pendingOpen.current = workspaceId !== null;
++  }, [serverId, workspaceId]);
++
++  useEffect(() => {
++    if (!workspaceId || !plugin || !client || !connected) return;
++    if (typeof window === "undefined" || typeof document === "undefined")
++      return;
++
++    const reporter = createWorkspaceActivityReporter(() => {
++      if (!client.isConnected || plugin.lifetime.signal.aborted) return;
++      return plugin.invoke("ltcook.workspace.activity", { workspaceId });
++    });
++    const record = () => {
++      if (document.visibilityState !== "visible") return;
++      pendingOpen.current = false;
++      reporter.record();
++    };
++    const visibility = () => {
++      if (document.visibilityState === "visible") record();
++      else reporter.flush();
++    };
++
++    // A delayed plugin catalog may finish loading after the workspace opened. Catalog
++    // refreshes and reconnects thereafter do not manufacture new user interactions.
++    if (pendingOpen.current) record();
++    window.addEventListener("focus", record);
++    window.addEventListener("pointerdown", record, { passive: true });
++    window.addEventListener("keydown", record);
++    window.addEventListener("wheel", record, { passive: true });
++    window.addEventListener("touchstart", record, { passive: true });
++    window.addEventListener("pagehide", reporter.flush);
++    document.addEventListener("visibilitychange", visibility);
++
++    return () => {
++      window.removeEventListener("focus", record);
++      window.removeEventListener("pointerdown", record);
++      window.removeEventListener("keydown", record);
++      window.removeEventListener("wheel", record);
++      window.removeEventListener("touchstart", record);
++      window.removeEventListener("pagehide", reporter.flush);
++      document.removeEventListener("visibilitychange", visibility);
++      reporter.dispose();
++    };
++  }, [serverId, workspaceId, plugin, client, connected]);
++}
