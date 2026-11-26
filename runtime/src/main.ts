@@ -418,8 +418,8 @@ async function run(): Promise<void> {
               estimatedSize: data.estimatedTokens,
             });
           },
-          onFailure: () => {
-            void telemetry.log('warn', 'session-memory.update_failed', {});
+          onFailure: ({ agentId, category }) => {
+            void telemetry.log('warn', 'session-memory.update_failed', { agentId, category });
           },
         });
         memory.setInferenceMode(mode);

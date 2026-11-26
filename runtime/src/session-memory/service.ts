@@ -62,6 +62,13 @@ export type MemoryPage = {
   reset: boolean;
   messages: MemorySourceMessage[];
 };
+
+export class MemoryHistoryUnavailableError extends Error {
+  constructor() {
+    super('Session Memory history is unavailable.');
+  }
+}
+
 export interface MemorySource {
   read(
     agentId: string,
@@ -75,6 +82,8 @@ export interface MemorySource {
 type UnitCounts = { uamp: number; aab: number };
 type SummaryOutcome = 'up-to-date' | 'below-threshold' | 'failed' | 'unknown';
 type MemoryError = { at: string; message: string };
+type MemoryFailureCategory =
+  'history-unavailable' | 'input-budget' | 'device-placement' | 'inference' | 'unexpected-update';
 type StoredMemory = UnitCounts & { agentId: string; epoch: string; coveredThrough: number | null };
 type DeliveredMemory = UnitCounts & {
   sessionId: string;
@@ -170,7 +179,7 @@ type MemoryOptions = {
   model?: string;
   configuration?: string;
   peers?(agentId: string, workspaceRoot: string): readonly string[];
-  onFailure?(): void;
+  onFailure?(failure: { agentId: string; category: MemoryFailureCategory }): void;
   onDispatch?(data: { agentId: string; elapsedMs: number; estimatedTokens?: number }): void;
   onRequest?(data: {
     agentId: string;
@@ -782,10 +791,23 @@ export class SessionMemory {
     };
   }
 
-  private noteFailure(agentId: string, message: string): void {
+  private noteFailure(agentId: string, category: MemoryFailureCategory, message: string): void {
     const activity = this.agentActivity(agentId);
     activity.outcome = 'failed';
     activity.lastError = { at: new Date().toISOString(), message };
+    this.options.onFailure?.({ agentId, category });
+  }
+
+  private noteUpdateFailure(agentId: string, error: unknown, fallback: string): void {
+    if (error instanceof MemoryHistoryUnavailableError) {
+      this.noteFailure(
+        agentId,
+        'history-unavailable',
+        'Session Memory could not read the conversation history. Check that it is available in Paseo.',
+      );
+    } else {
+      this.noteFailure(agentId, 'unexpected-update', fallback);
+    }
   }
 
   prepareDelivery(
@@ -970,12 +992,9 @@ export class SessionMemory {
       let retry: boolean;
       try {
         retry = await this.update(agentId, pending.force, pending.queuedAt, signal);
-      } catch {
+      } catch (error) {
         retry = signal.aborted;
-        if (!retry) {
-          this.noteFailure(agentId, 'Session Memory update failed.');
-          this.options.onFailure?.();
-        }
+        if (!retry) this.noteUpdateFailure(agentId, error, 'Session Memory update failed.');
       }
       if (retry && !this.abort.signal.aborted) {
         const next = this.pending.get(agentId);
@@ -1324,8 +1343,7 @@ export class SessionMemory {
       } catch (error) {
         if (!(error instanceof MemoryInputBudgetError)) throw error;
         retainCoverage(unit);
-        this.noteFailure(agentId, error.message);
-        this.options.onFailure?.();
+        this.noteFailure(agentId, 'input-budget', error.message);
         if (!legacy) {
           if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
           this.store.saveSummary({ ...record, state: 'failed' });
@@ -1415,10 +1433,10 @@ export class SessionMemory {
               if (selected?.mainGpu === undefined || selected.unavailable) {
                 this.noteFailure(
                   agentId,
+                  'device-placement',
                   selected?.unavailable ?? catalog.diagnostic ?? unknownDevice,
                 );
                 failure = true;
-                this.options.onFailure?.();
                 break;
               }
               placement = { mainGpu: selected.mainGpu };
@@ -1486,15 +1504,18 @@ export class SessionMemory {
           if (!result.complete) {
             this.noteFailure(
               agentId,
+              'inference',
               providerFailure ??
                 (result.failure === 'invalid-json'
                   ? 'Ollama returned invalid JSON for a Session Memory summary.'
                   : 'Session Memory returned an incomplete summary.'),
             );
             failure = true;
-            this.options.onFailure?.();
             break;
           }
+          // > Unconfirmed portions must not count as completed coverage.
+          if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
+          signal.throwIfAborted();
           summary.parts.push({ content: result.content, format, sources: part.sources });
           summary.summaryTokens =
             (summary.summaryTokens ?? 0) + estimateMemoryTokens(memorySummaryText(result.content));
@@ -1504,8 +1525,6 @@ export class SessionMemory {
               result.elapsedMs >= 0 && Number.isSafeInteger(durationMs) ? durationMs : undefined;
           }
           summary.complete = summary.parts.length === parts.length;
-          if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
-          signal.throwIfAborted();
           if (summary.complete) {
             if (!legacy) summary.state = 'summarized';
             activity.lastSuccessfulSummaryAt = new Date().toISOString();
@@ -1521,13 +1540,15 @@ export class SessionMemory {
             break;
           }
           failure = true;
-          this.noteFailure(
-            agentId,
-            error instanceof OllamaSummaryError
-              ? error.message
-              : 'Session Memory could not complete the summary.',
-          );
-          this.options.onFailure?.();
+          if (error instanceof OllamaSummaryError) {
+            this.noteFailure(agentId, 'inference', error.message);
+          } else {
+            this.noteUpdateFailure(
+              agentId,
+              error,
+              'Session Memory could not complete the summary.',
+            );
+          }
           break;
         }
       }
