@@ -1082,7 +1082,7 @@ try {
   try {
     await assert.rejects(
       host.api.agents.ref(mobileSession.id).send('Prompt blocked by idle restart'),
-      /reserved for an LTCook restart/,
+      /reserved for LTCook maintenance/,
     );
     assert.equal(modelCalls, priorModelCalls);
   } finally {
