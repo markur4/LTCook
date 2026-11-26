@@ -385,6 +385,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- **Show summary** displays full Discussion summaries in chat. New summaries
+  group related facts and preserve the details needed for follow-up.
+
 - LTCook’s bundled Paseo plugin loads its Session Memory text helper, restoring
   the sidebar panels in installed builds.
 
