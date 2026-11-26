@@ -39,11 +39,11 @@ unrelated changes. Coding agents must also follow [AGENTS.md](AGENTS.md).
 
 ## Set up development
 
-The project requires Python 3.12+, Bun 1.4.4+, Node matching `.node-version`,
+The project requires Python 3.13+, Bun 1.4.4+, Node matching `.node-version`,
 uv, and just. From the project root:
 
 ```shell
-uv venv --python 3.12 .venv
+uv venv --python 3.13 .venv
 just sync
 ```
 

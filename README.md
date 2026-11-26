@@ -37,7 +37,7 @@ design. Before editing, read "README maintenance" in CONTRIBUTING.md.
 
 [![CI](https://github.com/markur4/ltcook/actions/workflows/ci.yml/badge.svg)](https://github.com/markur4/ltcook/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 [![Bun](https://img.shields.io/badge/Bun-development-runtime-black)](https://bun.sh/)
 
 
@@ -138,7 +138,7 @@ Third-party packages retain their own licences.
 
 # Installation
 
-The installer uses Python 3.12 or newer through `uv`. If `uv` is not available,
+The installer uses Python 3.13 through `uv`. If `uv` is not available,
 it installs the official user-scoped `uv` executable and lets `uv` provision a
 compatible Python; no system Python or administrator access is required.
 
