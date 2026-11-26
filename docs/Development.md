@@ -47,13 +47,19 @@ checkout and report the denied action, the reason, and the relevant user
 authorization. Leave the Pass open until the agreed integration succeeds.
 
 For an ordinary Codex chat in Paseo, start with **Default Permissions** when
-testing guidance with the user's command approval flow. In the pinned adapter,
-that preset uses `on-request`, `workspace-write`, and the `user` reviewer.
-Paseo's **Auto-review** preset can override Codex's user configuration by
-sending `approvalsReviewer: "auto_review"` to the app-server. Check the
-effective mode for the chat when diagnosing a denial, including after resuming.
+testing guidance with the user's command approval flow. That preset uses
+`on-request`, `workspace-write`, and the `user` reviewer. LTCook's pinned
+Paseo adapter defaults to **Auto-review** when the host Codex version supports
+it (0.115.0 and newer). Auto-review keeps the same policy and sandbox, and
+passes `approvalsReviewer: "auto_review"` to Codex app-server, overriding the
+user's reviewer setting for that chat. Check the effective mode when diagnosing
+a denial, including after resuming. [Pinned Paseo adapter](https://github.com/getpaseo/paseo/blob/23bae61535542a45ade7196a7b3c152705f16de3/packages/server/src/server/agent/providers/codex-app-server-agent.ts#L8012-L8032)
+
 The Codex command approval flow and the Team's code review Task have separate
-criteria and authority. See [instruction sources](Explanations.md#instruction-sources-in-codex-and-pi).
+criteria and authority. In Codex 0.171.0, the app-server entry point supplies
+`vscode` as the thread source label even when Paseo launches it. Check the mode
+and approval settings to identify which reviewer resolved a request.
+[Codex app-server entry point](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/cli/src/main.rs#L1361-L1369) · [Instruction sources](Explanations.md#instruction-sources-in-codex-and-pi)
 
 ## Maintainer environment
 
