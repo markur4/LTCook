@@ -1415,6 +1415,7 @@ export class SessionMemory {
             prefixHash: part.prefixHash,
             result,
           });
+        let completed: Extract<MemorySummaryResult, { complete: true }>;
         try {
           let placement: MemoryPlacement = {};
           if (selection?.mode !== 'hosted') {
@@ -1516,22 +1517,7 @@ export class SessionMemory {
           // > Unconfirmed portions must not count as completed coverage.
           if (!(await this.currentHistory(agentId, epoch, latest, signal))) return true;
           signal.throwIfAborted();
-          summary.parts.push({ content: result.content, format, sources: part.sources });
-          summary.summaryTokens =
-            (summary.summaryTokens ?? 0) + estimateMemoryTokens(memorySummaryText(result.content));
-          if (summary.durationMs !== undefined) {
-            const durationMs = summary.durationMs + Math.round(result.elapsedMs);
-            summary.durationMs =
-              result.elapsedMs >= 0 && Number.isSafeInteger(durationMs) ? durationMs : undefined;
-          }
-          summary.complete = summary.parts.length === parts.length;
-          if (summary.complete) {
-            if (!legacy) summary.state = 'summarized';
-            activity.lastSuccessfulSummaryAt = new Date().toISOString();
-            saveFinished(summary);
-          } else {
-            this.store.saveSummary(summary);
-          }
+          completed = result;
         } catch (error) {
           this.inference = undefined;
           signal.throwIfAborted();
@@ -1550,6 +1536,23 @@ export class SessionMemory {
             );
           }
           break;
+        }
+        // > A failed write must stop this update before it can save its checkpoint.
+        summary.parts.push({ content: completed.content, format, sources: part.sources });
+        summary.summaryTokens =
+          (summary.summaryTokens ?? 0) + estimateMemoryTokens(memorySummaryText(completed.content));
+        if (summary.durationMs !== undefined) {
+          const durationMs = summary.durationMs + Math.round(completed.elapsedMs);
+          summary.durationMs =
+            completed.elapsedMs >= 0 && Number.isSafeInteger(durationMs) ? durationMs : undefined;
+        }
+        summary.complete = summary.parts.length === parts.length;
+        if (summary.complete) {
+          if (!legacy) summary.state = 'summarized';
+          saveFinished(summary);
+          activity.lastSuccessfulSummaryAt = new Date().toISOString();
+        } else {
+          this.store.saveSummary(summary);
         }
       }
       if (!summary.complete) {

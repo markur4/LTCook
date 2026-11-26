@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import Database from 'libsql';
 import {
   estimateMemoryTokens,
   mergeMemoryEntries,
@@ -569,6 +570,116 @@ test('retains a pending checkpoint when history fails after inference and recove
     expect(failures).toHaveLength(1);
   } finally {
     await memory.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('keeps durable coverage when SQLite rejects a completed summary and retries on restart', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-memory-write-failure-'));
+  const databasePath = path.join(directory, 'memory.sqlite');
+  const messages: MemorySourceMessage[] = [
+    { ...first, turnId: 'short' },
+    { ...finding, turnId: 'short' },
+  ];
+  const original = { ...first, seq: 3, turnId: 'long', messageId: 'long-prompt' };
+  const reply = { ...longReply, seq: 4, turnId: 'long', messageId: 'long-reply' };
+  const content = '## Resolution\n\nKeep the cobalt cursor.';
+  let requests = 0;
+  const failures: unknown[] = [];
+  const options = {
+    databasePath,
+    contextIndependent: true,
+    source: timeline(() => ({ epoch: 'one', messages })),
+    async summarize(type: 'UAMP' | 'AAB') {
+      requests++;
+      return { type, text: content, content, complete: true as const, elapsedMs: 1 };
+    },
+    onFailure: (diagnostic: unknown) => failures.push(diagnostic),
+  };
+  function changeTrigger(sql: string) {
+    const database = new Database(databasePath);
+    try {
+      database.exec(sql);
+    } finally {
+      database.close();
+    }
+  }
+  let memory: SessionMemory | undefined = new SessionMemory(options);
+  try {
+    memory.turn('leader', { turnId: 'short', outcome: 'completed' }, false);
+    await memory.settled();
+    expect(memory.status(undefined, 'leader')).toMatchObject({
+      summarization: 'up-to-date',
+      lastSuccessfulSummaryAt: null,
+      stored: { uamp: 1, coveredThrough: finding.seq },
+    });
+    expect(requests).toBe(0);
+
+    changeTrigger(`
+      CREATE TRIGGER reject_completed_discussion
+      BEFORE UPDATE OF value ON memory_summary
+      WHEN json_extract(NEW.value, '$.complete') = 1
+      BEGIN SELECT RAISE(ABORT, 'synthetic completed summary write failure'); END;
+    `);
+    messages.push(original, reply);
+    memory.turn('leader', { turnId: 'long', outcome: 'completed' }, false);
+    await memory.settled();
+    const store = new MemoryStore(databasePath);
+    try {
+      expect(store.state('leader')).toMatchObject({ epoch: 'one', seq: finding.seq });
+      expect(store.summaries('leader', 'one')).toMatchObject([
+        { position: finding.seq, state: 'skipped', complete: true },
+        { position: reply.seq, state: 'pending', complete: false, parts: [] },
+      ]);
+    } finally {
+      store.close();
+    }
+    expect(memory.status(undefined, 'leader')).toMatchObject({
+      summarization: 'failed',
+      lastSuccessfulSummaryAt: null,
+      lastError: { message: 'Session Memory update failed.' },
+      stored: { uamp: 1, coveredThrough: finding.seq },
+      pendingUamp: 1,
+    });
+    expect(requests).toBe(1);
+    expect(failures).toEqual([{ agentId: 'leader', category: 'unexpected-update' }]);
+
+    await memory.close();
+    memory = undefined;
+    changeTrigger('DROP TRIGGER reject_completed_discussion');
+    memory = new SessionMemory(options);
+    memory.recover(['leader']);
+    await memory.settled();
+    expect(requests).toBe(2);
+    expect(memory.status(undefined, 'leader')).toMatchObject({
+      summarization: 'up-to-date',
+      lastSuccessfulSummaryAt: expect.any(String),
+      lastError: null,
+      stored: { uamp: 2, coveredThrough: reply.seq },
+      pendingUamp: 0,
+    });
+    const { summaries } = await memory.readStoredSummaries('leader');
+    expect(summaries).toMatchObject([
+      {
+        position: reply.seq,
+        state: 'summarized',
+        parts: [{ content, format: 'markdown', sources: [original.seq, reply.seq] }],
+      },
+      { position: finding.seq, state: 'skipped' },
+    ]);
+    expect(
+      await memory.sourceMessage('leader', '', {
+        agentId: 'leader',
+        epoch: 'one',
+        seq: original.seq,
+      }),
+    ).toMatchObject({
+      lookup: 'found',
+      source: { messageId: original.messageId, text: original.text },
+    });
+    expect(failures).toHaveLength(1);
+  } finally {
+    await memory?.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
