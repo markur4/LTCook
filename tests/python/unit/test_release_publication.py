@@ -189,16 +189,15 @@ def test_verify_rejects_a_setup_with_a_divergent_binding_under_valid_hashes(
         release_assets.verify(directory, repository=REPOSITORY, tag=TAG, commit=COMMIT)
 
 
-@pytest.mark.parametrize(
-    ("suffix", "channel", "keep"), [("b", "beta", 1), ("rc", "pre-release", 3)]
-)
+@pytest.mark.parametrize(("suffix", "channel"), [("b", "beta"), ("rc", "pre-release")])
 def test_preview_retention_preserves_other_channels_drafts_and_tags(
-    monkeypatch: pytest.MonkeyPatch, suffix: str, channel: str, keep: int
+    monkeypatch: pytest.MonkeyPatch, suffix: str, channel: str
 ) -> None:
     tag = f"v1.0.0{suffix}4"
     github = GitHub(tag)
     for number in range(1, 5):
-        github.add(number, f"v1.0.0{suffix}{number}", preview=True, day=number)
+        version = f"0.9.0{suffix}{number}" if number == 1 else f"1.0.0{suffix}{number}"
+        github.add(number, f"v{version}", preview=True, day=number)
     github.add(5, "v0.9.0")
     other = "rc" if suffix == "b" else "b"
     github.add(6, f"v1.0.0{other}1", preview=True)
@@ -209,9 +208,11 @@ def test_preview_retention_preserves_other_channels_drafts_and_tags(
         release_assets.Identity(REPOSITORY, tag, COMMIT), 4, channel
     )
 
-    assert set(github.releases) == set(range(5 - keep, 8))
+    assert set(github.releases) == {4, 5, 6, 7}
     assert github.mutations == [
-        ("delete", f"v1.0.0{suffix}{number}") for number in range(4 - keep, 0, -1)
+        ("delete", f"v1.0.0{suffix}3"),
+        ("delete", f"v1.0.0{suffix}2"),
+        ("delete", f"v0.9.0{suffix}1"),
     ]
 
 

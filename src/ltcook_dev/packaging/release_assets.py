@@ -222,6 +222,10 @@ def _gh(*args: str) -> str:
     return subprocess.check_output(["gh", *args], text=True)
 
 
+def _git(*args: str) -> str:
+    return subprocess.check_output(["git", *args], text=True)
+
+
 def _object(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ReleaseError("GitHub returned an invalid release object.")
@@ -359,8 +363,7 @@ def _prune_previews(identity: Identity, release_id: int, channel: str) -> None:
         )
     ):
         raise ReleaseError("GitHub preview listing has ambiguous release identities.")
-    keep = 1 if channel == "beta" else 3
-    expired = sorted(candidates, reverse=True)[keep:]
+    expired = sorted(candidates, reverse=True)[1:]
     if any(candidate_id == release_id for _, candidate_id, _ in expired):
         raise ReleaseError(
             "The requested preview falls outside the current retention window."
@@ -461,8 +464,77 @@ def publish(
     print(f"GitHub release {tag} is published.")
 
 
+def _dependency_state(commit: str) -> tuple[object, ...]:
+    metadata = tomllib.loads(_git("show", f"{commit}:pyproject.toml"))
+    project = metadata["project"]
+    name, version = project["name"], project.pop("version")
+    lock = tomllib.loads(_git("show", f"{commit}:uv.lock"))
+    for package in lock["package"]:
+        if package.get("name") == name and package.get("source") == {"editable": "."}:
+            if package.pop("version") != version:
+                raise ReleaseError("The uv lock disagrees with the project version.")
+            break
+    else:
+        raise ReleaseError("The uv lock does not contain the local project.")
+    return metadata, lock, tomllib.loads(_git("show", f"{commit}:pylock.toml"))
+
+
+def reuse_rc(repository: str, tag: str) -> bool:
+    """Find successful hosted checks on an equivalent ancestor RC.
+
+    :param repository: Owner and repository that ran source CI.
+    :param tag: Stable release tag to qualify for the shorter CI profile.
+    :return: Whether a same-cycle candidate passed its exact tag-push CI.
+    """
+    repository, tag = _repository(repository), _tag(tag)
+    if release_channel(tag[1:]) != "stable":
+        return False
+    stable = _git("rev-parse", f"refs/tags/{tag}^{{commit}}").strip()
+    candidates = _git(
+        "tag", "--merged", stable, "--list", "--sort=-version:refname", f"{tag}rc*"
+    ).splitlines()
+    for candidate in candidates:
+        if _preview_channel(candidate) != "pre-release":
+            continue
+        commit = _git("rev-parse", f"refs/tags/{candidate}^{{commit}}").strip()
+        changed = subprocess.run(
+            [
+                "git",
+                "diff",
+                "--quiet",
+                commit,
+                stable,
+                "--",
+                ".",
+                ":!CHANGELOG.md",
+                ":!pyproject.toml",
+                ":!uv.lock",
+                ":!pylock.toml",
+            ],
+            check=False,
+        ).returncode
+        if changed or _dependency_state(commit) != _dependency_state(stable):
+            continue
+        data = _api_object(
+            f"repos/{repository}/actions/workflows/ci.yml/runs"
+            f"?head_sha={commit}&event=push&status=success"
+        )
+        runs = data.get("workflow_runs")
+        if isinstance(runs, list) and any(
+            isinstance(run, dict)
+            and run.get("head_sha") == commit
+            and run.get("head_branch") == candidate
+            and run.get("event") == "push"
+            and run.get("conclusion") == "success"
+            for run in runs
+        ):
+            print(f"Reusing successful CI from {candidate} ({commit}).")
+            return True
+    return False
+
+
 def main() -> int:
-    """Run read-only asset verification or explicit GitHub publication."""
+    """Run release verification, CI evidence lookup, or explicit publication."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("verify", "publish"):
@@ -473,8 +545,13 @@ def main() -> int:
         subparser.add_argument("--directory", type=Path, required=True)
         if command == "publish":
             subparser.add_argument("--notes", type=Path, required=True)
+    reuse = commands.add_parser("reuse-rc")
+    reuse.add_argument("--repository", required=True)
+    reuse.add_argument("--tag", required=True)
     args = parser.parse_args()
     try:
+        if args.command == "reuse-rc":
+            return 0 if reuse_rc(args.repository, args.tag) else 1
         if args.command == "publish":
             publish(
                 args.directory,
