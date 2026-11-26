@@ -31,11 +31,11 @@ import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shar
 import {
   ModelCatalogRequestSchema,
   ModelCatalogResponseSchema,
-  ResolvedModelSchema,
+  ResolvedModelDtoSchema,
   MODEL_ALIAS_METADATA_KEY,
   MODEL_REASONING_METADATA_KEY,
   RESOLVED_MODEL_METADATA_KEY,
-} from './shared/models';
+} from '@ltcook/model-contracts';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import {
   PanelDetailSourceSchema,
@@ -536,7 +536,7 @@ export default function contribute(server: PluginServerContext) {
   const memoryObservation = z.object({ memoryEnabled: z.boolean() });
   const cleanup = [
     server.addHook('agent.turn.before', async ({ agent, turnId }, context) => {
-      const model = ResolvedModelSchema.safeParse(agent.metadata[RESOLVED_MODEL_METADATA_KEY]);
+      const model = ResolvedModelDtoSchema.safeParse(agent.metadata[RESOLVED_MODEL_METADATA_KEY]);
       const reference = context.paseo.agents.ref(agent.id);
       const current = model.success
         ? reference.current()
@@ -618,7 +618,7 @@ export default function contribute(server: PluginServerContext) {
       const selection = request.metadata?.['ltcook.team'];
       if (typeof selection !== 'string' || !selection)
         throw new Error('Choose an installed Team before starting LTCook.');
-      const selected = ResolvedModelSchema.parse(
+      const selected = ResolvedModelDtoSchema.parse(
         await runtimeJson('/v1/model/resolve', {
           teamSelection: selection,
           workspaceRoot: request.config.cwd,
@@ -678,7 +678,7 @@ export default function contribute(server: PluginServerContext) {
         workspaceRoot: request.cwd,
         teamSelection,
       };
-      const savedModel = ResolvedModelSchema.safeParse(
+      const savedModel = ResolvedModelDtoSchema.safeParse(
         request.metadata[RESOLVED_MODEL_METADATA_KEY],
       );
       if (!savedModel.success)

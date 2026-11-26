@@ -18,7 +18,7 @@ import type {
 } from '../workflow-api/index.js';
 import { resolveModel, type ResolvedModel } from '../models/aliases.js';
 import { piThinking } from '../models/adapters.js';
-import { RESOLVED_MODEL_METADATA_KEY } from '../paseo-plugin/shared/models.js';
+import { RESOLVED_MODEL_METADATA_KEY } from '@ltcook/model-contracts';
 import {
   REPO_LOCATE_TOOL_NAME,
   WORKTREE_TOOL_NAME,

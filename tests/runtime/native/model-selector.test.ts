@@ -2,9 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import {
   ModelCatalogRequestSchema,
   ModelCatalogResponseSchema,
-  ResolvedModelSchema,
-  effectiveRunningModel,
-} from '../../../runtime/src/paseo-plugin/shared/models.js';
+  ResolvedModelDtoSchema,
+} from '@ltcook/model-contracts';
+import { ResolvedModelSchema } from '../../../runtime/src/models/aliases.js';
+import { effectiveRunningModel } from '../../../runtime/src/paseo-plugin/client/running-model.js';
 
 describe('Paseo model selection contract', () => {
   test('accepts a resolved model with session reasoning and rejects incomplete settings', () => {
@@ -17,12 +18,35 @@ describe('Paseo model selection contract', () => {
       reasoningSource: 'session',
     };
 
-    expect(ResolvedModelSchema.parse(resolved)).toEqual(resolved);
-    expect(ResolvedModelSchema.safeParse({ ...resolved, provider: undefined }).success).toBe(false);
+    expect(ResolvedModelDtoSchema.parse(resolved)).toEqual(resolved);
+    expect(ResolvedModelDtoSchema.safeParse({ ...resolved, provider: undefined }).success).toBe(
+      false,
+    );
     expect(
-      ResolvedModelSchema.safeParse({ ...resolved, reasoningSource: 'provider' }).success,
+      ResolvedModelDtoSchema.safeParse({ ...resolved, reasoningSource: 'provider' }).success,
     ).toBe(false);
   });
+
+  test.each([
+    ['alias', { alias: 'native-custom' }],
+    ['provider name', { provider: 'Native Adapter' }],
+    ['model name', { model: 'Native Model (preview)' }],
+  ] as const)(
+    'accepts a native %s for display while validating runtime settings',
+    (_field, native) => {
+      const configured = {
+        alias: 'smart',
+        provider: 'openai-codex',
+        model: 'gpt-6.2-sol',
+        reasoningSource: 'default',
+      };
+      const displayed = { ...configured, ...native };
+
+      expect(ResolvedModelSchema.parse(configured)).toEqual(configured);
+      expect(ResolvedModelDtoSchema.parse(displayed)).toEqual(displayed);
+      expect(ResolvedModelSchema.safeParse(displayed).success).toBe(false);
+    },
+  );
 
   test('validates the selected Team and exposes each alias resolved for its Leader', () => {
     const response = {
@@ -63,6 +87,12 @@ describe('Paseo model selection contract', () => {
     expect(
       ModelCatalogResponseSchema.safeParse({
         ...response,
+        aliases: [...response.aliases, ...response.aliases],
+      }).success,
+    ).toBe(false);
+    expect(
+      ModelCatalogResponseSchema.safeParse({
+        ...response,
         aliases: response.aliases.map((item) =>
           item.alias === 'local-tiny' ? { ...item, reasoningOptions: ['unsupported'] } : item,
         ),
@@ -72,7 +102,7 @@ describe('Paseo model selection contract', () => {
 });
 
 test('running Paseo settings display a native override while retaining the alias', () => {
-  const selected = ResolvedModelSchema.parse({
+  const selected = ResolvedModelDtoSchema.parse({
     alias: 'plan',
     provider: 'openai-codex',
     model: 'gpt-6.2-sol',

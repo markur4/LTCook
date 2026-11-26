@@ -143,6 +143,13 @@ file versions. The runtime verifies those versions and the generated outputs
 before caching the result. An input change during preparation or a wait for the
 writer lock makes the next request resolve configuration again.
 
+Model alias policy and strict runtime validation live in
+`runtime/src/models/aliases.ts`. The `@ltcook/model-contracts` workspace
+owns the shared model fields, reasoning values, and catalog schema. Asset
+staging includes the package and its compiled entry so the installed Paseo
+plugin can resolve it. The plugin projects native model changes onto that
+shared contract.
+
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,
@@ -414,6 +421,12 @@ of whether the runner completed. Existing elapsed-time history and fallback for
 the three agent cases still use their original attempts.
 
 ### Session Memory qualification
+
+Production records source references for Discussions below 256 estimated tokens.
+At or above that threshold, it summarizes the current UAMP in structured Markdown.
+The qualification recipes below compare that policy with historical JSON and
+other experimental settings. For the current production behavior, see
+[Context-aware Session Memory](Explanations.md#context-aware-session-memory).
 
 Run the matched CPU comparison after suspending production inference:
 

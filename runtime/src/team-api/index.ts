@@ -1,6 +1,6 @@
+import type { ModelAlias, ReasoningEffort } from '@ltcook/model-contracts';
 import type { GuidanceResource } from '../guidance-api/index.js';
-import type { ModelAlias, ReasoningEffort } from '../models/aliases.js';
-export type { ModelAlias } from '../models/aliases.js';
+export type { ModelAlias } from '@ltcook/model-contracts';
 export type WorkType = 'design' | 'plan.prefill' | 'plan.finalize' | 'task.execute';
 export interface TeamMember {
   key: string;

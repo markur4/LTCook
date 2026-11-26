@@ -25,8 +25,9 @@ import { z } from 'zod';
 import type { ResolvedModel } from '../models/aliases.js';
 import {
   ModelCatalogRequestSchema,
-  type ModelCatalogResponseSchema,
-} from '../paseo-plugin/shared/models.js';
+  type ModelCatalogRequest,
+  type ModelCatalogResponse,
+} from '@ltcook/model-contracts';
 import {
   EvalDeleteRequestSchema,
   EvalRunIdSchema,
@@ -100,9 +101,7 @@ export class RuntimeApi {
   }
   private modelSelection:
     | {
-        catalog(
-          input: z.infer<typeof ModelCatalogRequestSchema>,
-        ): z.infer<typeof ModelCatalogResponseSchema>;
+        catalog(input: ModelCatalogRequest): ModelCatalogResponse;
         resolve(input: z.infer<typeof modelSelectionRequest>): Promise<ResolvedModel>;
       }
     | undefined;
