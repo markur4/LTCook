@@ -34,7 +34,7 @@ import {
   namedMemoryOutcomes,
 } from '../../../runtime/src/evals/session-memory-facts.js';
 import { prepareMemorySummaries } from '../../../runtime/src/session-memory/summarization.js';
-import { estimateMemoryTokens } from '../../../runtime/src/session-memory/text.js';
+import { estimateMemoryTokens } from '../../../runtime/src/paseo-plugin/server/memory-text.js';
 import { memoryFixtures } from '../../../runtime/src/evals/session-memory-fixtures.js';
 
 test('extractive summaries require verbatim complete sentences, attribution and compression', () => {

@@ -1,5 +1,5 @@
 import type { MemorySearchEntry } from './service.js';
-import { budgetMemoryText, estimateMemoryTokens } from './text.js';
+import { budgetMemoryText, estimateMemoryTokens } from '../paseo-plugin/server/memory-text.js';
 
 export type OriginalHistoryAvailability = 'available' | 'partial' | 'unavailable';
 

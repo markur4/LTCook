@@ -10,7 +10,7 @@ import {
   type MemorySourceMessage,
   type MemoryTurnOutcome,
 } from '../../../runtime/src/session-memory/units.js';
-import { estimateMemoryTokens } from '../../../runtime/src/session-memory/text.js';
+import { estimateMemoryTokens } from '../../../runtime/src/paseo-plugin/server/memory-text.js';
 import { isEmptyMemorySummary, parseMemoryJson } from '../../../runtime/src/session-memory/json.js';
 
 test('uses native outcomes and preserves steering while treating an assignment as runtime input', () => {

@@ -9,7 +9,7 @@ import {
   memoryIdentifierMatches,
   memoryIdentifiers,
   memoryPreview,
-} from './text.js';
+} from '../paseo-plugin/server/memory-text.js';
 import {
   budgetHandoffDiscussions,
   compactHandoffLine,

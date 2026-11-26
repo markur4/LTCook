@@ -1,5 +1,5 @@
 import type { MemoryFact } from './session-memory-fixtures.js';
-import { memoryIdentifierMatches } from '../session-memory/text.js';
+import { memoryIdentifierMatches } from '../paseo-plugin/server/memory-text.js';
 
 type CheckStatus = NonNullable<MemoryFact['checkStatus']>;
 

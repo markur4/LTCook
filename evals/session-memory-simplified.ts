@@ -36,7 +36,7 @@ import {
   type MemorySummaryFormat,
   type MemorySummaryResult,
 } from '../runtime/src/session-memory/summarization.js';
-import { estimateMemoryTokens } from '../runtime/src/session-memory/text.js';
+import { estimateMemoryTokens } from '../runtime/src/paseo-plugin/server/memory-text.js';
 import {
   identifyMemoryUnits,
   type MemorySourceMessage,

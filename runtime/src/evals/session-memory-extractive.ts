@@ -5,8 +5,8 @@ import {
   memoryPreview,
   memoryRelevance,
   type MemoryMessage,
-} from '../session-memory/text.js';
-export { estimateMemoryTokens, type MemoryMessage } from '../session-memory/text.js';
+} from '../paseo-plugin/server/memory-text.js';
+export { estimateMemoryTokens, type MemoryMessage } from '../paseo-plugin/server/memory-text.js';
 import {
   ollamaChat,
   type OllamaChatMetrics,

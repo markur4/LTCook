@@ -1,5 +1,5 @@
 import type { PaseoApi } from '@getpaseo/client';
-import { memoryPreview } from '../../session-memory/text.js';
+import { memoryPreview } from './memory-text.js';
 
 export type MemoryMessage = {
   seq: number;
