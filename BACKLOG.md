@@ -93,6 +93,15 @@ Treat this as the parking lot for actionable problems discovered while working b
 The [architectural CSC report](code-smells.md) records findings, accepted
 decisions, the Explorer fix status, and the order for the remaining passes.
 
+## P3 / E2 [Tooling] - *Investigate the native Activity live-rate timeout*
+
+- **Area:** `tests/runtime/system/paseo-gui-acceptance.ts`, `native-activity-memory-live-rate` stage.
+- **Observed while:** Running the offline Paseo browser team-flow acceptance during the runtime composition pass.
+- **Why not fixed now:** The matching timeout predates the composition change. Its cause remains unknown.
+- **Evidence:** Both the composition tree and the equivalent pre-change runtime and fixture inputs timed out waiting for `12.5 tokens/s`.
+- **Context:** The fixture uses scripted Session Memory inference to check whether Activity displays a live rate. The timeout leaves that part of the browser flow unverified.
+- **Suggested next step:** Trace the scripted rate sample through the runtime Activity response and browser during a targeted fixture run.
+
 ## P2 / E1 [Code smell] - *Give managed tool classification and bound-member lookup explicit owners*
 
 - **Area:** `runtime/src/tools`, `runtime/src/core`, `runtime/src/integrations/native-policy.ts`, and `runtime/src/integrations/runtime-api.ts`.

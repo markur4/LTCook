@@ -118,9 +118,9 @@ the authenticated Session lookup and ordinary MCP grants.
 
 ### CSC-02 — HTTP constructs services also used by the tool catalog
 
-**Observed coupling.** [RuntimeApi](runtime/src/integrations/runtime-api.ts)
-creates the ColGREP provider and worktree tool used by
-[main](runtime/src/main.ts) for the shared catalog. It also owns Activity
+**Observed coupling at baseline.** [RuntimeApi](runtime/src/integrations/runtime-api.ts)
+created the ColGREP provider and worktree tool used by
+[main](runtime/src/main.ts) for the shared catalog. It also owned Activity
 preferences, routing, identity, body limits, and several readiness checks.
 The listener starts before the host and controller are ready. HTTP invokes
 the catalog via [WorkspaceMcp](runtime/src/integrations/mcp.ts), while ordinary
@@ -322,6 +322,12 @@ and 269 Python Traditional Tests. The TypeScript suite used an isolated view of
 host skills, addressing the already tracked fixture issue. Those checks apply
 to the Explorer patch's reviewed tree and do not verify the proposed refactors.
 See [PR #62](https://github.com/markur4/LTCook/pull/62) for its evidence.
+
+The composition pass passed native Paseo browser worktree acceptance. The
+broader offline browser team-flow case timed out waiting for `12.5 tokens/s`
+during the live Session Memory rate stage. The matched pre-change run reached
+the same timeout. Live-rate display remains unverified. See the
+[focused tooling follow-up](BACKLOG.md#p3--e2-tooling---investigate-the-native-activity-live-rate-timeout).
 
 Existing backlog entries remain authoritative for detached runtime shutdown,
 mobile Activity observation, chat diff/worktree selection, host-skill fixture
