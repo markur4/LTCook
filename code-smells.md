@@ -136,8 +136,11 @@ The composition pass moves ColGREP, Activity preferences, and the Session
 worktree store and tool to [runtime startup](runtime/src/main.ts). The HTTP API
 uses the injected services. Worktree reads and reports share the
 [worktree scope resolver](runtime/src/integrations/session-worktrees.ts).
-The next passes still own route organization, Core extraction, and failure
-handling.
+The [Activity route module](runtime/src/integrations/runtime-activity.ts)
+owns its six existing operations and declares their paths once. RuntimeApi
+retains authentication, body limits, and response error handling. The native
+boundary tests cover user authorization and pre-ready responses. Other route
+families, Core extraction, and failure handling remain open.
 
 ### CSC-03 — Session Memory concentrates recording, inference, retrieval, and handoff
 

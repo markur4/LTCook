@@ -93,6 +93,24 @@ Treat this as the parking lot for actionable problems discovered while working b
 The [architectural CSC report](code-smells.md) records findings, accepted
 decisions, the Explorer fix status, and the order for the remaining passes.
 
+## P3 / E1 [Docs drift] - *Expand the Session Memory explanation*
+
+- **Area:** `docs/Explanations.md`, `docs/How-To-User-Guides.md`, `docs/References.md`, and `runtime/src/session-memory/`.
+- **Observed while:** Reviewing how Session Memory turns native history into Discussion records and delegation evidence.
+- **Why not fixed now:** The explanation and its diagrams need a focused documentation pass.
+- **Evidence:** The [current explanation](docs/Explanations.md#context-aware-session-memory) describes the behavior in prose. [Development](docs/Development.md#session-memory-qualification) links to architecture diagrams that are missing from the explanation.
+- **Context:** At `58e951c` and rechecked on main at `e6f0ef9`, 256 estimated tokens across user messages, final replies, and supplied attachment text triggers summarization. Hosted uses `@tiny` with low reasoning (GPT-6 Luna with the default model setting). The runtime summarizes the current UAMP in structured Markdown. Treat the half-UAMP trigger and excluding attachments from the estimate as proposals.
+- **Suggested next step:** Expand the existing explanation with Mermaid diagrams for UAMP and AAB boundaries, trigger and scheduling, prompt composition, chronological delegation, and storage and recovery. Verify details against the current runtime and Traditional Tests. Preserve existing anchors, add task guidance and setting cross-links where needed, and preview Mermaid on GitHub. See [issue #69](https://github.com/markur4/LTCook/issues/69), [the review draft](https://github.com/markur4/LTCook/issues/69#issuecomment-7194630459), and [Session Memory decomposition](#p3--e1-code-smell---decompose-session-memory-after-covering-production-recovery).
+
+## P3 / E2 [Code smell] - *Give LTCook Services and container deployment distinct homes*
+
+- **Area:** `runtime/src/session-memory/`, `runtime/src/services/`, `runtime/src/repository/`, `services/`, and `docs/`.
+- **Observed while:** Reviewing runtime ownership and the Activity sidebar's Services terminology during the architectural CSC.
+- **Why not fixed now:** This records the approved ownership decision. Schedule the moves with the CSC follow-ups after the next milestone.
+- **Evidence:** Activity lists Session Memory and RAG Index under Services. The Session Memory feature lives in `runtime/src/session-memory/`, while `runtime/src/services/controller.ts` controls external containers and root `services/` holds Compose definitions and templates.
+- **Context:** LTCook Services live in the single runtime, remain available while enabled, wait for events, schedules, or requests, and maintain their own state. AI is optional and a separate process or daemon is unnecessary. Reserve `runtime/src/services/` for these capabilities. Keep search, indexing, and providers in `runtime/src/repository/`. If dedicated background indexing is added later, it can live under `runtime/src/services/` and call `runtime/src/repository/`. The existing RAG Index view does not establish an autonomous daemon.
+- **Suggested next step:** Move the entire Session Memory feature to `runtime/src/services/session-memory/`, preserving its internal ownership, and keep tool exposure in `runtime/src/tools/session-memory.ts`. Rename root `services/` to `containers/` and move the controller to `runtime/src/integrations/containers.ts` or an equally clear container integration path. Update packaging, asset staging, and `docs/` in the same change, including [repository routing](docs/Development.md#repository-routing), the [Session Memory explanation](docs/Explanations.md#context-aware-session-memory), and affected container paths and links. Preserve the Activity labels and GUI experience, keep one runtime, and omit migrations and legacy adapters. Coordinate the moves with [runtime decomposition](#p3--e1-code-smell---separate-runtime-composition-transport-and-coordination) and [Session Memory decomposition](#p3--e1-code-smell---decompose-session-memory-after-covering-production-recovery).
+
 ## P3 / E2 [Tooling] - *Investigate the native Activity live-rate timeout*
 
 - **Area:** `tests/runtime/system/paseo-gui-acceptance.ts`, `native-activity-memory-live-rate` stage.
@@ -115,10 +133,10 @@ decisions, the Explorer fix status, and the order for the remaining passes.
 
 - **Area:** `runtime/src/main.ts`, `runtime/src/integrations/runtime-api.ts`, `runtime/src/integrations/mcp.ts`, and `runtime/src/core/runtime.ts`.
 - **Observed while:** Tracing shared tool construction, startup and scheduling.
-- **Why not fixed now:** The composition pass moves shared construction. Route and Core extraction and correction of failure details remain open.
+- **Why not fixed now:** The composition and Activity passes move shared construction and its first route family. The other route families, Core extraction, and correction of failure details remain open.
 - **Evidence:** Runtime startup now shares configured services with HTTP and the tool catalog. RuntimeController still implements command policy, scheduling, native lifecycle, delivery, and snapshot projection. RIED and Session Memory lose returned error detail at the native boundary.
 - **Context:** Preserve startup readiness, one coordination owner, uncertain-send protection, approval and review gates, and the existing user workflows.
-- **Suggested next step:** Extract route families on the injected service boundary, then extract cohesive Core responsibilities using the shared task gates and fix evidenced error detail losses. See [CSC-02](code-smells.md#csc-02--http-constructs-services-also-used-by-the-tool-catalog), [CSC-04](code-smells.md#csc-04--runtimecontroller-concentrates-coordination-responsibilities), [CSC-09](code-smells.md#csc-09--adapters-discard-actionable-failure-detail), [tool classification and lookup](#p2--e1-code-smell---give-managed-tool-classification-and-bound-member-lookup-explicit-owners), and [model contract ownership](#p3--e3-code-smell---clarify-model-contract-and-documentation-ownership).
+- **Suggested next step:** Extract route families on the injected service boundary, then extract cohesive Core responsibilities using the shared task gates and fix evidenced error detail losses. See [CSC-02](code-smells.md#csc-02--http-constructs-services-also-used-by-the-tool-catalog), [CSC-04](code-smells.md#csc-04--runtimecontroller-concentrates-coordination-responsibilities), [CSC-09](code-smells.md#csc-09--adapters-discard-actionable-failure-detail), [tool classification and lookup](#p2--e1-code-smell---give-managed-tool-classification-and-bound-member-lookup-explicit-owners), [model contract ownership](#p3--e3-code-smell---clarify-model-contract-and-documentation-ownership), and [Services and container ownership](#p3--e2-code-smell---give-ltcook-services-and-container-deployment-distinct-homes).
 
 ## P3 / E1 [Code smell] - *Decompose Session Memory after covering production recovery*
 
@@ -127,7 +145,7 @@ decisions, the Explorer fix status, and the order for the remaining passes.
 - **Why not fixed now:** [PR #64](https://github.com/markur4/LTCook/pull/64) covers production-profile recovery. Extract workflows after that coverage is available on the pass base.
 - **Evidence:** One service owns ingestion, checkpoints, inference, Activity state, retrieval, and handoff. Some recovery tests use legacy JSON while production uses deterministic Markdown with context independence. The legacy branches have documented evaluation callers.
 - **Context:** Recovery coverage can land alongside the next milestone. Preserve same-version recovery, authority and citations, one derived-store owner, and runnable historical evaluations.
-- **Suggested next step:** Use the restart, resume, rewind, partial-history and interruption tests as the baseline. Extract cohesive workflows, isolate qualification strategies, and re-run the recovery cases. See [CSC-03](code-smells.md#csc-03--session-memory-concentrates-recording-inference-retrieval-and-handoff), [CSC-07](code-smells.md#csc-07--production-memory-carries-historical-evaluation-strategies), and [retrieval measurements](#p3--e1-question---measure-session-memory-retrieval-scaling).
+- **Suggested next step:** Use the restart, resume, rewind, partial-history and interruption tests as the baseline. Extract cohesive workflows, isolate qualification strategies, and re-run the recovery cases. See [CSC-03](code-smells.md#csc-03--session-memory-concentrates-recording-inference-retrieval-and-handoff), [CSC-07](code-smells.md#csc-07--production-memory-carries-historical-evaluation-strategies), [retrieval measurements](#p3--e1-question---measure-session-memory-retrieval-scaling), [Services and container ownership](#p3--e2-code-smell---give-ltcook-services-and-container-deployment-distinct-homes), and [Session Memory explanation](#p3--e1-docs-drift---expand-the-session-memory-explanation).
 
 ## P3 / E1 [Question] - *Measure Session Memory retrieval scaling*
 

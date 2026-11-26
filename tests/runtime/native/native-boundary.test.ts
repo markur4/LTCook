@@ -118,6 +118,44 @@ function snapshotFor(
 }
 
 describe('native runtime boundary', () => {
+  test('applies Activity user authority and route validation before runtime readiness', async () => {
+    const secret = 'activity-family-secret';
+    const nativeAgentId = 'ordinary-agent';
+    const api = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`);
+    const endpoint = await api.listen();
+    const post = (route: string, token: string, input: object) =>
+      fetch(`${endpoint}/v1/activity/${route}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+    try {
+      const agent = agentBearer(secret, nativeAgentId);
+      for (const route of [
+        'toggle',
+        'memory-inference',
+        'memory-device',
+        'memory-evidence',
+        'stored-summaries',
+        'services',
+      ]) {
+        const denied = await post(route, agent, { nativeAgentId });
+        expect(denied.status).toBe(403);
+        expect(await denied.json()).toEqual({});
+      }
+      expect((await fetch(`${endpoint}/v1/activity/services`)).status).toBe(404);
+      expect((await post('memory-evidence', secret, {})).status).toBe(503);
+      expect((await post('stored-summaries', secret, {})).status).toBe(400);
+      const services = await post('services', secret, { nativeAgentId });
+      expect(services.status).toBe(200);
+      expect(await services.json()).toMatchObject({
+        rag: { availability: 'unavailable', activity: 'unknown', indexingEnabled: null },
+      });
+    } finally {
+      await api.close();
+    }
+  });
+
   test('persistently applies Activity switches only on authenticated user requests', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-activity-controls-'));
     directories.push(directory);

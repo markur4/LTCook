@@ -117,6 +117,9 @@ Runtime startup constructs the ColGREP provider, Activity preferences, and
 Session worktree store. The HTTP routes and workspace catalog use the same
 instances. The HTTP listener starts before its native host and Core controller
 are ready. Worktree reads and reports share Session and Pass scope resolution.
+The Activity HTTP routes live in `runtime/src/integrations/runtime-activity.ts`.
+RuntimeApi authenticates the caller and parses the request before delegating
+to those routes.
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,
