@@ -79,7 +79,7 @@ test('workspace preparation is shared concurrently and invalidated by input and 
 });
 
 test.skipIf(process.platform === 'win32')(
-  'native agents reuse preparation but retain their own identities',
+  'native agents reuse Python-attested preparation and keep their own identities',
   async () => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'ltcook-native-preparation-')));
     const previousResponse = process.env.LTCOOK_TEST_PREPARATION_RESPONSE;
@@ -102,6 +102,43 @@ test.skipIf(process.platform === 'win32')(
       mkdirSync(workspace);
       const dependency = path.join(root, 'settings.env');
       writeFileSync(dependency, 'one');
+      const repository = path.resolve(import.meta.dir, '../../..');
+      const fixturePython = path.join(
+        process.env.UV_PROJECT_ENVIRONMENT ?? path.join(repository, '.venv'),
+        'bin/python',
+      );
+      const readPythonGuards = () => {
+        const result = Bun.spawnSync(
+          [
+            fixturePython,
+            '-c',
+            [
+              'import json, sys',
+              'from pathlib import Path',
+              'from ltcook.launch import NativePreparationInputs',
+              'inputs = NativePreparationInputs(dependencies={Path(sys.argv[1])})',
+              'before = inputs.observe()',
+              'assert before is not None',
+              'print(json.dumps(inputs.attest(inputs, before)))',
+            ].join('\n'),
+            dependency,
+          ],
+          {
+            env: {
+              ...process.env,
+              PYTHONPATH: [path.join(repository, 'src'), process.env.PYTHONPATH]
+                .filter(Boolean)
+                .join(path.delimiter),
+            },
+          },
+        );
+        if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+        const guards: Record<string, NativeInputGuard | null> | null = JSON.parse(
+          result.stdout.toString(),
+        );
+        if (!guards?.[dependency]) throw new Error('Python did not attest the fixture input.');
+        return guards;
+      };
       const response = path.join(root, 'response.json');
       const count = path.join(root, 'count');
       const piHome = path.join(root, 'pi');
@@ -112,6 +149,7 @@ test.skipIf(process.platform === 'win32')(
       symlinkSync(piHome, piHomeAlias);
       writeFileSync(models, '{}');
       writeFileSync(web, '{}');
+      const inputGuards = readPythonGuards();
       writeFileSync(
         response,
         JSON.stringify({
@@ -123,9 +161,9 @@ test.skipIf(process.platform === 'win32')(
             PATH: process.env.PATH,
           },
           dependencies: [dependency, models, web],
-          identityPaths: [dependency],
+          identityPaths: Object.keys(inputGuards),
           outputHashes: { [models]: sha256('{}'), [web]: sha256('{}') },
-          inputGuards: { [dependency]: inputGuard(dependency) },
+          inputGuards,
           reusable: true,
         }),
       );
@@ -168,34 +206,36 @@ test.skipIf(process.platform === 'win32')(
       expect(first.model).toMatchObject({ provider: 'fixture', model: 'smart-model' });
       expect(second.model).toMatchObject({ provider: 'fixture', model: 'small-model' });
       writeFileSync(dependency, 'two');
+      // > This response still describes the previous version of the input.
+      expect((await backend.prepare(options, 'three')).model.model).toBe('smart-model');
       const changedResponse = JSON.parse(readFileSync(response, 'utf8'));
       changedResponse.environment.LTCOOK_MODEL_SMART = 'fixture/updated-model';
-      changedResponse.inputGuards[dependency] = inputGuard(dependency);
+      changedResponse.inputGuards = readPythonGuards();
       writeFileSync(response, JSON.stringify(changedResponse));
-      expect((await backend.prepare(options, 'three')).model.model).toBe('updated-model');
+      expect((await backend.prepare(options, 'four')).model.model).toBe('updated-model');
       const reopened = await backend.prepare(options, 'one', first.model);
       expect(JSON.parse(reopened.env.LTCOOK_RESOLVED_MODEL!)).toEqual(first.model);
-      expect(readFileSync(count, 'utf8')).toBe('xx');
-      await backend.prepare({ ...options, sessionId: 'another' }, 'four');
       expect(readFileSync(count, 'utf8')).toBe('xxx');
+      await backend.prepare({ ...options, sessionId: 'another' }, 'five');
+      expect(readFileSync(count, 'utf8')).toBe('xxxx');
       const otherWorkspace = path.join(root, 'other-workspace');
       mkdirSync(otherWorkspace);
       const otherResponse = JSON.parse(readFileSync(response, 'utf8'));
       otherResponse.workspaceRoot = otherWorkspace;
       writeFileSync(response, JSON.stringify(otherResponse));
-      await backend.prepare({ ...options, workspaceRoot: otherWorkspace }, 'five');
-      expect(readFileSync(count, 'utf8')).toBe('xxxx');
+      await backend.prepare({ ...options, workspaceRoot: otherWorkspace }, 'six');
+      expect(readFileSync(count, 'utf8')).toBe('xxxxx');
       const foreignPiHome = path.join(root, 'foreign-pi');
       mkdirSync(foreignPiHome);
       rmSync(piHomeAlias);
       symlinkSync(foreignPiHome, piHomeAlias);
       await expect(
-        backend.prepare({ ...options, workspaceRoot: otherWorkspace }, 'six'),
+        backend.prepare({ ...options, workspaceRoot: otherWorkspace }, 'seven'),
       ).rejects.toThrow('workspace preparation outputs changed');
-      expect(readFileSync(count, 'utf8')).toBe('xxxxx');
+      expect(readFileSync(count, 'utf8')).toBe('xxxxxx');
       shutdown.abort(new Error('Runtime is stopping'));
       await expect(backend.create(options)).rejects.toThrow('Runtime is stopping');
-      expect(readFileSync(count, 'utf8')).toBe('xxxxx');
+      expect(readFileSync(count, 'utf8')).toBe('xxxxxx');
     } finally {
       if (previousResponse === undefined) delete process.env.LTCOOK_TEST_PREPARATION_RESPONSE;
       else process.env.LTCOOK_TEST_PREPARATION_RESPONSE = previousResponse;
