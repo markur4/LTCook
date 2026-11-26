@@ -377,6 +377,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
+- Read-only Explorer agents can use Session Memory when it is enabled and
+  authorized by the runtime.
+
 - LTCook’s bundled Paseo plugin loads its Session Memory text helper, restoring
   the sidebar panels in installed builds.
 
