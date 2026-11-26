@@ -11,10 +11,11 @@ const source = z.object({
   timestamp: z.string().optional(),
   attachmentIds: z.array(id).optional(),
 });
-const trackerFields = {
+export const trackerFields = {
   name: z.string().trim().min(1).max(80),
   instructions: z.string().trim().min(1).max(8000),
 };
+export const trackedItemText = z.string().trim().min(1).max(12000);
 const modification = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('add'), ...trackerFields }),
   z.strictObject({ type: z.literal('edit'), id, ...trackerFields }),
@@ -25,7 +26,7 @@ const modification = z.discriminatedUnion('type', [
     type: z.literal('item'),
     trackerId: id,
     itemId: id,
-    text: z.string().trim().min(1).max(12000).nullable(),
+    text: trackedItemText.nullable(),
   }),
 ]);
 

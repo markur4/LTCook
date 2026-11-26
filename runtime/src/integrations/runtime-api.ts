@@ -215,7 +215,10 @@ export class RuntimeApi {
       }
 
       let committed = false;
+      let resumeObservations: (() => void) | undefined;
       try {
+        if (response.destroyed) return false;
+        if (!this.stopping) resumeObservations = await this.memory?.suspendObservations();
         if (response.destroyed) return false;
         if (this.stopping) {
           response.writeHead(503).end('{"error":"LTCook runtime is stopping"}');
@@ -229,7 +232,10 @@ export class RuntimeApi {
         committed = true;
         return true;
       } finally {
-        if (!committed) await reservation.release().catch(() => undefined);
+        if (!committed) {
+          await reservation.release().catch(() => undefined);
+          resumeObservations?.();
+        }
       }
     } catch {
       if (!response.destroyed) {

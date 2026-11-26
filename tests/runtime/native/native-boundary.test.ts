@@ -34,6 +34,7 @@ import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js'
 import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
 import { createWebTools, type WebToolService } from '../../../runtime/src/tools/web.js';
 import { captureShellEnvironment } from '../../../runtime/src/integrations/shell-environment.js';
+import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
 
 const directories: string[] = [];
 afterEach(() => {
@@ -841,6 +842,25 @@ describe('native runtime boundary', () => {
     let attempt = 0;
     let released = 0;
     let stopCalls = 0;
+    let observing = 0;
+    const observationsAtCommit: number[] = [];
+    const records = new ConversationRecords({
+      databasePath: ':memory:',
+      source: {
+        async read() {
+          return { epoch: 'idle', latest: -1, through: -1, reset: false, messages: [] };
+        },
+        watch() {
+          observing++;
+          return async () => {
+            observing--;
+          };
+        },
+      },
+    });
+    records.turn('agent', { turnId: 'completed-turn', outcome: 'completed' });
+    await records.settled();
+    api.setConversationRecords(records);
     activation.setWorkspaceActivator(async () => {
       throw new Error('lifecycle does not open a session');
     });
@@ -868,6 +888,7 @@ describe('native runtime boundary', () => {
             released += 1;
           },
           async commit() {
+            observationsAtCommit.push(observing);
             if (attempt === 2) throw new Error('Could not commit');
             return { status: 'committed' };
           },
@@ -894,14 +915,19 @@ describe('native runtime boundary', () => {
       const busy = await stop('owner');
       expect(busy.status).toBe(423);
       expect(await busy.json()).toEqual({ status: 'busy', activeTurns: 3 });
+      expect(observing).toBe(1);
       expect((await stop('owner')).status).toBe(503);
       expect(released).toBe(1);
+      expect(observing).toBe(1);
       expect(stopCalls).toBe(0);
       expect((await stop('owner')).status).toBe(202);
       await stopFinished.promise;
       expect(stopCalls).toBe(1);
       expect(released).toBe(1);
+      expect(observationsAtCommit).toEqual([0, 0]);
+      expect(observing).toBe(0);
     } finally {
+      await records.close();
       await api.close();
     }
   });

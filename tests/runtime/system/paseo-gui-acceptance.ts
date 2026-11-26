@@ -968,19 +968,23 @@ try {
   );
   assert(original);
   assert.equal(clarificationRequests, 0);
-  await browser(
-    'eval',
-    `[...document.querySelectorAll('[data-testid="ltcook-clarify-reply"]')]
-    .at(-1)?.setAttribute('data-clarify-fixture', 'selected')`,
-  );
-  await browser('click', '[data-clarify-fixture="selected"]');
+  const clarifyButton = `[data-testid="ltcook-clarify-source-${original.seq}"] [data-testid="ltcook-clarify-reply"]`;
+  const clickClarify = async () => {
+    await browser('wait', clarifyButton);
+    await browser(
+      'eval',
+      `document.querySelector(${JSON.stringify(clarifyButton)})?.scrollIntoView({ block: 'center' })`,
+    );
+    await browser('click', clarifyButton);
+  };
+  await clickClarify();
   await browser('wait', '--text', 'Clarify with Hosted inference');
   assert.equal(clarificationRequests, 0);
-  await browser('click', '[data-clarify-fixture="selected"]');
+  await clickClarify();
   await browser('wait', '--text', 'The public cursor hides its storage layout.');
   assert.equal(clarificationRequests, 1);
-  await browser('click', '[data-clarify-fixture="selected"]');
-  await browser('click', '[data-clarify-fixture="selected"]');
+  await clickClarify();
+  await clickClarify();
   await browser('wait', '--text', 'The public cursor hides its storage layout.');
   assert.equal(clarificationRequests, 1);
   assert.deepEqual(
@@ -1090,6 +1094,10 @@ try {
   }
   const committed = await reserveIdleRestart();
   assert.equal(committed.status, 'reserved');
+  await tracker.close();
+  tracker = undefined;
+  await memory.close();
+  memory = undefined;
   assert.deepEqual(await committed.commit(), { status: 'committed' });
   const shutdownDeadline = Date.now() + 10_000;
   while ((await readDaemonInstance(paseoHome)) && Date.now() < shutdownDeadline) {
@@ -1104,6 +1112,7 @@ try {
       teamsBrowser: 'reuse and New Session',
       childNavigation: 'native subagent track and contextual panel',
       panels: 'Activity Explorer, Team hierarchy, Task Board, Diagnostics',
+      conversationProducts: 'exact replies, Hosted confirmation, saved results, and Tracked Items',
       telemetry: 'existing Perfetto timings exported',
       idleRestart: 'busy refusal, admission freeze, release and graceful shutdown',
       modelCalls,

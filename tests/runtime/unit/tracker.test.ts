@@ -144,7 +144,7 @@ test('records incomplete coverage and durably skips paused messages without repl
   const { open, history, database, inputs } = fixture(noChanges, 900);
   const first = open();
   try {
-    first.configure(conversation, { type: 'add', name: 'Large', instructions: 'A'.repeat(4000) });
+    first.configure(conversation, { type: 'add', name: 'Large', instructions: 'A'.repeat(8000) });
     history.messages.push(messages.user(1, 'Keep deployment in Europe.'));
     const initial = await collect(first);
     expect(initial.events[0]!.trackers.map(({ status }) => status)).toEqual([
@@ -268,12 +268,13 @@ test('a user edit during inference makes the affected extraction incomplete', as
   });
   const service = open();
   try {
+    const manualDecision = 'My manual decision. '.repeat(550).trim();
     history.messages.push(messages.user(1, 'I choose the original.'));
     const itemId = (await collect(service)).trackers[0]!.items[0]!.id;
     history.messages.push(messages.user(2, 'I choose the replacement.'));
     service.observe(conversation);
     await started;
-    service.editItem(conversation, decisions, itemId, 'My manual decision');
+    service.editItem(conversation, decisions, itemId, manualDecision);
     finish(
       JSON.stringify({
         trackers: [
@@ -287,7 +288,7 @@ test('a user edit during inference makes the affected extraction incomplete', as
     await service.settled();
     const result = await service.snapshot(conversation);
     expect(result.events[1]!.trackers[0]!.status).toBe('incomplete');
-    expect(result.trackers[0]!.items[0]!.text).toBe('My manual decision');
+    expect(result.trackers[0]!.items[0]!.text).toBe(manualDecision);
   } finally {
     await service.close();
     database.close();

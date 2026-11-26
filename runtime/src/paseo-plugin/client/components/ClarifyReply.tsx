@@ -68,7 +68,7 @@ export function ClarifyReply({
           : 'Clarify';
 
   return (
-    <View style={{ alignItems: 'flex-start', gap: 4 }}>
+    <View testID={`ltcook-clarify-source-${data.seq}`} style={{ alignItems: 'flex-start', gap: 4 }}>
       {needsHostedConfirmation && (
         <Text style={{ color: theme.colors.foregroundMuted }}>
           Hosted inference sends this reply and relevant earlier context to OpenAI.

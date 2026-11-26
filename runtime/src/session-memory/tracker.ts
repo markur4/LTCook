@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'libsql';
 import { z } from 'zod';
 import { estimateMemoryTokens } from '../paseo-plugin/server/memory-text.js';
+import { trackedItemText, trackerFields } from '../paseo-plugin/shared/tracker.js';
 import type { MemoryPage, MemorySource } from './conversation.js';
 import type { ConversationInference, ConversationPrompt } from './inference.js';
 import {
@@ -21,10 +22,15 @@ export type TrackerConfiguration =
   | { type: 'remove'; id: string };
 
 const sourcePositions = z.array(z.number().int().nonnegative()).max(16);
-const text = z.string().trim().min(1).max(4000);
+const extractedItemText = trackedItemText.max(4000);
 const mutation = z.discriminatedUnion('type', [
-  z.strictObject({ type: z.literal('add'), text, sources: sourcePositions }),
-  z.strictObject({ type: z.literal('update'), itemId: z.string(), text, sources: sourcePositions }),
+  z.strictObject({ type: z.literal('add'), text: extractedItemText, sources: sourcePositions }),
+  z.strictObject({
+    type: z.literal('update'),
+    itemId: z.string(),
+    text: extractedItemText,
+    sources: sourcePositions,
+  }),
   z.strictObject({ type: z.literal('retire'), itemId: z.string(), sources: sourcePositions }),
 ]);
 const extraction = z.strictObject({
@@ -126,13 +132,19 @@ export class TrackerService {
           }
         }
       })
-      .finally(() => this.runs.delete(agentId));
+      .finally(() => {
+        this.runs.delete(agentId);
+        if (this.pending.has(agentId)) this.observe(agentId);
+      });
     this.runs.set(agentId, run);
   }
 
   async settled(agentId?: string): Promise<void> {
-    if (agentId !== undefined) await this.runs.get(agentId);
-    else await Promise.all(this.runs.values());
+    if (agentId === undefined) {
+      while (this.runs.size) await Promise.all(this.runs.values());
+    } else {
+      while (this.runs.has(agentId)) await this.runs.get(agentId);
+    }
   }
 
   async snapshot(agentId: string) {
@@ -165,8 +177,8 @@ export class TrackerService {
     if (change.type === 'add') {
       state.trackers.push({
         id: randomUUID(),
-        name: text.parse(change.name),
-        instructions: text.parse(change.instructions),
+        name: trackerFields.name.parse(change.name),
+        instructions: trackerFields.instructions.parse(change.instructions),
         enabled: true,
         version: 0,
       });
@@ -175,8 +187,8 @@ export class TrackerService {
       if (!tracker) throw new Error('Tracker is unavailable.');
       switch (change.type) {
         case 'edit':
-          tracker.name = text.parse(change.name);
-          tracker.instructions = text.parse(change.instructions);
+          tracker.name = trackerFields.name.parse(change.name);
+          tracker.instructions = trackerFields.instructions.parse(change.instructions);
           tracker.version++;
           break;
         case 'enable':
@@ -198,7 +210,7 @@ export class TrackerService {
     if (!tracker || !item) throw new Error('Tracked item is unavailable.');
     state.revisions.push({
       ...item,
-      text: value === null ? null : text.parse(value),
+      text: value === null ? null : trackedItemText.parse(value),
       manual: true,
       eventId: undefined,
     });

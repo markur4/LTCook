@@ -145,3 +145,46 @@ test('reopening the record store preserves exact attachment references and obser
     await reopened.close();
   }
 });
+
+test('suspending observations awaits native release and resumes queued observations', async () => {
+  const releaseStarted = Promise.withResolvers<void>();
+  const releaseFinished = Promise.withResolvers<void>();
+  const observed: string[] = [];
+  let watched = 0;
+  const records = new ConversationRecords({
+    databasePath: ':memory:',
+    source: {
+      ...conversationTimeline([]),
+      watch() {
+        watched++;
+        return () => {
+          releaseStarted.resolve();
+          return releaseFinished.promise;
+        };
+      },
+    },
+    onObserved: (id) => observed.push(id),
+  });
+  try {
+    await records.recover([leader]);
+    await records.settled();
+    let suspended = false;
+    const suspension = records.suspendObservations().then((resume) => {
+      suspended = true;
+      return resume;
+    });
+    await releaseStarted.promise;
+    expect(suspended).toBe(false);
+    records.observe(leader);
+    expect(observed).toEqual([leader]);
+    releaseFinished.resolve();
+    const resume = await suspension;
+    resume();
+    await records.settled();
+    expect(watched).toBe(2);
+    expect(observed).toEqual([leader, leader]);
+  } finally {
+    releaseFinished.resolve();
+    await records.close();
+  }
+});

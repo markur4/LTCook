@@ -50,7 +50,7 @@ export interface MemorySource {
     cursor?: MemoryCursor,
     direction?: 'after' | 'tail' | 'before',
   ): Promise<MemoryPage>;
-  watch?(agentId: string, notify: () => void): () => void;
+  watch?(agentId: string, notify: () => void): () => void | Promise<void>;
   invalidateAttachments?(agentId: string, epoch: string, from?: number): Promise<void>;
 }
 
@@ -199,7 +199,8 @@ export class ConversationRecords {
   private readonly store: ConversationStore;
   private readonly abort = new AbortController();
   private readonly active = new Map<string, string>();
-  private readonly watchers = new Map<string, () => void>();
+  private readonly watchers = new Map<string, (() => void | Promise<void>) | undefined>();
+  private observationsSuspended = false;
   private readonly pending = new Map<string, boolean>();
   private readonly revisions = new Map<
     string,
@@ -274,17 +275,21 @@ export class ConversationRecords {
   }
 
   agentClosed(agentId: string): void {
-    this.watchers.get(agentId)?.();
+    const stop = this.watchers.get(agentId);
     this.watchers.delete(agentId);
+    if (stop)
+      void Promise.resolve()
+        .then(stop)
+        .catch(() => {});
     this.active.delete(agentId);
     this.observe(agentId, true);
   }
 
   private watch(id: string): void {
-    if (!this.abort.signal.aborted && !this.watchers.has(id) && this.source.watch)
+    if (!this.abort.signal.aborted && !this.watchers.get(id) && this.source.watch)
       this.watchers.set(
         id,
-        this.source.watch(id, () => this.observe(id)),
+        this.observationsSuspended ? undefined : this.source.watch(id, () => this.observe(id)),
       );
   }
 
@@ -292,15 +297,44 @@ export class ConversationRecords {
     if (this.abort.signal.aborted) return;
     this.revision(id);
     this.pending.set(id, force || !!this.pending.get(id));
+    if (this.observationsSuspended) return;
     this.options.onObserved?.(id);
     this.startDrain();
   }
 
+  private releaseWatches() {
+    return Promise.allSettled(
+      [...this.watchers].flatMap(([id, stop]) => {
+        if (!stop) return [];
+        this.watchers.set(id, undefined);
+        return [Promise.resolve().then(stop)];
+      }),
+    );
+  }
+
+  async suspendObservations(): Promise<() => void> {
+    this.observationsSuspended = true;
+    const resume = () => {
+      if (!this.observationsSuspended || this.abort.signal.aborted) return;
+      this.observationsSuspended = false;
+      for (const id of this.watchers.keys()) this.watch(id);
+      for (const id of new Set([...this.watchers.keys(), ...this.pending.keys()])) this.observe(id);
+    };
+    const releases = await this.releaseWatches();
+    await this.settled();
+    if (releases.some(({ status }) => status === 'rejected')) {
+      resume();
+      throw new Error('Conversation observation could not be released.');
+    }
+    return resume;
+  }
+
   private startDrain(): void {
-    if (this.drain || !this.pending.size || this.abort.signal.aborted) return;
+    if (this.observationsSuspended || this.drain || !this.pending.size || this.abort.signal.aborted)
+      return;
     this.drain = Promise.resolve()
       .then(async () => {
-        while (!this.abort.signal.aborted && this.pending.size) {
+        while (!this.observationsSuspended && !this.abort.signal.aborted && this.pending.size) {
           const [agentId, flush] = this.pending.entries().next().value!;
           this.pending.delete(agentId);
           try {
@@ -738,7 +772,7 @@ export class ConversationRecords {
   async close(): Promise<void> {
     this.abort.abort();
     this.pending.clear();
-    for (const stop of this.watchers.values()) stop();
+    await this.releaseWatches();
     this.watchers.clear();
     await this.settled();
     this.store.close();

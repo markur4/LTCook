@@ -57,7 +57,7 @@ export function createPaseoMemorySource(
           notify();
       });
       void unsubscribe.ready.catch(() => {});
-      return unsubscribe;
+      return () => unsubscribe.release();
     },
     async read(agentId: string, cursor?: MemoryCursor, direction = 'after') {
       const timeline = api.agents.ref(agentId).timeline;
