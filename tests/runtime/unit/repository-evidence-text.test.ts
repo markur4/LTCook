@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import {
   REPO_LOCATE_TOOL_NAME,
   REPO_SEARCH_TOOL_NAME,
-} from '../../../runtime/src/paseo-plugin/shared/workspace-tools.js';
+} from '../../../runtime/src/tools/workspace-tools.js';
 import { repositoryEvidenceText } from '../../../runtime/src/tools/repository-evidence-text.js';
 
 const ready = {

@@ -11,10 +11,8 @@ import { EVAL_MODEL } from '../evals/setup.js';
 import { ReasoningEffortSchema, ResolvedModelSchema } from '../models/aliases.js';
 import { piThinking } from '../models/adapters.js';
 import { useCodexOpenAiAuth } from './codex-auth.js';
-import {
-  REPO_SEARCH_TIMEOUT_MS,
-  WORKSPACE_MCP_SERVER,
-} from '../paseo-plugin/shared/workspace-tools.js';
+import { WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
+import { REPO_SEARCH_TIMEOUT_MS } from '../tools/workspace-tools.js';
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,

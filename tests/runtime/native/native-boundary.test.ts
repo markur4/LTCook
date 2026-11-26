@@ -495,10 +495,16 @@ describe('native runtime boundary', () => {
     let authorized = 0;
     let invoked = 0;
     const controller = {
-      snapshot: () => snapshotFor(nativeAgentId, true, 'session-1', process.cwd()),
-      authorizeTool() {
+      snapshot() {
+        throw new Error('Managed tool authorization must not read a Session snapshot');
+      },
+      authorizeWorkspaceTool(sessionId: string, agentId: string) {
         authorized++;
-        return { allowed, reason: 'Tool budget exhausted' };
+        if (sessionId !== 'session-1' || agentId !== nativeAgentId)
+          return { allowed: false, unbound: true, reason: 'Native identity is not bound' };
+        return allowed
+          ? { allowed: true, workspaceRoot: process.cwd(), reason: 'Authorized' }
+          : { allowed: false, reason: 'Tool budget exhausted' };
       },
     } as unknown as RuntimeController;
     const authority = `127.0.0.1:${await freePort()}`;
@@ -548,8 +554,9 @@ describe('native runtime boundary', () => {
       expect(invoked).toBe(0);
       allowed = true;
       expect((await call('unbound')).status).toBe(403);
+      expect(invoked).toBe(0);
       expect(await (await call()).json()).toEqual(searchResult);
-      expect(authorized).toBe(2);
+      expect(authorized).toBe(3);
       expect(invoked).toBe(1);
       const search = await call(nativeAgentId, 'ltcook_repo_search');
       expect(search.status).toBe(200);
@@ -566,7 +573,7 @@ describe('native runtime boundary', () => {
         ],
       });
       expect(await (await call('unbound', 'ltcook_repo_search')).text()).toBe('{}');
-      expect(authorized).toBe(3);
+      expect(authorized).toBe(5);
       const locate = await call(nativeAgentId, 'ltcook_repo_locate');
       expect(locate.status).toBe(200);
       expect(await locate.json()).toMatchObject({
@@ -574,7 +581,7 @@ describe('native runtime boundary', () => {
         searches: [{ mode: 'hybrid', status: 'unavailable', provider: 'colgrep' }],
       });
       expect((await call('unbound', 'ltcook_repo_locate')).status).toBe(403);
-      expect(authorized).toBe(4);
+      expect(authorized).toBe(7);
     } finally {
       await api.close();
     }

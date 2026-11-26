@@ -1,29 +1,7 @@
-import {
-  REPOSITORY_TOOL_NAMES,
-  SESSION_MEMORY_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
-const READ_ONLY_TOOLS = new Set([
-  'read',
-  'grep',
-  'find',
-  'ls',
-  'web_search',
-  'fetch_content',
-  'get_search_content',
-  'code_search',
-  'code_fetch',
-  'ltcook_team',
-  'ltcook_ried',
-  ...REPOSITORY_TOOL_NAMES,
-  SESSION_MEMORY_TOOL_NAME,
-  'web_enable',
-  'ltcook_web_search',
-  'ltcook_web_fetch',
-  'ltcook_web_content',
-]);
+import { allowsRestrictedTool } from '../tools/capabilities.js';
 
 export function nativeToolAllowed(readOnly: boolean, toolName: string): boolean {
-  return !readOnly || READ_ONLY_TOOLS.has(toolName);
+  return !readOnly || allowsRestrictedTool(toolName);
 }
 
 const PRIVATE_PARENT_KEYS = [

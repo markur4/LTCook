@@ -224,6 +224,12 @@ export interface RuntimeController {
     toolName: string,
     input: Record<string, unknown>,
   ): ToolAuthorization;
+  authorizeWorkspaceTool(
+    sessionId: string,
+    nativeAgentId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+  ): WorkspaceToolAuthorization;
   bindDecisionPresentation(input: DecisionPresentation): void;
   resolveDecisionPresentation(input: {
     sessionId: string;
@@ -322,3 +328,6 @@ export interface ToolAuthorization {
   allowed: boolean;
   reason: string;
 }
+export type WorkspaceToolAuthorization =
+  | { allowed: true; reason: string; workspaceRoot: string }
+  | { allowed: false; reason: string; unbound?: boolean };

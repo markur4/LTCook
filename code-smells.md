@@ -67,9 +67,8 @@ work. The following checklist is an index.
    [draft PR #62](https://github.com/markur4/LTCook/pull/62). The two role
    variants passed the focused native guard regression, and the reviewer
    approved the three-file patch. The fix is merged into local `main` as
-   `4698a1`. At this report's baseline, publication to remote `main` still
-   requires separate authorization. Check the target and PR state before
-   repeating or including the fix in another pass.
+   `4698a1`, and the report was integrated locally as `bfb823`. Check the
+   published target and PR state before picking up either change.
 2. **Next milestone (CSC-01, CSC-05, CSC-06A).** Establish ownership of tool
    classification and a targeted bound-member lookup. This removes the
    dependency on the full Session projection and gives runtime composition
@@ -113,7 +112,9 @@ decisions about roles, approval, grants, and transport identity. Guarded
 coordination through `ltcook_team` still uses command-level authority.
 Native unknown-tool handling differs between read-only and writable members.
 Verify the supported behavior for both roles, disabled Memory, and the three
-authorization scopes above. Keep the focused bug fix separate from this redesign.
+authorization scopes above. The authorization pass gives
+[tool capabilities](runtime/src/tools/capabilities.ts) one owner, separate from
+the authenticated Session lookup and ordinary MCP grants.
 
 ### CSC-02 — HTTP constructs services also used by the tool catalog
 
@@ -183,6 +184,10 @@ checks when moving timeline logic. Check the built plugin's dependency
 resolution before removing the current import path. Keep shared MCP transport
 metadata accessible to the deployed plugin.
 
+The authorization pass moves [workspace tool metadata](runtime/src/tools/workspace-tools.ts)
+to runtime tools. The plugin retains its MCP registration name. The timeline
+decoder and neutral Memory data contract belong to the later Memory pass.
+
 ### CSC-06A — Managed authorization repeats broad reads
 
 **Observed redundant work, unmeasured latency.** The Pi hook asks
@@ -200,6 +205,13 @@ Avoid cached positive decisions and preserve actual evaluation budget semantics.
 Do not treat the scheduler's post-send refresh as redundant. Verify fresh,
 stale, mismatched, and uninitialized binding cases and measure query count before
 claiming a latency improvement.
+
+The authorization pass replaces two Session projections and the separate
+Planning binding read per managed HTTP invocation with a single Core lookup.
+Session Memory and worktree calls keep their native authorization round trip
+because Pi's call hook sees the tool name and input and lacks the selected
+handler's identity. The separate worktree Pass context still reads its
+projection.
 
 ### CSC-06B — Broad Memory search walks original history
 
@@ -245,6 +257,12 @@ deterministic JSON, and deterministic Markdown. It explicitly sets context
 independence for its hosted arm. Legacy behavior also affects queue and pause
 semantics. The [qualification guide](docs/Development.md#session-memory-qualification)
 documents the comparison.
+
+[PR #64](https://github.com/markur4/LTCook/pull/64) adds production-profile
+characterization with an incomplete timeline, shutdown during Markdown
+inference, same-store reopen and resume, and old-epoch citation and row
+invalidation. The delayed history and missed terminal event fixtures exercise
+both profiles. Re-run these assertions after restructuring Session Memory.
 
 Characterize restart, resume, partial history, rewind and interrupted
 summaries with the real production profile. Then extract qualification variants

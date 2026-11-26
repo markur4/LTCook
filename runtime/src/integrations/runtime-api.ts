@@ -29,9 +29,8 @@ import {
   isRepositoryTool,
   SESSION_MEMORY_TOOL_NAME,
   REPO_SEARCH_TIMEOUT_MS,
-  WORKTREE_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
-import { isWebTool } from '../tools/web.js';
+} from '../tools/workspace-tools.js';
+import { isManagedWorkspaceTool } from '../tools/capabilities.js';
 import { createSessionWorktreeTool } from '../tools/session-worktree.js';
 import type { ToolContext } from '../tools/types.js';
 import { SessionWorktrees, type WorktreeScope } from './session-worktrees.js';
@@ -952,17 +951,11 @@ export class RuntimeApi {
       }
       if (request.url === '/v1/workspace-tool') {
         const toolName = input.toolName;
-        const repositorySearch = isRepositoryTool(toolName);
         if (
           actor.kind !== 'agent' ||
           !input.sessionId ||
           !this.workspaceMcp ||
-          !(
-            repositorySearch ||
-            isWebTool(toolName) ||
-            toolName === SESSION_MEMORY_TOOL_NAME ||
-            toolName === WORKTREE_TOOL_NAME
-          ) ||
+          !isManagedWorkspaceTool(toolName) ||
           !input.toolArgs ||
           typeof input.toolArgs !== 'object' ||
           Array.isArray(input.toolArgs)
@@ -970,31 +963,23 @@ export class RuntimeApi {
           response.writeHead(403).end('{}');
           return;
         }
-        const session = runtime.snapshot(input.sessionId);
-        if (
-          !session.members.some(
-            (member) =>
-              member.binding?.nativeAgentId === actor.nativeAgentId &&
-              member.binding.state === 'bound',
-          )
-        ) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const authorization = runtime.authorizeTool(
+        const authorization = runtime.authorizeWorkspaceTool(
           input.sessionId,
           actor.nativeAgentId,
           toolName,
           input.toolArgs as Record<string, unknown>,
         );
         if (!authorization.allowed) {
-          response.writeHead(403).end(JSON.stringify({ error: authorization.reason }));
+          response
+            .writeHead(403)
+            .end(authorization.unbound ? '{}' : JSON.stringify({ error: authorization.reason }));
           return;
         }
         const controller = new AbortController();
         const cancel = () => controller.abort();
         response.once('close', cancel);
         try {
+          const repositorySearch = isRepositoryTool(toolName);
           const timeoutMs =
             toolName === SESSION_MEMORY_TOOL_NAME
               ? 5_000
@@ -1003,7 +988,7 @@ export class RuntimeApi {
                 : 120_000;
           const result = await this.workspaceMcp.invokeTool(toolName, input.toolArgs, {
             agentId: actor.nativeAgentId,
-            workspaceRoot: session.session.workspaceRoot,
+            workspaceRoot: authorization.workspaceRoot,
             sessionId: input.sessionId,
             workspaceFileAccess: false,
             repositorySearchAccess: repositorySearch,

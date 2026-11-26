@@ -123,6 +123,11 @@ wheel and installer, not general build debris. See
 
 ## Workspace tool guidance
 
+Runtime tool names and capability checks live in `runtime/src/tools`. Core
+checks current Session bindings and Pass authority for managed calls, and the
+MCP adapter checks ordinary workspace grants. The installed Paseo plugin keeps
+its MCP server registration name within its copied source tree.
+
 When adding a workspace tool or changing what agents should use it for, ship
 concise agent-facing guidance with the registration. Explain when to choose the
 tool, what evidence it returns, and what to do when the evidence is incomplete.

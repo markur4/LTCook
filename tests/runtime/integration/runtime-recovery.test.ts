@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import defaultTeam from '@ltcook/team-default';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import team from '@ltcook/team-default-minimal';
 import {
@@ -333,6 +333,9 @@ describe('RuntimeController coordination', () => {
     expect(
       restored.members.find((member) => member.member.key === 'adjutant')?.binding?.state,
     ).toBe('missing');
+    expect(
+      runtime.authorizeWorkspaceTool('missing', missingId, 'session-memory', {}),
+    ).toMatchObject({ allowed: false, unbound: true });
     await runtime.close();
   });
   test('runtime dispatches one whole-Pass review and completes only current acceptance', async () => {
@@ -425,6 +428,10 @@ describe('RuntimeController coordination', () => {
     runtime = createRuntime({ databasePath: path, team, agents });
     await runtime.openSession({ id: first.session.id, workspaceRoot: first.session.workspaceRoot });
     expect(runtime.snapshot(second.session.id).session.id).toBe(second.session.id);
+    const secondAgentId = second.members[0]!.binding!.nativeAgentId!;
+    expect(
+      runtime.authorizeWorkspaceTool(second.session.id, secondAgentId, 'session-memory', {}),
+    ).toMatchObject({ allowed: false, reason: 'Session native bindings have not been reconciled' });
     expect(
       runtime.authorizeTool(
         second.session.id,
@@ -438,6 +445,18 @@ describe('RuntimeController coordination', () => {
       workspaceRoot: second.session.workspaceRoot,
     });
     expect(restoredSecond.session.workspaceRoot).toBe('/workspace-two');
+    const projectSnapshot = spyOn(runtime, 'snapshot');
+    try {
+      expect(
+        runtime.authorizeWorkspaceTool(second.session.id, secondAgentId, 'session-memory', {}),
+      ).toMatchObject({ allowed: true, workspaceRoot: '/workspace-two' });
+      expect(
+        runtime.authorizeWorkspaceTool(first.session.id, secondAgentId, 'session-memory', {}),
+      ).toMatchObject({ allowed: false, unbound: true });
+      expect(projectSnapshot).not.toHaveBeenCalled();
+    } finally {
+      projectSnapshot.mockRestore();
+    }
     expect(
       restoredSecond.members.filter((member) => member.binding?.state === 'bound'),
     ).toHaveLength(2);

@@ -1,7 +1,4 @@
-import {
-  REPOSITORY_TOOL_NAMES,
-  SESSION_MEMORY_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
+import { allowsRestrictedTool } from '../tools/capabilities.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,24 +24,6 @@ const mandatoryPrompts = {
   'breaking-changes': 'What breaking changes, compatibility, and migration decisions apply?',
   verification: 'What validation and potentially lengthy verification is authorized?',
 } as const;
-const readTools = new Set([
-  'read',
-  'grep',
-  'find',
-  'ls',
-  'web_search',
-  'ltcook_web_search',
-  'ltcook_web_fetch',
-  'ltcook_web_content',
-  'fetch_content',
-  'get_search_content',
-  'code_search',
-  'code_fetch',
-  'web_enable',
-  'ltcook_ried',
-  ...REPOSITORY_TOOL_NAMES,
-  SESSION_MEMORY_TOOL_NAME,
-]);
 export interface PlanningDependencies {
   executionAllowed?(sessionId: string, passId: string): boolean;
   stateDirectory: string;
@@ -422,22 +401,19 @@ export class PlanningWorkflow {
       )
     );
   }
-  authorize(
-    sessionId: string,
+  authorizeBoundTool(
+    session: Session,
     nativeAgentId: string,
     toolName: string,
     input: Record<string, unknown>,
   ): ToolAuthorization {
-    const binding = this.store
-      .listBindings(sessionId)
-      .find((item) => item.nativeAgentId === nativeAgentId && item.state === 'bound');
-    if (!binding) return { allowed: false, reason: 'Native identity is not bound to this Session' };
-    if (readTools.has(toolName) || toolName === 'ltcook_team')
+    const sessionId = session.id;
+    if (allowsRestrictedTool(toolName))
       return { allowed: true, reason: 'Read-only investigation or guarded coordination' };
     if (['write', 'edit'].includes(toolName)) {
       const filePath = input.path;
       if (typeof filePath === 'string') {
-        const candidate = path.resolve(this.store.getSession(sessionId).workspaceRoot, filePath);
+        const candidate = path.resolve(session.workspaceRoot, filePath);
         const parent = path.dirname(candidate);
         if (
           parent === path.join(this.documentsDirectory, 'plans') ||

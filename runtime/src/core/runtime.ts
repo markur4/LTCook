@@ -20,15 +20,14 @@ import type {
   Report,
   DecisionPresentation,
   Task,
+  ToolAuthorization,
+  WorkspaceToolAuthorization,
 } from '../workflow-api/index.js';
 import { CoordinationStore } from '../storage/coordination.js';
 import { canonicalWorkspace } from './workspace.js';
 import type { RiedService } from '../repository/discovery.js';
 import type { RiedRequest } from '../repository/requests.js';
-import {
-  REPOSITORY_TOOL_NAMES,
-  SESSION_MEMORY_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
+import { allowsRestrictedTool } from '../tools/capabilities.js';
 
 import {
   memoryDispatchDeadlineMs,
@@ -1505,46 +1504,57 @@ Task to register: ${input.description}`,
     nativeAgentId: string,
     toolName: string,
     input: Record<string, unknown>,
-  ) {
+  ): ToolAuthorization {
+    const { allowed, reason } = this.authorizeToolCall(sessionId, nativeAgentId, toolName, input);
+    return { allowed, reason };
+  }
+  authorizeWorkspaceTool(
+    sessionId: string,
+    nativeAgentId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+  ): WorkspaceToolAuthorization {
+    return this.authorizeToolCall(sessionId, nativeAgentId, toolName, input);
+  }
+  private authorizeToolCall(
+    sessionId: string,
+    nativeAgentId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+  ): WorkspaceToolAuthorization {
     this.assertOpen();
-    this.session(sessionId);
+    const session = this.session(sessionId);
+    const { members, leaderKey, reviewPolicy } = this.teamFor(session).definition;
+    const boundKeys = new Set(
+      this.store
+        .listBindings(sessionId)
+        .filter(
+          ({ nativeAgentId: boundId, state }) => boundId === nativeAgentId && state === 'bound',
+        )
+        .map(({ memberKey }) => memberKey),
+    );
+    const member = members.find(({ key }) => boundKeys.has(key));
     if (!this.initializedSessions.has(sessionId))
-      return { allowed: false, reason: 'Session native bindings have not been reconciled' };
-    const member = this.snapshot(sessionId).members.find(
-      (item) => item.binding?.nativeAgentId === nativeAgentId && item.binding.state === 'bound',
-    )?.member;
-    if (this.evaluationSessionId === sessionId && member) {
+      return {
+        allowed: false,
+        reason: 'Session native bindings have not been reconciled',
+        unbound: !member,
+      };
+    if (!member)
+      return {
+        allowed: false,
+        reason: 'Native identity is not bound to this Session',
+        unbound: true,
+      };
+    if (this.evaluationSessionId === sessionId) {
       if (this.evaluationToolCalls >= this.evaluationToolBudget)
         return { allowed: false, reason: 'Evaluation tool budget exceeded' };
       this.evaluationToolCalls++;
     }
-    if (
-      member?.readOnly &&
-      ![
-        'read',
-        'grep',
-        'find',
-        'ls',
-        'web_search',
-        'ltcook_web_search',
-        'ltcook_web_fetch',
-        'ltcook_web_content',
-        'fetch_content',
-        'get_search_content',
-        'code_search',
-        'code_fetch',
-        'ltcook_team',
-        'ltcook_ried',
-        ...REPOSITORY_TOOL_NAMES,
-        SESSION_MEMORY_TOOL_NAME,
-        'web_enable',
-      ].includes(toolName)
-    )
+    if (member.readOnly && !allowsRestrictedTool(toolName))
       return { allowed: false, reason: 'Member is read-only' };
     if (
-      (member?.key === this.teamFor(sessionId).definition.leaderKey ||
-        (member &&
-          this.teamFor(sessionId).definition.reviewPolicy.reviewerKeys.includes(member.key))) &&
+      (member.key === leaderKey || reviewPolicy.reviewerKeys.includes(member.key)) &&
       this.store
         .listPasses(sessionId)
         .some((pass) => pass.status === 'running' && this.executionAllowed(sessionId, pass.id))
@@ -1560,9 +1570,21 @@ Task to register: ${input.description}`,
               this.planning.get(sessionId, decision.planId).stage === 'approved',
           )
       )
-        return { allowed: true, reason: 'Leader of an active approved Pass' };
+        return {
+          allowed: true,
+          reason: 'Leader of an active approved Pass',
+          workspaceRoot: session.workspaceRoot,
+        };
     }
-    return this.planning.authorize(sessionId, nativeAgentId, toolName, input);
+    const { allowed, reason } = this.planning.authorizeBoundTool(
+      session,
+      nativeAgentId,
+      toolName,
+      input,
+    );
+    return allowed
+      ? { allowed: true, reason, workspaceRoot: session.workspaceRoot }
+      : { allowed: false, reason };
   }
   bindDecisionPresentation(input: DecisionPresentation): void {
     this.assertOpen();

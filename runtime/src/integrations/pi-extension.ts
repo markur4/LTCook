@@ -20,7 +20,7 @@ import {
   SESSION_MEMORY_TOOL_NAME,
   WORKTREE_TOOL_DESCRIPTION,
   WORKTREE_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
+} from '../tools/workspace-tools.js';
 import { sessionMemoryDescription, sessionMemoryInput } from '../tools/session-memory.js';
 import { worktreeToolInput } from '../tools/session-worktree.js';
 import { isWebTool, webDefinitions } from '../tools/web.js';
@@ -381,7 +381,7 @@ export default async function activate(
   pi.on('tool_call', async (event, ctx) => {
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
-    // > The shared HTTP endpoint authorizes these calls once for every native caller.
+    // > Repository and web tools use their existing invocation-time authorization.
     if (isWebTool(event.toolName) || isRepositoryTool(event.toolName)) return;
     try {
       // > Native new/resume may change cwd; authorize exactly the path the tool will use.
@@ -516,7 +516,17 @@ export default async function activate(
       async execute(_id, input, signal) {
         const response = await invokeWorkspaceTool(SESSION_MEMORY_TOOL_NAME, input, signal, 5000);
         const result: unknown = await response.json();
-        if (!response.ok) throw new Error(`Session Memory unavailable (${response.status}).`);
+        if (!response.ok) {
+          const reason =
+            response.status === 403 && result && typeof result === 'object' && 'error' in result
+              ? result.error
+              : undefined;
+          throw new Error(
+            typeof reason === 'string'
+              ? reason
+              : `Session Memory unavailable (${response.status}).`,
+          );
+        }
         return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
       },
     });

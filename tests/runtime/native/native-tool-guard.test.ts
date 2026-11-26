@@ -163,7 +163,8 @@ test('every native call requires runtime authorization and runtime failures bloc
     expect(paths.at(-1)).toBe('/different/plans/Plan.md');
     failure = true;
     expect((await guard({ toolName: 'bash', input: { command: 'anything' } }))?.block).toBe(true);
-    expect(requests).toEqual(['write', 'write', 'write', 'bash']);
+    expect((await guard({ toolName: 'ltcook_worktree', input: {} }))?.block).toBe(true);
+    expect(requests).toEqual(['write', 'write', 'write', 'bash', 'ltcook_worktree']);
     server.stop(true);
     expect((await guard({ toolName: 'read', input: { path: '/project/file' } }))?.block).toBe(true);
   } finally {
@@ -174,14 +175,21 @@ test('every native call requires runtime authorization and runtime failures bloc
 test.each(['explorer', 'explorer-tmp'])(
   'managed Pi lets %s use Session Memory when the runtime authorizes it',
   async (memberKey) => {
-    let allowed = false;
-    const authorizations: string[] = [];
+    let precheckAllowed = false;
+    let invocationAllowed = false;
+    const calls: { path: string; toolName: string }[] = [];
+    const reason = 'Session native bindings have not been reconciled';
     const server = Bun.serve({
       port: 0,
       async fetch(request) {
         const body = (await request.json()) as { toolName: string };
-        authorizations.push(body.toolName);
-        return Response.json({ allowed, reason: 'Native identity is not bound to this Session' });
+        const path = new URL(request.url).pathname;
+        calls.push({ path, toolName: body.toolName });
+        if (path === '/v1/tool/authorize')
+          return Response.json({ allowed: precheckAllowed, reason });
+        return invocationAllowed
+          ? Response.json({ matches: [] })
+          : Response.json({ error: reason }, { status: 403 });
       },
     });
     try {
@@ -202,26 +210,40 @@ test.each(['explorer', 'explorer-tmp'])(
         toolName: string;
         input: Record<string, unknown>;
       }) => Promise<{ block: boolean; reason: string } | undefined>;
-      const tools = new Set<string>();
-      await activate({
+      const tools = new Map<string, Parameters<ExtensionAPI['registerTool']>[0]>();
+      const pi = {
         on(name: string, handler: unknown) {
           if (name === 'tool_call') guard = handler as typeof guard;
         },
         registerTool(tool: Parameters<ExtensionAPI['registerTool']>[0]) {
-          tools.add(tool.name);
+          tools.set(tool.name, tool);
         },
-      } as unknown as ExtensionAPI);
+      } as unknown as ExtensionAPI;
+      await activate(pi);
 
-      expect(tools.has('session-memory')).toBe(true);
-      const call = { toolName: 'session-memory', input: { query: 'prior decisions' } };
-      expect(await guard(call)).toEqual({
-        block: true,
-        reason: 'Native identity is not bound to this Session',
-      });
-      allowed = true;
-      expect(await guard(call)).toBeUndefined();
+      const tool = tools.get('session-memory');
+      if (!tool) throw new Error('Session Memory was not registered');
+      const input = { query: 'prior decisions' };
+      expect(await guard({ toolName: tool.name, input })).toEqual({ block: true, reason });
       expect((await guard({ toolName: 'write', input: { path: 'project.ts' } }))?.block).toBe(true);
-      expect(authorizations).toEqual(['session-memory', 'session-memory']);
+      expect(calls).toEqual([{ path: '/v1/tool/authorize', toolName: 'session-memory' }]);
+
+      precheckAllowed = true;
+      expect(await guard({ toolName: tool.name, input })).toBeUndefined();
+      const execute = () => tool.execute('memory-1', input, undefined, undefined, {} as never);
+      await expect(execute()).rejects.toThrow(reason);
+      invocationAllowed = true;
+      expect((await execute()).details).toEqual({ matches: [] });
+      expect(calls).toEqual([
+        { path: '/v1/tool/authorize', toolName: 'session-memory' },
+        { path: '/v1/tool/authorize', toolName: 'session-memory' },
+        { path: '/v1/workspace-tool', toolName: 'session-memory' },
+        { path: '/v1/workspace-tool', toolName: 'session-memory' },
+      ]);
+      process.env.LTCOOK_SESSION_MEMORY_THRESHOLD = '0';
+      tools.clear();
+      await activate(pi);
+      expect(tools.has('session-memory')).toBe(false);
     } finally {
       server.stop(true);
     }
