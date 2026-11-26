@@ -1302,13 +1302,13 @@ test('recovers a production Discussion after incomplete history and interrupted 
     historyComplete = true;
     memory.observe('leader', true);
     await eventually(() => requests.length === 1);
-    expect((await memory.readStoredSummaries('leader')).summaries).toMatchObject([
-      { state: 'pending', parts: [] },
-    ]);
+    const { summaries: pending } = await memory.readStoredSummaries('leader');
+    expect(pending).toMatchObject([{ state: 'pending', parts: [] }]);
     await memory.close();
 
     reopened = true;
     memory = new SessionMemory(options);
+    expect((await memory.readStoredSummaries('leader')).summaries).toEqual(pending);
     memory.recover(['leader']);
     await memory.settled();
     expect(requests).toHaveLength(2);
@@ -1334,6 +1334,12 @@ test('recovers a production Discussion after incomplete history and interrupted 
     await memory.settled();
     expect(await memory.sourceMessage('leader', '', reference)).toEqual({ lookup: 'unavailable' });
     expect((await memory.readStoredSummaries('leader')).summaries).toEqual([]);
+    const store = new MemoryStore(options.databasePath);
+    try {
+      expect(store.summaries('leader', reference.epoch)).toEqual([]);
+    } finally {
+      store.close();
+    }
     expect(requests).toHaveLength(2);
   } finally {
     await memory.close();
