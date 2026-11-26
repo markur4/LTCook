@@ -882,8 +882,10 @@ tests and the required Linux clockwork acceptance. That acceptance starts
 isolated real Pi and Paseo processes against a local scripted OpenAI-compatible
 endpoint with fake credentials. It covers approved delegation, a real local
 verification command, failure/correction, restart, independent review, and Pass
-completion without model downloads or external services. It is a PR CI gate;
-other slow installer/service scenarios retain their separate prerequisites.
+completion without model downloads or external services. Hosted CI runs this
+acceptance and the native Paseo GUI acceptance on release candidates, stable tags
+that need extended checks, and manual dispatches. Other slow installer and
+service scenarios retain their separate prerequisites.
 
 Native package smoke requires a built setup from an explicit immutable commit
 and normal download/toolchain prerequisites. Run only the selected maintained
@@ -901,11 +903,23 @@ from WSL.
 
 ## Releases
 
+Hosted CI runs the Linux Python 3.12 source checks on pull requests and pushes
+to `main`. A new commit cancels stale CI for the same PR or ref. Routine CI
+checks the Bun workspaces and runs the quick Python suite directly from source.
+Release candidates add Python 3.13, package builds, and offline native
+acceptance. Stable tags run the same extended checks unless a same-version
+ancestor release candidate passed its tag CI with identical source and
+dependencies. An equivalent stable promotion still runs the source checks.
+Manual CI dispatch runs extended checks and the separate integration, system,
+macOS, and Windows jobs.
+
 The committed `RELEASE_REQUIRE_CI` setting controls the hosted CI gate.
 With its default value `false`, the release command relies on successful local
-tests and artifact verification. Set it to `true` to also require hosted CI on
-the exact tag and commit. Raw version tag pushes trigger CI. The independent
-`RELEASE_PYPI` setting is `false` for LTCook.
+tests and artifact verification. Report hosted CI separately from local results
+before merging or releasing. A beta tag selects the CI profile and skips the
+test jobs with this setting. Set it to `true` to run the source checks on beta
+tags and require successful hosted CI on the exact release tag and commit.
+`RELEASE_PYPI` is independently set to `false`, so publication goes to GitHub.
 
 Keep one cumulative changelog section per target version. Start the section
 with a heading such as `## [0.2.0] - YYYY-MM-DD (b1)`, then update the same
@@ -934,8 +948,9 @@ retry the checked bundle. `just release VERSION` combines preparation and
 publication. Git pushes and release publication require explicit authorization.
 
 GitHub marks beta and RC builds as prereleases. Publishing keeps the newest
-beta and the three newest release candidates. Retention removes older preview
-releases and their downloads, while Git tags and stable releases stay available.
+published beta and the newest published release candidate across target
+versions. Retention removes older releases and downloads in the published
+channel. Git tags and all stable releases stay available.
 The published-release workflow verifies and starts the uploaded Linux setup.
 The manual workflow remains available for building downloadable GitHub Actions
 artifacts. Native Windows and macOS behavior requires checks on those platforms.
