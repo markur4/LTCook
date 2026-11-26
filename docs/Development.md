@@ -385,9 +385,10 @@ the three agent cases still use their original attempts.
 
 ### Session Memory qualification
 
-Production records the current Discussion in structured Markdown. The
-qualification recipes below compare that policy with historical JSON and
-other experimental settings. The current production behavior is described in
+Production records source references for Discussions below 256 estimated tokens.
+At or above that threshold, it summarizes the current UAMP in structured Markdown.
+The qualification recipes below compare that policy with historical JSON and
+other experimental settings. For the current production behavior, see
 [Context-aware Session Memory](Explanations.md#context-aware-session-memory).
 
 Run the matched CPU comparison after suspending production inference:
