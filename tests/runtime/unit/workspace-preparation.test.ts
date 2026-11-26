@@ -1,18 +1,41 @@
 import { expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { WorkspacePreparationCache } from '../../../runtime/src/integrations/workspace-preparation.js';
+import {
+  WorkspacePreparationCache,
+  type NativeInputGuard,
+} from '../../../runtime/src/integrations/workspace-preparation.js';
 import { createPaseoAgentBackend } from '../../../runtime/src/integrations/paseo.js';
 import team from '@ltcook/team-default-minimal';
+
+const sha256 = (content: string) => createHash('sha256').update(content).digest('hex');
+
+function inputGuard(file: string): NativeInputGuard {
+  const stat = lstatSync(file, { bigint: true });
+  return {
+    identity: [
+      String(stat.dev),
+      String(stat.ino),
+      String(stat.mode),
+      String(stat.uid),
+      String(stat.gid),
+    ],
+    version: [String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)],
+  };
+}
 
 test('workspace preparation is shared concurrently and invalidated by input and output changes', async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'ltcook-preparation-'));
@@ -30,6 +53,8 @@ test('workspace preparation is shared concurrently and invalidated by input and 
       environment: { MODEL: String(++calls) },
       dependencies: [workspace, config, optional, generated],
       identityPaths: [],
+      outputHashes: {},
+      inputGuards: {},
       reusable: true,
     });
     const [one, two] = await Promise.all([
@@ -54,9 +79,9 @@ test('workspace preparation is shared concurrently and invalidated by input and 
 });
 
 test.skipIf(process.platform === 'win32')(
-  'native agents reuse preparation but retain their own identities',
+  'native agents reuse Python-attested preparation and keep their own identities',
   async () => {
-    const root = mkdtempSync(path.join(tmpdir(), 'ltcook-native-preparation-'));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'ltcook-native-preparation-')));
     const previousResponse = process.env.LTCOOK_TEST_PREPARATION_RESPONSE;
     const previousCount = process.env.LTCOOK_TEST_PREPARATION_COUNT;
     try {
@@ -77,20 +102,68 @@ test.skipIf(process.platform === 'win32')(
       mkdirSync(workspace);
       const dependency = path.join(root, 'settings.env');
       writeFileSync(dependency, 'one');
+      const repository = path.resolve(import.meta.dir, '../../..');
+      const fixturePython = path.join(
+        process.env.UV_PROJECT_ENVIRONMENT ?? path.join(repository, '.venv'),
+        'bin/python',
+      );
+      const readPythonGuards = () => {
+        const result = Bun.spawnSync(
+          [
+            fixturePython,
+            '-c',
+            [
+              'import json, sys',
+              'from pathlib import Path',
+              'from ltcook.launch import NativePreparationInputs',
+              'inputs = NativePreparationInputs(dependencies={Path(sys.argv[1])})',
+              'before = inputs.observe()',
+              'assert before is not None',
+              'print(json.dumps(inputs.attest(inputs, before)))',
+            ].join('\n'),
+            dependency,
+          ],
+          {
+            env: {
+              ...process.env,
+              PYTHONPATH: [path.join(repository, 'src'), process.env.PYTHONPATH]
+                .filter(Boolean)
+                .join(path.delimiter),
+            },
+          },
+        );
+        if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+        const guards: Record<string, NativeInputGuard | null> | null = JSON.parse(
+          result.stdout.toString(),
+        );
+        if (!guards?.[dependency]) throw new Error('Python did not attest the fixture input.');
+        return guards;
+      };
       const response = path.join(root, 'response.json');
       const count = path.join(root, 'count');
+      const piHome = path.join(root, 'pi');
+      const piHomeAlias = path.join(root, 'pi-link');
+      const models = path.join(piHome, 'models.json');
+      const web = path.join(piHome, 'web-search.json');
+      mkdirSync(piHome);
+      symlinkSync(piHome, piHomeAlias);
+      writeFileSync(models, '{}');
+      writeFileSync(web, '{}');
+      const inputGuards = readPythonGuards();
       writeFileSync(
         response,
         JSON.stringify({
           workspaceRoot: workspace,
           environment: {
-            PI_CODING_AGENT_DIR: path.join(root, 'pi'),
+            PI_CODING_AGENT_DIR: piHomeAlias,
             LTCOOK_MODEL_SMART: 'fixture/smart-model',
             LTCOOK_MODEL_SMOL: 'fixture/small-model',
             PATH: process.env.PATH,
           },
-          dependencies: [dependency],
-          identityPaths: [],
+          dependencies: [dependency, models, web],
+          identityPaths: Object.keys(inputGuards),
+          outputHashes: { [models]: sha256('{}'), [web]: sha256('{}') },
+          inputGuards,
           reusable: true,
         }),
       );
@@ -102,15 +175,17 @@ test.skipIf(process.platform === 'win32')(
       chmodSync(python, 0o700);
       process.env.LTCOOK_TEST_PREPARATION_RESPONSE = response;
       process.env.LTCOOK_TEST_PREPARATION_COUNT = count;
+      const shutdown = new AbortController();
       const backend = await createPaseoAgentBackend({
         api: {} as never,
         python,
         runtimeApiUrl: 'http://127.0.0.1:1234',
-        piHome: path.join(root, 'pi'),
+        piHome,
         extensionPath: extension,
         appNodeModules: modules,
         deploymentNode: process.execPath,
         browserAvailable: false,
+        workspacePreparationSignal: shutdown.signal,
         identity: (id) => ({ agentId: id, token: `token-${id}` }),
       });
       const options = {
@@ -127,25 +202,40 @@ test.skipIf(process.platform === 'win32')(
       expect(readFileSync(count, 'utf8')).toBe('x');
       expect(first.env.LTCOOK_AGENT_API_TOKEN).toBe('token-one');
       expect(second.env.LTCOOK_AGENT_API_TOKEN).toBe('token-two');
+      expect(first.env.PI_CODING_AGENT_DIR).toBe(piHome);
       expect(first.model).toMatchObject({ provider: 'fixture', model: 'smart-model' });
       expect(second.model).toMatchObject({ provider: 'fixture', model: 'small-model' });
       writeFileSync(dependency, 'two');
+      // > This response still describes the previous version of the input.
+      expect((await backend.prepare(options, 'three')).model.model).toBe('smart-model');
       const changedResponse = JSON.parse(readFileSync(response, 'utf8'));
       changedResponse.environment.LTCOOK_MODEL_SMART = 'fixture/updated-model';
+      changedResponse.inputGuards = readPythonGuards();
       writeFileSync(response, JSON.stringify(changedResponse));
-      expect((await backend.prepare(options, 'three')).model.model).toBe('updated-model');
+      expect((await backend.prepare(options, 'four')).model.model).toBe('updated-model');
       const reopened = await backend.prepare(options, 'one', first.model);
       expect(JSON.parse(reopened.env.LTCOOK_RESOLVED_MODEL!)).toEqual(first.model);
-      expect(readFileSync(count, 'utf8')).toBe('xx');
-      await backend.prepare({ ...options, sessionId: 'another' }, 'four');
       expect(readFileSync(count, 'utf8')).toBe('xxx');
+      await backend.prepare({ ...options, sessionId: 'another' }, 'five');
+      expect(readFileSync(count, 'utf8')).toBe('xxxx');
       const otherWorkspace = path.join(root, 'other-workspace');
       mkdirSync(otherWorkspace);
       const otherResponse = JSON.parse(readFileSync(response, 'utf8'));
       otherResponse.workspaceRoot = otherWorkspace;
       writeFileSync(response, JSON.stringify(otherResponse));
-      await backend.prepare({ ...options, workspaceRoot: otherWorkspace }, 'five');
-      expect(readFileSync(count, 'utf8')).toBe('xxxx');
+      await backend.prepare({ ...options, workspaceRoot: otherWorkspace }, 'six');
+      expect(readFileSync(count, 'utf8')).toBe('xxxxx');
+      const foreignPiHome = path.join(root, 'foreign-pi');
+      mkdirSync(foreignPiHome);
+      rmSync(piHomeAlias);
+      symlinkSync(foreignPiHome, piHomeAlias);
+      await expect(
+        backend.prepare({ ...options, workspaceRoot: otherWorkspace }, 'seven'),
+      ).rejects.toThrow('workspace preparation outputs changed');
+      expect(readFileSync(count, 'utf8')).toBe('xxxxxx');
+      shutdown.abort(new Error('Runtime is stopping'));
+      await expect(backend.create(options)).rejects.toThrow('Runtime is stopping');
+      expect(readFileSync(count, 'utf8')).toBe('xxxxxx');
     } finally {
       if (previousResponse === undefined) delete process.env.LTCOOK_TEST_PREPARATION_RESPONSE;
       else process.env.LTCOOK_TEST_PREPARATION_RESPONSE = previousResponse;
@@ -155,6 +245,187 @@ test.skipIf(process.platform === 'win32')(
     }
   },
 );
+
+test('ordered preparation continues after a rejected asynchronous writer', async () => {
+  const cache = new WorkspacePreparationCache();
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const order: string[] = [];
+  const reason = new Error('Failed to prepare the first workspace');
+  const first = cache.get('first', async () => {
+    started.resolve();
+    await release.promise;
+    order.push('first finished');
+    throw reason;
+  });
+  const firstResult = Promise.allSettled([first]);
+  await started.promise;
+  const prepare = () => {
+    order.push('second started');
+    return {
+      environment: {},
+      dependencies: [],
+      identityPaths: [],
+      outputHashes: {},
+      inputGuards: {},
+      reusable: true,
+    };
+  };
+  const second = cache.get('second', prepare);
+  const repeated = cache.get('second', prepare);
+  release.resolve();
+  expect(await firstResult).toEqual([{ status: 'rejected', reason }]);
+  const result = await second;
+  expect(await repeated).toBe(result);
+  expect(order).toEqual(['first finished', 'second started']);
+});
+
+test('shutdown rejects active and queued workspace preparations', async () => {
+  const shutdown = new AbortController();
+  const cache = new WorkspacePreparationCache({ signal: shutdown.signal });
+  const started = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const prepare = () => ({
+    environment: {},
+    dependencies: [],
+    identityPaths: [],
+    outputHashes: {},
+    inputGuards: {},
+    reusable: true,
+  });
+  const active = cache.get('first', async () => {
+    started.resolve();
+    await finish.promise;
+    return prepare();
+  });
+  await started.promise;
+  let queuedStarts = 0;
+  const queued = cache.get('second', () => {
+    queuedStarts++;
+    return prepare();
+  });
+  const results = Promise.allSettled([active, queued]);
+  const reason = new Error('Runtime is stopping');
+  shutdown.abort(reason);
+  finish.resolve();
+  expect(await results).toEqual([
+    { status: 'rejected', reason },
+    { status: 'rejected', reason },
+  ]);
+  expect(queuedStarts).toBe(0);
+});
+
+test('completed preparations evict the least recently reused entry', async () => {
+  const cache = new WorkspacePreparationCache({ maxEntries: 2 });
+  const prepare = () => ({
+    environment: {},
+    dependencies: [],
+    identityPaths: [],
+    outputHashes: {},
+    inputGuards: {},
+    reusable: true,
+  });
+  const first = await cache.get('first', prepare);
+  const second = await cache.get('second', prepare);
+  expect(await cache.get('first', prepare)).toBe(first);
+  await cache.get('third', prepare);
+  expect(await cache.get('first', prepare)).toBe(first);
+  expect(await cache.get('second', prepare)).not.toBe(second);
+});
+
+test('preparation refuses to pair fresh configuration with replaced outputs', async () => {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'ltcook-preparation-output-')));
+  try {
+    const cache = new WorkspacePreparationCache();
+    const output = path.join(root, 'models.json');
+    const publish = (content: string) => {
+      writeFileSync(output, content);
+      return {
+        environment: { PI_CODING_AGENT_DIR: root, MODEL: content },
+        dependencies: [output],
+        identityPaths: [],
+        outputHashes: { [output]: sha256(content) },
+        inputGuards: {},
+        reusable: true,
+      };
+    };
+    const stale = publish('first publication');
+    writeFileSync(output, 'competing publication');
+    await expect(cache.get('workspace', () => stale)).rejects.toThrow(
+      'workspace preparation outputs changed',
+    );
+    const recovered = await cache.get('workspace', () => publish('second publication'));
+    expect(recovered.environment.MODEL).toBe('second publication');
+    expect(await cache.get('workspace', () => stale)).toBe(recovered);
+    writeFileSync(output, 'another publication');
+    expect(
+      (await cache.get('workspace', () => publish('third publication'))).environment.MODEL,
+    ).toBe('third publication');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unchanged-size source edit after resolution prevents stale cache publication', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ltcook-preparation-source-'));
+  try {
+    const source = path.join(root, 'workspace.env');
+    writeFileSync(source, 'first');
+    utimesSync(source, 1_700_000_000, 1_700_000_000);
+    const prepare = () => ({
+      environment: { MODEL: readFileSync(source, 'utf8') },
+      dependencies: [source],
+      identityPaths: [source],
+      outputHashes: {},
+      inputGuards: { [source]: inputGuard(source) },
+      reusable: true,
+    });
+    const cache = new WorkspacePreparationCache();
+    const first = await cache.get('workspace', () => {
+      const resolved = prepare();
+      writeFileSync(source, 'later');
+      utimesSync(source, 1_700_000_001, 1_700_000_001);
+      return resolved;
+    });
+    expect(first.environment.MODEL).toBe('first');
+    const current = await cache.get('workspace', prepare);
+    expect(current.environment.MODEL).toBe('later');
+    writeFileSync(source, 'later');
+    expect(await cache.get('workspace', prepare)).toBe(current);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a missing source marker that briefly appears prevents cache publication', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ltcook-preparation-missing-'));
+  try {
+    const marker = path.join(root, 'workspace.env');
+    utimesSync(root, 1_700_000_000, 1_700_000_000);
+    const prepare = (model: string) => ({
+      environment: { MODEL: model },
+      dependencies: [marker],
+      identityPaths: [root, marker],
+      outputHashes: {},
+      inputGuards: { [root]: inputGuard(root), [marker]: null },
+      reusable: true,
+    });
+    const cache = new WorkspacePreparationCache();
+    const first = await cache.get('workspace', () => {
+      const resolved = prepare('former');
+      writeFileSync(marker, 'transient');
+      rmSync(marker);
+      utimesSync(root, 1_700_000_001, 1_700_000_001);
+      return resolved;
+    });
+    expect(first.environment.MODEL).toBe('former');
+    const current = await cache.get('workspace', () => prepare('current'));
+    expect(current.environment.MODEL).toBe('current');
+    expect(await cache.get('workspace', () => prepare('unexpected'))).toBe(current);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('installation authority, ownership and parent permissions invalidate native preparation', async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'ltcook-preparation-guards-'));
@@ -175,6 +446,8 @@ test('installation authority, ownership and parent permissions invalidate native
         environment: {},
         dependencies: [authority, ownership],
         identityPaths: [root],
+        outputHashes: {},
+        inputGuards: {},
         reusable: true,
       };
     };
@@ -206,6 +479,8 @@ test('unrepresentable AppRC guards force resolution for every caller', async () 
     environment: { MODEL: String(++calls) },
     dependencies: [],
     identityPaths: [],
+    outputHashes: {},
+    inputGuards: null,
     reusable: false,
   });
   const [first, second] = await Promise.all([
@@ -229,6 +504,8 @@ test('an invalid old dependency path falls back to fresh preparation', async () 
       environment: { MODEL: String(++calls) },
       dependencies: calls === 1 ? [dependency] : [],
       identityPaths: [],
+      outputHashes: {},
+      inputGuards: {},
       reusable: true,
     });
     await cache.get('session', prepare);
@@ -255,6 +532,8 @@ test.skipIf(process.platform === 'win32')(
         environment: { MODEL: String(++calls) },
         dependencies: [],
         identityPaths: [linked],
+        outputHashes: {},
+        inputGuards: {},
         reusable: true,
       });
       await cache.get('session', prepare);

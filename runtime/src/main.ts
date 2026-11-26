@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
+import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { SessionSnapshot } from './workflow-api/index.js';
 import { TeamRegistry } from './integrations/team-loader.js';
@@ -176,6 +177,7 @@ async function run(): Promise<void> {
   let memory: SessionMemory | undefined;
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
+  const nativePreparation = new AbortController();
   let shutdownPromise: Promise<void> | undefined;
   let disconnectPlanningDialogs: (() => void) | undefined;
   let serviceStartup: Promise<unknown> | undefined;
@@ -191,6 +193,7 @@ async function run(): Promise<void> {
   };
   const cleanup = (signal: string, exitCode: number): Promise<void> => {
     stopping = true;
+    nativePreparation.abort(new Error('LTCook runtime is stopping.'));
     startup.end();
     shutdownPromise ??= (async () => {
       const failures: unknown[] = [];
@@ -297,14 +300,27 @@ async function run(): Promise<void> {
       return;
     }
     if (workspaceRoot) {
-      const configResult = childProcess.spawnSync(
-        python,
-        ['-m', 'ltcook.launch', 'write-native-config', '--workspace', workspaceRoot],
-        { encoding: 'utf8', env: process.env, windowsHide: true },
-      );
-      if (configResult.status !== 0) {
+      try {
+        await promisify(childProcess.execFile)(
+          python,
+          ['-m', 'ltcook.launch', 'write-native-config', '--workspace', workspaceRoot],
+          {
+            encoding: 'utf8',
+            env: process.env,
+            signal: nativePreparation.signal,
+            timeout: 15_000,
+            windowsHide: true,
+            maxBuffer: 1024 * 1024,
+          },
+        );
+      } catch (error) {
+        if (nativePreparation.signal.aborted) return;
+        const stderr =
+          error instanceof Error && 'stderr' in error && typeof error.stderr === 'string'
+            ? error.stderr
+            : '';
         const pathError = /PI_CODING_AGENT_DIR must resolve inside the LTCook deployment\./.exec(
-          configResult.stderr ?? '',
+          stderr,
         )?.[0];
         throw new Error(
           pathError ?? 'AppRC native configuration adapter failed to write its registered files.',
@@ -522,6 +538,7 @@ async function run(): Promise<void> {
       deploymentNode: node,
       browserAvailable: receipt.browser_available === true,
       browserExecutable: receipt.browser_executable,
+      workspacePreparationSignal: nativePreparation.signal,
       originalShellEnvironment(_workspace, currentSessionId) {
         return workspaceShellEnvironments.get(currentSessionId);
       },
@@ -555,7 +572,13 @@ async function run(): Promise<void> {
     api.setRuntime(runtimeController);
     if (workspaceRoot && sessionId) {
       workspaceShellEnvironments.set(sessionId, captureShellEnvironment(process.env));
-      initialSnapshot = await runtimeController.openSession({ id: sessionId, workspaceRoot });
+      try {
+        initialSnapshot = await runtimeController.openSession({ id: sessionId, workspaceRoot });
+      } catch (error) {
+        if (nativePreparation.signal.aborted) return;
+        throw error;
+      }
+      if (stopping) return;
       activation.register(workspaceRoot, initialSnapshot.session.id);
     }
     if (stopping) return;

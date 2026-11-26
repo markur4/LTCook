@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import tempfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from apprc import ResolveOptions
+from filelock import FileLock, Timeout
 
 from ltcook.config.app import APP_RC
 from ltcook.config.bundle import LtcookConfig
@@ -219,59 +223,93 @@ def _merge_model_providers(old: dict, new: dict) -> dict:
     return providers
 
 
+def _merge_existing_models(
+    path: Path, document: dict[str, object]
+) -> dict[str, object]:
+    if not path.exists():
+        return document
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Managed Pi models.json is not valid JSON.") from exc
+    if isinstance(existing, dict):
+        existing_providers = existing.get("providers", {})
+        new_providers = document.get("providers", {})
+        if isinstance(existing_providers, dict) and isinstance(new_providers, dict):
+            return {
+                **existing,
+                "providers": _merge_model_providers(existing_providers, new_providers),
+            }
+    return document
+
+
+def _publish_pi_document(path: Path, document: dict[str, object]) -> str:
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(document, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        # > Hash the same bytes that will be published, including native newlines.
+        with open(temporary, "rb") as published:
+            digest = hashlib.file_digest(published, "sha256").hexdigest()
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return digest
+
+
+@dataclass(frozen=True, slots=True)
+class PiConfigPublication:
+    """Record the generated files and whether their writer lock was contended."""
+
+    output_hashes: dict[Path, str]
+    waited_for_lock: bool
+
+
 def write_pi_config(
     config: LtcookConfig,
     *,
     owned_dir: str | Path,
     pi_home: str | Path | None = None,
     runtime_environment: Mapping[str, str] | None = None,
-) -> tuple[Path, ...]:
-    """Atomically publish AppRC-derived Pi settings with private permissions.
+) -> PiConfigPublication:
+    """Serialize preparation by canonical Pi home and atomically publish each file.
 
     :param config: Settings for the selected workspace.
     :param owned_dir: AppRC-owned deployment application directory.
     :param pi_home: Workspace-specific AppRC-owned Pi home.
     :param runtime_environment: Launch settings after applying global model scope.
-    :return: Pi configuration paths written by LTCook.
+    :return: Published file digests and whether lock acquisition had to wait.
     """
-    import tempfile
-
-    written: list[Path] = []
-    for path, document in pi_documents(
+    documents = pi_documents(
         config,
         owned_dir=owned_dir,
         pi_home=pi_home,
         runtime_environment=runtime_environment,
-    ).items():
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if path.name == "models.json" and path.exists():
-            try:
-                existing = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                raise ValueError("Managed Pi models.json is not valid JSON.") from exc
-            if isinstance(existing, dict):
-                existing_providers = existing.get("providers", {})
-                new_providers = document.get("providers", {})
-                if isinstance(existing_providers, dict) and isinstance(
-                    new_providers, dict
-                ):
-                    document = {
-                        **existing,
-                        "providers": _merge_model_providers(
-                            existing_providers, new_providers
-                        ),
-                    }
-        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    )
+    agent_home = next(iter(documents)).parent
+    agent_home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock = FileLock(agent_home / ".ltcook-pi-config.lock", timeout=10, mode=0o600)
+    waited_for_lock = False
+    try:
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(document, stream, ensure_ascii=False, indent=2)
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.chmod(temporary, 0o600)
-            os.replace(temporary, path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-        written.append(path)
-    return tuple(written)
+            acquisition = lock.acquire(blocking=False)
+        except Timeout:
+            waited_for_lock = True
+            acquisition = lock.acquire()
+    except Timeout as exc:
+        raise ValueError("Timed out waiting to write Pi configuration.") from exc
+
+    written: dict[Path, str] = {}
+    with acquisition:
+        models_path = agent_home / "models.json"
+        documents[models_path] = _merge_existing_models(
+            models_path, documents[models_path]
+        )
+        for path, document in documents.items():
+            written[path] = _publish_pi_document(path, document)
+    return PiConfigPublication(written, waited_for_lock)

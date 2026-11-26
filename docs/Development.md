@@ -132,6 +132,17 @@ native delivery to RuntimeController. The Session projection in
 `runtime/src/core/session-snapshot.ts` uses the same dependency and approval
 rules as the scheduler and controller, from `runtime/src/core/task-gates.ts`.
 
+Native workspace preparation calls AppRC asynchronously from
+`runtime/src/integrations/paseo.ts`. The preparation cache bounds reusable
+workspace entries and checks recorded dependency fingerprints and generated
+output hashes before reuse. The shared Python writer in
+`src/ltcook/config/pi_config.py` serializes updates by canonical Pi home for
+native, web, and CLI callers. For reusable installations, AppRC first discovers
+the input paths, then resolves settings again after the helper captures their
+file versions. The runtime verifies those versions and the generated outputs
+before caching the result. An input change during preparation or a wait for the
+writer lock makes the next request resolve configuration again.
+
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,

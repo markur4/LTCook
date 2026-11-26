@@ -1,4 +1,5 @@
 import errno
+import hashlib
 import json
 import os
 import urllib.error
@@ -8,9 +9,11 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from filelock import FileLock
 from typer.testing import CliRunner
 
 from ltcook import launch
+from ltcook.config import pi_config
 from ltcook.config.bundle import LtcookConfig
 from ltcook.config.pi_config import pi_documents, write_pi_config
 
@@ -35,21 +38,35 @@ def test_native_preparation_reports_configuration_inputs_and_outputs(
     }
     monkeypatch.setenv("LTCOOK_SHELL_PROVENANCE", json.dumps(shell))
     config = APP_RC.paths(environment=shell).require("config")
+    resolve_launch = launch.resolve_launch
+    resolutions = 0
+
+    def resolve_once(*args, **kwargs):
+        nonlocal resolutions
+        resolutions += 1
+        return resolve_launch(*args, **kwargs)
+
+    monkeypatch.setattr(launch, "resolve_launch", resolve_once)
     launch.prepare_native_command(project)
     result = json.loads(capsys.readouterr().out)
     inputs = set(result["dependencies"])
     assert str(project) in result["identityPaths"]
     assert result["reusable"] is False
+    assert result["inputGuards"] is None
+    assert resolutions == 1
     marker = project / APP_RC.schema.workspace_dotenv_filename
     assert str(marker) in inputs
     assert str(marker.with_name(f"{marker.stem}.secret{marker.suffix}")) in inputs
     assert str(config / APP_RC.schema.user_dotenv_filename) in inputs
     assert str(config / APP_RC.schema.apprc_toml_filename) in inputs
     assert result["environment"]["LTCOOK_MODEL_SMART"] == "fixture-model"
-    pi_home = Path(result["environment"]["PI_CODING_AGENT_DIR"])
-    for filename in ("models.json", "web-search.json"):
-        assert str(pi_home / filename) in inputs
-        assert (pi_home / filename).is_file()
+    pi_home = Path(result["environment"]["PI_CODING_AGENT_DIR"]).resolve()
+    output_paths = {pi_home / "models.json", pi_home / "web-search.json"}
+    assert inputs.issuperset(map(str, output_paths))
+    assert result["outputHashes"] == {
+        str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in output_paths
+    }
 
 
 def test_native_preparation_tracks_installed_authority_and_disables_unknown_guards(
@@ -99,6 +116,70 @@ def test_native_preparation_tracks_installed_authority_and_disables_unknown_guar
     inaccessible = launch.NativePreparationInputs()
     inaccessible.capture(replace(installed, layers=(resource,)))
     assert inaccessible.reusable is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Installed source reuse requires POSIX")
+@pytest.mark.parametrize("edit_during_resolution", [False, True])
+def test_native_preparation_attests_the_second_configuration_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    edit_during_resolution: bool,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
+    workspace.mkdir()
+    source = workspace / "workspace.env"
+    optional = workspace / "workspace.secret.env"
+    source.write_text("first", encoding="utf-8")
+    deployment = tmp_path / "deployment"
+    resolutions = 0
+
+    def resolved_launch(
+        requested: Path,
+        *,
+        original_environment,
+        preparation_inputs: launch.NativePreparationInputs,
+    ) -> launch.LaunchConfig:
+        nonlocal resolutions
+        resolutions += 1
+        assert requested == workspace
+        value = source.read_text(encoding="utf-8")
+        preparation_inputs.dependencies.update((source, optional))
+        preparation_inputs.identity_paths.add(workspace)
+        if resolutions == 1:
+            source.write_text("newer", encoding="utf-8")
+            os.utime(source, (1_700_000_000, 1_700_000_000))
+        elif edit_during_resolution:
+            source.write_text("later", encoding="utf-8")
+            os.utime(source, (1_700_000_001, 1_700_000_001))
+        return launch.LaunchConfig(
+            {
+                "LTCOOK_DEPLOYMENT_DIR": str(deployment),
+                "PI_CODING_AGENT_DIR": str(deployment / "pi"),
+                "LTCOOK_MODEL_SMART": value,
+            },
+            _native_config(),
+            workspace,
+        )
+
+    monkeypatch.setattr(launch, "resolve_launch", resolved_launch)
+    launch.prepare_native_command(workspace)
+    result = json.loads(capsys.readouterr().out)
+    assert resolutions == 2
+    assert result["environment"]["LTCOOK_MODEL_SMART"] == "newer"
+    assert result["reusable"] is not edit_during_resolution
+    if edit_during_resolution:
+        assert result["inputGuards"] is None
+    else:
+        guards = result["inputGuards"]
+        assert guards[str(optional)] is None
+        for guarded in (source, workspace):
+            observed = guarded.lstat()
+            assert guards[str(guarded)]["version"] == [
+                str(observed.st_size),
+                str(observed.st_mtime_ns),
+                str(observed.st_ctime_ns),
+            ]
 
 
 def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
@@ -484,7 +565,7 @@ def test_pi_documents_keep_secrets_out_of_json_and_write_private_files(tmp_path)
         config,
         owned_dir=deployment / "app",
         pi_home=pi_home,
-    )
+    ).output_hashes
     assert set(written) == set(documents)
     assert all(path.stat().st_mode & 0o777 == 0o600 for path in written)
     assert {path.parent for path in written} == {pi_home}
@@ -504,6 +585,97 @@ def test_pi_writer_preserves_unrelated_local_models(tmp_path):
     models = json.loads(models_path.read_text())
     assert "custom" in models["providers"]
     assert "ollama" in models["providers"]
+
+
+def test_pi_writer_waits_for_canonical_home_before_reading_or_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _native_config()
+    deployment = tmp_path / "deployment"
+    pi_home = (deployment / "pi").resolve()
+    pi_home.mkdir(parents=True)
+    aliased_home = deployment / "unused" / ".." / "pi"
+    models_path = pi_home / "models.json"
+    web_path = pi_home / "web-search.json"
+    models_path.write_text("invalid JSON until the holder finishes", encoding="utf-8")
+    web_path.write_text("held configuration", encoding="utf-8")
+
+    def immediate_lock(path: Path, *, timeout: int, mode: int) -> FileLock:
+        return FileLock(path, timeout=0, mode=mode)
+
+    monkeypatch.setattr(pi_config, "FileLock", immediate_lock)
+    with FileLock(pi_home / ".ltcook-pi-config.lock"):
+        with pytest.raises(
+            ValueError, match="Timed out waiting to write Pi configuration"
+        ):
+            write_pi_config(config, owned_dir=deployment / "app", pi_home=aliased_home)
+        assert web_path.read_text(encoding="utf-8") == "held configuration"
+        models_path.write_text(
+            json.dumps({"providers": {"custom": {"models": []}}}), encoding="utf-8"
+        )
+
+    written = write_pi_config(
+        config, owned_dir=deployment / "app", pi_home=aliased_home
+    ).output_hashes
+    assert written == {
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (models_path, web_path)
+    }
+    models = json.loads(models_path.read_text(encoding="utf-8"))
+    assert models["providers"]["custom"] == {"models": []}
+
+
+def test_native_preparation_discards_reuse_after_waiting_for_shared_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    deployment = tmp_path / "deployment"
+    pi_home = (deployment / "pi").resolve()
+    pi_home.mkdir(parents=True)
+    lock_path = pi_home / ".ltcook-pi-config.lock"
+    lock_holder = FileLock(lock_path)
+
+    def resolved_launch(
+        workspace: Path,
+        *,
+        original_environment,
+        preparation_inputs: launch.NativePreparationInputs,
+    ) -> launch.LaunchConfig:
+        preparation_inputs.identity_paths.add(workspace)
+        return launch.LaunchConfig(
+            {
+                "LTCOOK_DEPLOYMENT_DIR": str(deployment),
+                "PI_CODING_AGENT_DIR": str(pi_home),
+            },
+            _native_config(),
+            workspace,
+        )
+
+    monkeypatch.setattr(launch, "resolve_launch", resolved_launch)
+    launch.prepare_native_command(tmp_path)
+    assert json.loads(capsys.readouterr().out)["reusable"] is True
+
+    def contended_lock(path: Path, *, timeout: int, mode: int) -> FileLock:
+        writer = FileLock(path, timeout=timeout, mode=mode)
+        acquire = writer.acquire
+
+        def acquire_after_holder(*, blocking: bool = True):
+            if blocking:
+                lock_holder.release()
+            return acquire(blocking=blocking)
+
+        monkeypatch.setattr(writer, "acquire", acquire_after_holder)
+        return writer
+
+    monkeypatch.setattr(pi_config, "FileLock", contended_lock)
+    with lock_holder:
+        launch.prepare_native_command(tmp_path)
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["reusable"] is False
+    assert result["outputHashes"] == {
+        str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (pi_home / "models.json", pi_home / "web-search.json")
+    }
 
 
 def test_pi_writer_retains_the_prior_local_model_after_alias_edit(tmp_path):
