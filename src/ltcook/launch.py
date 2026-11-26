@@ -30,6 +30,7 @@ from ltcook._runtime_client import (
 )
 from ltcook.config.bundle import LtcookConfig
 from ltcook.config.pi_config import (
+    PiConfigPublication,
     resolve_config,
     resolve_global_config,
     write_pi_config,
@@ -394,7 +395,7 @@ def launch_model(
                 "Runtime prerequisites are not prepared; re-run the LTCook installer."
             )
         if harness == "pi":
-            pi_paths = _write_launch_pi_config(launch)
+            pi_paths = _write_launch_pi_config(launch).output_hashes
             models_path = next(path for path in pi_paths if path.name == "models.json")
             environment["LTCOOK_PI_MODELS_PATH"] = str(models_path)
         completed = subprocess.run(
@@ -681,7 +682,7 @@ def write_native_command(
     """Generate Pi model and web-access files in the AppRC-owned deployment."""
     launch = resolve_launch(workspace, original_environment=os.environ)
     try:
-        paths = _write_launch_pi_config(launch)
+        paths = _write_launch_pi_config(launch).output_hashes
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(json.dumps([str(path) for path in paths]))
@@ -697,9 +698,10 @@ def prepare_native_command(
         workspace, original_environment=os.environ, preparation_inputs=inputs
     )
     try:
-        outputs = _write_launch_pi_config(launch)
+        publication = _write_launch_pi_config(launch)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
+    outputs = publication.output_hashes
     inputs.dependencies.update(outputs)
     inputs.guard_ancestors()
     typer.echo(
@@ -710,13 +712,13 @@ def prepare_native_command(
                 "dependencies": sorted(map(str, inputs.dependencies)),
                 "identityPaths": sorted(map(str, inputs.identity_paths)),
                 "outputHashes": {str(path): digest for path, digest in outputs.items()},
-                "reusable": inputs.reusable,
+                "reusable": inputs.reusable and not publication.waited_for_lock,
             }
         )
     )
 
 
-def _write_launch_pi_config(launch: LaunchConfig) -> dict[Path, str]:
+def _write_launch_pi_config(launch: LaunchConfig) -> PiConfigPublication:
     """Write native files from the same effective settings sent to Pi."""
     environment = launch.environment
     return write_pi_config(

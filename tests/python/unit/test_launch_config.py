@@ -49,7 +49,7 @@ def test_native_preparation_reports_configuration_inputs_and_outputs(
     assert str(config / APP_RC.schema.user_dotenv_filename) in inputs
     assert str(config / APP_RC.schema.apprc_toml_filename) in inputs
     assert result["environment"]["LTCOOK_MODEL_SMART"] == "fixture-model"
-    pi_home = Path(result["environment"]["PI_CODING_AGENT_DIR"])
+    pi_home = Path(result["environment"]["PI_CODING_AGENT_DIR"]).resolve()
     output_paths = {pi_home / "models.json", pi_home / "web-search.json"}
     assert inputs.issuperset(map(str, output_paths))
     assert result["outputHashes"] == {
@@ -490,7 +490,7 @@ def test_pi_documents_keep_secrets_out_of_json_and_write_private_files(tmp_path)
         config,
         owned_dir=deployment / "app",
         pi_home=pi_home,
-    )
+    ).output_hashes
     assert set(written) == set(documents)
     assert all(path.stat().st_mode & 0o777 == 0o600 for path in written)
     assert {path.parent for path in written} == {pi_home}
@@ -517,7 +517,7 @@ def test_pi_writer_waits_for_canonical_home_before_reading_or_publishing(
 ) -> None:
     config = _native_config()
     deployment = tmp_path / "deployment"
-    pi_home = deployment / "pi"
+    pi_home = (deployment / "pi").resolve()
     pi_home.mkdir(parents=True)
     aliased_home = deployment / "unused" / ".." / "pi"
     models_path = pi_home / "models.json"
@@ -541,13 +541,65 @@ def test_pi_writer_waits_for_canonical_home_before_reading_or_publishing(
 
     written = write_pi_config(
         config, owned_dir=deployment / "app", pi_home=aliased_home
-    )
+    ).output_hashes
     assert written == {
         path: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in (models_path, web_path)
     }
     models = json.loads(models_path.read_text(encoding="utf-8"))
     assert models["providers"]["custom"] == {"models": []}
+
+
+def test_native_preparation_discards_reuse_after_waiting_for_shared_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    deployment = tmp_path / "deployment"
+    pi_home = (deployment / "pi").resolve()
+    pi_home.mkdir(parents=True)
+    lock_path = pi_home / ".ltcook-pi-config.lock"
+    lock_holder = FileLock(lock_path)
+
+    def resolved_launch(
+        workspace: Path,
+        *,
+        original_environment,
+        preparation_inputs: launch.NativePreparationInputs,
+    ) -> launch.LaunchConfig:
+        return launch.LaunchConfig(
+            {
+                "LTCOOK_DEPLOYMENT_DIR": str(deployment),
+                "PI_CODING_AGENT_DIR": str(pi_home),
+            },
+            _native_config(),
+            workspace,
+        )
+
+    monkeypatch.setattr(launch, "resolve_launch", resolved_launch)
+    launch.prepare_native_command(tmp_path)
+    assert json.loads(capsys.readouterr().out)["reusable"] is True
+
+    def contended_lock(path: Path, *, timeout: int, mode: int) -> FileLock:
+        writer = FileLock(path, timeout=timeout, mode=mode)
+        acquire = writer.acquire
+
+        def acquire_after_holder(*, blocking: bool = True):
+            if blocking:
+                lock_holder.release()
+            return acquire(blocking=blocking)
+
+        monkeypatch.setattr(writer, "acquire", acquire_after_holder)
+        return writer
+
+    monkeypatch.setattr(pi_config, "FileLock", contended_lock)
+    with lock_holder:
+        launch.prepare_native_command(tmp_path)
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["reusable"] is False
+    assert result["outputHashes"] == {
+        str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (pi_home / "models.json", pi_home / "web-search.json")
+    }
 
 
 def test_pi_writer_retains_the_prior_local_model_after_alias_edit(tmp_path):

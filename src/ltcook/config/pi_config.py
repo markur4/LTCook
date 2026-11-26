@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from apprc import ResolveOptions
@@ -261,20 +262,28 @@ def _publish_pi_document(path: Path, document: dict[str, object]) -> str:
     return digest
 
 
+@dataclass(frozen=True, slots=True)
+class PiConfigPublication:
+    """Record the generated files and whether their writer lock was contended."""
+
+    output_hashes: dict[Path, str]
+    waited_for_lock: bool
+
+
 def write_pi_config(
     config: LtcookConfig,
     *,
     owned_dir: str | Path,
     pi_home: str | Path | None = None,
     runtime_environment: Mapping[str, str] | None = None,
-) -> dict[Path, str]:
+) -> PiConfigPublication:
     """Serialize preparation by canonical Pi home and atomically publish each file.
 
     :param config: Settings for the selected workspace.
     :param owned_dir: AppRC-owned deployment application directory.
     :param pi_home: Workspace-specific AppRC-owned Pi home.
     :param runtime_environment: Launch settings after applying global model scope.
-    :return: Generated configuration paths and SHA-256 digests of published bytes.
+    :return: Published file digests and whether lock acquisition had to wait.
     """
     documents = pi_documents(
         config,
@@ -284,15 +293,23 @@ def write_pi_config(
     )
     agent_home = next(iter(documents)).parent
     agent_home.mkdir(parents=True, exist_ok=True, mode=0o700)
-    written: dict[Path, str] = {}
+    lock = FileLock(agent_home / ".ltcook-pi-config.lock", timeout=10, mode=0o600)
+    waited_for_lock = False
     try:
-        with FileLock(agent_home / ".ltcook-pi-config.lock", timeout=10, mode=0o600):
-            models_path = agent_home / "models.json"
-            documents[models_path] = _merge_existing_models(
-                models_path, documents[models_path]
-            )
-            for path, document in documents.items():
-                written[path] = _publish_pi_document(path, document)
+        try:
+            acquisition = lock.acquire(blocking=False)
+        except Timeout:
+            waited_for_lock = True
+            acquisition = lock.acquire()
     except Timeout as exc:
         raise ValueError("Timed out waiting to write Pi configuration.") from exc
-    return written
+
+    written: dict[Path, str] = {}
+    with acquisition:
+        models_path = agent_home / "models.json"
+        documents[models_path] = _merge_existing_models(
+            models_path, documents[models_path]
+        )
+        for path, document in documents.items():
+            written[path] = _publish_pi_document(path, document)
+    return PiConfigPublication(written, waited_for_lock)

@@ -115,9 +115,13 @@ translation in LTCook-owned paths and avoid a second hidden settings layer. The
 TypeScript runtime owns coordination; team packages use its public Team API v3.
 Native workspace preparation calls AppRC asynchronously from
 `runtime/src/integrations/paseo.ts`. The preparation cache bounds reusable
-workspace entries and checks the original inputs and generated output hashes
-before reuse. The shared Python writer in `src/ltcook/config/pi_config.py`
-serializes updates by canonical Pi home, including native, web, and CLI callers.
+workspace entries and checks recorded dependency fingerprints and generated
+output hashes before reuse. The shared Python writer in
+`src/ltcook/config/pi_config.py` serializes updates by canonical Pi home for
+native, web, and CLI callers. When preparation waits for the lock, the next
+request resolves configuration again. The runtime takes its first dependency
+fingerprint after AppRC reads the inputs, so an edit between those steps can
+escape invalidation.
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,
