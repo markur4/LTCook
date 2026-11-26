@@ -29,7 +29,8 @@ import { configurePiExtensions } from './pi-settings.js';
 import { isWithin } from '../path-containment.js';
 import { memoryDispatchId } from './paseo-memory.js';
 import { WorkspacePreparationCache, type WorkspacePreparation } from './workspace-preparation.js';
-import { connectIdleRestart, type IdleRestartReservation } from './paseo-idle-restart.js';
+import { connectPaseoMaintenance, type IdleRestartReservation } from './paseo-idle-restart.js';
+import { seedWorkspaceLabels, type WorkspaceNativeMutations } from './paseo-workspace-services.js';
 
 const exec = promisify(execFile);
 const exactStatNumber = z.string().regex(/^-?\d{1,24}$/);
@@ -90,6 +91,8 @@ function readWorkspacePreparation(response: unknown, workspaceRoot: string): Wor
 
 export interface PaseoHost {
   api: PaseoApi;
+  workspaceMutations: WorkspaceNativeMutations;
+  archiveWorkspacePreservingFiles?: (workspaceId: string, signal?: AbortSignal) => Promise<boolean>;
   listen: string;
   logPath: string;
   reserveIdleRestart?: () => Promise<IdleRestartReservation>;
@@ -178,8 +181,13 @@ export async function startPaseoHost(input: {
   const serverEntry = fileURLToPath(import.meta.resolve('@getpaseo/server'));
   const serverRoot = path.resolve(path.dirname(serverEntry), '../../..');
   const supervisor = path.join(serverRoot, 'dist/scripts/supervisor-entrypoint.js');
-  const { startDaemonInstance, waitForDaemonReady, stopDaemonInstance, daemonLogPath } =
-    await import('@getpaseo/server/daemon-control');
+  const {
+    startDaemonInstance,
+    waitForDaemonReady,
+    stopDaemonInstance,
+    daemonLogPath,
+    readDaemonInstance,
+  } = await import('@getpaseo/server/daemon-control');
   const { hashDaemonPassword } = await import('@getpaseo/server');
   const appBin = path.join(appRoot, 'node_modules', '.bin');
   const piCommand =
@@ -213,6 +221,11 @@ export async function startPaseoHost(input: {
     daemon: {
       listen: input.listen,
       appendSystemPrompt:
+        (await readFile(
+          path.resolve(input.pluginDirectory, '../../resources/rules/workspace-terminology.md'),
+          'utf8',
+        )) +
+        '\n\n' +
         `When LTCook workspace tools are available, prefer ${REPO_LOCATE_TOOL_NAME} with a known symbol to find its definition, callers, or tests. ` +
         'For multi-file investigations, call Locate trace with the question and up to four independent leads, such as behaviors, symbols, routes, or settings. Use its numbered evidence and check only specific gaps. ' +
         `Use ${REPO_SEARCH_TOOL_NAME} in hybrid mode when you know the behavior but lack the symbol. Discover these tools through tool search if needed. ` +
@@ -250,9 +263,8 @@ export async function startPaseoHost(input: {
     'paseo-idle-restart',
     'register.mjs',
   );
-  const hasMaintenanceLoader =
-    process.platform === 'linux' &&
-    (await stat(maintenanceLoader).catch(() => undefined))?.isFile();
+  const hasMaintenanceLoader = (await stat(maintenanceLoader).catch(() => undefined))?.isFile();
+  if (!(await readDaemonInstance(home))) await seedWorkspaceLabels(home);
   const started = await startDaemonInstance({
     home,
     command: input.node,
@@ -274,13 +286,21 @@ export async function startPaseoHost(input: {
     await client.connect();
     const connectedClient = client;
     const api = createPaseoApi(connectedClient);
+    const maintenance = hasMaintenanceLoader
+      ? await connectPaseoMaintenance(instance.listen, input.userToken)
+      : undefined;
     const reserveIdleRestart =
-      hasMaintenanceLoader && started.spawned
-        ? await connectIdleRestart(instance.listen, input.userToken)
-        : undefined;
+      process.platform === 'linux' && started.spawned ? maintenance?.reserveIdleRestart : undefined;
     return {
       api,
+      workspaceMutations: {
+        listWorkspaceLabels: connectedClient.listWorkspaceLabels.bind(connectedClient),
+        setWorkspaceLabel: connectedClient.setWorkspaceLabel.bind(connectedClient),
+        updateWorkspaceLabel: connectedClient.updateWorkspaceLabel.bind(connectedClient),
+        updateAgent: connectedClient.updateAgent.bind(connectedClient),
+      },
       reserveIdleRestart,
+      archiveWorkspacePreservingFiles: maintenance?.archiveWorkspacePreservingFiles,
       listen: instance.listen,
       logPath: daemonLogPath(home),
       async listProviderSubagents(agentId) {

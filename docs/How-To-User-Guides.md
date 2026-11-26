@@ -18,6 +18,9 @@
   - [Authenticate with Pi](#authenticate-with-pi)
   - [Choose application paths](#choose-application-paths)
   - [Select a team and resume a session](#select-a-team-and-resume-a-session)
+  - [Organize workspaces and find the archive](#organize-workspaces-and-find-the-archive)
+    - [Find and restore archived conversations](#find-and-restore-archived-conversations)
+    - [Change the service settings](#change-the-service-settings)
   - [Plan work and answer decisions](#plan-work-and-answer-decisions)
   - [Configure guidance](#configure-guidance)
   - [Configure research tools](#configure-research-tools)
@@ -742,6 +745,88 @@ ltcook config set runtime.database /absolute/path/to/new-coordination.sqlite --s
 The new store starts new coordination Sessions. Pi/Paseo histories and shared
 authentication remain with their native owners; selecting a fresh store does
 not authorize replay of an uncertain action.
+
+## Organize workspaces and find the archive
+
+Use a Paseo project for a repository and a Paseo workspace for related work.
+Start with one main user-facing session in that workspace; add sessions and
+supporting tabs when useful. Select the host where you want to run the work.
+See the [Paseo and AppRC glossary](Explanations.md#paseo-and-apprc-terminology)
+for the distinction between a workspace container and its working directory.
+
+Workspace Organizer maintains **Feature** (blue), **Bugfix** (red), **CSC**
+(amber), and **Research** (violet) on this LTCook host. It selects a category
+from the first conversation content, then reassesses changed conversations or
+observed Git revisions every 12 hours. If work changes during the first
+classification, it can retry once after at least 60 seconds, when the workspace
+is idle. Other labels remain available.
+Use Paseo's native label filters to narrow the workspace list. The native default sorts workspaces by
+creation time, newest first; an existing display preference is preserved.
+
+Renamer keeps workspace titles within 20 visible characters and agent-session
+tab titles within 15. It updates a new conversation when content becomes
+available, then at most every 30 minutes when its source changes. Workspace
+names also respond to observed Git changes; agent-tab names follow their own
+conversations. File, diff, terminal, browser, and native provider-subagent titles
+remain native.
+Renamer and category selection use `@tiny` with low reasoning and the configured
+model authentication. They resume later when inference is unavailable; the
+current names and labels remain usable.
+
+Open **Activity → Services** to see whether each service is enabled or running,
+its latest check and change, and any diagnostic. Workspace Organizer also shows
+why workspaces are protected from automatic archival. Change the service
+switches through AppRC as described below; these cards report status only.
+
+### Find and restore archived conversations
+
+Open **History** in Paseo's left sidebar, select an archived conversation, and
+choose **Unarchive** to resume it. If Paseo needs to recreate a removed workspace
+directory, the workspace recovery action is **Restore**. These records remain
+on their original host under Paseo's data home; there is no separate archive
+folder to organize or synchronize. The host must be connected to read them.
+History lists agent conversations, so a workspace that never had an agent has
+no conversation entry there.
+
+Workspace Organizer's automatic archive waits for 14 days without meaningful
+use. Conversation activity, observed Git revisions and tracked or untracked file
+changes, and interaction in LTCook's bundled Paseo web app reset the inactivity
+period. External-only edits in ordinary-directory projects and changes only to
+ignored files do not. Other Paseo clients do not report focus-only use. Pin a
+workspace if you use another Paseo client or edit files that the service does
+not observe.
+Running or queued work, a pending request for your input, live terminals,
+incomplete activity information, or unavailable archive support prevents archival.
+Empty workspaces remain active. First discovery and restoration each start a
+fresh 14-day observation period. Automatic relabeling and renaming do not reset it.
+
+Automatic archive keeps the entire working directory, including modified,
+untracked, and ignored files, and skips project teardown commands. This includes
+Paseo-owned worktrees and does not require a commit or remote push. If the
+connected daemon cannot guarantee this behavior, automatic archival stays
+paused and **Activity → Services** asks you to restart LTCook. Paseo's manual
+archive action can still remove a Paseo-owned worktree directory.
+
+### Change the service settings
+
+All five [service switches](References.md#workspace-service-settings) default to
+`true` and apply across this installation's Paseo workspaces. Save them at user
+scope and restart LTCook to apply changes. For example, to retain automatic
+labels and agent-tab names while disabling automatic archival and workspace
+renaming:
+
+```shell
+ltcook config set runtime.services.workspace_organizer.auto_archive false --scope user
+ltcook config set runtime.services.renamer.workspaces false --scope user
+ltcook restart
+```
+
+Set the same values to `true` to enable them again. The respective `enabled`
+setting pauses the whole service. `runtime.services.renamer.tabs` independently
+controls agent-tab renaming. Deliberate shell exports take precedence over saved
+user values; AppRC project overlays do not change the host-wide service policy.
+The `ltcook services` commands manage research containers, while these two
+services follow the LTCook runtime lifecycle.
 
 ## Plan work and answer decisions
 

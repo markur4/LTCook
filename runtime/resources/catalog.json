@@ -1,5 +1,10 @@
 [
   {
+    "path": "rules/workspace-terminology.md",
+    "kind": "rule",
+    "required": true
+  },
+  {
     "path": "rules/planning.md",
     "kind": "rule",
     "required": true

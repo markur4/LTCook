@@ -6,6 +6,7 @@ import type { RuntimeActor, RuntimeController } from '../workflow-api/index.js';
 import { canonicalWorkspace } from '../core/workspace.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { PaseoHost } from './paseo.js';
+import type { PaseoWorkspaceServices } from './paseo-workspace-services.js';
 import type { SessionMemory } from '../session-memory/service.js';
 import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
@@ -89,6 +90,11 @@ export class RuntimeApi {
   ) => { scope?: MemoryScope; task?: MemoryTaskContext } | undefined;
   private pastedDocuments?: PastedDocuments;
   private providerSubagents?: PaseoHost['listProviderSubagents'];
+  private workspaceServices?: PaseoWorkspaceServices;
+
+  setWorkspaceServices(service: PaseoWorkspaceServices): void {
+    this.workspaceServices = service;
+  }
 
   setProviderSubagents(list: PaseoHost['listProviderSubagents']): void {
     this.providerSubagents = list;
@@ -451,6 +457,7 @@ export class RuntimeApi {
         }
         await handleActivityRoute(activityRoute, parsed, response, {
           activity: this.services.activity,
+          workspaceServices: this.workspaceServices,
           memoryDisabled: this.memoryDisabled,
           readMemory: () => this.memory,
           readSession: (id) => this.runtime?.snapshot(id),
