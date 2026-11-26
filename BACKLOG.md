@@ -151,19 +151,19 @@ decisions, the Explorer fix status, and the order for the remaining passes.
 
 - **Area:** `runtime/src/session-memory/service.ts` and `runtime/src/integrations/paseo-memory.ts`.
 - **Observed while:** Tracing broad discovery through authorized original history.
-- **Why not fixed now:** Practical latency and recall have not been measured.
-- **Evidence:** Broad searches walk history pages and rank results after each page. Exact source lookup already uses a targeted cursor read. Output limits do not bound broad history reads.
+- **Why not fixed now:** The local Paseo pilot met the current deadlines and found every expected source on the measured corpus. It gives no reason to introduce an index for that workload.
+- **Evidence:** Exact lookup used one page at every tested size. Targeted broad search walked 200 pages at 9,600 messages. Handoff read one page for current context and 200 pages when recovering older originals. See the [retrieval measurements](code-smells.md#retrieval-measurements) for latency, recall, and fixture limits.
 - **Context:** Evaluate search, exact lookup, and handoff recovery separately. Preserve epoch, peer scope, citations, and truthful incomplete results.
-- **Suggested next step:** Measure pages, bytes, latency, deadlines and recall for long histories and multiple peers. Consider a rebuildable lexical index if warranted. See [CSC-06B](code-smells.md#csc-06b--broad-memory-search-walks-original-history) and [Session Memory decomposition](#p3--e1-code-smell---decompose-session-memory-after-covering-production-recovery).
+- **Suggested next step:** Retain the current paths during [Session Memory decomposition](#p3--e1-code-smell---decompose-session-memory-after-covering-production-recovery). Reconsider an epoch-aware lexical index if a representative workload shows missed deadlines or recall loss. See [CSC-06B](code-smells.md#csc-06b--broad-memory-search-walks-original-history).
 
 ## P3 / E2 [Question] - *Measure live workspace preparation and cache growth*
 
 - **Area:** `runtime/src/integrations/paseo.ts`, `runtime/src/integrations/workspace-preparation.ts`, and `src/ltcook/config/pi_config.py`.
 - **Observed while:** Tracing AppRC workspace preparation for managed native agents.
-- **Why not fixed now:** Event-loop delay and cache growth have not been measured. Async preparation can introduce shared-output races.
+- **Why not fixed now:** [Draft #75](https://github.com/markur4/LTCook/pull/75) has a measured and reviewed implementation awaiting integration.
 - **Evidence:** The live runtime uses `spawnSync` and synchronous fingerprints. The cache has no eviction. Different Session keys can point to the same generated Pi configuration.
 - **Context:** AppRC owns configuration and shell provenance. Configuration writes include read-merge-replace behavior.
-- **Suggested next step:** Measure delay and cache growth independently. If changes are justified, preserve invalidation and serialize writes by shared output path. See [CSC-06C](code-smells.md#csc-06c--live-workspace-preparation-uses-synchronous-io).
+- **Suggested next step:** Reconcile the async startup and bounded cache with Session activation on the target. Preserve shared Pi-home serialization, fingerprint invalidation, and shell provenance. See the [workspace preparation measurements](code-smells.md#workspace-preparation-measurements) and [CSC-06C](code-smells.md#csc-06c--live-workspace-preparation-uses-synchronous-io).
 
 ## P3 / E3 [Code smell] - *Clarify model contract and documentation ownership*
 
