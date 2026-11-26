@@ -14,16 +14,16 @@ import { createRepoLocateTool } from '../tools/repo-locate.js';
 import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
 import type { ToolDefinition } from '../tools/types.js';
 import {
-  isRepositoryTool,
   REPO_LOCATE_TOOL_NAME,
   REPO_SEARCH_TIMEOUT_MS,
   SESSION_MEMORY_TOOL_NAME,
   WORKTREE_TOOL_DESCRIPTION,
   WORKTREE_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
+} from '../tools/workspace-tools.js';
 import { sessionMemoryDescription, sessionMemoryInput } from '../tools/session-memory.js';
 import { worktreeToolInput } from '../tools/session-worktree.js';
-import { isWebTool, webDefinitions } from '../tools/web.js';
+import { isManagedWorkspaceTool } from '../tools/capabilities.js';
+import { webDefinitions } from '../tools/web.js';
 import { loadTeam } from './team-loader.js';
 import { nativeToolAllowed } from './native-policy.js';
 import { decisionTitle, readPlanForApproval } from './planning-dialogs.js';
@@ -382,7 +382,12 @@ export default async function activate(
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
     // > The shared HTTP endpoint authorizes these calls once for every native caller.
-    if (isWebTool(event.toolName) || isRepositoryTool(event.toolName)) return;
+    if (
+      isManagedWorkspaceTool(event.toolName) &&
+      (event.toolName !== SESSION_MEMORY_TOOL_NAME || memoryEnabled) &&
+      (event.toolName !== WORKTREE_TOOL_NAME || !evaluation)
+    )
+      return;
     try {
       // > Native new/resume may change cwd; authorize exactly the path the tool will use.
       const input =
@@ -516,7 +521,17 @@ export default async function activate(
       async execute(_id, input, signal) {
         const response = await invokeWorkspaceTool(SESSION_MEMORY_TOOL_NAME, input, signal, 5000);
         const result: unknown = await response.json();
-        if (!response.ok) throw new Error(`Session Memory unavailable (${response.status}).`);
+        if (!response.ok) {
+          const reason =
+            response.status === 403 && result && typeof result === 'object' && 'error' in result
+              ? result.error
+              : undefined;
+          throw new Error(
+            typeof reason === 'string'
+              ? reason
+              : `Session Memory unavailable (${response.status}).`,
+          );
+        }
         return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
       },
     });

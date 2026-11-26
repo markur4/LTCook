@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { Type } from 'typebox';
 import { Value } from 'typebox/value';
-import { REPO_SEARCH_TIMEOUT_MS } from '../../paseo-plugin/shared/workspace-tools.js';
+import { REPO_SEARCH_TIMEOUT_MS } from '../../tools/workspace-tools.js';
 import { isWithin } from '../../path-containment.js';
 import { RepositorySourceReader } from '../evidence.js';
 import type { RepositoryDiagnostic, RepositoryRetrieval } from '../results.js';

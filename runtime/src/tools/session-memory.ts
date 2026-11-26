@@ -1,5 +1,5 @@
 import { Type } from 'typebox';
-import { SESSION_MEMORY_TOOL_NAME } from '../paseo-plugin/shared/workspace-tools.js';
+import { SESSION_MEMORY_TOOL_NAME } from './workspace-tools.js';
 import { defineTool } from './types.js';
 import type { SessionMemory } from '../session-memory/service.js';
 

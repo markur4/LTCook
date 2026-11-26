@@ -1,9 +1,6 @@
 import { Type } from 'typebox';
 import type { SessionWorktrees, WorktreeScope } from '../integrations/session-worktrees.js';
-import {
-  WORKTREE_TOOL_DESCRIPTION,
-  WORKTREE_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
+import { WORKTREE_TOOL_DESCRIPTION, WORKTREE_TOOL_NAME } from './workspace-tools.js';
 import { defineTool, type ToolContext } from './types.js';
 
 export const worktreeToolInput = Type.Object(

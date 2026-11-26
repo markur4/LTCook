@@ -21,7 +21,7 @@ import {
   REPO_LOCATE_TOOL_NAME,
   WORKTREE_TOOL_NAME,
   REPO_SEARCH_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
+} from '../tools/workspace-tools.js';
 import { agentEnvironment } from './native-policy.js';
 import { configurePiExtensions } from './pi-settings.js';
 import { isWithin } from '../path-containment.js';

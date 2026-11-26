@@ -1,8 +1,5 @@
 import { Type, type Static } from 'typebox';
-import {
-  REPO_LOCATE_TOOL_NAME,
-  REPO_SEARCH_TIMEOUT_MS,
-} from '../paseo-plugin/shared/workspace-tools.js';
+import { REPO_LOCATE_TOOL_NAME, REPO_SEARCH_TIMEOUT_MS } from './workspace-tools.js';
 import { RepositorySourceReader } from '../repository/evidence.js';
 import { assertRepositoryPathVisible, isRepositoryPathVisible } from '../repository/filesystem.js';
 import {
@@ -29,7 +26,7 @@ import {
 } from './repo-trace.js';
 import { defineTool } from './types.js';
 
-export { REPO_LOCATE_TOOL_NAME } from '../paseo-plugin/shared/workspace-tools.js';
+export { REPO_LOCATE_TOOL_NAME } from './workspace-tools.js';
 
 const LocateHit = Type.Object({
   ...RepositoryHitSchema.properties,

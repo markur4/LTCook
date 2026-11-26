@@ -13,11 +13,8 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolDefinition, ToolContext } from '../tools/types.js';
-import {
-  isRepositoryTool,
-  WORKSPACE_MCP_SERVER,
-  WORKTREE_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
+import { WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
+import { isRepositoryTool, WORKTREE_TOOL_NAME } from '../tools/workspace-tools.js';
 import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
 import type { WebToolService } from '../tools/web.js';

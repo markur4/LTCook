@@ -175,13 +175,18 @@ test.each(['explorer', 'explorer-tmp'])(
   'managed Pi lets %s use Session Memory when the runtime authorizes it',
   async (memberKey) => {
     let allowed = false;
-    const authorizations: string[] = [];
+    const invocations: { path: string; toolName: string }[] = [];
     const server = Bun.serve({
       port: 0,
       async fetch(request) {
         const body = (await request.json()) as { toolName: string };
-        authorizations.push(body.toolName);
-        return Response.json({ allowed, reason: 'Native identity is not bound to this Session' });
+        invocations.push({ path: new URL(request.url).pathname, toolName: body.toolName });
+        return allowed
+          ? Response.json({ matches: [] })
+          : Response.json(
+              { error: 'Session native bindings have not been reconciled' },
+              { status: 403 },
+            );
       },
     });
     try {
@@ -202,26 +207,35 @@ test.each(['explorer', 'explorer-tmp'])(
         toolName: string;
         input: Record<string, unknown>;
       }) => Promise<{ block: boolean; reason: string } | undefined>;
-      const tools = new Set<string>();
-      await activate({
+      const tools = new Map<string, Parameters<ExtensionAPI['registerTool']>[0]>();
+      const pi = {
         on(name: string, handler: unknown) {
           if (name === 'tool_call') guard = handler as typeof guard;
         },
         registerTool(tool: Parameters<ExtensionAPI['registerTool']>[0]) {
-          tools.add(tool.name);
+          tools.set(tool.name, tool);
         },
-      } as unknown as ExtensionAPI);
+      } as unknown as ExtensionAPI;
+      await activate(pi);
 
-      expect(tools.has('session-memory')).toBe(true);
-      const call = { toolName: 'session-memory', input: { query: 'prior decisions' } };
-      expect(await guard(call)).toEqual({
-        block: true,
-        reason: 'Native identity is not bound to this Session',
-      });
-      allowed = true;
-      expect(await guard(call)).toBeUndefined();
+      const tool = tools.get('session-memory');
+      if (!tool) throw new Error('Session Memory was not registered');
+      const input = { query: 'prior decisions' };
+      expect(await guard({ toolName: tool.name, input })).toBeUndefined();
       expect((await guard({ toolName: 'write', input: { path: 'project.ts' } }))?.block).toBe(true);
-      expect(authorizations).toEqual(['session-memory', 'session-memory']);
+      expect(invocations).toEqual([]);
+      const execute = () => tool.execute('memory-1', input, undefined, undefined, {} as never);
+      await expect(execute()).rejects.toThrow('Session native bindings have not been reconciled');
+      allowed = true;
+      expect((await execute()).details).toEqual({ matches: [] });
+      expect(invocations).toEqual([
+        { path: '/v1/workspace-tool', toolName: 'session-memory' },
+        { path: '/v1/workspace-tool', toolName: 'session-memory' },
+      ]);
+      process.env.LTCOOK_SESSION_MEMORY_THRESHOLD = '0';
+      tools.clear();
+      await activate(pi);
+      expect(tools.has('session-memory')).toBe(false);
     } finally {
       server.stop(true);
     }

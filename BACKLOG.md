@@ -97,10 +97,10 @@ decisions, the Explorer fix status, and the order for the remaining passes.
 
 - **Area:** `runtime/src/tools`, `runtime/src/core`, `runtime/src/integrations/native-policy.ts`, and `runtime/src/integrations/runtime-api.ts`.
 - **Observed while:** Reviewing the managed Pi Session Memory denial and its server authorization path.
-- **Why not fixed now:** The independent Explorer correction is in draft PR #62. Classification and lookup need a focused follow-up.
+- **Why not fixed now:** Explorer restoration is tracked in PR #62. This pass covers classification and bound-member lookup. The timeline decoder and neutral Memory contract remain with the Session Memory pass.
 - **Evidence:** Three policy paths classify many of the same tools. Managed workspace-tool authorization builds two Session snapshots, and the Session Memory hook adds an authorization round trip. Tool metadata also crosses the deployed plugin boundary.
 - **Context:** The next milestone depends on explicit tool classification and a current binding lookup. Keep role, Pass approval, workspace grants, and Memory peer scope distinct.
-- **Suggested next step:** Consolidate classification, use targeted state reads, and verify the three authorization scopes. See [CSC-01](code-smells.md#csc-01--tool-classification-and-authorization-disagree), [CSC-05](code-smells.md#csc-05--backend-contracts-sit-under-the-paseo-plugin), [CSC-06A](code-smells.md#csc-06a--managed-authorization-repeats-broad-reads), and the [runtime decomposition](#p3--e1-code-smell---separate-runtime-composition-transport-and-coordination) entry.
+- **Suggested next step:** Use the scoped invocation authority in the transport decomposition, then finish Memory-specific ownership with the Session Memory pass. See [CSC-01](code-smells.md#csc-01--tool-classification-and-authorization-disagree), [CSC-05](code-smells.md#csc-05--backend-contracts-sit-under-the-paseo-plugin), [CSC-06A](code-smells.md#csc-06a--managed-authorization-repeats-broad-reads), and the [runtime decomposition](#p3--e1-code-smell---separate-runtime-composition-transport-and-coordination) entry.
 
 ## P3 / E1 [Code smell] - *Separate runtime composition, transport and coordination*
 
@@ -115,10 +115,10 @@ decisions, the Explorer fix status, and the order for the remaining passes.
 
 - **Area:** `runtime/src/session-memory`, `runtime/src/integrations/paseo-memory.ts`, `evals/session-memory-simplified.ts`, and `tests/runtime/unit/session-memory.test.ts`.
 - **Observed while:** Comparing production recording and recovery with the qualification paths.
-- **Why not fixed now:** Production-profile characterization must precede extraction.
+- **Why not fixed now:** [PR #64](https://github.com/markur4/LTCook/pull/64) covers production-profile recovery. Extract workflows after that coverage is available on the pass base.
 - **Evidence:** One service owns ingestion, checkpoints, inference, Activity state, retrieval, and handoff. Some recovery tests use legacy JSON while production uses deterministic Markdown with context independence. The legacy branches have documented evaluation callers.
 - **Context:** Recovery coverage can land alongside the next milestone. Preserve same-version recovery, authority and citations, one derived-store owner, and runnable historical evaluations.
-- **Suggested next step:** Cover current-profile restart, resume, rewind, partial history and interruption, then extract cohesive workflows and isolate qualification strategies. See [CSC-03](code-smells.md#csc-03--session-memory-concentrates-recording-inference-retrieval-and-handoff), [CSC-07](code-smells.md#csc-07--production-memory-carries-historical-evaluation-strategies), and [retrieval measurements](#p3--e1-question---measure-session-memory-retrieval-scaling).
+- **Suggested next step:** Use the restart, resume, rewind, partial-history and interruption tests as the baseline. Extract cohesive workflows, isolate qualification strategies, and re-run the recovery cases. See [CSC-03](code-smells.md#csc-03--session-memory-concentrates-recording-inference-retrieval-and-handoff), [CSC-07](code-smells.md#csc-07--production-memory-carries-historical-evaluation-strategies), and [retrieval measurements](#p3--e1-question---measure-session-memory-retrieval-scaling).
 
 ## P3 / E1 [Question] - *Measure Session Memory retrieval scaling*
 
