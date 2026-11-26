@@ -193,12 +193,9 @@ jobs:
       - name: Install locked dependencies without the staged Python app
         run: |
           bun install --frozen-lockfile
-          bun run build
           uv sync --locked --all-groups --no-install-project
       - name: Run explicit integration checks
         run: PYTHONPATH=src uv run --locked --no-sync pytest -m integration
-      - name: Build the bundled Paseo web app
-        run: bun run build:paseo-web
       - name: Run explicit system checks
         run: |
           PYTHONPATH=src uv run --locked --no-sync pytest -m system \
