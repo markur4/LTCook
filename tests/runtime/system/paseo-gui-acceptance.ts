@@ -1195,6 +1195,8 @@ try {
   await browser('screenshot', path.join(directory, 'passage-summary-complete.png'));
   assert(complete.includes('Final summary outcome remains visible.'));
   await browser('press', 'Escape');
+  await browser('wait', completeSummary, '--state', 'hidden');
+  await browser('scrollintoview', '[aria-label="Hide summary"]');
   await browser(
     'wait',
     '--fn',
