@@ -16,6 +16,7 @@ work. The following checklist is an index.
 - [Execution order](#execution-order)
 - [Findings](#findings)
 - [Coverage and existing backlog](#coverage-and-existing-backlog)
+- [Implementation evidence](#implementation-evidence)
 
 ## Decisions and acceptance
 
@@ -302,3 +303,63 @@ Existing backlog entries remain authoritative for detached runtime shutdown,
 mobile Activity observation, chat diff/worktree selection, host-skill fixture
 isolation, local summarizer fidelity, and intermittent Agent Eval retries.
 See [BACKLOG.md](BACKLOG.md).
+
+## Implementation evidence
+
+On November 26, 2026, GitHub `main` was at `8742f8`. The Explorer fix and
+this report remained open drafts. A local rehearsal combined Explorer tip
+`176b072` and report tip `b9f7cb`. That tree, `dea849`, passed 397 Bun
+Traditional Tests, 274 Python Traditional Tests, static checks, the build,
+and offline Pi/Paseo clockwork. Dependent work
+requires the Explorer and report PRs on the published target. Local merges and
+scratch verification leave that prerequisite pending. [Explorer fix](https://github.com/markur4/LTCook/pull/62)
+
+| Finding | Evidence on the draft trees | Remaining work |
+| --- | --- | --- |
+| CSC-01 | Both read-only Explorer lifetimes passed. The authorization draft verified managed bindings, MCP workspace grants, and Memory peer access as distinct scopes. [#62](https://github.com/markur4/LTCook/pull/62), [#66](https://github.com/markur4/LTCook/pull/66) | Integrate in order and verify authorization on the combined target. |
+| CSC-02 | The reviewed passes cover injected services, Activity routes, a shared catalog for tool dispatch, and Session activation and routes. [#68](https://github.com/markur4/LTCook/pull/68), [#70](https://github.com/markur4/LTCook/pull/70), [#71](https://github.com/markur4/LTCook/pull/71), [#72](https://github.com/markur4/LTCook/pull/72) | Reconcile the transport sequence with the target and verify affected callers together. |
+| CSC-03 | Production-profile coverage exercises restart, rewind, incomplete history, and interruption. The recording draft adds history-read and SQLite-write failure recovery. [#64](https://github.com/markur4/LTCook/pull/64), [#77](https://github.com/markur4/LTCook/pull/77) | Integrate the recovery baseline, extract the workflows, and rerun these cases. |
+| CSC-04 | The scheduler and Session projection share task gates. The reviewed draft passed the offline clockwork fixture. [#74](https://github.com/markur4/LTCook/pull/74) | Reconcile the scheduler with Core, then extract command policy, native lifecycle, and delivery. |
+| CSC-05 | Tool metadata has a runtime owner. The authorization draft verified the copied Paseo plugin's dependency. [#66](https://github.com/markur4/LTCook/pull/66) | Move the neutral Memory source contract and Paseo decoding with the Memory extraction. |
+| CSC-06A | For a warm, bound Explorer web-tool request without an active Pass or scheduled Tasks, source tracing counted 23 coordination reads on `main` and one binding read in the draft. The loopback regression rejected snapshot calls. [#66](https://github.com/markur4/LTCook/pull/66) | Verify the scoped path after integration. The source count establishes query work for that request. |
+| CSC-06B | The local Paseo pilot measured exact lookup, targeted and peer search, and handoff recovery separately. See [Retrieval measurements](#retrieval-measurements). | Retain the current retrieval design for the measured workload. Revisit indexing when a representative workload shows missed deadlines or recall loss. |
+| CSC-06C | The async draft bounds the cache, serializes writes by canonical Pi home, and verifies source versions and generated files. See [Workspace preparation measurements](#workspace-preparation-measurements). [#75](https://github.com/markur4/LTCook/pull/75) | Reconcile startup and Session registration on the combined target. |
+| CSC-07 | The recovery suite exercises production Markdown and retains historical comparison cases. [#64](https://github.com/markur4/LTCook/pull/64) | Isolate the historical policies and fixtures and verify their documented baselines. |
+| CSC-08 | The model contract draft verified offline package staging, both installed plugin entry points, and a representative Team type consumer. [#76](https://github.com/markur4/LTCook/pull/76) | Integrate the draft and keep the routing references current as ownership moves. |
+| CSC-09 | A transient history read or rejected SQLite summary write leaves unfinished work eligible for restart. Activity surfaces the known history failure, and a combined rehearsal with #72 passed both Traditional Test suites and offline native recovery. [#77](https://github.com/markur4/LTCook/pull/77) | Integrate the recording fixes and carry actionable RIED and Session Memory errors through the managed tool transport. |
+
+The unified backlog in the Activity draft includes the Services and container
+deployment entry and the Session Memory explanation entry. Both point to the
+affected decomposition entries and remain scheduled follow-ups. [Activity routes and backlog](https://github.com/markur4/LTCook/pull/70)
+
+### Retrieval measurements
+
+The pilot used fixture Pi histories, the pinned Paseo daemon over loopback,
+and disposable SQLite state. Exact lookup took one page at 96, 960, and 9,600
+messages and found its expected source in every run. Targeted broad search
+read 2, 20, and 200 pages at those sizes. Its 9,600-message median was
+71.13 ms. A four-peer search read 422 pages and about 1 MB of decoded message
+text, with a median of 51.64 ms. It found all four labeled sources in each
+sample.
+
+Current-context handoff used one page with a median of 0.80 ms. Handoff with
+original recovery used 200 pages with a median of 63.11 ms and found both
+expected sources. The measured search and handoff paths stayed inside their
+5-second and 500-ms deadlines. These warm loopback results show the scaling
+of small fixture messages. Installed latency under load and recall on other
+corpora remain open questions.
+
+### Workspace preparation measurements
+
+Five disposable helper runs per path measured a median Node timer delay of
+203.09 ms with synchronous preparation and 1.64 ms with the async draft. Total
+helper time remained close to 200 ms on both paths. The original cache retained
+2,001 distinct synthetic entries. The replacement retains up to 128 completed
+entries and checks generated outputs after concurrent writes to the same Pi
+home. Earlier timing evidence predates the source-version check.
+
+The final draft reproduced stale reuse after a same-size edit and a transient
+workspace marker. The corrected fixture verifies Python-emitted guards through
+the TypeScript parser and cache. Stable input still reuses the prepared
+environment. Installed cold overhead and hit rates remain unmeasured.
+[Workspace preparation](https://github.com/markur4/LTCook/pull/75)
