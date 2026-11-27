@@ -540,6 +540,7 @@ export class RuntimeApi {
         }
         await handleActivityRoute(activityRoute, parsed, response, {
           activity: this.services.activity,
+          catalog: this.workspaceTools,
           workspaceServices: this.workspaceServices,
           lastDelivered: (sessionId, agentId) => this.memory?.lastDelivered(sessionId, agentId),
           readSession: (id) => this.runtime?.snapshot(id),

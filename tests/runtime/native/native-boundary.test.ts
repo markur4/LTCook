@@ -138,7 +138,13 @@ describe('native runtime boundary', () => {
       });
     try {
       const agent = agentBearer(secret, nativeAgentId);
-      for (const route of ['toggle', 'services', 'workspace-touch', 'workspace-services']) {
+      for (const route of [
+        'toggle',
+        'services',
+        'workspace-touch',
+        'workspace-services',
+        'repository-query',
+      ]) {
         const denied = await post(route, agent, { nativeAgentId });
         expect(denied.status).toBe(403);
         expect(await denied.json()).toEqual({});

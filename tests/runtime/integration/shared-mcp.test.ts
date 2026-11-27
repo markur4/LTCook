@@ -190,7 +190,9 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
   const createApi = async () => {
     const api = new RuntimeApi(undefined, secret, authority, new SessionActivation());
     const ried = new RiedService(path.join(root, 'cache'), undefined, () => ({ PATH: '' }));
-    api.setWorkspaceMcp(new WorkspaceMcp(createTools(ried), authority));
+    const tools = createTools(ried);
+    api.setWorkspaceTools(tools);
+    api.setWorkspaceMcp(new WorkspaceMcp(tools, authority));
     await api.listen();
     return api;
   };
@@ -199,6 +201,12 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
     fetch(`${base}/v1/mcp/${action}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const activity = (route: string, body: object) =>
+    fetch(`${base}/v1/activity/${route}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
   async function grant(agentId: string, workspaceRoot: string, provider?: 'pi' | 'codex') {
@@ -223,6 +231,30 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
     const firstToken = await grant('pi-one', first, 'pi');
     expect(await grant('pi-one', first, 'pi')).toBe(firstToken);
     const secondToken = await grant('codex-two', second, 'codex');
+    const { workspace } = (await (
+      await activity('services', { nativeAgentId: 'codex-two' })
+    ).json()) as { workspace: { identity: string } };
+    const locateRequest = {
+      agentId: 'codex-two',
+      workspaceIdentity: workspace.identity,
+      request: { tool: 'locate', input: { location: { path: 'other.ts', line: 1 } } },
+    };
+    const directLocate = await activity('repository-query', locateRequest);
+    expect(directLocate.status).toBe(200);
+    expect(await directLocate.json()).toMatchObject({
+      text: expect.stringContaining('1 | export const otherWorkspace = true;'),
+    });
+    const wrongWorktree = await activity('repository-query', {
+      ...locateRequest,
+      agentId: 'pi-one',
+    });
+    expect(wrongWorktree.status).toBe(409);
+    const traversal = await activity('repository-query', {
+      ...locateRequest,
+      request: { tool: 'locate', input: { location: { path: '../first/source.ts', line: 1 } } },
+    });
+    expect(traversal.status).toBe(400);
+    expect(JSON.stringify(await traversal.json())).not.toContain('firstWorkspace');
     const one = await client(firstToken);
     const two = await client(secondToken);
     const unscoped = await client(await grant('unscoped', second));

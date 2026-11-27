@@ -69,9 +69,12 @@ export async function openAuthorizedSearchWorkspace(
 ): Promise<RepositoryWorkspace> {
   if (!context.repositorySearchAccess)
     throw new Error('Repository search is unavailable for this session.');
-  const workspace = await openRepositoryWorkspace(context.workspaceRoot).catch(() => undefined);
+  const workspace =
+    context.repositoryWorkspace ??
+    (await openRepositoryWorkspace(context.workspaceRoot).catch(() => undefined));
   if (workspace?.root !== context.workspaceRoot)
     throw new Error('The authorized workspace is unavailable.');
+  if (context.repositoryWorkspace) await workspace.assertUnchanged();
   return workspace;
 }
 

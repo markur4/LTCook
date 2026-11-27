@@ -233,8 +233,16 @@ Expand **RAG Index** to see the worktree that the selected conversation is
 authorized to search. **Building first index** means ranked search is warming
 up. **Ready · Refreshing** means the previous generation is still searchable.
 The runtime starts indexing when an authorized worktree becomes active.
-Opening the panel shows the last completed index, the next retry when
-scheduled, and any repair needed.
+**Last checked** shows when the last completed index check finished, even if
+there was nothing to reindex. **Last queried** shows the last successful query
+that used the published index, including queries with no matches. Select either
+timestamp for its definition. The panel also shows the last time an index was
+published, the next scheduled retry, and any repair needed.
+
+Select **Query Repo** to open a Paseo tab for that worktree. Run
+`ltcook_repo_search` or `ltcook_repo_locate` directly from the tab. Use
+**Edit tool arguments** for options such as paths, source locations, and trace
+leads. Results appear in the tab without starting an agent turn.
 
 Turn off **Index updates** to pause ColGREP indexing in the LTCook runtime
 serving this Paseo host. Ranked queries can keep using the published index,

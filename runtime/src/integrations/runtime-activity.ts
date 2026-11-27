@@ -1,8 +1,17 @@
 import type { ServerResponse } from 'node:http';
+import { z } from 'zod';
 import { activityToggleRpc } from '../paseo-plugin/shared/activity.js';
+import { repositoryQuerySubscription } from '../paseo-plugin/shared/repository-query.js';
 import type { createColgrepProvider } from '../repository/providers/colgrep.js';
-import { openRepositoryWorkspace } from '../repository/workspace.js';
+import { openRepositoryWorkspace, type RepositoryWorkspace } from '../repository/workspace.js';
 import type { ConversationRecords } from '../session-memory/conversation.js';
+import type { ToolCatalog } from '../tools/catalog.js';
+import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
+import {
+  REPO_LOCATE_TOOL_NAME,
+  REPO_SEARCH_TIMEOUT_MS,
+  REPO_SEARCH_TOOL_NAME,
+} from '../tools/workspace-tools.js';
 import type { SessionSnapshot } from '../workflow-api/index.js';
 import type { ActivityPreferences } from './activity-preferences.js';
 import type { WorkspaceMcp } from './mcp.js';
@@ -20,6 +29,7 @@ export interface ActivityServices {
 
 interface ActivityDependencies {
   activity?: ActivityServices;
+  catalog?: ToolCatalog;
   workspaceServices?: PaseoWorkspaceServices;
   lastDelivered: ConversationRecords['lastDelivered'];
   readSession(sessionId: string): SessionSnapshot | undefined;
@@ -37,6 +47,45 @@ type ActivityHandler = (
   response: ServerResponse,
   dependencies: ActivityDependencies,
 ) => void | Promise<void>;
+
+const repositoryQueryRequest = repositoryQuerySubscription.input.extend({
+  sessionId: z.string().min(1).max(1024).optional(),
+});
+
+function activityWorkspaceIdentity(workspace: RepositoryWorkspace): string {
+  return JSON.stringify([workspace.identity, workspace.cacheIdentity]);
+}
+
+function boundActivitySession(
+  agentId: string,
+  sessionId: string,
+  dependencies: ActivityDependencies,
+): SessionSnapshot | undefined {
+  const session = dependencies.readSession(sessionId);
+  return session?.members.some(
+    ({ binding }) => binding?.state === 'bound' && binding.nativeAgentId === agentId,
+  )
+    ? session
+    : undefined;
+}
+
+async function activityRepositoryScope(
+  agentId: string,
+  sessionId: string | undefined,
+  dependencies: ActivityDependencies,
+) {
+  if (!sessionId) return { workspace: await dependencies.readGrantedWorkspace(agentId) };
+  const session = boundActivitySession(agentId, sessionId, dependencies);
+  if (!session) return undefined;
+  const root = dependencies.registeredWorkspace(sessionId);
+  const workspace =
+    root === session.session.workspaceRoot
+      ? await openRepositoryWorkspace(root)
+          .then((opened) => (opened.root === root ? opened : undefined))
+          .catch(() => undefined)
+      : undefined;
+  return { session, workspace };
+}
 
 const activityRoutes = {
   async '/v1/activity/workspace-touch'(parsed, response, dependencies) {
@@ -71,6 +120,75 @@ const activityRoutes = {
     activity.colgrep.setIndexingEnabled(enabled);
     response.writeHead(200).end(JSON.stringify({ enabled }));
   },
+  async '/v1/activity/repository-query'(parsed, response, dependencies) {
+    const input = repositoryQueryRequest.safeParse(parsed);
+    if (!input.success) {
+      response.writeHead(400).end('{"error":"Invalid repository query request."}');
+      return;
+    }
+    const { catalog } = dependencies;
+    if (!catalog) {
+      response.writeHead(503).end('{"error":"LTCook repository tools are unavailable."}');
+      return;
+    }
+    const { agentId, sessionId, workspaceIdentity, request } = input.data;
+    const connection = new AbortController();
+    const cancel = () => connection.abort();
+    response.once('close', cancel);
+    if (response.destroyed) cancel();
+    const deadline = AbortSignal.timeout(REPO_SEARCH_TIMEOUT_MS);
+    const signal = AbortSignal.any([connection.signal, deadline]);
+    try {
+      const scope = await activityRepositoryScope(agentId, sessionId, dependencies);
+      signal.throwIfAborted();
+      const workspace = scope?.workspace;
+      if (!workspace) {
+        response.writeHead(403).end('{"error":"The repository search scope is unavailable."}');
+        return;
+      }
+      if (activityWorkspaceIdentity(workspace) !== workspaceIdentity) {
+        response
+          .writeHead(409)
+          .end('{"error":"The worktree changed. Reopen Query Repo from Activity."}');
+        return;
+      }
+      const name = request.tool === 'search' ? REPO_SEARCH_TOOL_NAME : REPO_LOCATE_TOOL_NAME;
+      const result = await catalog.invoke(name, request.input, {
+        agentId,
+        sessionId,
+        workspaceRoot: workspace.root,
+        workspaceFileAccess: false,
+        repositorySearchAccess: true,
+        repositoryWorkspace: workspace,
+        signal,
+      });
+      await workspace.assertUnchanged();
+      const current = (await activityRepositoryScope(agentId, sessionId, dependencies))?.workspace;
+      signal.throwIfAborted();
+      if (
+        !current ||
+        current.root !== workspace.root ||
+        activityWorkspaceIdentity(current) !== workspaceIdentity
+      ) {
+        response.writeHead(403).end('{"error":"The repository search scope is unavailable."}');
+        return;
+      }
+      response.writeHead(200).end(JSON.stringify({ text: repositoryEvidenceText(name, result) }));
+    } catch (error) {
+      if (connection.signal.aborted) return;
+      if (deadline.aborted) {
+        response.writeHead(504).end('{"error":"The repository tool timed out."}');
+        return;
+      }
+      const message =
+        error instanceof Error && error.message === 'Invalid tool arguments.'
+          ? error.message
+          : 'The repository tool could not run. Check its arguments and workspace access.';
+      response.writeHead(400).end(JSON.stringify({ error: message }));
+    } finally {
+      response.off('close', cancel);
+    }
+  },
   async '/v1/activity/services'(parsed, response, dependencies) {
     const input = parsed as { nativeAgentId?: string; sessionId?: string };
     const agentId = input.nativeAgentId;
@@ -78,24 +196,12 @@ const activityRoutes = {
       response.writeHead(400).end('{}');
       return;
     }
-    const session = input.sessionId ? dependencies.readSession(input.sessionId) : undefined;
-    if (
-      session &&
-      !session.members.some(
-        ({ binding }) => binding?.state === 'bound' && binding.nativeAgentId === agentId,
-      )
-    ) {
+    const scope = await activityRepositoryScope(agentId, input.sessionId, dependencies);
+    if (!scope) {
       response.writeHead(403).end('{}');
       return;
     }
-    const registeredWorkspace = session && dependencies.registeredWorkspace(session.session.id);
-    const workspace = session
-      ? registeredWorkspace === session.session.workspaceRoot
-        ? await openRepositoryWorkspace(registeredWorkspace)
-            .then((opened) => (opened.root === registeredWorkspace ? opened : undefined))
-            .catch(() => undefined)
-        : undefined
-      : await dependencies.readGrantedWorkspace(agentId);
+    const { session, workspace } = scope;
     const colgrep = dependencies.activity?.colgrep;
     const [rag, subagents] = await Promise.all([
       workspace && colgrep
@@ -120,7 +226,10 @@ const activityRoutes = {
         },
         task: task?.title,
         subagents,
-        workspace: workspace && { root: workspace.root, identity: workspace.identity },
+        workspace: workspace && {
+          root: workspace.root,
+          identity: activityWorkspaceIdentity(workspace),
+        },
         lastDelivered: session && dependencies.lastDelivered(session.session.id, agentId),
       }),
     );

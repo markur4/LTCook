@@ -78,6 +78,8 @@ const ragStatus = z.object({
   activity: RagIndexActivitySchema,
   diagnostic: z.string().optional(),
   publishedAt: z.string().optional(),
+  lastCheckedAt: z.iso.datetime().optional(),
+  lastQueriedAt: z.iso.datetime().optional(),
   retryAt: z.string().optional(),
 });
 const handoff = z.object({
