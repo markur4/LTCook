@@ -51,6 +51,9 @@ All notable changes to `ltcook` will be documented in this file.
   When a message blocks extraction, the affected
   Tracker resumes in message order after recovery. Coverage gives users retry
   and skip controls and keeps skipped messages visible as incomplete.
+  In new conversations, the default **Design Decisions** instructions keep
+  independent decisions in separate notes and preserve each decision's
+  conditions and rationale.
 
 - Workspace Organizer maintains the standard Feature, Bugfix, CSC, and Research
   labels in blue, red, amber, and violet. It classifies new workspaces and

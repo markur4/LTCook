@@ -281,6 +281,10 @@ items** brings the collections together. The notebook keeps reading,
 editing, and coverage inspection together; Activity holds the compact service
 status.
 
+In new conversations, **Design Decisions** records one concise item per decision
+and keeps its conditions and rationale with it. In an existing conversation,
+select **Design Decisions** and choose **Edit Tracker** to change its saved instructions.
+
 **Notes** returns to the saved items after inspecting Coverage. **Copy all notes**
 copies every saved item in this conversation as plain text, with Tracker headings
 and bullet points. It includes disabled Trackers and ignores the selected

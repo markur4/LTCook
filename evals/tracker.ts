@@ -64,16 +64,29 @@ async function evaluate() {
       result === 'no-change' || result === 'changes',
       `Tracker #${seq} status: ${result}`,
     );
-    return view.trackers[0]!.items;
+    const items = view.trackers[0]!.items;
+    requireCheck(
+      items.every(({ text }) => !/^\s*(?:[-*+]|\d+[.)])\s/m.test(text)),
+      'Stored a Markdown list marker in a Tracked Item.',
+    );
+    return items;
   }
 
   try {
     const initial = await track(
-      'We will keep the public cursor opaque so the storage format can change.',
+      'We will keep the public cursor opaque so the storage format can change. Also, keep maintenance mode enabled until the queue drains.',
+    );
+    const cursor = initial.find(({ text }) => /opaque/i.test(text));
+    const maintenance = initial.find(({ text }) => /maintenance mode/i.test(text));
+    requireCheck(
+      initial.length === 2 && cursor && maintenance && cursor.id !== maintenance.id,
+      'Did not store the two independent decisions in separate Tracked Items.',
     );
     requireCheck(
-      initial.some(({ text }) => /opaque/i.test(text)),
-      'Missed the initial explicit design decision.',
+      /storage format/i.test(cursor.text) &&
+        /queue/i.test(maintenance.text) &&
+        /drain/i.test(maintenance.text),
+      'Omitted the cursor rationale or the condition for maintenance mode.',
     );
     append('agent', 'Proposal: use a 20-second retry interval for the worker queue.');
     const ambiguous = await track('Interesting. Is the deployment already live?');
@@ -86,20 +99,18 @@ async function evaluate() {
       'I propose using a 20-second retry interval for the worker queue.',
     );
     const accepted = await track('Yes, implement that.');
+    const retry = accepted.find(({ text }) => /20.second/i.test(text));
     requireCheck(
-      accepted.some(
-        ({ text, sources }) =>
-          /20.second/i.test(text) &&
-          sources.some(({ seq }) => seq === proposal) &&
-          sources.some(({ seq }) => seq === proposal + 1),
-      ),
+      retry &&
+        retry.sources.some(({ seq }) => seq === proposal) &&
+        retry.sources.some(({ seq }) => seq === proposal + 1),
       'Missed the explicit approval or its proposal citation.',
     );
     const amended = await track(
       'Change that retry interval to 35 seconds. Keep the opaque public cursor.',
     );
     requireCheck(
-      amended.some(({ text }) => /35.second/i.test(text)) &&
+      amended.some(({ id, text }) => id === retry.id && /35.second/i.test(text)) &&
         amended.some(({ text }) => /opaque/i.test(text)) &&
         !amended.some(({ text }) => /20.second/i.test(text)),
       'Incorrectly updated or retired a design decision.',
