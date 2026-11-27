@@ -14,7 +14,7 @@ import urllib.error
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict
 from uuid import UUID, uuid4
 
 import typer
@@ -800,6 +800,43 @@ def services_logs(
     :return: None.
     """
     service_action("logs", workspace)
+
+
+@services_cli.command("bughunter-authorization")
+def bughunter_authorization(
+    operation: Literal["status", "grant", "revoke", "prohibit", "clear-prohibition"],
+    data_file: Annotated[Path | None, typer.Option("--file")] = None,
+    prohibition_id: Annotated[str | None, typer.Option("--id")] = None,
+) -> None:
+    """Inspect or change BugFix standing authority through the authenticated runtime."""
+    request: dict[str, object] = {"operation": operation}
+    if operation in ("grant", "prohibit"):
+        if data_file is None:
+            raise typer.BadParameter("Supply the scope as a JSON file with --file.")
+        try:
+            request["grant" if operation == "grant" else "prohibition"] = json.loads(
+                data_file.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as error:
+            raise typer.BadParameter("The scope file must be readable JSON.") from error
+    elif operation == "clear-prohibition":
+        if not prohibition_id:
+            raise typer.BadParameter("Supply the prohibition identifier with --id.")
+        request["id"] = prohibition_id
+    launch = resolve_launch(None, original_environment=os.environ)
+    try:
+        with open_runtime_request(
+            launch.environment, "/v1/activity/bugfix-authorization", request, timeout=5
+        ) as response:
+            typer.echo(json.dumps(json.load(response), indent=2))
+    except urllib.error.HTTPError as error:
+        raise typer.BadParameter(
+            f"The runtime rejected this BugFix authorization request (HTTP {error.code})."
+        ) from error
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(
+            "The authenticated LTCook runtime is unavailable."
+        ) from error
 
 
 @launch_cli.command("write-native-config")

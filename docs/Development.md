@@ -379,6 +379,20 @@ authorized repository and reads tracked content from its snapshot. Where
 provenance is unavailable, it reports the gap and limits source conclusions.
 Automatic model dispatch remains gated by model usage qualification.
 
+Dev mode additionally supports eligible source fixes under a standing grant.
+Use `ltcook services bughunter-authorization status` to inspect its current
+scope and results. Use `grant --file` to supply a JSON scope with `targetBranch`,
+`repairKinds`, `allowedPaths`, `actions`, and `maxModelRequests`.
+`revoke` withdraws the grant. `prohibit --file` records an explicit restriction
+using the applicable `targetBranch`, `repairKind`, `action`, and `path` fields.
+`clear-prohibition --id` removes a specific restriction.
+
+The supported repair classes are `proper-fix` and `workaround`. Actions include
+`worktree.create`, `source.edit`, `verify`, `git.commit`, `git.push`,
+`pr.open`, `pr.merge`, `issue.write`, and `worktree.cleanup`. The native
+agents use scoped worktrees. The runtime owns verification, Git operations,
+and reconciliation. Dev mode and all consequential actions remain opt-in.
+
 ## Local Ollama and Agent Evals
 
 Normal LTCook application setup detects a local Ollama installation or uses the

@@ -2,6 +2,8 @@ import type { CoordinationStore } from '../storage/coordination.js';
 import type {
   Assignment,
   Report,
+  Pass,
+  NativeBinding,
   RuntimeEvent,
   Session,
   Task,
@@ -33,6 +35,14 @@ type SchedulerDependencies = {
   teamFor(session: Session): TeamPackage;
   deliverAssignment(assignment: Assignment): Promise<void>;
   emit(event: RuntimeEvent): void;
+  canDispatch?(session: Session, task: Task): boolean;
+  prepareMember?(
+    session: Session,
+    task: Task,
+    memberKey: string,
+  ): Promise<NativeBinding | undefined>;
+  reviewEvidence?(session: Session, pass: Pass): string | undefined;
+  completesAfterReview?(session: Session, pass: Pass): boolean;
 };
 
 export class PassScheduler {
@@ -137,6 +147,12 @@ export class PassScheduler {
       let gate = current.find((task) => task.scheduled && task.phase === 'review');
       const policy = this.dependencies.teamFor(session).definition.reviewPolicy;
       if (!gate && policy.required) {
+        const evidence = this.dependencies.reviewEvidence?.(session, pass);
+        if (
+          evidence === undefined &&
+          this.dependencies.completesAfterReview?.(session, pass) === false
+        )
+          continue;
         gate = this.store.createTask(session.id, {
           passId: pass.id,
           workType: 'task.execute',
@@ -144,7 +160,9 @@ export class PassScheduler {
           requestId: `${pass.id}:review`,
           title: `Review Pass: ${pass.title}`,
           description:
-            'Review the complete Pass. Fix in-scope findings before acceptance, or request changes. Record review.create with this assignmentId and the current Pass revision.',
+            evidence === undefined
+              ? 'Review the complete Pass. Fix in-scope findings before acceptance, or request changes. Record review.create with this assignmentId and the current Pass revision.'
+              : 'Review the complete verified tree. Use read-only source inspection. Request changes if a correction is required. Record review.create with this assignmentId and the current Pass revision.',
           acceptance: 'Current-revision Pass-wide acceptance by the declared reviewer',
         });
       }
@@ -164,7 +182,8 @@ export class PassScheduler {
         )
           continue;
       }
-      this.store.updatePass(session.id, { passId: pass.id, status: 'completed' });
+      if (this.dependencies.completesAfterReview?.(session, pass) !== false)
+        this.store.updatePass(session.id, { passId: pass.id, status: 'completed' });
     }
   }
 
@@ -172,6 +191,7 @@ export class PassScheduler {
     if (
       !task.passId ||
       !this.isActiveExecutionPass(session.id, task.passId) ||
+      this.dependencies.canDispatch?.(session, task) === false ||
       taskGateBlockers(this.store, session.id, task).length
     )
       return;
@@ -235,15 +255,25 @@ export class PassScheduler {
       )
     )
       return;
-    const binding = this.store.listBindings(session.id).find((item) => item.memberKey === selected);
+    let binding = this.store.listBindings(session.id).find((item) => item.memberKey === selected);
+    if (binding?.state !== 'bound' && this.dependencies.prepareMember)
+      binding = await this.dependencies.prepareMember(session, task, selected);
     if (binding?.state !== 'bound' || !binding.nativeAgentId) return;
+    if (
+      !this.isActiveExecutionPass(session.id, task.passId) ||
+      this.dependencies.canDispatch?.(session, task) === false
+    )
+      return;
+    const reviewedTree = review
+      ? this.dependencies.reviewEvidence?.(session, this.store.getPass(session.id, task.passId))
+      : undefined;
     const assignment =
       previous ??
       this.store.createAssignment(session.id, {
         taskId: task.id,
         memberKey: selected,
         nativeAgentId: binding.nativeAgentId,
-        message: `${review ? 'Pass-wide review' : 'Scheduled Task'} ${task.id} in Pass ${task.passId}. ${task.description} Acceptance: ${task.acceptance}. Verification requirements: ${JSON.stringify(task.verificationRequirements)}. ${review ? 'Submit review.create with assignmentId and the current Pass revision.' : 'Submit report.create with outcome success or failure and named verification entries with evidence.'}`,
+        message: `${review ? 'Pass-wide review' : 'Scheduled Task'} ${task.id} in Pass ${task.passId}. ${task.description} ${reviewedTree ? `Verified Git tree: ${reviewedTree}. ` : ''}Acceptance: ${task.acceptance}. Verification requirements: ${JSON.stringify(task.verificationRequirements)}. ${review ? 'Submit review.create with assignmentId and the current Pass revision.' : 'Submit report.create with outcome success or failure and named verification entries with evidence.'}`,
       });
     if (task.status !== 'running')
       this.store.updateTask(session.id, { taskId: task.id, status: 'running' });

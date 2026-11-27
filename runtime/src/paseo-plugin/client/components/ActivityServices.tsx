@@ -35,10 +35,12 @@ function ActivitySwitch({
   theme,
   label,
   enabled,
+  feature = 'rag-index',
 }: {
   theme: Theme;
   label: string;
   enabled: boolean | null;
+  feature?: 'rag-index' | 'bughunter';
 }) {
   const toggle = useRpc(activityToggleRpc);
   const [pending, setPending] = useState(false);
@@ -48,7 +50,7 @@ function ActivitySwitch({
     setPending(true);
     setError(null);
     try {
-      await toggle({ feature: 'rag-index', enabled: next });
+      await toggle({ feature, enabled: next });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not save this setting.');
     } finally {
@@ -143,12 +145,16 @@ function BugScanCard({
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const canRun = !pending && scan.status !== 'running' && scan.status !== 'queued';
-  async function trigger() {
+  const canControl = scan.enabled && !pending;
+  const canRun = canControl && scan.status !== 'running' && scan.status !== 'queued';
+  async function trigger(
+    action: 'run' | 'pause' | 'resume' | 'pause-fix' | 'resume-fix',
+    id?: string,
+  ) {
     setPending(true);
     setError(null);
     try {
-      await run({ agentId });
+      await run({ agentId, action, id });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not start BugScan.');
     } finally {
@@ -160,19 +166,80 @@ function BugScanCard({
       theme={theme}
       title="BugHunter"
       icon="Search"
-      status={statusLabel(scan.status)}
+      status={scan.enabled ? statusLabel(scan.status) : 'Disabled'}
       statusTone={scan.status === 'failed' || scan.status === 'blocked' ? 'warning' : 'muted'}
       open={open}
       onToggle={() => setOpen(!open)}
       summaryLabel={`${scan.findings.length} findings`}
       summary={<ActivityText theme={theme}>{scan.findings.length} findings</ActivityText>}
     >
+      <ActivitySwitch
+        theme={theme}
+        label="BugHunter execution"
+        enabled={scan.enabled}
+        feature="bughunter"
+      />
       {canRun && (
-        <ActivityButton theme={theme} label="Run BugScan" onPress={() => void trigger()}>
+        <ActivityButton theme={theme} label="Run BugScan" onPress={() => void trigger('run')}>
           <ActivityText theme={theme} strong>
             Run BugScan
           </ActivityText>
         </ActivityButton>
+      )}
+      {canControl && scan.status === 'running' && (
+        <ActivityButton theme={theme} label="Pause BugScan" onPress={() => void trigger('pause')}>
+          <ActivityText theme={theme}>Pause BugScan</ActivityText>
+        </ActivityButton>
+      )}
+      {canControl && scan.status === 'paused' && scan.id && (
+        <ActivityButton
+          theme={theme}
+          label="Resume BugScan"
+          onPress={() => void trigger('resume', scan.id)}
+        >
+          <ActivityText theme={theme}>Resume BugScan</ActivityText>
+        </ActivityButton>
+      )}
+      {scan.fix && (
+        <>
+          <ActivityField theme={theme} label="BugFix">
+            {statusLabel(scan.fix.status)}
+          </ActivityField>
+          <ActivityField theme={theme} label="Delivery">
+            {[
+              scan.fix.implemented && 'Implemented',
+              scan.fix.verified && 'Verified',
+              scan.fix.integrated && 'Integrated',
+              scan.fix.installed && 'Installed',
+              scan.fix.recovered && 'Recovery verified',
+            ]
+              .filter(Boolean)
+              .join(' · ') || 'Pending'}
+          </ActivityField>
+          {scan.fix.failure && (
+            <ActivityText theme={theme} tone="warning">
+              {scan.fix.failure}
+            </ActivityText>
+          )}
+          {canControl && ['queued', 'running', 'paused', 'blocked'].includes(scan.fix.status) && (
+            <ActivityButton
+              theme={theme}
+              label={
+                ['queued', 'running'].includes(scan.fix.status) ? 'Pause BugFix' : 'Resume BugFix'
+              }
+              onPress={() =>
+                void trigger(
+                  ['queued', 'running'].includes(scan.fix!.status) ? 'pause-fix' : 'resume-fix',
+                  scan.fix?.id,
+                )
+              }
+            >
+              <ActivityText theme={theme}>
+                {['queued', 'running'].includes(scan.fix.status) ? 'Pause BugFix' : 'Resume BugFix'}
+              </ActivityText>
+            </ActivityButton>
+          )}
+        </>
       )}
       {(error || scan.failure) && (
         <ActivityText theme={theme} tone="warning">

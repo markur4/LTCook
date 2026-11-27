@@ -100,6 +100,13 @@ export default async function activate(
       body: JSON.stringify({ sessionId, nativeAgentId, ...payload }),
     });
   const evaluation = Boolean(process.env.LTCOOK_EVAL_ARM);
+  if (bugScan) {
+    pi.on('before_provider_request', async () => {
+      const response = await rpc('/v1/activity/bughunter-model-request', {});
+      if (!response.ok)
+        throw new Error('BugHunter has no model request capacity for this assignment.');
+    });
+  }
   const memoryEnabled = !evaluation;
   if (memoryEnabled) {
     pi.on('session_before_compact', () => {
@@ -386,8 +393,11 @@ export default async function activate(
     }
   });
   pi.on('tool_call', async (event, ctx) => {
-    if (bugScan && event.toolName !== 'read' && event.toolName !== 'ltcook_team')
-      return { block: true, reason: 'BugScan permits only approved source reads and reports.' };
+    if (bugScan && !['read', 'write', 'edit', 'ltcook_team'].includes(event.toolName))
+      return {
+        block: true,
+        reason: 'BugHunter permits only its approved source and Task operations.',
+      };
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
     // > Repository and web tools use their existing invocation-time authorization.

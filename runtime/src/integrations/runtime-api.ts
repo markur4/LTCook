@@ -1,5 +1,7 @@
 import type { Telemetry } from '../diagnostics/telemetry.js';
 import type { BugScanService } from '../services/bugscan.js';
+import type { BugFixService } from '../services/bugfix.js';
+import type { BugFixAuthorization } from '../core/bugfix-authorization.js';
 import type { BugScanActivity } from './runtime-activity.js';
 import process from 'node:process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -160,6 +162,8 @@ export class RuntimeApi {
   }
   private evals: EvalRunService | undefined;
   private bugScan?: BugScanActivity;
+  private bugHunterModelGate?: (sessionId: string, nativeAgentId: string) => boolean;
+  private bugFix?: { authorization: BugFixAuthorization; service: BugFixService };
   private evaluationObserver:
     | ((agentId: string, value: Record<string, unknown>) => EvaluationExecutionScope | void)
     | undefined;
@@ -191,6 +195,14 @@ export class RuntimeApi {
 
   setBugScan(service: BugScanService, scope: string, requireWorkspace: boolean): void {
     this.bugScan = { service, scope, requireWorkspace };
+  }
+
+  setBugHunterModelGate(gate: (sessionId: string, nativeAgentId: string) => boolean): void {
+    this.bugHunterModelGate = gate;
+  }
+
+  setBugFix(service: BugFixService, authorization: BugFixAuthorization): void {
+    this.bugFix = { service, authorization };
   }
   setLifecycle(
     identity: RuntimeLifecycleIdentity,
@@ -324,6 +336,8 @@ export class RuntimeApi {
       [
         '/v1/model/catalog',
         '/v1/model/resolve',
+        '/v1/activity/bughunter-model-request',
+        '/v1/activity/bugfix-authorization',
         '/v1/session/worktrees',
         '/v1/runtime/stop',
         '/v1/session-memory/observe',
@@ -458,6 +472,59 @@ export class RuntimeApi {
         response.writeHead(401).end('{"error":"unauthorized"}');
         return;
       }
+      if (request.url === '/v1/activity/bughunter-model-request') {
+        const allowed =
+          actor.kind === 'agent' &&
+          typeof input.sessionId === 'string' &&
+          this.bugHunterModelGate?.(input.sessionId, actor.nativeAgentId);
+        response.writeHead(allowed ? 204 : 403).end();
+        return;
+      }
+      if (request.url === '/v1/activity/bugfix-authorization') {
+        if (actor.kind !== 'user') {
+          response.writeHead(403).end('{"error":"User authentication is required."}');
+          return;
+        }
+        const bugFix = this.bugFix;
+        if (!bugFix) {
+          response
+            .writeHead(403)
+            .end('{"error":"BugFix requires Dev mode and a verified repository."}');
+          return;
+        }
+        const operation = z
+          .discriminatedUnion('operation', [
+            z.strictObject({ operation: z.literal('status') }),
+            z.strictObject({ operation: z.literal('grant'), grant: z.unknown() }),
+            z.strictObject({ operation: z.literal('revoke') }),
+            z.strictObject({ operation: z.literal('prohibit'), prohibition: z.unknown() }),
+            z.strictObject({ operation: z.literal('clear-prohibition'), id: z.string().min(1) }),
+          ])
+          .parse(parsed);
+        const authorization = bugFix.authorization;
+        switch (operation.operation) {
+          case 'grant':
+            authorization.grant(actor, operation.grant);
+            break;
+          case 'revoke':
+            authorization.revoke(actor);
+            break;
+          case 'prohibit':
+            authorization.prohibit(actor, operation.prohibition);
+            break;
+          case 'clear-prohibition':
+            authorization.clearProhibition(actor, operation.id);
+            break;
+        }
+        response.writeHead(200).end(
+          JSON.stringify({
+            grant: authorization.current() ?? null,
+            prohibitions: authorization.listProhibitions(),
+            batches: bugFix.service.list(),
+          }),
+        );
+        return;
+      }
       if (request.url === '/v1/tracker/snapshot' || request.url === '/v1/tracker/modify') {
         if (!isUser) {
           response.writeHead(403).end('{}');
@@ -522,6 +589,7 @@ export class RuntimeApi {
           shutdownSignal: this.shutdownController.signal,
           activity: this.services.activity,
           bugScan: this.bugScan,
+          bugFix: this.bugFix?.service,
           catalog: this.workspaceTools,
           workspaceServices: this.workspaceServices,
           lastDelivered: (sessionId, agentId) => this.memory?.lastDelivered(sessionId, agentId),

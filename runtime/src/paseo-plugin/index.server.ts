@@ -338,7 +338,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(activityToggleRpc, async (input) =>
     activityToggleRpc.output.parse(await runtimeJson('/v1/activity/toggle', input)),
   );
-  server.handle(bugScanRunRpc, async ({ agentId }, { paseo }) => {
+  server.handle(bugScanRunRpc, async ({ agentId, action, id }, { paseo }) => {
     const current = await paseo.agents.ref(agentId).refresh();
     if (!current) throw new Error('The selected agent is unavailable.');
     const agent = current.agent;
@@ -347,6 +347,8 @@ export default function contribute(server: PluginServerContext) {
       await runtimeJson('/v1/activity/bugscan', {
         nativeAgentId: agent.id,
         sessionId,
+        action,
+        id,
       }),
     );
   });

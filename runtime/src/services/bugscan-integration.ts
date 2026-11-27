@@ -81,6 +81,7 @@ export function bugScanBrief(phase: BugScanRequest['phase']): string {
         'Use an operational remedy when independent evidence shows the failure comes from configuration or an external dependency and restoring that dependency restores the behavior.',
         'List each architectural problem in technicalDebt with problem, decision (immediate or deferred), and rationale.',
         'Record evidenced architectural problems even when the selected repair can leave them in place. Mark those deferred if they require separate work. Use an empty list only when the evidence exposes no architectural problem.',
+        'For a supported source remedy, list the precise existing repository-relative files it must change as repairPaths. Omit that field when the evidence does not establish the necessary paths.',
         'Only read source when the workspace represents the exact source revision listed for the evidence. A missing revision limits source conclusions to hypotheses.',
       ].join('\n');
 }
@@ -96,6 +97,7 @@ async function sendInvestigation(
   const result = await runtime.investigateBugScan({
     workspaceRoot,
     recordWorkspaceRoot: request.scope,
+    huntId: request.huntId,
     requestId: request.requestId,
     role: request.role,
     workerSlot: request.workerSlot,
@@ -131,6 +133,9 @@ export async function startBugScan(input: {
   logPath: string;
   stateDirectory: string;
   configuredWorkspace?: string;
+  budgetMs?: number;
+  canStartAutomatic?: () => boolean;
+  canStartHunt?: () => boolean;
   resolveSessionWorkspace?: (sessionId: string) => string | undefined;
 }) {
   const { runtime, logPath, stateDirectory, configuredWorkspace } = input;
@@ -200,7 +205,9 @@ export async function startBugScan(input: {
     },
     resolveSource: (buildIdentity, _scope, signal, candidateRevision) =>
       sourceRevisionForBuild(sourceWorkspace, buildIdentity, signal, candidateRevision),
-    canStartAutomatic: () => false,
+    budgetMs: input.budgetMs,
+    canStartAutomatic: input.canStartAutomatic ?? (() => false),
+    canStartHunt: input.canStartHunt,
     async investigate(request, signal) {
       if (request.phase !== 'investigate')
         return sendInvestigation(runtime, request, evidenceWorkspace, signal);

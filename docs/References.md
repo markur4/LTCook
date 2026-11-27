@@ -291,6 +291,9 @@ apply when the runtime next starts. The typed bundle exposes
 | `LTCOOK_WORKSPACE_ORGANIZER_ENABLED` | `runtime.services.workspace_organizer.enabled` | `true` | Enable standard label maintenance, classification, and eligible automatic archival. |
 | `LTCOOK_BUGHUNTER_ENABLED` | `runtime.services.bughunter.enabled` | `false` | Enable diagnostic intake and manual read-only BugScan for the runtime. |
 | `LTCOOK_BUGHUNTER_WORKSPACE` | `runtime.services.bughunter.workspace` | Empty | Absolute checkout authorized for BugScan. Empty limits BugScan to installation-level evidence. |
+| `LTCOOK_BUGHUNTER_MODE` | `runtime.services.bughunter.mode` | `user` | Use `dev` with standing authority for scoped BugFix work. |
+| `LTCOOK_BUGHUNTER_ACTIVE_MINUTES` | `runtime.services.bughunter.active_minutes` | `45` | Active time shared by investigation and repair. |
+| `LTCOOK_BUGHUNTER_MANUAL_MODEL_REQUESTS` | `runtime.services.bughunter.manual_model_requests` | `12` | Provider request ceiling for a manual investigation without a Dev grant. |
 | `LTCOOK_WORKSPACE_ORGANIZER_AUTO_ARCHIVE` | `runtime.services.workspace_organizer.auto_archive` | `true` | Enable the 14-day inactivity archive policy while Workspace Organizer is enabled. |
 | `LTCOOK_RENAMER_ENABLED` | `runtime.services.renamer.enabled` | `true` | Enable first-prompt naming. |
 | `LTCOOK_RENAMER_WORKSPACES` | `runtime.services.renamer.workspaces` | `true` | Allow workspace titles of at most 20 Unicode grapheme clusters. |
