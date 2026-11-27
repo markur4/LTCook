@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { appendFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { startBugScan } from '../../../runtime/src/services/bugscan-integration.js';
 import {
   BugScanService,
   type BugScanRequest,
@@ -77,6 +78,8 @@ test('persists the read position and counts distinct warning operations across a
   withLog(async (logPath) => {
     let state: BugScanState | undefined;
     let calls = 0;
+    const candidate = 'd'.repeat(40);
+    const candidates: (string | undefined)[] = [];
     const create = () =>
       new BugScanService({
         logPath,
@@ -85,7 +88,10 @@ test('persists the read position and counts distinct warning operations across a
           state = value;
         },
         scopeFor: () => first,
-        resolveSource: async () => 'c'.repeat(40),
+        resolveSource: async (_build, _scope, _signal, revision) => {
+          candidates.push(revision);
+          return 'c'.repeat(40);
+        },
         investigate: async (request) => {
           calls++;
           return answer(request);
@@ -94,9 +100,11 @@ test('persists the read position and counts distinct warning operations across a
         now: () => now,
       });
     const prefix = event('distinct-3');
+    const previousBuild = event('distinct-2', { buildIdentity: `deployment:${'b'.repeat(64)}` });
+    const currentBuild = event('distinct-1', { sourceRevision: candidate });
     await appendFile(
       logPath,
-      `${event('distinct-1')}\n${event('distinct-1')}\n${event('distinct-2')}\n${prefix.slice(0, 17)}`,
+      `${currentBuild}\n${currentBuild}\n${previousBuild}\n${prefix.slice(0, 17)}`,
     );
     const prior = create();
     await prior.ingest();
@@ -111,8 +119,9 @@ test('persists the read position and counts distinct warning operations across a
       await resumed.ingest();
       await eventually(() => resumed.list()[0]?.status === 'completed');
       const hunt = resumed.list()[0];
-      expect(hunt?.groups[0]?.evidence).toHaveLength(3);
+      expect(hunt?.groups.map((group) => group.evidence.length)).toEqual([2, 1]);
       expect(hunt?.groups[0]?.sourceRevision).toBe('c'.repeat(40));
+      expect(candidates).toEqual([candidate, undefined]);
       expect(hunt?.findings[0]?.technicalDebt).toMatchObject([{ decision: 'deferred' }]);
       expect(calls).toBe(1);
       await appendFile(logPath, `${event('distinct-1')}\n`);
@@ -162,6 +171,48 @@ test('a single stall starts a hunt and known dependency, test and recursive even
       expect(JSON.stringify(request)).not.toContain('seeded-secret');
       expect(service.list()[0]?.findings[0]).toMatchObject({ confidence: 'hypothesis' });
       expect(service.list()[0]?.findings[0]?.remedy).toBeUndefined();
+    } finally {
+      await service.close();
+    }
+  }));
+
+test('the native bridge sends one investigation per assigned group and includes sibling context', () =>
+  withLog(async (logPath) => {
+    const nativeRequests: (BugScanRequest & { relatedGroups?: BugScanRequest['groups'] })[] = [];
+    const { service, scope } = await startBugScan({
+      stateDirectory: path.dirname(logPath),
+      logPath,
+      runtime: {
+        bugScanRecords: () => ({ load: () => undefined, save: () => {} }),
+        async investigateBugScan(input) {
+          const request = input.evidence as (typeof nativeRequests)[number];
+          nativeRequests.push(request);
+          return {
+            summary: 'Investigation reported.',
+            evidence: JSON.stringify(answer(request)),
+            outcome: 'success',
+          };
+        },
+      },
+    });
+    try {
+      const records = ['a', 'b', 'c'].map((fingerprint) =>
+        event(fingerprint, {
+          component: 'runtime',
+          code: 'runtime.failure',
+          buildIdentity: `deployment:${fingerprint.repeat(64)}`,
+        }),
+      );
+      await appendFile(logPath, `${records.join('\n')}\n`);
+      await service.trigger(scope);
+      await eventually(() => service.list()[0]?.status === 'blocked');
+      const investigator = nativeRequests.filter((request) => request.role === 'investigator');
+      expect(investigator).toHaveLength(3);
+      expect(investigator.map((request) => request.groups.length)).toEqual([1, 1, 1]);
+      expect(investigator.map((request) => request.relatedGroups?.length)).toEqual([2, 2, 2]);
+      expect(new Set(investigator.map((request) => request.groups[0]?.id)).size).toBe(3);
+      expect(nativeRequests.at(-1)?.phase).toBe('consolidate');
+      expect(service.list()[0]?.findings[0]?.groupIds).toHaveLength(3);
     } finally {
       await service.close();
     }

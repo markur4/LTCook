@@ -365,9 +365,11 @@ An explicit host-wide BugHunter setting enables the service and can name the
 checkout to investigate. Open Activity → Services for that scope and use
 **Run BugScan** to investigate the pending evidence. The card shows the current
 status, supported causes or hypotheses, remedies, and explicit immediate or
-deferred architecture decisions. When a build supplies exact source provenance,
-the investigation reads tracked content for that revision. Where provenance is
-unavailable, report the evidence gap and limit source-dependent conclusions.
+deferred architecture decisions. Native builds include the source revision in
+their verified deployment assets. A clean checkout running the runtime directly
+can also provide a source revision. BugScan looks up that commit in the
+authorized repository and reads tracked content from its snapshot. Where
+provenance is unavailable, it reports the gap and limits source conclusions.
 Automatic model dispatch remains gated by model usage qualification.
 
 ## Local Ollama and Agent Evals

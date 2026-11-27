@@ -5,6 +5,7 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { Model } from '@earendil-works/pi-ai';
 import activate from '../../../runtime/src/integrations/pi-extension.js';
 import { guardEvaluationModelRuntime } from '../../../runtime/src/integrations/pi-rpc.js';
+import { bugHunterTeamId } from '../../../runtime/src/services/bughunter-team.js';
 import {
   EVAL_CONTEXT_WINDOW,
   EVAL_MODEL,
@@ -13,6 +14,48 @@ import {
 const original = { ...process.env };
 afterEach(() => {
   process.env = { ...original };
+});
+
+test('BugScan sanitizes native source reads and drops binary data before returning output', async () => {
+  const handlers = new Map<string, (event: unknown) => unknown>();
+  const pi = {
+    on(name: string, handler: (event: unknown) => unknown) {
+      handlers.set(name, handler);
+    },
+    registerTool() {},
+  } as unknown as ExtensionAPI;
+  Object.assign(process.env, {
+    LTCOOK_NATIVE_AGENT_ID: 'native',
+    LTCOOK_SESSION_ID: 'session',
+    LTCOOK_TEAM_INSTANCE_ID: 'team-instance',
+    LTCOOK_TEAM_ID: bugHunterTeamId,
+    LTCOOK_MEMBER_KEY: 'leader',
+    LTCOOK_RUNTIME_API_URL: 'http://127.0.0.1:1',
+    LTCOOK_AGENT_API_TOKEN: 'fixture',
+    LTCOOK_TEAM: bugHunterTeamId,
+  });
+  await activate(pi);
+  const sanitize = handlers.get('tool_result');
+  expect(
+    sanitize?.({
+      toolName: 'read',
+      content: [
+        { type: 'text', text: 'password=seeded-private-password\nexport const status = 200;' },
+        { type: 'image', data: 'seeded-private-image', mimeType: 'image/png' },
+      ],
+      details: { private: 'seeded-private-details' },
+    }),
+  ).toEqual({
+    content: [{ type: 'text', text: 'password=<redacted>\nexport const status = 200;' }],
+    details: null,
+  });
+  expect(
+    sanitize?.({
+      toolName: 'read',
+      content: [{ type: 'image', data: 'seeded-private-image', mimeType: 'image/png' }],
+    }),
+  ).toMatchObject({ isError: true });
+  expect(sanitize?.({ toolName: 'ltcook_team' })).toBeUndefined();
 });
 
 test('evaluation stream guard rejects wrong model/provider/endpoint before SDK provider invocation', () => {

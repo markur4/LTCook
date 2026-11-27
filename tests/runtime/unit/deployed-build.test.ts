@@ -25,9 +25,10 @@ test('verifies actual deployed assets and rejects a receipt left by a different 
       await writeFile(path.join(root, name), contents);
     }
     await writeFile(path.join(root, '.ltcook-build.json'), JSON.stringify({ fingerprint, files }));
-    await expect(verifyDeployedBuild(root, path.join(root, entry), fingerprint)).resolves.toBe(
+    await writeFile(path.join(root, 'runtime/dist/source-revision'), `${'a'.repeat(40)}\n`);
+    await expect(verifyDeployedBuild(root, path.join(root, entry), fingerprint)).resolves.toEqual({
       fingerprint,
-    );
+    });
     await expect(verifyDeployedBuild(root, path.join(root, entry), '0'.repeat(64))).rejects.toThrow(
       'does not match the installation receipt',
     );
@@ -37,6 +38,43 @@ test('verifies actual deployed assets and rejects a receipt left by a different 
     await writeFile(path.join(root, browser), '<!doctype html><title>Wrong build</title>');
     await expect(verifyDeployedBuild(root, path.join(root, entry), fingerprint)).rejects.toThrow(
       `asset changed: ${browser}`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('returns source provenance only from the verified deployment asset', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ltcook-build-'));
+  try {
+    const entry = 'runtime/dist/main.js';
+    const provenance = 'runtime/dist/source-revision';
+    const entryPath = path.join(root, entry);
+    const provenancePath = path.join(root, provenance);
+    const manifestPath = path.join(root, '.ltcook-build.json');
+    const entryContents = '// the runtime';
+    const sourceRevision = 'a'.repeat(40);
+    await mkdir(path.dirname(entryPath), { recursive: true });
+    await writeFile(entryPath, entryContents);
+    async function installManifest(contents: string): Promise<string> {
+      const files = { [entry]: hash(entryContents), [provenance]: hash(contents) };
+      const fingerprint = hash(`${entry}\0${files[entry]}\n${provenance}\0${files[provenance]}\n`);
+      await writeFile(provenancePath, contents);
+      await writeFile(manifestPath, JSON.stringify({ fingerprint, files }));
+      return fingerprint;
+    }
+    const fingerprint = await installManifest(`${sourceRevision}\n`);
+    await expect(verifyDeployedBuild(root, entryPath, fingerprint)).resolves.toEqual({
+      fingerprint,
+      sourceRevision,
+    });
+    await writeFile(provenancePath, `${'b'.repeat(40)}\n`);
+    await expect(verifyDeployedBuild(root, entryPath, fingerprint)).rejects.toThrow(
+      `asset changed: ${provenance}`,
+    );
+    const malformedFingerprint = await installManifest('main\n');
+    await expect(verifyDeployedBuild(root, entryPath, malformedFingerprint)).rejects.toThrow(
+      'source revision is invalid',
     );
   } finally {
     await rm(root, { recursive: true, force: true });

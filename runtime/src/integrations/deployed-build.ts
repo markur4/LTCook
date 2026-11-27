@@ -4,6 +4,8 @@ import path from 'node:path';
 import { z } from 'zod';
 
 const entrypoint = 'runtime/dist/main.js';
+const provenanceAsset = 'runtime/dist/source-revision';
+const gitCommit = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const deploymentManifest = z.strictObject({
   fingerprint: sha256,
@@ -26,7 +28,7 @@ export async function verifyDeployedBuild(
   appRoot: string,
   runningEntry: string,
   expected: unknown,
-): Promise<string> {
+): Promise<{ fingerprint: string; sourceRevision?: string }> {
   const root = await realpath(appRoot);
   if (path.resolve(runningEntry) !== assetPath(root, entrypoint))
     throw new Error('The runtime entrypoint belongs to a different deployment.');
@@ -40,18 +42,24 @@ export async function verifyDeployedBuild(
     Buffer.compare(Buffer.from(left), Buffer.from(right)),
   );
   const digest = createHash('sha256');
+  let sourceRevision: string | undefined;
   for (const [asset, declared] of assets) {
     const target = assetPath(root, asset);
     if ((await realpath(target)) !== target || !(await stat(target)).isFile())
       throw new Error(`The deployed build asset is not a regular file: ${asset}`);
-    const actual = createHash('sha256')
-      .update(await readFile(target))
-      .digest('hex');
+    const contents = await readFile(target);
+    const actual = createHash('sha256').update(contents).digest('hex');
     if (actual !== declared) throw new Error(`The deployed build asset changed: ${asset}`);
+    if (asset === provenanceAsset) {
+      const revision = contents.toString('utf8').trim();
+      if (!gitCommit.test(revision))
+        throw new Error('The deployed build source revision is invalid.');
+      sourceRevision = revision;
+    }
     digest.update(`${asset}\0${actual}\n`);
   }
   const actual = digest.digest('hex');
   if (actual !== manifest.fingerprint || actual !== expected)
     throw new Error('The deployed runtime build does not match the installation receipt.');
-  return actual;
+  return { fingerprint: actual, ...(sourceRevision === undefined ? {} : { sourceRevision }) };
 }

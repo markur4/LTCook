@@ -427,6 +427,7 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
         pi=Section({}),
         workspace_organizer=Section({"LTCOOK_WORKSPACE_ORGANIZER_ENABLED": "true"}),
         renamer=Section({"LTCOOK_RENAMER_ENABLED": "true"}),
+        bughunter=Section({"LTCOOK_BUGHUNTER_ENABLED": "true"}),
     )
 
     class Resolved:
@@ -441,7 +442,15 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
         seen["environment"] = environment
         return Resolved()
 
-    monkeypatch.setattr(launch, "resolve_global_config", lambda **_kwargs: Resolved())
+    class GlobalResolved(Resolved):
+        def build(self, bundle):
+            values = dict(vars(config))
+            values["bughunter"] = Section({"LTCOOK_BUGHUNTER_ENABLED": "false"})
+            return SimpleNamespace(**values)
+
+    monkeypatch.setattr(
+        launch, "resolve_global_config", lambda **_kwargs: GlobalResolved()
+    )
     monkeypatch.setattr(launch, "resolve_config", resolve_config)
     result = launch.resolve_launch(tmp_path, original_environment=process_environment)
 
@@ -449,6 +458,7 @@ def test_workspace_launch_uses_shell_provenance_before_resolving(monkeypatch, tm
     assert seen["environment"] == original
     assert result.environment["LTCOOK_TEAM"] == "workspace-team"
     assert result.environment["LTCOOK_CONVERSATION_INPUT_TOKENS"] == "8000"
+    assert result.environment["LTCOOK_BUGHUNTER_ENABLED"] == "false"
     assert result.environment["LTCOOK_WORKSPACE"] == str(tmp_path.resolve())
     assert result.environment["LTCOOK_JS_ROOT"] == str(tmp_path / "source-root")
     assert result.environment["PATH"].split(os.pathsep)[1] == str(
@@ -506,6 +516,7 @@ def test_production_javascript_root_defaults_under_deployment(monkeypatch, tmp_p
         pi=Section({}),
         workspace_organizer=Section({"LTCOOK_WORKSPACE_ORGANIZER_ENABLED": "true"}),
         renamer=Section({"LTCOOK_RENAMER_ENABLED": "true"}),
+        bughunter=Section({"LTCOOK_BUGHUNTER_ENABLED": "false"}),
     )
 
     class Resolved:

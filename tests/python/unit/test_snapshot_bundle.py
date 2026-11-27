@@ -13,10 +13,8 @@ from pathlib import Path
 import pytest
 from apprc.distribution import build_project_snapshot, read_distribution_spec
 
-from ltcook_dev.packaging.package_assets import (
-    REQUIRED_PASEO_PLUGIN_ASSETS,
-    archive_assets,
-)
+from ltcook_dev.packaging.package_assets import REQUIRED_PASEO_PLUGIN_ASSETS
+from ltcook_distr import build_native
 
 ROOT = Path(__file__).resolve().parents[3]
 INSTALLATION_ICONS = ("assets/LTCook-Icon-Final.png", "assets/LTCook-Icon-Final.ico")
@@ -150,10 +148,13 @@ with patch.dict(os.environ, {'LTCOOK_BROWSER_ENABLED': 'false', 'LTCOOK_SERVICE_
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux native payload contract.")
-def test_finished_snapshot_wheel_initializes_compiled_assets(tmp_path: Path) -> None:
+def test_finished_snapshot_wheel_initializes_compiled_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Exercise the final SDK snapshot rather than the pre-cleanup export tree.
 
     :param tmp_path: Isolated repository, package build, and deployment workspace.
+    :param monkeypatch: Replace Bun calls with the prepared offline fixture.
     """
     source = tmp_path / "project"
     commit = _committed_project(source)
@@ -206,11 +207,11 @@ def test_finished_snapshot_wheel_initializes_compiled_assets(tmp_path: Path) -> 
             target = exported / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
-        archive_assets(
-            exported,
-            exported / "src/ltcook_distr/bundle.zip",
-            staging_parent=tmp_path,
-        )
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                build_native.subprocess, "run", lambda *_args, **_kwargs: None
+            )
+            build_native._prepare(exported, tmp_path, commit)
 
     project = build_project_snapshot(
         read_distribution_spec(source),
@@ -268,6 +269,14 @@ def test_finished_snapshot_wheel_initializes_compiled_assets(tmp_path: Path) -> 
     )
     assert initialized.returncode == 0, initialized.stdout + initialized.stderr
     deployment = appdata / "deployment"
+    provenance = "runtime/dist/source-revision"
+    assert (deployment / "app" / provenance).read_text(
+        encoding="ascii"
+    ) == f"{commit}\n"
+    manifest = json.loads(
+        (deployment / "app/.ltcook-build.json").read_text(encoding="utf-8")
+    )
+    assert provenance in manifest["files"]
     for name, content in expected.items():
         deployed = (deployment / "app" / name).read_text(encoding="utf-8")
         if name == "runtime/dist/paseo-web/index.html":

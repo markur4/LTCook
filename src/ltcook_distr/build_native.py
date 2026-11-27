@@ -23,15 +23,20 @@ def _assert_no_links(path: Path) -> None:
         raise ValueError(f"Unsafe native build cache path: {path}")
 
 
-def _prepare(tree: Path, staging_parent: Path) -> None:
+def _prepare(tree: Path, staging_parent: Path, source_revision: str) -> None:
     """Compile committed JavaScript and archive it from external private staging.
 
     :param tree: Private SDK-exported repository tree for the requested commit.
     :param staging_parent: Invocation-owned directory outside that tree.
+    :param source_revision: Full commit used by the SDK to export the tree.
     """
     subprocess.run(("bun", "install", "--frozen-lockfile"), cwd=tree, check=True)
     subprocess.run(("bun", "run", "build"), cwd=tree, check=True)
     subprocess.run(("bun", "run", "build:paseo-web"), cwd=tree, check=True)
+    provenance = tree / "runtime/dist/source-revision"
+    _assert_no_links(provenance)
+    with provenance.open("x", encoding="ascii", newline="\n") as destination:
+        destination.write(f"{source_revision}\n")
     archive_assets(
         tree,
         tree / "src/ltcook_distr/bundle.zip",
@@ -48,6 +53,13 @@ def build(revision: str, root: Path, uv_path: Path | None = None) -> tuple[Path,
     """
     _assert_no_links(root)
     root = root.resolve(strict=True)
+    source_revision = subprocess.run(
+        ("git", "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}"),
+        cwd=root,
+        check=True,
+        capture_output=True,
+        encoding="ascii",
+    ).stdout.strip()
     cache = root / ".cache/apprc"
     _assert_no_links(cache)
     cache.mkdir(parents=True, exist_ok=True)
@@ -58,9 +70,9 @@ def build(revision: str, root: Path, uv_path: Path | None = None) -> tuple[Path,
     snapshot_path = invocation / "source.zip"
     prepared = build_project_snapshot(
         spec,
-        revision=revision,
+        revision=source_revision,
         destination=snapshot_path,
-        prepare=lambda tree: _prepare(tree, invocation),
+        prepare=lambda tree: _prepare(tree, invocation, source_revision),
     )
     uv = str(uv_path) if uv_path is not None else shutil.which("uv")
     if uv is None:

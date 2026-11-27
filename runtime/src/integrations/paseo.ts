@@ -28,6 +28,7 @@ import { agentEnvironment } from './native-policy.js';
 import { configurePiExtensions } from './pi-settings.js';
 import { isWithin } from '../path-containment.js';
 import { memoryDispatchId } from './paseo-memory.js';
+import { bugHunterTeamId } from '../services/bughunter-team.js';
 import { WorkspacePreparationCache, type WorkspacePreparation } from './workspace-preparation.js';
 import {
   connectPaseoMaintenance,
@@ -506,11 +507,12 @@ export async function createPaseoAgentBackend(input: {
     await mkdir(agentHome, { recursive: true, mode: 0o700 });
     signal?.throwIfAborted();
     const settingsPath = path.join(agentHome, 'settings.json');
+    const bugScan = options.teamId === bugHunterTeamId;
     const browserEnabled =
-      input.browserAvailable && workspaceEnv.LTCOOK_BROWSER_ENABLED !== 'false';
-    const codeSearchEnabled = workspaceEnv.LTCOOK_CODESEARCH_ENABLED === 'true';
+      !bugScan && input.browserAvailable && workspaceEnv.LTCOOK_BROWSER_ENABLED !== 'false';
+    const codeSearchEnabled = !bugScan && workspaceEnv.LTCOOK_CODESEARCH_ENABLED === 'true';
     const ownedExtensions = codeSearchEnabled ? codeSearchExtensions : [];
-    await configurePiExtensions(settingsPath, ownedExtensions);
+    if (!bugScan) await configurePiExtensions(settingsPath, ownedExtensions);
     signal?.throwIfAborted();
     const browserHome =
       workspaceEnv.LTCOOK_BROWSER_HOME || path.join(path.dirname(agentHome), 'browser-home');
@@ -520,6 +522,7 @@ export async function createPaseoAgentBackend(input: {
     ];
     const agentEnv = agentEnvironment({
       ...workspaceEnv,
+      ...(bugScan ? { PI_OFFLINE: '1' } : {}),
       PATH: pathEntries.join(path.delimiter),
       LTCOOK_RUNTIME_API_URL: input.runtimeApiUrl,
       LTCOOK_AGENT_API_TOKEN: identity.token,
@@ -539,7 +542,7 @@ export async function createPaseoAgentBackend(input: {
       HOME: browserHome,
       ...(process.platform === 'win32' ? { USERPROFILE: browserHome } : {}),
     });
-    const context7Enabled = agentEnv.LTCOOK_CONTEXT7_ENABLED === 'true';
+    const context7Enabled = !bugScan && agentEnv.LTCOOK_CONTEXT7_ENABLED === 'true';
     const context7Url = agentEnv.LTCOOK_CONTEXT7_URL;
     if (context7Enabled && !context7Url) {
       throw new Error('LTCOOK_CONTEXT7_URL must be configured when Context7 is enabled.');

@@ -23,6 +23,7 @@ const eventSchema = z.object({
     .string()
     .regex(/^(?:source:[a-f0-9]{40}|[a-z0-9-]+:[a-f0-9]{64})$/)
     .optional(),
+  sourceRevision: sourceRevision.optional(),
   message: z.string().optional(),
   cause: z.unknown().optional(),
   context: z
@@ -42,7 +43,7 @@ type DiagnosticInput = z.infer<typeof eventSchema>;
 
 export type BugScanEvidence = Pick<
   DiagnosticInput,
-  'eventId' | 'code' | 'component' | 'severity' | 'outcome' | 'buildIdentity'
+  'eventId' | 'code' | 'component' | 'severity' | 'outcome' | 'buildIdentity' | 'sourceRevision'
 > & {
   receivedAt: number;
   operationId: string;
@@ -91,7 +92,7 @@ const findingSchema = z.object({
     .max(32),
 });
 
-const findingsSchema = z.object({ findings: z.array(findingSchema).max(64) });
+export const bugScanFindingsSchema = z.object({ findings: z.array(findingSchema).max(64) });
 export type BugScanFinding = z.infer<typeof findingSchema>;
 
 export interface BugScanGroup {
@@ -146,6 +147,7 @@ interface BugScanOptions {
     buildIdentity: string | undefined,
     scope: string,
     signal: AbortSignal,
+    candidateRevision?: string,
   ) => Promise<string | undefined>;
   investigate: (request: BugScanRequest, signal: AbortSignal) => Promise<unknown>;
   canStartAutomatic?: () => boolean;
@@ -209,9 +211,15 @@ function groupsFor(evidence: BugScanEvidence[]): BugScanGroup[] {
 }
 
 function cleanFindings(raw: unknown, groups: BugScanGroup[]): BugScanFinding[] {
-  const parsed = findingsSchema.safeParse(raw);
-  if (!parsed.success)
-    throw new Error('The investigation report did not match the findings contract.');
+  const parsed = bugScanFindingsSchema.safeParse(raw);
+  if (!parsed.success) {
+    const fields = parsed.error.issues
+      .slice(0, 8)
+      .map(({ path, code }) => `${path.join('.') || 'report'} (${code})`);
+    throw new Error(
+      `The investigation report did not match the findings contract. Invalid fields: ${fields.join(', ')}.`,
+    );
+  }
   const known = new Map(groups.map((group) => [group.id, group]));
   const covered = new Set<string>();
   const result = parsed.data.findings.map((finding) => {
@@ -416,6 +424,7 @@ export class BugScanService {
       severity: event.severity,
       outcome: event.outcome,
       buildIdentity: event.buildIdentity,
+      sourceRevision: event.sourceRevision,
       operationId,
       receivedAt,
       message: event.message === undefined ? undefined : sanitize(event.message),
@@ -518,9 +527,9 @@ export class BugScanService {
   }
 
   private queueAutomatic(): void {
+    const since = this.now() - thresholdWindowMs;
     this.state.pending = this.state.pending.filter(
-      ({ evidence }) =>
-        this.immediate(evidence) || evidence.receivedAt >= this.now() - thresholdWindowMs,
+      ({ evidence }) => this.immediate(evidence) || evidence.receivedAt >= since,
     );
     const scopes = new Set(this.state.pending.map((item) => item.scope));
     for (const scope of scopes) {
@@ -532,13 +541,14 @@ export class BugScanService {
       const evidence = this.state.pending
         .filter((item) => item.scope === scope)
         .map((item) => item.evidence);
+      const failureCounts = new Map<string, number>();
+      for (const item of evidence) {
+        if (item.receivedAt >= since)
+          failureCounts.set(item.component, (failureCounts.get(item.component) ?? 0) + 1);
+      }
       if (
         evidence.some((item) => this.immediate(item)) ||
-        groupsFor(evidence).some(
-          (group) =>
-            group.evidence.filter((item) => item.receivedAt >= this.now() - thresholdWindowMs)
-              .length >= 3,
-        )
+        [...failureCounts.values()].some((count) => count >= 3)
       )
         this.enqueue(scope, true, this.takeEvidence(scope));
     }
@@ -598,10 +608,16 @@ export class BugScanService {
         signal.throwIfAborted();
         if (group.sourceRevision) continue;
         try {
+          const candidateRevisions = new Set(
+            group.evidence.flatMap((item) => (item.sourceRevision ? [item.sourceRevision] : [])),
+          );
+          const candidateRevision =
+            candidateRevisions.size === 1 ? candidateRevisions.values().next().value : undefined;
           const revision = await this.options.resolveSource(
             group.buildIdentity,
             hunt.scope,
             signal,
+            candidateRevision,
           );
           signal.throwIfAborted();
           if (revision && sourceRevision.safeParse(revision).success) {

@@ -280,9 +280,10 @@ async function run(): Promise<void> {
       );
     if (installedRuntime && receipt.app !== appRoot)
       throw new Error('The installed runtime receipt belongs to a different deployment.');
-    const buildFingerprint = installedRuntime
+    const deployedBuild = installedRuntime
       ? await verifyDeployedBuild(appRoot, fileURLToPath(import.meta.url), receipt.fingerprint)
       : undefined;
+    const buildFingerprint = deployedBuild?.fingerprint;
     const entrypointDigest = buildFingerprint
       ? undefined
       : createHash('sha256')
@@ -293,13 +294,14 @@ async function run(): Promise<void> {
       fileURLToPath(import.meta.url) === path.join(appRoot, 'runtime', 'src', 'main.ts');
     const sourceRevision = executingSource
       ? await cleanSourceRevision(await fs.realpath(appRoot))
-      : undefined;
+      : deployedBuild?.sourceRevision;
     telemetry.setBuildIdentity(
-      sourceRevision
-        ? `source:${sourceRevision}`
-        : buildFingerprint
-          ? `deployment:${buildFingerprint}`
+      buildFingerprint
+        ? `deployment:${buildFingerprint}`
+        : sourceRevision
+          ? `source:${sourceRevision}`
           : `entrypoint:${entrypointDigest}`,
+      sourceRevision,
     );
     let summarizerModel = '';
     try {
@@ -607,7 +609,15 @@ async function run(): Promise<void> {
           logPath: path.resolve(logs),
           stateDirectory: await fs.realpath(stateDirectory),
           configuredWorkspace,
-          resolveSessionWorkspace: (id) => activation.registeredWorkspace(id),
+          resolveSessionWorkspace: (id) => {
+            const current = activation.registeredWorkspace(id);
+            if (current) return current;
+            try {
+              return runtimeController.snapshot(id).session.workspaceRoot;
+            } catch {
+              return undefined;
+            }
+          },
         });
         api.setBugScan(bugScan.service, bugScan.scope, configuredWorkspace !== undefined);
         const poll = () => {
