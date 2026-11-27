@@ -1,4 +1,4 @@
-import { SidebarRow } from '@getpaseo/plugin/client/ui';
+import { ScrollView, SidebarRow } from '@getpaseo/plugin/client/ui';
 import type { PluginClientContext } from '@getpaseo/plugin/client';
 import { TeamsBrowser } from './client/screens/TeamsBrowser';
 import { TeamStatus } from './client/screens/TeamStatus';
@@ -11,6 +11,8 @@ import {
 import { TURN_SKILLS_TIMELINE_KIND, TurnSkillsTimelineSchema } from './shared/activity';
 import { ActivityPanel } from './client/screens/ActivityPanel';
 import { TrackedItems } from './client/screens/TrackedItems';
+import { WorkspaceServices } from './client/components/WorkspaceServices';
+import { ActivityText } from './client/components/ActivityCard';
 import {
   clearPendingSkillDocuments,
   SKILL_DOCUMENT_PANEL_ID,
@@ -26,6 +28,17 @@ import { TeamComposerItem } from './client/components/TeamComposerItem';
 import { ModelComposerItem } from './client/components/ModelComposerItem';
 import { PastedTextComposerItem } from './client/components/PastedTextComposerItem';
 import { pastedTextSource } from './shared/pasted-text';
+
+const workspaceServicesPanelId = 'workspace-services';
+const trackedItemsPanelId = 'tracked-items';
+
+function loadedWebBuild(): string | undefined {
+  const { document } = globalThis as {
+    document?: { querySelector(selector: string): { content?: string } | null };
+  };
+  const build = document?.querySelector('meta[name="ltcook-web-build"]')?.content;
+  return build && /^[a-f0-9]{64}$/.test(build) ? build.slice(0, 12) : undefined;
+}
 
 export default function contribute(client: PluginClientContext) {
   const ActivityDefault = createActivityDefault(client);
@@ -73,7 +86,26 @@ export default function contribute(client: PluginClientContext) {
       Component: (props) => <ActivityPanel {...props} client={client} />,
     }),
     client.addWorkspacePanel({
-      id: 'tracked-items',
+      id: workspaceServicesPanelId,
+      title: 'Workspace Services',
+      icon: 'Tags',
+      locations: ['explorer'],
+      Component: ({ theme, layout }) => {
+        const build = layout.platform === 'web' ? loadedWebBuild() : undefined;
+        return (
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 10, gap: 5 }}>
+            <WorkspaceServices theme={theme} />
+            {build && (
+              <ActivityText theme={theme} tone="muted">
+                Loaded web build {build}
+              </ActivityText>
+            )}
+          </ScrollView>
+        );
+      },
+    }),
+    client.addWorkspacePanel({
+      id: trackedItemsPanelId,
       title: 'Tracked Items',
       icon: 'Notebook',
       locations: ['explorer'],
@@ -99,6 +131,24 @@ export default function contribute(client: PluginClientContext) {
       context: 'workspace',
       onSelect({ openPanel }) {
         openPanel(ACTIVITY_PANEL_ID, { location: 'explorer' });
+      },
+    }),
+    client.addCommandCenterItem({
+      id: 'open-workspace-services',
+      title: 'Open Workspace Services',
+      icon: 'Tags',
+      context: 'workspace',
+      onSelect({ openPanel }) {
+        openPanel(workspaceServicesPanelId, { location: 'explorer' });
+      },
+    }),
+    client.addCommandCenterItem({
+      id: 'open-tracked-items',
+      title: 'Open Tracked Items',
+      icon: 'Notebook',
+      context: 'workspace',
+      onSelect({ openPanel }) {
+        openPanel(trackedItemsPanelId, { location: 'explorer' });
       },
     }),
     client.addComposerItem({
