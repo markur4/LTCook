@@ -274,3 +274,52 @@ test('a rejected history request cannot suppress a replacement timeline', async 
     clearTimeout(deadline);
   }
 });
+
+test('the first live event can establish a newer timeline than the initial history page', async () => {
+  const stop = new AbortController();
+  const paseo = {
+    agents: {
+      ref(id: string) {
+        let live: (() => void) | undefined;
+        return {
+          timeline: {
+            subscribe(listener: (input: unknown) => void) {
+              live = () =>
+                listener({
+                  epoch: 'new',
+                  seq: 3,
+                  event: {
+                    type: 'timeline',
+                    item: { type: 'assistant_message', text: 'Current reply.' },
+                  },
+                });
+              return { ready: Promise.resolve(), async release() {} };
+            },
+            async refetch() {
+              live?.();
+              return {
+                agentId: id,
+                epoch: 'old',
+                entries: [{ seqStart: 1, item: { type: 'assistant_message', text: 'Obsolete.' } }],
+              };
+            },
+          },
+        };
+      },
+    },
+  } as unknown as PaseoApi;
+  let snapshot: BugHunterSnapshot | undefined;
+  await observeBugHunter(
+    paseo,
+    { workspaceId: 'workspace', huntId: 'selected-hunt', agentId: 'allowed-agent' },
+    stop.signal,
+    async (next) => {
+      snapshot = next;
+      stop.abort();
+    },
+    async () => details,
+  );
+  expect(snapshot?.chat?.messages).toEqual([
+    { id: 'new:3', role: 'assistant', text: 'Current reply.' },
+  ]);
+});

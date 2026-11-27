@@ -136,16 +136,14 @@ function observeConversation(agentId: string, timeline: Timeline, signal: AbortS
           if (signal.aborted || released || generation !== observedGeneration)
             return { agentId, messages: renderMessages() };
           if (tail.error || tail.agentId !== agentId) throw new Error('Timeline unavailable.');
-          if (epoch !== undefined && tail.epoch !== epoch) {
-            reset(tail.epoch);
-            return { agentId, messages: [] };
+          if (epoch === undefined || tail.epoch === epoch) {
+            epoch = tail.epoch;
+            for (const { item, seqStart } of tail.entries) {
+              if (item.type === 'user_message' || item.type === 'assistant_message')
+                append(messagePart(item, seqStart));
+            }
+            through = Math.max(through, tail.endCursor?.seq ?? -1);
           }
-          epoch = tail.epoch;
-          for (const { item, seqStart } of tail.entries) {
-            if (item.type === 'user_message' || item.type === 'assistant_message')
-              append(messagePart(item, seqStart));
-          }
-          through = Math.max(through, tail.endCursor?.seq ?? -1);
         } catch {
           if (signal.aborted || released || generation !== observedGeneration)
             return { agentId, messages: renderMessages() };

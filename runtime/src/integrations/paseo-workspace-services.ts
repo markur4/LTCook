@@ -9,6 +9,7 @@ import type { createHostClient } from '@getpaseo/client/node';
 import type { ProviderSubagentDescriptorPayload } from '@getpaseo/protocol/messages';
 import { readMemoryMessages } from '../paseo-plugin/server/memory-source.js';
 import { isWithin } from '../path-containment.js';
+import { bugHunterTeamId } from '../services/bughunter-team.js';
 import { WorkspaceOrganizer } from '../services/workspace-organizer.js';
 import { Renamer } from '../services/renamer.js';
 import { createWorkspaceMetadataGenerator } from '../services/workspace-metadata-inference.js';
@@ -376,6 +377,8 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
     const metadata: WorkspaceMetadataSnapshot['agents'] = [];
     for (const agent of agents) {
       signal.throwIfAborted();
+      // > BugHunter has its own transcript and does not represent user workspace activity.
+      if (agent.labels?.['ltcook.team'] === bugHunterTeamId) continue;
       try {
         const stamp = hash([
           agent.updatedAt,
