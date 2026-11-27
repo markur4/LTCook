@@ -18,7 +18,12 @@ const SOURCE_LINES = 12;
 
 const TraceLeadSchema = Type.Object(
   {
-    mode: Type.Union([Type.Literal('hybrid'), Type.Literal('exact'), Type.Literal('literal')]),
+    mode: Type.Union([
+      Type.Literal('hybrid'),
+      Type.Literal('semantic'),
+      Type.Literal('exact'),
+      Type.Literal('literal'),
+    ]),
     query: Type.String({ minLength: 1, maxLength: 1024 }),
   },
   { additionalProperties: false },
@@ -28,6 +33,7 @@ type TraceLead = Static<typeof TraceLeadSchema>;
 export const RepositoryTraceInputSchema = Type.Object(
   {
     question: Type.String({ minLength: 1, maxLength: 1024 }),
+    mode: Type.Optional(Type.Literal('semantic')),
     leads: Type.Optional(Type.Array(TraceLeadSchema, { minItems: 1, maxItems: MAX_LEADS })),
   },
   { additionalProperties: false },
@@ -77,16 +83,22 @@ export function verifiedIdentifier(hits: RepositoryHit[]): string | undefined {
   }
 }
 
-function traceLeads({ question, leads }: Static<typeof RepositoryTraceInputSchema>): TraceLead[] {
+function traceLeads({
+  question,
+  mode,
+  leads,
+}: Static<typeof RepositoryTraceInputSchema>): TraceLead[] {
   if (!question.trim() || /[\0\r\n]/.test(question))
     throw new Error('Supply a nonempty, single-line trace question.');
+  if (mode !== undefined && leads !== undefined)
+    throw new Error('Supply either a trace mode for generated leads or explicit leads.');
   const requested: TraceLead[] =
     leads ??
     question
       .trim()
       .split(/(?<=[?;])\s+/)
       .slice(0, MAX_LEADS)
-      .map((query) => ({ mode: 'hybrid', query }));
+      .map((query) => ({ mode: mode ?? 'hybrid', query }));
   const normalized = requested.map(({ mode, query }) => ({ mode, query: query.trim() }));
   if (
     normalized.some(
@@ -282,7 +294,8 @@ export async function traceRepository(
       const { hits } = initial;
       const gaps = new Set(initial.gaps);
       const limit = leads.length <= 2 ? 6 : 4;
-      const lexical = lead.mode !== 'hybrid';
+      const lexical = lead.mode === 'exact' || lead.mode === 'literal';
+      const semantic = lead.mode === 'semantic';
       const primaryHits = selectHits(hits, limit, lexical);
       async function readEvidence(hit: RepositoryHit) {
         try {
@@ -294,35 +307,39 @@ export async function traceRepository(
           gaps.add(signal.aborted ? 'deadline' : 'source-unavailable');
         }
       }
-      // > Verify the original hits while exact follow-ups and other leads are still running.
+      // > Verify the original hits while following connections and resolving the other leads.
       const primaryEvidence = new Map(primaryHits.map((hit) => [hit, readEvidence(hit)]));
-      const anchorNames = lead.mode === 'exact' ? [lead.query] : lexical ? [] : rankedAnchors(hits);
+      const anchorNames =
+        lead.mode === 'exact'
+          ? [lead.query]
+          : lexical
+            ? []
+            : rankedAnchors(semantic ? primaryHits : hits);
       const anchors = await Promise.all(
         anchorNames.map(async (symbol) => {
-          const candidate = await exactCandidate(symbol);
-          for (const gap of candidate.gaps) gaps.add(gap);
+          // > Semantic traces follow source links from ranked hits without searching for the symbol.
+          const candidate = semantic ? undefined : await exactCandidate(symbol);
+          if (candidate) for (const gap of candidate.gaps) gaps.add(gap);
+          const followUpHits = candidate?.hits ?? [];
+          const anchorHits = candidate?.hits ?? primaryHits.filter(({ name }) => name === symbol);
           try {
-            const { connections, incomplete } = await navigation.trace(
-              symbol,
-              candidate.hits,
-              3,
-              4,
-            );
+            const { connections, incomplete } = await navigation.trace(symbol, anchorHits, 3, 4);
             if (incomplete) gaps.add('connection-unresolved');
-            return { hits: candidate.hits, connections };
+            return { hits: followUpHits, connections };
           } catch {
             gaps.add(signal.aborted ? 'deadline' : 'connection-unresolved');
-            return { hits: candidate.hits, connections: [] };
+            return { hits: followUpHits, connections: [] };
           }
         }),
       );
-      const ordered = [
-        ...hits.slice(0, 2),
-        ...anchors.flatMap((anchor) => anchor.hits),
-        ...hits.slice(2),
-      ];
-      const combined = selectHits(ordered, limit, lexical);
-      const selected = deadline.aborted ? primaryHits : combined;
+      const selected =
+        semantic || deadline.aborted
+          ? primaryHits
+          : selectHits(
+              [...hits.slice(0, 2), ...anchors.flatMap((anchor) => anchor.hits), ...hits.slice(2)],
+              limit,
+              lexical,
+            );
       const candidates = await Promise.all(
         selected.map((hit) => primaryEvidence.get(hit) ?? readEvidence(hit)),
       );

@@ -56,7 +56,7 @@ const LocateSearch = Type.Object({
     ),
   ),
   query: Type.String(),
-  mode: Type.Union([Type.Literal('exact'), Type.Literal('hybrid')]),
+  mode: Type.Union([Type.Literal('exact'), Type.Literal('hybrid'), Type.Literal('semantic')]),
 });
 
 const HITS_PER_ROLE = 3;
@@ -194,8 +194,9 @@ export function createRepoLocateTool(
   return defineTool({
     name: REPO_LOCATE_TOOL_NAME,
     description:
-      'For multi-file investigations use trace {question, leads?} to get verified source, connections and evidence gaps in one call. Add up to four leads {mode, query}: hybrid for separate behaviors, exact for symbols, literal for routes and setting names. For quick lookups use symbol, symbols, query, or location {path, line, maxLines}. Set follow to true on quick symbol lookups for one verified local connection. Optionally supply base (a local Git ref) to prioritize changed code and related tests.' +
-      ' Hybrid trace leads use an existing complete index. Run a ranked repository search to build or resume it.' +
+      'Use trace {question, mode?, leads?} for verified source, connections, and gaps across files. Supply up to four leads {mode, query}: hybrid for combined ranking, semantic for ranking by meaning without keyword scoring, exact for symbols, and literal for routes and settings. Set trace.mode to semantic to generate semantic leads from the question instead of supplying leads.' +
+      ' For quick lookups use symbol, symbols, query, or location {path, line, maxLines}. Set mode to semantic with query to skip lexical search and exact follow-up. Set follow to true on a symbol lookup for one verified local connection. Optionally supply base (a local Git ref) to prioritize changed paths and their tests.' +
+      ' Ranked trace leads use an existing complete index. Run a ranked repository search to build or resume it.' +
       repositoryEvidenceGuidance,
     inputSchema: Type.Object(
       {
@@ -208,6 +209,7 @@ export function createRepoLocateTool(
         follow: Type.Optional(Type.Boolean()),
         base: Type.Optional(RepositorySearchBaseSchema),
         query: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
+        mode: Type.Optional(Type.Union([Type.Literal('hybrid'), Type.Literal('semantic')])),
         paths: Type.Optional(RepositorySearchPathsSchema),
       },
       { additionalProperties: false },
@@ -228,6 +230,12 @@ export function createRepoLocateTool(
       )
         throw new Error(
           'Supply exactly one of symbol, symbols, query, location, or trace, with distinct nonempty single-line queries.',
+        );
+      if (input.mode !== undefined && input.query === undefined)
+        throw new Error('Supply a query to select a Locate mode.');
+      if (input.mode === 'semantic' && input.follow)
+        throw new Error(
+          'Semantic Locate skips exact follow-ups. Use a semantic trace to follow verified connections.',
         );
       const deadline = AbortSignal.timeout(
         input.trace ? REPOSITORY_TRACE_TIMEOUT_MS : REPO_SEARCH_TIMEOUT_MS,
@@ -314,7 +322,7 @@ export function createRepoLocateTool(
         await workspace.assertUnchanged();
         return { searches, followUp: 'not-needed', trace };
       }
-      const run = async (mode: 'hybrid' | 'exact', query: string) => {
+      const run = async (mode: Static<typeof LocateSearch>['mode'], query: string) => {
         const symbol = mode === 'exact' ? query : undefined;
         const classify = symbol ? classifySymbol(symbol) : undefined;
         const result = await search(workspace, { query, mode, paths: input.paths }, signal, {
@@ -332,7 +340,7 @@ export function createRepoLocateTool(
           stage: { mode, query, ...grouped, ...(connections.length ? { connections } : {}) },
         };
       };
-      const mode = input.query === undefined ? 'exact' : 'hybrid';
+      const mode = input.query === undefined ? 'exact' : (input.mode ?? 'hybrid');
       let initial: Static<typeof RepositorySearchOutputSchema>;
       try {
         const stages = await Promise.allSettled(queries.map((query) => run(mode, query)));
@@ -356,6 +364,7 @@ export function createRepoLocateTool(
         return { searches, followUp: 'deadline' };
       }
       if (initial.status !== 'ready') return { searches, followUp: 'initial-unavailable' };
+      if (mode === 'semantic') return { searches, followUp: 'not-needed' };
       const identifier = verifiedIdentifier(initial.results ?? []);
       if (!identifier) return { searches, followUp: 'no-verified-symbol' };
       try {

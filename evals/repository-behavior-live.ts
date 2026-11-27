@@ -81,7 +81,7 @@ type NativeObservation = Pick<
 const citationInstructions =
   'Cite the smallest retrieved range that supports each claim, using workspace-relative paths and inclusive line ranges. If the retrieved evidence does not support an answer, return an empty answer and no citations.';
 const instructions = `Call ${REPO_SEARCH_TOOL_NAME} before answering. Choose a search mode suited to the question. ${citationInstructions}`;
-const locateInstructions = `Call ${REPO_LOCATE_TOOL_NAME} first. Use symbol for a known identifier or query for a conceptual question. Use ${REPO_SEARCH_TOOL_NAME} for additional evidence if needed. ${citationInstructions}`;
+const locateInstructions = `Call ${REPO_LOCATE_TOOL_NAME} first. Use symbol for a known identifier or query for a conceptual question. Choose semantic mode when shared words are likely to add irrelevant matches. Use ${REPO_SEARCH_TOOL_NAME} for additional evidence if needed. ${citationInstructions}`;
 
 function autonomousPrompt(question: string, factFields: readonly string[]) {
   return [
@@ -124,6 +124,7 @@ function describeRequest(
         input.symbol,
         input.symbols,
         input.query,
+        input.query === undefined ? undefined : (input.mode ?? 'hybrid'),
         input.trace,
         input.location,
         paths,
