@@ -11,6 +11,7 @@ import type { createColgrepProvider } from '../repository/providers/colgrep.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from '../repository/workspace.js';
 import type { ConversationRecords } from '../session-memory/conversation.js';
 import type { ToolCatalog } from '../tools/catalog.js';
+import { RepositoryFilterError } from '../repository/filter.js';
 import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
 import {
   REPO_LOCATE_TOOL_NAME,
@@ -242,7 +243,8 @@ const activityRoutes = {
         return;
       }
       const message =
-        error instanceof Error && error.message === 'Invalid tool arguments.'
+        error instanceof RepositoryFilterError ||
+        (error instanceof Error && error.message === 'Invalid tool arguments.')
           ? error.message
           : 'The repository tool could not run. Check its arguments and workspace access.';
       response.writeHead(400).end(JSON.stringify({ error: message }));

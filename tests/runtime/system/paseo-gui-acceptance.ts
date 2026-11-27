@@ -1090,7 +1090,11 @@ try {
   await browser(
     'fill',
     '[aria-label="Tool arguments (JSON)"]',
-    JSON.stringify({ mode: 'literal', query: 'directRepoQuery', paths: ['query-fixture.ts'] }),
+    JSON.stringify({
+      mode: 'literal',
+      query: 'directRepoQuery',
+      filter: { includePaths: ['query-fixture.ts'] },
+    }),
   );
   await clickButton('Run query');
   const queryResult = '[data-testid="ltcook-repository-query-result"]';
@@ -1105,12 +1109,24 @@ try {
   await browser('fill', '[aria-label="Search query"]', ' directRepoQuery ');
   await clickButton('Run query');
   await browser('wait', queryResult);
+  assert.doesNotMatch(await browser('get', 'text', queryResult), /query-decoy\.ts/);
+  await browser('fill', '[aria-label="Search query"]', 'directRepoQuery');
+  await clickButton('Filters');
+  await browser('fill', '[aria-label="Include paths"]', 'query-*.ts');
+  await browser('fill', '[aria-label="Include literal text"]', 'directRepoQuery');
+  await browser('fill', '[aria-label="Exclude literal text"]', 'false');
+  await browser('fill', '[aria-label="Exclude regex"]', '[');
+  await clickButton('Run query');
+  await browser('wait', '--text', 'filter.excludeRegex[0] must be a valid RE2 regular expression');
+  await browser('fill', '[aria-label="Exclude regex"]', '');
+  await clickButton('Run query');
+  await browser('wait', queryResult);
   const literalResult = await browser('get', 'text', queryResult);
   assert.match(literalResult, /1 \| export const directRepoQuery = true/);
   assert.doesNotMatch(
     literalResult,
     /query-decoy\.ts/,
-    'Literal search preserves query whitespace',
+    'Query Repo filters content from other matching paths',
   );
   await browser(
     'wait',
@@ -1137,7 +1153,11 @@ try {
     'placeholder',
     'Tool arguments (JSON)',
     'fill',
-    JSON.stringify({ mode: 'literal', query: 'directRepoQueryExtra', paths: ['query-decoy.ts'] }),
+    JSON.stringify({
+      mode: 'literal',
+      query: 'directRepoQueryExtra',
+      filter: { includePaths: ['query-decoy.ts'] },
+    }),
   );
   await clickButton('Run query');
   await browser(

@@ -447,6 +447,13 @@ Team route is `POST /v1/ried`. Requests accept the following operations.
 | `map` | Optional `target`, `maxDepth`, and `maxEntries` | Bounded workspace-relative directory and file paths. The default is the workspace root, depth 3, and 100 scanned entries. Limits can be raised to depth 8 and 256 scanned entries. |
 | `outline` | Explicit workspace-relative `target` | A `brief outline` of a source file or up to 12 source files in a directory. Requires trusted file-read access and limits the returned text to 12,000 characters. |
 
+Maps, directory outlines, and the repository, recipes, and Git sections
+accept the path fields of [Repository filtering](#repository-filtering).
+Git filters apply to changed, untracked, and base-comparison file lists and
+their counts. Scoped repository and recipe inventories bypass the shared
+metadata cache. An excluded required Just import produces partial recipe
+inventory with a diagnostic.
+
 The repository section includes source and test directories, detected tools
 and configuration files, scripts, resources, agent instructions, conventions,
 and platform metadata. Command provenance indicates whether `brief` inferred a
@@ -490,11 +497,10 @@ use Search and Locate through their native LTCook integration.
 | `literal` | ripgrep | Find a case-sensitive substring. |
 | `regex` | ripgrep | Find matching lines using ripgrep's default regex engine. |
 
-Set `paths` to literal workspace-relative paths using forward slashes. The
-`limit` ranges from 1 to 20 and defaults to 8. Ranked modes additionally accept
-`pattern` as a regular expression prefilter. In lexical modes, put the search
-text or expression directly in `query`. Source search uses RIED's exclusions
-for common credential paths and generated directories.
+The `limit` ranges from 1 to 20 and defaults to 8. In lexical modes, put the
+search text or expression directly in `query`. Apply optional
+[repository filters](#repository-filtering) in any mode. Source search uses
+RIED's exclusions for common credential paths and generated directories.
 
 Results carry `path`, `startLine`, `endLine`, `excerpt`, and an optional symbol
 `name`. Paths are relative to the workspace and use forward slashes. Line
@@ -528,6 +534,39 @@ LTCook setup installs ColGREP 1.8.5, ONNX Runtime 1.23.0, and the
 `4bcdf5ed93f791259eb130b577a240f753d68dd8`. Asset failures affect repository
 search only. Repeat [LTCook setup](How-To-User-Guides.md#install-from-a-checkout)
 for your installation to restore the managed assets.
+
+#### Repository filtering
+
+Pass an optional `filter` to Search, Locate searches and traces, or a supported
+RIED operation. Each field takes a list of rules. Any rule can satisfy its field.
+Every populated inclusion field must match, and any exclusion takes precedence.
+An empty list has no effect.
+
+| Field | Rule |
+| --- | --- |
+| `includePaths`, `excludePaths` | Match the workspace-relative path against globs. |
+| `includeText`, `excludeText` | Match literal text anywhere in the verified retrieval unit. |
+| `includeRegex`, `excludeRegex` | Match a regular expression anywhere in the verified retrieval unit. |
+
+Use forward slashes and case-sensitive paths. `*` and `?` match within a
+segment, and a full `**` segment matches across directories. For example,
+`src/**` selects a subtree, `**/generated/**` selects generated subtrees,
+and `.config/**` selects a hidden directory explicitly. A directory matching
+an exclusion also excludes its descendants. Use literal text for ordinary
+words and phrases. Regex filters use the RE2 dialect, with case-sensitive
+matching by default, bounded pattern and input sizes, and errors for unsupported
+syntax such as lookaround and backreferences.
+
+Content rules operate on the verified matching line in lexical search and the
+verified source chunk in ranked search. Locate can add context for display
+after filtering and follows connections within the same path scope. Filters
+apply at query time against the existing index. The response reports effective
+rules, observed rejections, and any candidate-budget exhaustion.
+
+Replace previous `paths` arguments with `filter.includePaths`, using `/**`
+to include a directory's descendants. Replace a positive `pattern` filter with
+`filter.includeRegex`. Search's `mode: "regex"` still applies ripgrep regex
+syntax to the search `query`.
 
 #### Repository Locate
 

@@ -41,7 +41,10 @@ const cases = [
         id: 'fixtureSymbol',
         value: 'releaseRetryLimit',
         path: 'tests/runtime/system/paseo-workspace-mcp.ts',
-        lines: ["'codex_locate_ripgrep',", "{ symbol: 'releaseRetryLimit', paths: [retryPath] },"],
+        lines: [
+          "'codex_locate_ripgrep',",
+          "{ symbol: 'releaseRetryLimit', filter: { includePaths: [retryPath] } },",
+        ],
       },
     ],
   },

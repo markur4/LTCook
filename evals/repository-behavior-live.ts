@@ -94,6 +94,13 @@ function autonomousPrompt(question: string, factFields: readonly string[]) {
   ].join('\n');
 }
 
+function filterIdentity(filter: Static<SearchTool['inputSchema']>['filter']) {
+  return Object.entries(filter ?? {})
+    .filter(([, rules]) => rules.length > 0)
+    .sort(([first], [second]) => first.localeCompare(second))
+    .map(([field, rules]) => [field, [...new Set(rules)].sort()]);
+}
+
 function describeRequest(
   input: unknown,
   search: SearchTool,
@@ -101,23 +108,22 @@ function describeRequest(
   tool: RepositoryToolName,
 ) {
   if (tool === REPO_SEARCH_TOOL_NAME && Value.Check(search.inputSchema, input)) {
-    const paths = (input.paths ?? []).toSorted();
+    const filter = filterIdentity(input.filter);
     return {
       key: JSON.stringify([
         tool,
         input.mode ?? 'hybrid',
         input.query,
-        input.pattern,
-        paths,
+        filter,
         input.limit ?? 8,
         input.base,
       ]),
-      workspaceWide: paths.every((scope) => scope === '.' || scope === 'fixture'),
-      query: [input.query, input.pattern].filter(Boolean).join(' '),
+      workspaceWide: filter.length === 0,
+      query: input.query,
     };
   }
   if (tool === REPO_LOCATE_TOOL_NAME && Value.Check(locate.inputSchema, input)) {
-    const paths = (input.paths ?? []).toSorted();
+    const filter = filterIdentity(input.filter);
     return {
       key: JSON.stringify([
         tool,
@@ -127,11 +133,11 @@ function describeRequest(
         input.query === undefined ? undefined : (input.mode ?? 'hybrid'),
         input.trace,
         input.location,
-        paths,
+        filter,
         input.follow ?? false,
         input.base,
       ]),
-      workspaceWide: paths.every((scope) => scope === '.' || scope === 'fixture'),
+      workspaceWide: filter.length === 0,
       query: input.symbol ?? input.symbols?.join(' ') ?? input.query ?? input.trace?.question ?? '',
     };
   }
