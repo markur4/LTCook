@@ -10,7 +10,6 @@ import {
 } from '../../../runtime/src/services/bugfix.js';
 import { indexProgressProof } from '../../../runtime/src/services/bugfix-integration.js';
 import type { BugScanHunt } from '../../../runtime/src/services/bugscan.js';
-import { REPOSITORY_INDEX_TIMEOUT_MS } from '../../../runtime/src/services/repository-index.js';
 
 const source = 'a'.repeat(40);
 const tree = 'b'.repeat(40);
@@ -363,6 +362,7 @@ test('index recovery requires a new published generation for the same stalled op
         outcome: 'incomplete',
         component: 'repository-index',
         workspaceId: 'fixture-index',
+        progressDeadlineMs: 500,
         operationId: 'original-operation',
         receivedAt: 0,
       },
@@ -386,9 +386,11 @@ test('index recovery requires a new published generation for the same stalled op
       { generation: undefined },
       { workspaceId: 'other-index' },
       { operationId: 'original-operation' },
-      { elapsedMs: REPOSITORY_INDEX_TIMEOUT_MS },
+      { elapsedMs: 500, progressDeadlineMs: 600 },
     ])
       expect(indexProgressProof(sourceHunt, remedy, { ...observation, ...changed })).toBe(false);
+    delete sourceHunt.groups[0].evidence[0]!.progressDeadlineMs;
+    expect(indexProgressProof(sourceHunt, remedy, observation)).toBe(false);
   } finally {
     await service.close();
   }

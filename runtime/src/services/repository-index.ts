@@ -20,6 +20,7 @@ export interface RepositoryIndexDiagnostic {
   operationId: string;
   workspaceId: string;
   elapsedMs: number;
+  progressDeadlineMs?: number;
   generation?: string;
   message: string;
   cause?: unknown;
@@ -29,6 +30,7 @@ export interface RepositoryIndexDiagnostic {
 export function repositoryIndexDiagnosticEvent({
   workspaceId,
   elapsedMs,
+  progressDeadlineMs,
   retryAt,
   generation,
   ...event
@@ -37,7 +39,7 @@ export function repositoryIndexDiagnosticEvent({
     ...event,
     component: 'repository-index',
     correlationId: event.operationId,
-    context: { workspaceId, elapsedMs, retryAt, generation },
+    context: { workspaceId, elapsedMs, progressDeadlineMs, retryAt, generation },
   };
 }
 
@@ -309,6 +311,7 @@ export class RepositoryIndexService {
           code: 'repository-index.stalled',
           severity: 'error',
           outcome: 'incomplete',
+          progressDeadlineMs: this.progressDeadlineMs,
           message: STALLED,
         });
       },

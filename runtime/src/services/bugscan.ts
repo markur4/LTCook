@@ -33,6 +33,7 @@ const eventSchema = z.object({
         .regex(/^[a-f0-9]{64}$/)
         .optional(),
       sessionId: z.string().min(1).max(128).optional(),
+      progressDeadlineMs: z.number().int().positive().optional(),
       deliberateFailure: z.boolean().optional(),
       dependencyOutage: z.boolean().optional(),
     })
@@ -48,6 +49,7 @@ export type BugScanEvidence = Pick<
   receivedAt: number;
   operationId: string;
   workspaceId?: string;
+  progressDeadlineMs?: number;
   message?: string;
   cause?: string;
 };
@@ -443,6 +445,7 @@ export class BugScanService {
       buildIdentity: event.buildIdentity,
       sourceRevision: event.sourceRevision,
       workspaceId: event.context?.workspaceId,
+      progressDeadlineMs: event.context?.progressDeadlineMs,
       operationId,
       receivedAt,
       message: event.message === undefined ? undefined : sanitize(event.message),

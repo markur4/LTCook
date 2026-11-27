@@ -410,8 +410,9 @@ For a managed repository indexing stall, recovery requires a fresh published
 index generation in the affected workspace before the original progress limit,
 a readiness check for that same generation, and build provenance matching the
 integrated revision. This observation verifies the managed progress
-deadline for that workspace. Findings that require a different workload or
-failure condition remain pending until that behavior has its own probe. Read [the qualification plan](bughunter-qualification/PLAN.md)
+deadline for that workspace. Findings with no recorded original deadline, or
+with a different workload or failure condition, keep their recovery pending
+until the formerly failing behavior can be verified. Read [the qualification plan](bughunter-qualification/PLAN.md)
 for the acceptance cases and fixtures.
 
 ## Local Ollama and Agent Evals

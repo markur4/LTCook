@@ -8,11 +8,7 @@ import type {
 } from '../core/bugfix-authorization.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from '../repository/workspace.js';
 import type { BugScanHunt, BugScanService } from './bugscan.js';
-import {
-  REPOSITORY_INDEX_TIMEOUT_MS,
-  repositoryIndexWorkspaceId,
-  type RepositoryIndexDiagnostic,
-} from './repository-index.js';
+import { repositoryIndexWorkspaceId, type RepositoryIndexDiagnostic } from './repository-index.js';
 import { createBugFixDelivery } from './bugfix-delivery.js';
 import { createBugHunterIssueReporter, type BugHunterIssueEntry } from './bughunter-issues.js';
 import {
@@ -54,7 +50,8 @@ export function indexProgressProof(
     diagnostic.code !== 'repository-index.completed' ||
     diagnostic.outcome !== 'success' ||
     !diagnostic.generation ||
-    diagnostic.elapsedMs >= REPOSITORY_INDEX_TIMEOUT_MS
+    !Number.isFinite(diagnostic.elapsedMs) ||
+    diagnostic.elapsedMs < 0
   )
     return false;
   return (
@@ -64,10 +61,12 @@ export function indexProgressProof(
         group?.component === 'repository-index' &&
         group.evidence.length > 0 &&
         group.evidence.every(
-          ({ code, workspaceId, operationId }) =>
+          ({ code, workspaceId, operationId, progressDeadlineMs }) =>
             code === 'repository-index.stalled' &&
             workspaceId === diagnostic.workspaceId &&
-            operationId !== diagnostic.operationId,
+            operationId !== diagnostic.operationId &&
+            progressDeadlineMs !== undefined &&
+            diagnostic.elapsedMs < progressDeadlineMs,
         )
       );
     }) && remedy.finding.groupIds.length > 0
