@@ -1,16 +1,24 @@
 import { constants } from 'node:fs';
 import { lstat, open, opendir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
-import { isRepositoryPathVisible } from '../filesystem.js';
+import { isRepositoryPathVisible, readBoundedFile } from '../filesystem.js';
 import type { RepositoryWorkspace } from '../workspace.js';
 
-type SourceFile = [path: string, modified: string, size: string, changed: string, inode: string];
+type SourceFile = [
+  path: string,
+  modified: string,
+  size: string,
+  changed: string,
+  inode: string,
+  digest?: string,
+];
 export type ColgrepSourceSnapshot = SourceFile[];
 
 const MAX_SOURCE_FILES = 250_000;
 const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
+const MAX_EVIDENCE_FILE_BYTES = 2 * 1024 * 1024;
 
 export function missing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
@@ -20,6 +28,7 @@ export function missing(error: unknown): boolean {
 export async function captureColgrepSource(
   workspace: RepositoryWorkspace,
   signal: AbortSignal,
+  verifyContents = false,
 ): Promise<ColgrepSourceSnapshot> {
   const files: ColgrepSourceSnapshot = [];
   const directories = ['.'];
@@ -37,20 +46,27 @@ export async function captureColgrepSource(
       if (entry.isDirectory()) {
         directories.push(child);
       } else if (entry.isFile()) {
-        const info = await lstat(path.join(directory.absolute, entry.name), { bigint: true }).catch(
-          (error: unknown) => {
-            if (!missing(error)) throw error;
-          },
-        );
-        if (info?.isFile()) {
-          files.push([
-            child,
-            String(info.mtimeNs),
-            String(info.size),
-            String(info.ctimeNs),
-            String(info.ino),
-          ]);
+        const absolute = path.join(directory.absolute, entry.name);
+        const info = await lstat(absolute, { bigint: true }).catch((error: unknown) => {
+          if (!missing(error)) throw error;
+        });
+        if (!info?.isFile()) continue;
+        const file: SourceFile = [
+          child,
+          String(info.mtimeNs),
+          String(info.size),
+          String(info.ctimeNs),
+          String(info.ino),
+        ];
+        if (verifyContents) {
+          const buffer = await readBoundedFile(absolute, MAX_EVIDENCE_FILE_BYTES).catch(
+            (error: unknown) => {
+              if (!missing(error)) throw error;
+            },
+          );
+          if (buffer) file[5] = createHash('sha256').update(buffer).digest('hex');
         }
+        files.push(file);
       }
     }
   }
@@ -64,7 +80,9 @@ export function sameColgrepSource(
 ): boolean {
   return (
     left.length === right.length &&
-    left.every((file, index) => file.every((value, field) => value === right[index]?.[field]))
+    left.every((file, index) =>
+      file.slice(0, 5).every((value, field) => value === right[index]?.[field]),
+    )
   );
 }
 
@@ -74,10 +92,15 @@ export function requiresFreshColgrepBuild(
   after: ColgrepSourceSnapshot,
 ): boolean {
   const previous = new Map(before.map((file) => [file[0], file]));
-  return after.some(([name, modified, size, changed, inode]) => {
+  return after.some(([name, modified, size, changed, inode, digest]) => {
     const old = previous.get(name);
     return (
-      old && old[1] === modified && old[2] === size && (old[3] !== changed || old[4] !== inode)
+      old &&
+      old[1] === modified &&
+      old[2] === size &&
+      (old[3] !== changed ||
+        old[4] !== inode ||
+        (old[5] !== undefined && digest !== undefined && old[5] !== digest))
     );
   });
 }
@@ -91,7 +114,7 @@ export async function readColgrepSource(
 ): Promise<ColgrepSourceSnapshot | undefined> {
   const file = await open(
     snapshotPath(indices),
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
   ).catch((error: unknown) => {
     if (!missing(error)) throw error;
   });
@@ -106,7 +129,7 @@ export async function readColgrepSource(
       input.some(
         (file) =>
           !Array.isArray(file) ||
-          file.length !== 5 ||
+          (file.length !== 5 && file.length !== 6) ||
           file.some((value) => typeof value !== 'string'),
       )
     )

@@ -231,10 +231,8 @@ export class ColgrepIndexStore {
   }
 
   private assertBinding(db: Database.Database): void {
-    if (
-      db.prepare('SELECT identity FROM cache_binding WHERE singleton = 1').pluck().get() !==
-      this.binding
-    ) {
+    const row: unknown = db.prepare('SELECT identity FROM cache_binding WHERE singleton = 1').get();
+    if (!row || typeof row !== 'object' || !('identity' in row) || row.identity !== this.binding) {
       throw new Error('The ColGREP catalog belongs to a different worktree or index format.');
     }
   }

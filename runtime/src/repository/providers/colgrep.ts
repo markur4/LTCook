@@ -518,7 +518,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
     }
 
     try {
-      let source = await captureColgrepSource(workspace, signal);
+      const source = await captureColgrepSource(workspace, signal);
       const published = await store.readPublished();
       const previous = published && (await readColgrepSource(published.indices));
       if (previous && sameColgrepSource(previous, source)) return performance.now() - started;
@@ -527,15 +527,20 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
 
       const seed = previous !== undefined && !requiresFreshColgrepBuild(previous, source);
       let candidate = await writer.candidate({ seed });
+      let checkpointSource = await captureColgrepSource(workspace, signal, true);
       const beforePause = candidate.resumed
         ? await readColgrepSource(candidate.indices)
         : undefined;
-      if (candidate.resumed && (!beforePause || requiresFreshColgrepBuild(beforePause, source))) {
+      if (
+        (candidate.resumed &&
+          (!beforePause || requiresFreshColgrepBuild(beforePause, checkpointSource))) ||
+        (candidate.seeded && previous && requiresFreshColgrepBuild(previous, checkpointSource))
+      ) {
         // > A native refresh also skips a changed file if its size and mtime were preserved.
         await writer.discard(candidate);
         candidate = await writer.candidate({ seed: false, resume: false });
       }
-      if (!candidate.resumed) await writeColgrepSource(candidate.indices, source);
+      if (!candidate.resumed) await writeColgrepSource(candidate.indices, checkpointSource);
 
       const init = async () => {
         signal.throwIfAborted();
@@ -558,13 +563,13 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       try {
         await init();
         if (candidate.resumed) {
-          const beforeReconciliation = await captureColgrepSource(workspace, signal);
-          if (requiresFreshColgrepBuild(source, beforeReconciliation)) {
+          const beforeReconciliation = await captureColgrepSource(workspace, signal, true);
+          if (requiresFreshColgrepBuild(checkpointSource, beforeReconciliation)) {
             await writer.discard(candidate);
             candidate = await writer.candidate({ seed: false, resume: false });
           }
-          source = beforeReconciliation;
-          if (!candidate.resumed) await writeColgrepSource(candidate.indices, source);
+          checkpointSource = beforeReconciliation;
+          if (!candidate.resumed) await writeColgrepSource(candidate.indices, checkpointSource);
           // > Resume skips already checkpointed paths. A second native pass reconciles them.
           await init();
         }
@@ -576,7 +581,8 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       signal.throwIfAborted();
       await workspace.assertUnchanged();
       signal.throwIfAborted();
-      await writeColgrepSource(candidate.indices, source);
+      // > Keep the observation from before the last native pass so late edits are checked again.
+      await writeColgrepSource(candidate.indices, checkpointSource);
       await writer.publish(candidate, signal);
       return performance.now() - started;
     } finally {
