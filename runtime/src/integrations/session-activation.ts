@@ -70,14 +70,19 @@ export class SessionActivation {
     if (authorizeRepositoryIndex) this.registerIndexScope(sessionId, canonicalRoot);
   }
 
+  revokeRepositoryIndex(sessionId: string): void {
+    const authorization = this.indexAuthorizations.get(sessionId);
+    this.indexAuthorizations.delete(sessionId);
+    authorization?.stopIndexing?.();
+  }
+
   private registerIndexScope(sessionId: string, root: string): void {
     const indexService = this.repositoryIndex;
     if (!indexService) return;
     const identity = indexWorkspaceIdentity(root);
     const previous = this.indexAuthorizations.get(sessionId);
     if (previous?.identity === identity) return;
-    previous?.stopIndexing?.();
-    this.indexAuthorizations.delete(sessionId);
+    this.revokeRepositoryIndex(sessionId);
     if (!identity) return;
 
     const authorization: IndexAuthorization = { identity };

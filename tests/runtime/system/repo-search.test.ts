@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
+  chmod,
   copyFile,
   cp,
   mkdir,
@@ -227,7 +228,7 @@ test.skipIf(!deploymentDirectory)(
       await mkdir(nested, { recursive: true });
       const hooks = path.join(root, 'empty-hooks');
       await mkdir(hooks);
-      await writeFile(path.join(workspace, '.gitignore'), 'excluded.ts\n');
+      await writeFile(path.join(workspace, '.gitignore'), 'excluded.ts\nignored-build-output/\n');
       await writeFile(path.join(workspace, 'main.ts'), code('mainOnlyChecksum'));
       await writeFile(path.join(nested, 'nested.ts'), code('nestedChecksum'));
       git(workspace, 'init', '--quiet');
@@ -249,6 +250,9 @@ test.skipIf(!deploymentDirectory)(
       );
       git(workspace, 'worktree', 'add', '--quiet', '--detach', sibling);
       await writeFile(path.join(workspace, 'excluded.ts'), code('excludedChecksum'));
+      await writeFile(path.join(workspace, 'soon-excluded.ts'), code('localOnlyChecksum'));
+      const ignoredOutput = path.join(workspace, 'ignored-build-output');
+      await mkdir(ignoredOutput);
       await writeFile(path.join(sibling, 'main.ts'), code('siblingOnlyChecksum'));
       await writeFile(outside, code('outsideOnlyChecksum'));
       await symlink(outside, path.join(nested, 'escape.ts'), 'file');
@@ -265,7 +269,12 @@ test.skipIf(!deploymentDirectory)(
       const tool = searchTool(cacheDirectory);
       const byName = (directory: string, pattern: string, paths?: string[]) =>
         search(tool, directory, { query: 'calculate checksum using bytes', pattern, paths });
-      await observer.buildIndex(parentWorkspace, new AbortController().signal);
+      try {
+        if (process.platform !== 'win32') await chmod(ignoredOutput, 0o000);
+        await observer.buildIndex(parentWorkspace, new AbortController().signal);
+      } finally {
+        if (process.platform !== 'win32') await chmod(ignoredOutput, 0o700);
+      }
       const cold = await byName(workspace, 'mainOnlyChecksum');
       expect(cold).toMatchObject({
         status: 'ready',
@@ -317,6 +326,16 @@ test.skipIf(!deploymentDirectory)(
         results: [{ path: 'main.ts' }],
       });
       expect(await byName(sibling, 'mainOnlyChecksum')).toMatchObject({
+        status: 'ready',
+        results: [],
+      });
+      expect(await byName(workspace, 'localOnlyChecksum')).toMatchObject({
+        status: 'ready',
+        results: [{ path: 'soon-excluded.ts' }],
+      });
+      await writeFile(path.join(workspace, '.git', 'info', 'exclude'), 'soon-excluded.ts\n');
+      await observer.buildIndex(parentWorkspace, new AbortController().signal);
+      expect(await byName(workspace, 'localOnlyChecksum')).toMatchObject({
         status: 'ready',
         results: [],
       });
@@ -527,6 +546,14 @@ test.skipIf(!deploymentDirectory)(
       const provider = createColgrepProvider({ deploymentDirectory, cacheDirectory });
       const workspaceIdentity = await openRepositoryWorkspace(workspace);
       await provider.buildIndex(workspaceIdentity, new AbortController().signal);
+      const beforeDamagedReceipt = (await provider.readStatus(workspaceIdentity)).generation;
+      const receiptFile = await findNativeFile(cacheDirectory, 'source.json');
+      if (!receiptFile) throw new Error('Expected the published source observation.');
+      await writeFile(receiptFile, 'invalid JSON');
+      await provider.buildIndex(workspaceIdentity, new AbortController().signal);
+      expect((await provider.readStatus(workspaceIdentity)).generation).not.toBe(
+        beforeDamagedReceipt,
+      );
       const indexFile = await findNativeFile(cacheDirectory, 'metadata.db');
       if (!indexFile) throw new Error('Expected the published native index metadata.');
       await rm(indexFile);

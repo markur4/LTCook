@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { BigIntStats } from 'node:fs';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -5,6 +6,9 @@ import { isWithin } from '../path-containment.js';
 
 type PathKind = 'file' | 'directory';
 type RepositoryPath = { absolute: string; relative: string; kind: PathKind };
+type DirectoryIdentityStats = Pick<BigIntStats, 'dev' | 'ino' | 'birthtimeNs'>;
+
+const fallbackCacheScope = randomUUID();
 
 export interface RepositoryWorkspace {
   readonly root: string;
@@ -22,16 +26,29 @@ export function repositoryWorkspaceIdentity(info: Pick<BigIntStats, 'dev' | 'ino
   return `${info.dev}:${info.ino}`;
 }
 
+function directoryBirthTime(info: DirectoryIdentityStats): bigint | undefined {
+  return info.ino > 0n && info.birthtimeNs > 0n ? info.birthtimeNs : undefined;
+}
+
+/** Identify the cache incarnation separately from a mount-specific live grant. */
+export function repositoryWorkspaceCacheIdentity(info: DirectoryIdentityStats): string {
+  const birth = directoryBirthTime(info);
+  // > An ordinary directory edit changes ctime. A filesystem that cannot identify
+  // > the directory by birth time only shares its cache within this process.
+  return birth === undefined
+    ? `process:${fallbackCacheScope}:${repositoryWorkspaceIdentity(info)}`
+    : `birth:${info.ino}:${birth}`;
+}
+
 async function directoryIdentity(directory: string) {
   const info = await stat(directory, { bigint: true });
   if (!info.isDirectory())
     throw new Error('Repository discovery requires an existing workspace directory');
-  const live = repositoryWorkspaceIdentity(info);
-  // > Mount device numbers can change across boots, including for WSL's ext4 disk.
-  const birth = info.ino > 0n && info.birthtimeNs > 0n ? info.birthtimeNs : undefined;
-  // > Without a birth time, avoid reusing persisted evidence of uncertain origin.
-  const cache = birth === undefined ? `stat:${live}:${info.ctimeNs}` : `birth:${info.ino}:${birth}`;
-  return { live, cache, birth };
+  return {
+    live: repositoryWorkspaceIdentity(info),
+    cache: repositoryWorkspaceCacheIdentity(info),
+    birth: directoryBirthTime(info),
+  };
 }
 
 /** Open a root supplied by an already authenticated workspace/session binding. */

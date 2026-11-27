@@ -19,7 +19,6 @@ import {
 import { ColgrepIndexStore } from './colgrep-index-store.js';
 import {
   captureColgrepSource,
-  missing,
   readColgrepSource,
   requiresFreshColgrepBuild,
   sameColgrepSource,
@@ -40,6 +39,7 @@ const MAX_STDOUT = 4 * 1024 * 1024;
 const MAX_STDERR = 64 * 1024;
 const CHECKPOINT_GRACE_MS = 4000;
 const INDEX_TIMEOUT_MS = 15 * 60_000;
+const PARTIAL_SCAN_REFRESH_MS = 5 * 60_000;
 const REPAIR = 'Repeat LTCook setup with the supported installer or editable registration.';
 const MODEL_FILES = [
   'config.json',
@@ -359,7 +359,7 @@ async function checkIndexLayout(
     throw new Error('ColGREP produced an index for a different worktree or model.');
   }
   const building = await lstat(path.join(directory, '.building')).catch((error: unknown) => {
-    if (!missing(error)) throw error;
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
   });
   if (building) throw new Error('ColGREP left an incomplete index checkpoint.');
   const vector = path.join(directory, 'index');
@@ -549,9 +549,15 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       const usable = published && (await hasIndexLayout(assets, workspace, published.indices));
       if (published && !usable) await store.invalidatePublished(published.id);
       const previous = usable ? await readColgrepSource(published.indices) : undefined;
-      if (previous && sameColgrepSource(previous, source)) return performance.now() - started;
-      if (!source.length)
-        throw new RepositoryIndexError('The worktree has no files to index yet.', true);
+      if (
+        published &&
+        previous &&
+        sameColgrepSource(previous, source) &&
+        (source.complete ||
+          Date.now() - Date.parse(published.publishedAt) < PARTIAL_SCAN_REFRESH_MS)
+      ) {
+        return performance.now() - started;
+      }
 
       const seed = previous !== undefined && !requiresFreshColgrepBuild(previous, source);
       let candidate = await writer.candidate({ seed });
@@ -559,10 +565,12 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       const beforePause = candidate.resumed
         ? await readColgrepSource(candidate.indices)
         : undefined;
+      const seededFrom = candidate.seeded ? previous : undefined;
+      const nativeSources = [beforePause, seededFrom].filter((snapshot) => snapshot !== undefined);
       if (
-        (candidate.resumed &&
-          (!beforePause || requiresFreshColgrepBuild(beforePause, checkpointSource))) ||
-        (candidate.seeded && previous && requiresFreshColgrepBuild(previous, checkpointSource))
+        (candidate.resumed && !beforePause) ||
+        (candidate.seeded && !seededFrom) ||
+        nativeSources.some((snapshot) => requiresFreshColgrepBuild(snapshot, checkpointSource))
       ) {
         // > A native refresh also skips a changed file if its size and mtime were preserved.
         await writer.discard(candidate);
@@ -592,7 +600,12 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         await init();
         if (candidate.resumed) {
           const beforeReconciliation = await captureColgrepSource(workspace, signal, true);
-          if (requiresFreshColgrepBuild(checkpointSource, beforeReconciliation)) {
+          // > A resumed native build can still contain files from any earlier observation.
+          if (
+            [checkpointSource, ...nativeSources].some((snapshot) =>
+              requiresFreshColgrepBuild(snapshot, beforeReconciliation),
+            )
+          ) {
             await writer.discard(candidate);
             candidate = await writer.candidate({ seed: false, resume: false });
           }

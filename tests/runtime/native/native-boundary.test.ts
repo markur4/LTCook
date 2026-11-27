@@ -27,6 +27,7 @@ import {
   SessionWorktrees,
 } from '../../../runtime/src/integrations/session-worktrees.js';
 import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
+import type { RepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 import type { RiedRequest } from '../../../runtime/src/repository/requests.js';
 import { createSessionWorktreeTool } from '../../../runtime/src/tools/session-worktree.js';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
@@ -152,6 +153,48 @@ describe('native runtime boundary', () => {
       expect(await services.json()).toMatchObject({
         rag: { availability: 'unavailable', activity: 'unknown', indexingEnabled: null },
       });
+    } finally {
+      await api.close();
+    }
+  });
+
+  test('trusted native archive releases the managed Session worktree from indexing', async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'ltcook-index-archive-')));
+    directories.push(directory);
+    let activate!: (workspace: RepositoryWorkspace) => void;
+    const activated = new Promise<RepositoryWorkspace>((resolve) => (activate = resolve));
+    let released = false;
+    const activation = new SessionActivation(
+      {},
+      {
+        activate(workspace) {
+          activate(workspace);
+          return () => {
+            released = true;
+          };
+        },
+      },
+    );
+    const agentId = 'managed-index-session';
+    const secret = 'archive-fixture';
+    const address = `127.0.0.1:${await freePort()}`;
+    const api = new RuntimeApi(undefined, secret, address, activation);
+    await api.listen();
+    try {
+      activation.register(directory, agentId, { authorizeRepositoryIndex: true });
+      const workspace = await activated;
+      const revoke = (token: string) =>
+        fetch(`http://${address}/v1/mcp/revoke`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ nativeAgentId: agentId }),
+        });
+      expect((await revoke(agentBearer(secret, agentId))).status).toBe(403);
+      await workspace.assertUnchanged();
+      expect((await revoke(secret)).status).toBe(200);
+      expect(released).toBe(true);
+      await expect(workspace.assertUnchanged()).rejects.toThrow('no longer authorized');
+      expect(activation.registeredWorkspace(agentId)).toBe(directory);
     } finally {
       await api.close();
     }

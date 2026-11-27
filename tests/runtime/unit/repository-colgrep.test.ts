@@ -1,6 +1,16 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
@@ -29,7 +39,7 @@ async function waitForFile(file: string) {
 }
 
 test.skipIf(process.platform === 'win32')(
-  'ColGREP retains verified evidence after stale locations and malformed or unauthorized candidates',
+  'ColGREP serves verified generations and reconciles interrupted builds',
   () =>
     fixture(async (root, source) => {
       const files: Record<string, string> = {};
@@ -70,8 +80,25 @@ if (process.argv[2] === 'init') {
   await Bun.write(path.join(directory, 'index', 'metadata.db'), 'fixture');
   await Bun.write(path.join(directory, 'index', 'metadata.json'), '{}');
   await Bun.write(path.join(directory, 'project.json'), JSON.stringify({ model, project_path: workspace }));
-  await Bun.write(path.join(directory, '.building'), 'building');
-  if (count > 1 && await Bun.file(${JSON.stringify(path.join(root, 'hold-refresh'))}).exists()) {
+  const marker = path.join(directory, '.building');
+  const resume = await Bun.file(marker).exists();
+  await Bun.write(marker, 'building');
+  const checkpointMode = await Bun.file(${JSON.stringify(path.join(root, 'checkpoint-mode'))}).text().catch(() => '');
+  if (checkpointMode) {
+    const file = path.join(workspace, 'checkpoint.ts');
+    const record = Bun.file(path.join(directory, 'record.json'));
+    const previous = await record.json().catch(() => undefined);
+    const { mtimeNs, size } = await fs.stat(file, { bigint: true });
+    if (!previous || (!resume && (previous.mtime !== String(mtimeNs) || previous.size !== String(size)))) {
+      const unit = { file, code: await Bun.file(file).text(), name: 'checkpoint', line: 1, end_line: 1 };
+      await Bun.write(record, JSON.stringify({ unit, mtime: String(mtimeNs), size: String(size) }));
+    }
+    if (checkpointMode === 'pause' || resume) {
+      const phase = checkpointMode === 'pause' ? 'pause' : 'resume';
+      await Bun.write(path.join(${JSON.stringify(root)}, phase + '-checkpoint-started'), 'started');
+      while (!(await Bun.file(path.join(${JSON.stringify(root)}, phase + '-checkpoint-finished')).exists())) await Bun.sleep(10);
+    }
+  } else if (count > 1 && await Bun.file(${JSON.stringify(path.join(root, 'hold-refresh'))}).exists()) {
     await Bun.write(${JSON.stringify(path.join(root, 'refresh-started'))}, 'started');
     while (!(await Bun.file(${JSON.stringify(path.join(root, 'finish-refresh'))}).exists())) await Bun.sleep(10);
     if (await Bun.file(${JSON.stringify(path.join(root, 'fail-refresh'))}).exists()) {
@@ -79,13 +106,16 @@ if (process.argv[2] === 'init') {
       process.exit(1);
     }
   }
-  await fs.rm(path.join(directory, '.building'), { force: true });
+  await fs.rm(marker, { force: true });
   console.log('[]');
 } else if (process.argv.includes('blocked query')) {
   await Bun.write(${JSON.stringify(path.join(root, 'query-started'))}, 'started');
   await Bun.sleep(10000);
 } else if (process.argv.includes('repository index validation')) {
   console.log('[]');
+} else if (process.argv.includes('checkpoint file')) {
+  const { unit } = await Bun.file(path.join(process.env.COLGREP_DATA_DIR, 'fixture-index', 'record.json')).json();
+  console.log(JSON.stringify([{ unit }]));
 } else if (process.argv.includes('large output')) {
   console.log('x'.repeat(4 * 1024 * 1024 + 1));
 } else if (process.argv.includes('large diagnostics')) {
@@ -301,5 +331,47 @@ if (process.argv[2] === 'init') {
       await writeFile(path.join(root, 'finish-refresh'), 'finish');
       await expect(failedRefresh).rejects.toThrow();
       expect((await provider.readStatus(workspace)).generation).toBe(beforeFailure);
+
+      const checkpointProvider = createColgrepProvider({
+        deploymentDirectory: root,
+        cacheDirectory: path.join(root, 'checkpoint-cache'),
+      });
+      const checkpoint = path.join(source, 'checkpoint.ts');
+      const mode = path.join(root, 'checkpoint-mode');
+      const original = new Date('2026-01-01T00:00:00Z');
+      const changed = new Date('2026-01-02T00:00:00Z');
+      const updateCheckpoint = async (value: string, modified: Date) => {
+        await writeFile(checkpoint, `export const ${value} = 1;`);
+        await utimes(checkpoint, modified, modified);
+      };
+      await updateCheckpoint('alpha', original);
+      await writeFile(mode, 'pause');
+      const cancel = new AbortController();
+      const paused = checkpointProvider.buildIndex(workspace, cancel.signal);
+      try {
+        await waitForFile(path.join(root, 'pause-checkpoint-started'));
+      } finally {
+        cancel.abort();
+        await expect(paused).rejects.toThrow();
+      }
+
+      await updateCheckpoint('bravo', changed);
+      await writeFile(mode, 'resume');
+      const resumed = checkpointProvider.buildIndex(workspace, signal);
+      try {
+        await waitForFile(path.join(root, 'resume-checkpoint-started'));
+        await updateCheckpoint('delta', original);
+      } finally {
+        await writeFile(path.join(root, 'resume-checkpoint-finished'), 'finished');
+        await resumed;
+      }
+      const recovered = await checkpointProvider.search(
+        workspace,
+        { query: 'checkpoint file' },
+        signal,
+      );
+      expect(recovered.value.hits).toMatchObject([
+        { path: 'checkpoint.ts', excerpt: 'export const delta = 1;' },
+      ]);
     }),
 );

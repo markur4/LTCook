@@ -425,9 +425,11 @@ releases that query's generation without cancelling indexing.
 The AppRC cache keys compatible indexes by canonical worktree path and
 directory incarnation. The runtime also checks live directory identity for
 authorization. On filesystems with reliable directory birth time, an ordinary
-update or WSL remount can reuse a compatible index. ColGREP uses its native
-file discovery and ignore rules and runs on the host with LTCook's filesystem
-access.
+update or WSL remount can reuse a compatible index. Where directory birth
+time is unavailable, the cache can be reused within the owning process.
+Repository refresh checks use Git ignore rules when ripgrep is available.
+ColGREP applies its native file discovery and ignore rules when it builds an
+index and runs on the host with LTCook's filesystem access.
 
 The service builds a private candidate and publishes it after the native
 command succeeds and ColGREP can search it. Search pins one completed

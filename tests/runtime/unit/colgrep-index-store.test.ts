@@ -1,9 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ColgrepIndexStore } from '../../../runtime/src/repository/providers/colgrep-index-store.js';
-import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
+import {
+  openRepositoryWorkspace,
+  repositoryWorkspaceCacheIdentity,
+} from '../../../runtime/src/repository/workspace.js';
 
 async function withWorkspace(
   operation: (
@@ -71,6 +74,46 @@ test('reuses a persistent cache identity across live device changes and isolates
     };
     expect(
       await ColgrepIndexStore.open(cache, replacementWorkspace, compatibility, false),
+    ).toBeUndefined();
+  }));
+
+test('worktrees without birth time keep their published cache after root directory edits', () =>
+  withWorkspace(async (root, cache, workspace) => {
+    const compatibility = 'fixture-colgrep-format-v1';
+    const stats = await stat(workspace.root, { bigint: true });
+    const store = await ColgrepIndexStore.open(
+      cache,
+      {
+        ...workspace,
+        cacheIdentity: repositoryWorkspaceCacheIdentity({ ...stats, birthtimeNs: 0n }),
+      },
+      compatibility,
+      true,
+    );
+    const published = await publish(store, 'first-generation');
+
+    await writeFile(path.join(workspace.root, 'new.js'), 'export const ready = true;');
+    const reopened = await openRepositoryWorkspace(workspace.root);
+    const changed = { ...stats, ctimeNs: stats.ctimeNs + 1n, birthtimeNs: 0n };
+    const sameDirectory = await ColgrepIndexStore.open(
+      cache,
+      { ...reopened, cacheIdentity: repositoryWorkspaceCacheIdentity(changed) },
+      compatibility,
+      false,
+    );
+    expect((await sameDirectory?.readPublished())?.id).toBe(published.id);
+
+    await rename(workspace.root, path.join(root, 'previous-worktree'));
+    await mkdir(workspace.root);
+    const replacement = await openRepositoryWorkspace(workspace.root);
+    const replaced = { ...(await stat(workspace.root, { bigint: true })), birthtimeNs: 0n };
+    expect(
+      await ColgrepIndexStore.open(
+        cache,
+        { ...replacement, cacheIdentity: repositoryWorkspaceCacheIdentity(replaced) },
+        compatibility,
+        false,
+      ),
     ).toBeUndefined();
   }));
 
