@@ -2,6 +2,8 @@ import { defineSubscription } from '@getpaseo/plugin';
 import { z } from 'zod';
 import { bugScanActivity } from './activity.js';
 
+export const BUG_HUNTER_AGENT_METADATA = 'ltcook.bughunter';
+
 const id = z.string().min(1).max(1024);
 const conversation = z.object({
   id,

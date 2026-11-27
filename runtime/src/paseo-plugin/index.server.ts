@@ -14,7 +14,11 @@ import {
   TURN_SKILLS_TIMELINE_KIND,
   TurnSkillsTimelineSchema,
 } from './shared/activity';
-import { bugHunterDetailsSchema, bugHunterSubscription } from './shared/bughunter';
+import {
+  BUG_HUNTER_AGENT_METADATA,
+  bugHunterDetailsSchema,
+  bugHunterSubscription,
+} from './shared/bughunter';
 import { observeActivity, observedTimestamp } from './server/activity';
 import { readTurnSkills, type RegisteredSkill } from './server/activity-uses';
 import { observeBugHunter } from './server/bughunter';
@@ -604,16 +608,21 @@ export default function contribute(server: PluginServerContext) {
     return { items: [item] };
   });
   const observeMemory = (
-    agent: { id: string; provider: string },
+    agent: { id: string; provider: string; metadata: Record<string, unknown> },
     event: Record<string, unknown> = {},
   ) => {
-    if (!['ltcook', 'pi', 'codex'].includes(agent.provider)) return Promise.resolve(undefined);
+    if (
+      agent.metadata[BUG_HUNTER_AGENT_METADATA] === true ||
+      !['ltcook', 'pi', 'codex'].includes(agent.provider)
+    )
+      return Promise.resolve(undefined);
     return runtimeJson('/v1/session-memory/observe', { nativeAgentId: agent.id, ...event }).catch(
       () => undefined,
     );
   };
   const cleanup = [
     server.addHook('agent.turn.before', async ({ agent, turnId }, context) => {
+      if (agent.metadata[BUG_HUNTER_AGENT_METADATA] === true) return;
       const model = ResolvedModelDtoSchema.safeParse(agent.metadata[RESOLVED_MODEL_METADATA_KEY]);
       const reference = context.paseo.agents.ref(agent.id);
       const current = model.success
@@ -625,6 +634,7 @@ export default function contribute(server: PluginServerContext) {
       void observeMemory(agent, { turnId, outcome: 'running', local });
     }),
     server.addHook('agent.turn.after', async ({ agent, turnId, outcome }, { paseo, signal }) => {
+      if (agent.metadata[BUG_HUNTER_AGENT_METADATA] === true) return;
       await observeMemory(agent, { turnId, outcome: outcome.kind });
       if (
         !turnId ||

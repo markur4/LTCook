@@ -1436,7 +1436,7 @@ Task to register: ${input.description}`,
           });
           this.bugScanReportWaiters.get(assignment.id)?.(report);
         }
-        this.options.memory?.finalize(actor.nativeAgentId);
+        if (!bugScan) this.options.memory?.finalize(actor.nativeAgentId);
         this.emit({
           type: 'assignment.reported',
           sessionId,
@@ -1502,7 +1502,8 @@ Task to register: ${input.description}`,
               }
             : command,
         );
-        if (actor.kind === 'agent') this.options.memory?.finalize(actor.nativeAgentId);
+        if (actor.kind === 'agent' && session.teamId !== bugHunterTeamId)
+          this.options.memory?.finalize(actor.nativeAgentId);
         return review;
       }
       case 'approval.create':
@@ -1873,10 +1874,12 @@ Task to register: ${input.description}`,
     if (this.closed) return undefined;
     const sessions = this.store
       .listSessions()
-      .filter(({ id }) =>
-        this.store
-          .listBindings(id)
-          .some(({ nativeAgentId, state }) => nativeAgentId === agentId && state === 'bound'),
+      .filter(
+        ({ id, teamId }) =>
+          teamId !== bugHunterTeamId &&
+          this.store
+            .listBindings(id)
+            .some(({ nativeAgentId, state }) => nativeAgentId === agentId && state === 'bound'),
       );
     if (sessions.length !== 1) return undefined;
     const sessionId = sessions[0]!.id;

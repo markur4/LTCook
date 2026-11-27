@@ -29,6 +29,7 @@ import { configurePiExtensions } from './pi-settings.js';
 import { isWithin } from '../path-containment.js';
 import { memoryDispatchId } from './paseo-memory.js';
 import { bugHunterTeamId } from '../services/bughunter-team.js';
+import { BUG_HUNTER_AGENT_METADATA } from '../paseo-plugin/shared/bughunter.js';
 import { WorkspacePreparationCache, type WorkspacePreparation } from './workspace-preparation.js';
 import {
   connectPaseoMaintenance,
@@ -602,7 +603,10 @@ export async function createPaseoAgentBackend(input: {
             ...(mcpServers ? { mcpServers } : {}),
           },
           env: agentEnv,
-          metadata: { [RESOLVED_MODEL_METADATA_KEY]: model },
+          metadata: {
+            [RESOLVED_MODEL_METADATA_KEY]: model,
+            ...(options.teamId === bugHunterTeamId ? { [BUG_HUNTER_AGENT_METADATA]: true } : {}),
+          },
           labels: {
             'ltcook.session': options.sessionId,
             'ltcook.team-instance': options.teamInstanceId,

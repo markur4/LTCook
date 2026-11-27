@@ -92,6 +92,7 @@ test('dispatches a hidden read-only investigation and persists its sanitized res
     );
 
     expect(member).toMatchObject({ modelAlias: 'medium', thinking: 'high', readOnly: true });
+    expect(runtime.memoryContext(actor.nativeAgentId)).toBeUndefined();
     expect(runtime.teamCatalog().some((entry) => entry.teamId === bugHunterTeamId)).toBe(false);
     expect(runtime.listSessions(workspaceRoot)).toEqual([]);
     await expect(
