@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   RepositoryIndexError,
   RepositoryIndexService,
+  type RepositoryIndexDiagnostic,
 } from '../../../runtime/src/services/repository-index.js';
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 
@@ -153,6 +154,99 @@ test('releasing the final authorization stops that worktree job', () =>
       release();
       await cancelled.promise;
       expect(service.status(workspace)).toEqual({ activity: 'idle', diagnostic: null });
+    } finally {
+      await service.close();
+    }
+  }));
+
+test('reports one stalled operation and correlates its eventual completion', () =>
+  withWorkspace(async (workspace) => {
+    const releaseBuild = deferred();
+    const events: RepositoryIndexDiagnostic[] = [];
+    const service = new RepositoryIndexService(() => releaseBuild.promise, {
+      progressDeadlineMs: 20,
+      reconcileMs: 10_000,
+      onDiagnostic: (event) => {
+        events.push(event);
+      },
+    });
+    service.activate(workspace);
+
+    try {
+      await waitFor(
+        () => events.length > 0,
+        'The pending indexing operation did not report a stall.',
+      );
+      expect(events).toEqual([
+        expect.objectContaining({
+          code: 'repository-index.stalled',
+          severity: 'error',
+          outcome: 'incomplete',
+          operationId: expect.any(String),
+          workspaceId: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      ]);
+      expect(service.status(workspace)).toEqual({
+        activity: 'indexing',
+        diagnostic: 'Repository indexing exceeded its progress deadline.',
+      });
+
+      releaseBuild.resolve();
+      await waitFor(() => events.length > 1, 'The completed operation was not reported.');
+      expect(events.map(({ operationId }) => operationId)).toEqual([
+        events[0]?.operationId,
+        events[0]?.operationId,
+      ]);
+      expect(events[1]).toMatchObject({ code: 'repository-index.completed', outcome: 'success' });
+    } finally {
+      releaseBuild.resolve();
+      await service.close();
+    }
+  }));
+
+test('separates writer contention, a later failure, and an expected cancellation', () =>
+  withWorkspace(async (workspace) => {
+    const events: RepositoryIndexDiagnostic[] = [];
+    const failure = new Error('Index storage unavailable');
+    const thirdStarted = deferred();
+    let attempts = 0;
+    const service = new RepositoryIndexService(
+      async (_workspace, signal) => {
+        attempts++;
+        if (attempts === 1) {
+          throw new RepositoryIndexError('Waiting for another writer.', true, undefined, 'blocked');
+        }
+        if (attempts === 2) throw failure;
+        thirdStarted.resolve();
+        await new Promise<void>((resolve) =>
+          signal.addEventListener('abort', resolve, { once: true }),
+        );
+      },
+      {
+        retryInitialMs: 20,
+        retryMaximumMs: 20,
+        onDiagnostic: (event) => {
+          events.push(event);
+        },
+      },
+    );
+    const release = service.activate(workspace);
+
+    try {
+      await thirdStarted.promise;
+      release();
+      await service.close();
+      expect(events).toEqual([
+        expect.objectContaining({ code: 'repository-index.blocked', outcome: 'blocked' }),
+        expect.objectContaining({
+          code: 'repository-index.retrying',
+          outcome: 'failure',
+          cause: failure,
+        }),
+        expect.objectContaining({ code: 'repository-index.cancelled', outcome: 'cancelled' }),
+      ]);
+      expect(new Set(events.map(({ operationId }) => operationId)).size).toBe(3);
+      expect(new Set(events.map(({ workspaceId }) => workspaceId)).size).toBe(1);
     } finally {
       await service.close();
     }

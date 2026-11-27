@@ -401,10 +401,6 @@ def start_runtime(
     """Spawn one owner candidate with durable output and original shell provenance."""
     native = Path(environment["LTCOOK_JS_ROOT"]) / "runtime" / "dist" / "main.js"
     node = environment["LTCOOK_NODE_EXECUTABLE"]
-    if not Path(node).is_file() or not native.is_file():
-        raise RuntimeClientError(
-            "Runtime prerequisites are not prepared; re-run the LTCook installer to prepare prerequisites."
-        )
     path = _backend_path(environment)
     child_environment = dict(environment)
     child_environment["LTCOOK_SHELL_PROVENANCE"] = json.dumps(
@@ -421,17 +417,28 @@ def start_runtime(
         command.extend(("--restart-instance-id", str(restart_instance_id)))
     with _open_log(path, append=True) as output:
         offset = os.fstat(output.fileno()).st_size
-        process = subprocess.Popen(
-            command,
-            cwd=workspace_root,
-            env=child_environment,
-            stdin=subprocess.DEVNULL if detached else None,
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            close_fds=True,
-            start_new_session=detached and os.name == "posix",
-            creationflags=creationflags,
-        )
+        if not Path(node).is_file() or not native.is_file():
+            message = (
+                "Runtime prerequisites are not prepared; re-run the LTCook installer "
+                "to prepare prerequisites."
+            )
+            output.write(f"[launcher.prerequisites-missing] {message}\n".encode())
+            raise RuntimeClientError(message)
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=workspace_root,
+                env=child_environment,
+                stdin=subprocess.DEVNULL if detached else None,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                close_fds=True,
+                start_new_session=detached and os.name == "posix",
+                creationflags=creationflags,
+            )
+        except OSError as error:
+            output.write(f"[launcher.spawn-failed] OS error {error.errno}\n".encode())
+            raise
     return StartedRuntime(process, offset)
 
 

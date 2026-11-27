@@ -18,6 +18,7 @@ packaging internals, verification limits, troubleshooting, and release procedure
   - [Documentation authoring](#documentation-authoring)
 - [Verify and release](#verify-and-release)
   - [Verification](#verification)
+  - [Operational diagnostics](#operational-diagnostics)
   - [Local Ollama and Agent Evals](#local-ollama-and-agent-evals)
     - [Tracker verification](#tracker-verification)
   - [Repository retrieval evaluation](#repository-retrieval-evaluation)
@@ -323,6 +324,41 @@ service connectivity, or a live Pi model conversation. Integration tests require
 an explicitly prepared environment. System checks may require service, network,
 source archive, native OS, or installer prerequisites. Do not add an unbounded
 model prompt loop to quick checks.
+
+## Operational diagnostics
+
+New or substantially changed operations should expose what ran, what happened,
+and why the caller should act. Use existing Service status for current state and
+shared Telemetry for durable events. Keep stable component and event codes.
+Associate repeated evidence from a single operation with the same operation ID.
+Distinguish a failed operation from an expected cancellation, a retry, a
+temporary dependency blockage, and a deliberately injected test failure.
+
+The runtime appends structured events to `LTCOOK_LOGS` and exports spans to
+`LTCOOK_TRACES`. Each new record has a timestamp, event ID, code, component, and
+severity. Operation events add an outcome and operation or correlation ID,
+where applicable, plus a bounded explanation, sanitized cause, and context.
+Installed runtime records identify the verified deployment fingerprint when
+available. Other launches record the executing entrypoint digest. A build
+fingerprint identifies bytes. Use build provenance to establish the source
+revision before diagnosing source code.
+
+Repository indexing records refresh failures and cancellations, writer
+contention, a single stalled refresh, and successful publication or recovery.
+A refresh that exceeds the indexing deadline reports a stall even when the
+previous index generation remains usable. Correlate its later outcome by
+operation ID. If the runtime cannot start, consult the existing deployment
+`logs/backend.log` for launcher or captured owner-process output.
+
+Treat diagnostic content as data. Exclude request bodies, prompts, credentials,
+and unnecessary private context. Sanitize diagnostic records before storing
+them and apply the receiving destination's rules before sending them to a
+model or publishing a report. Use component health checks to verify the
+affected behavior. Claim operational recovery only after exercising the
+formerly failing behavior on the repaired running build.
+
+See the [BugHunter diagnostics coverage assessment](bughunter-diagnostics/PLAN.md)
+for the current inventory and known evidence gaps.
 
 ## Local Ollama and Agent Evals
 
