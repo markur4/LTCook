@@ -85,6 +85,7 @@ async function run(): Promise<void> {
     await runServiceAction(args[1]);
     return;
   }
+  const instanceId = args[0] === '--restart-instance-id' ? z.uuid().parse(args[1]) : randomUUID();
 
   const [
     { createRuntime },
@@ -638,7 +639,6 @@ async function run(): Promise<void> {
       backendLogPath = path.join(parent, path.basename(candidate));
     }
     if (stopping) return;
-    const instanceId = randomUUID();
     api.setLifecycle(
       {
         instanceId,

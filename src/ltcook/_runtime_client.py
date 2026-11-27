@@ -396,6 +396,7 @@ def start_runtime(
     workspace_root: Path | None,
     shell_environment: Mapping[str, str],
     detached: bool,
+    restart_instance_id: UUID | None = None,
 ) -> StartedRuntime:
     """Spawn one owner candidate with durable output and original shell provenance."""
     native = Path(environment["LTCOOK_JS_ROOT"]) / "runtime" / "dist" / "main.js"
@@ -415,10 +416,13 @@ def start_runtime(
         creationflags = (
             subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
         )
+    command = [node, str(native)]
+    if restart_instance_id is not None:
+        command.extend(("--restart-instance-id", str(restart_instance_id)))
     with _open_log(path, append=True) as output:
         offset = os.fstat(output.fileno()).st_size
         process = subprocess.Popen(
-            [node, str(native)],
+            command,
             cwd=workspace_root,
             env=child_environment,
             stdin=subprocess.DEVNULL if detached else None,

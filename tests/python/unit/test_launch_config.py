@@ -1011,8 +1011,9 @@ def test_probe_rejects_mismatched_or_incompatible_status(
         client.probe_runtime(environment)
 
 
+@pytest.mark.parametrize("restart", [False, True])
 def test_start_runtime_appends_private_capture_and_original_provenance(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, restart
 ):
     from ltcook import _runtime_client as client
 
@@ -1040,14 +1041,19 @@ def test_start_runtime_appends_private_capture_and_original_provenance(
         return Process()
 
     monkeypatch.setattr(client.subprocess, "Popen", spawn)
+    instance_id = uuid4() if restart else None
     started = client.start_runtime(
         environment,
         workspace_root=None,
         shell_environment={"SHELL_ONLY": "original"},
         detached=True,
+        restart_instance_id=instance_id,
     )
     assert started.backend_offset == len(b"prior output\n")
-    assert observed["arguments"] == [str(node), str(native)]
+    expected = [str(node), str(native)]
+    if instance_id is not None:
+        expected.extend(("--restart-instance-id", str(instance_id)))
+    assert observed["arguments"] == expected
     assert observed["kwargs"]["stdin"] == client.subprocess.DEVNULL
     assert observed["kwargs"]["stderr"] == client.subprocess.STDOUT
     assert observed["kwargs"]["start_new_session"] == (os.name == "posix")

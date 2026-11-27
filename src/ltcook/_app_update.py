@@ -279,8 +279,9 @@ def _start_registered(
         creationflags = (
             subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
         )
+    instance_id = str(uuid4())
     process = subprocess.Popen(
-        [str(launcher), "launch", "runtime"],
+        [str(launcher), "launch", "runtime", "--restart-instance-id", instance_id],
         env=dict(shell),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -294,6 +295,8 @@ def _start_registered(
         if isinstance(status, RuntimeStatus):
             if status.instance_id == previous_instance_id:
                 raise RuntimeClientError("The previous runtime is still responding.")
+            if status.instance_id != instance_id:
+                raise RuntimeClientError("Another runtime won the restart launch race.")
             if status.build_fingerprint != expected_build.fingerprint:
                 raise RuntimeClientError(
                     "The replacement runtime reported a different build."

@@ -1,6 +1,9 @@
 import { expect, test } from 'bun:test';
 import type { MemorySource } from '../../../runtime/src/session-memory/conversation.js';
-import type { ConversationPrompt } from '../../../runtime/src/session-memory/inference.js';
+import {
+  ConversationInference,
+  type ConversationPrompt,
+} from '../../../runtime/src/session-memory/inference.js';
 import { openConversationProductStore } from '../../../runtime/src/session-memory/product-store.js';
 import { ServiceInferenceError } from '../../../runtime/src/services/inference-recovery.js';
 import { TrackerService } from '../../../runtime/src/session-memory/tracker.js';
@@ -427,6 +430,65 @@ test('messages observed while a Tracker is disabled are never replayed after re-
     expect(inputs.map((input) => (JSON.parse(input) as Prompt).current.seq)).toEqual([2]);
   } finally {
     await service.close();
+    database.close();
+  }
+});
+
+test('disabling one Tracker cancels its queued request while another Tracker continues', async () => {
+  const { source, history } = timeline();
+  const database = openConversationProductStore(':memory:');
+  const submitted: string[][] = [];
+  const inference = new ConversationInference(
+    {
+      local: async (_product, prompt) => {
+        const request = JSON.parse(prompt.input) as Prompt;
+        submitted.push(request.trackers.map(({ id }) => id));
+        return { text: noChanges(request), complete: true };
+      },
+    },
+    'local',
+  );
+  let onQueued!: () => void;
+  const queued = new Promise<void>((resolve) => {
+    onQueued = resolve;
+  });
+  const service = new TrackerService(
+    database,
+    source,
+    {
+      complete(...args) {
+        const result = inference.complete(...args);
+        onQueued();
+        return result;
+      },
+    },
+    5000,
+  );
+  const releaseForeground = inference.holdForeground();
+  try {
+    service.configure(conversation, {
+      type: 'add',
+      name: 'Constraints',
+      instructions: 'Track constraints.',
+    });
+    const other = (await service.snapshot(conversation)).trackers[1]!.id;
+    history.messages.push(messages.user(1, 'Keep tests isolated.'));
+    service.observe(conversation);
+    await queued;
+    expect(submitted).toEqual([]);
+    service.configure(conversation, { type: 'enable', id: decisions, enabled: false });
+    releaseForeground();
+    await service.settled();
+
+    expect(submitted).toEqual([[other]]);
+    expect((await service.snapshot(conversation)).events[0]!.trackers).toMatchObject([
+      { trackerId: decisions, status: 'paused' },
+      { trackerId: other, status: 'no-change' },
+    ]);
+  } finally {
+    releaseForeground();
+    await service.close();
+    await inference.close();
     database.close();
   }
 });

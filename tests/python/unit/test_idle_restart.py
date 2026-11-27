@@ -288,7 +288,9 @@ def test_worker_verifies_the_registered_runtime_after_an_update(
     environment, store, launcher = installation
     _seed(store, update=True)
     build = "refreshed" if published else "installed"
-    runtime = _owner(environment, "replacement", build=build)
+    replacement = uuid4()
+    runtime = _owner(environment, str(replacement), build=build)
+    monkeypatch.setattr(lifecycle, "uuid4", Mock(side_effect=[uuid4(), replacement]))
     stop = Mock(side_effect=[RuntimeBusyError(1), 0])
     monkeypatch.setattr(restart, "stop_runtime", stop)
     monkeypatch.setattr(
@@ -336,8 +338,16 @@ def test_worker_verifies_the_registered_runtime_after_an_update(
     if update_exit:
         assert "exit 9" in status["message"]
     if coherent:
-        assert status["instance_id"] == "replacement"
-        assert start.call_args.args == ([str(launcher), "launch", "runtime"],)
+        assert status["instance_id"] == str(replacement)
+        assert start.call_args.args == (
+            [
+                str(launcher),
+                "launch",
+                "runtime",
+                "--restart-instance-id",
+                str(replacement),
+            ],
+        )
         assert ("running again" in status["message"]) == bool(update_exit)
     else:
         assert "Build mismatch" in status["message"]
@@ -376,13 +386,25 @@ def test_worker_rejects_a_build_from_a_different_update(
     start.assert_not_called()
 
 
-def test_worker_rejects_a_replacement_with_the_wrong_build(
+@pytest.mark.parametrize(
+    ("wrong_owner", "wrong_build", "error"),
+    [
+        (True, False, "Another runtime won the restart launch race"),
+        (False, True, "different build"),
+    ],
+)
+def test_worker_only_accepts_its_own_launch_on_the_expected_build(
     installation: tuple[dict[str, str], restart._Store, Path],
     monkeypatch: pytest.MonkeyPatch,
+    wrong_owner: bool,
+    wrong_build: bool,
+    error: str,
 ) -> None:
     environment, store, launcher = installation
     _seed(store)
     monkeypatch.setattr(restart, "stop_runtime", Mock(return_value=0))
+    replacement = uuid4()
+    monkeypatch.setattr(lifecycle, "uuid4", Mock(return_value=replacement))
     monkeypatch.setattr(
         restart,
         "probe_runtime",
@@ -390,7 +412,11 @@ def test_worker_rejects_a_replacement_with_the_wrong_build(
             side_effect=[
                 None,
                 None,
-                _owner(environment, "replacement", build="unrelated"),
+                _owner(
+                    environment,
+                    str(uuid4() if wrong_owner else replacement),
+                    build="unrelated" if wrong_build else "installed",
+                ),
             ]
         ),
     )
@@ -404,7 +430,7 @@ def test_worker_rejects_a_replacement_with_the_wrong_build(
 
     status = restart.restart_status(environment)
     assert status["state"] == "failed"
-    assert "different build" in status["message"]
+    assert error in status["message"]
     assert "instance_id" not in status
 
 

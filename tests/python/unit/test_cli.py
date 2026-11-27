@@ -115,6 +115,40 @@ def test_app_help_lists_its_immediate_commands(
         assert command_name in result.output
 
 
+def test_restart_leaves_a_competing_runtime_running_if_initially_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ltcook import _app_update
+    from ltcook._app_update import InstalledBuild, Registration
+
+    cli = importlib.import_module("ltcook.cli.app")
+    launcher = tmp_path / "ltcook"
+    registration = Registration(
+        tmp_path, uuid4(), "registered", tmp_path, tmp_path, True
+    )
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    monkeypatch.setattr(cli, "_registered_launcher", lambda **_: launcher)
+    monkeypatch.setattr(cli, "registration", lambda *_, **__: registration)
+    monkeypatch.setattr(
+        cli, "read_registered_build", lambda *_: InstalledBuild("build", None)
+    )
+    monkeypatch.setattr(
+        cli, "resolve_launch", lambda *_, **__: SimpleNamespace(environment={})
+    )
+    monkeypatch.setattr(cli, "probe_runtime", lambda *_: None)
+    monkeypatch.setattr(
+        cli,
+        "stop_runtime",
+        lambda *_, **__: pytest.fail("No runtime was observed to stop."),
+    )
+    monkeypatch.setattr(_app_update, "probe_runtime", lambda *_: "starting")
+
+    result = RUNNER.invoke(app, ["restart"], color=False)
+
+    assert result.exit_code == 2, result.output
+    assert "Another runtime appeared after stop" in result.output
+
+
 @pytest.mark.parametrize(
     ("options", "stop_status", "update_status", "recovered", "exit_code"),
     [

@@ -464,14 +464,22 @@ def restart_cmd(
             # > An explicit update may replace a build that predates attestation.
             build = None
         owner = probe_runtime(environment)
-        previous = owner.instance_id if isinstance(owner, RuntimeStatus) else None
-        stopped = stop_runtime(
-            environment,
-            expected_instance_id=previous,
-            expected_build_fingerprint=build.fingerprint if build is not None else None,
-        )
-        if stopped:
-            raise typer.Exit(stopped)
+        if owner == "starting":
+            raise RuntimeClientError(
+                "The runtime is still starting or unresponsive; retry ltcook restart when ready."
+            )
+        previous = None
+        if isinstance(owner, RuntimeStatus):
+            previous = owner.instance_id
+            stopped = stop_runtime(
+                environment,
+                expected_instance_id=previous,
+                expected_build_fingerprint=build.fingerprint
+                if build is not None
+                else None,
+            )
+            if stopped:
+                raise typer.Exit(stopped)
         result = restart_stopped_runtime(
             launcher,
             environment,

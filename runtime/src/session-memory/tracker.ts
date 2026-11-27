@@ -269,6 +269,10 @@ export class TrackerService {
   private readonly pending = new Map<string, boolean>();
   private readonly lifetime = new AbortController();
   private extraction = new AbortController();
+  private readonly activeBatches = new Map<
+    string,
+    { controller: AbortController; trackerIds: Set<string> }
+  >();
   private readonly providerBlocked = new Set<string>();
   private providerTimer?: ReturnType<typeof setTimeout>;
   private providerCheck?: Promise<void>;
@@ -399,6 +403,10 @@ export class TrackerService {
       }
     }
     this.store.save(agentId, state);
+    if (change.type === 'remove' || (change.type === 'enable' && !change.enabled)) {
+      const batch = this.activeBatches.get(agentId);
+      if (batch?.trackerIds.has(change.id)) batch.controller.abort();
+    }
     this.observeProviderGaps(agentId);
     if (change.type === 'enable' && change.enabled && state.cursor) this.observe(agentId);
   }
@@ -825,7 +833,7 @@ export class TrackerService {
           previous.push(input);
         else groups.push([input]);
       }
-      for (const group of groups) {
+      for (let group = groups.shift(); group; group = groups.shift()) {
         signal.throwIfAborted();
         const fresh = this.store.load(agentId);
         const eligible = group.filter(({ config }) => {
@@ -838,10 +846,25 @@ export class TrackerService {
           );
         });
         if (!eligible.length) continue;
+        const controller = new AbortController();
+        this.activeBatches.set(agentId, {
+          controller,
+          trackerIds: new Set(eligible.map(({ config }) => config.id)),
+        });
         let output: string;
         try {
-          output = await this.inference.complete('tracker', prompt(eligible), signal);
+          output = await this.inference.complete(
+            'tracker',
+            prompt(eligible),
+            AbortSignal.any([signal, controller.signal]),
+          );
+          controller.signal.throwIfAborted();
         } catch (error) {
+          if (controller.signal.aborted) {
+            // > Recheck eligibility before sending the surviving Trackers from this batch.
+            groups.unshift(eligible);
+            continue;
+          }
           const gap: TrackerGap =
             error instanceof ServiceInferenceError
               ? {
@@ -852,6 +875,8 @@ export class TrackerService {
               : { kind: 'transient' };
           for (const { config } of eligible) results.set(config.id, { status: 'failed', gap });
           continue;
+        } finally {
+          this.activeBatches.delete(agentId);
         }
         const parsed = extraction.safeParse(parseExtraction(output));
         for (const input of eligible) {
