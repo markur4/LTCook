@@ -1651,18 +1651,61 @@ describe('native runtime boundary', () => {
     ]);
   });
 
+  test('reports an unavailable worktree before indexing can start', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ltcook-telemetry-'));
+    directories.push(directory);
+    const records: unknown[] = [];
+    const activation = new SessionActivation(
+      {},
+      {
+        activate: () => {
+          throw new Error('No worktree was authorized');
+        },
+      },
+      {
+        record: async (record) => {
+          records.push(record);
+        },
+      },
+    );
+    activation.register(join(directory, 'absent'), 'session-diagnostics', {
+      authorizeRepositoryIndex: true,
+    });
+    expect(records).toMatchObject([
+      {
+        code: 'repository-index.activation-blocked',
+        component: 'repository-index',
+        outcome: 'blocked',
+        context: { sessionId: 'session-diagnostics' },
+      },
+    ]);
+  });
+
   test('redacts credentials and prompt content from structured logs and trace export', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-telemetry-'));
     directories.push(directory);
     const logs = join(directory, 'runtime.jsonl');
     const trace = join(directory, 'runtime.json');
-    const telemetry = new Telemetry(logs, trace);
+    const telemetry = new Telemetry(logs, trace, 'deployment:fixture');
     const span = telemetry.begin('runtime.operation');
     await telemetry.log('info', 'runtime.event', {
       apiToken: 'private-token',
       userPrompt: 'private-prompt',
       sessionId: 'session-1',
     });
+    await telemetry.record({
+      code: 'repository-index.failed',
+      component: 'repository-index',
+      severity: 'error',
+      outcome: 'failure',
+      operationId: 'index-1',
+      correlationId: 'index-1',
+      message: 'Request failed with Authorization: Bearer private-embedded-token',
+      cause: new Error('Index unavailable', {
+        cause: new Error('password="private spaced value"'),
+      }),
+    });
+    telemetry.instant('index.trace', { message: 'failed at https://user:private-url@localhost/' });
     span.end();
     await telemetry.exportTrace();
     const logText = readFileSync(logs, 'utf8');
@@ -1672,5 +1715,22 @@ describe('native runtime boundary', () => {
     expect(logText).toContain('session-1');
     expect(traceText).not.toContain('private-prompt');
     expect(traceText).not.toContain('private-token');
+    expect(logText).not.toContain('private-embedded-token');
+    expect(logText).not.toContain('private spaced value');
+    expect(traceText).not.toContain('private-url');
+    const [summary, diagnostic] = logText
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(summary.eventId).not.toEqual(diagnostic.eventId);
+    expect(diagnostic).toMatchObject({
+      buildIdentity: 'deployment:fixture',
+      code: 'repository-index.failed',
+      component: 'repository-index',
+      outcome: 'failure',
+      operationId: 'index-1',
+      correlationId: 'index-1',
+      cause: { message: 'Index unavailable', cause: { message: 'password=<redacted>' } },
+    });
   });
 });

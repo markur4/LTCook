@@ -1,4 +1,5 @@
 import type { Assignment, NativeBinding, Pass, Task, TeamMember } from '../workflow-api/index.js';
+import { redactDiagnosticText } from '../diagnostics/telemetry.js';
 
 /** Keep error reasons useful without persisting request bodies, credentials, or private paths. */
 export function sanitizeEvaluationText(value: string): string {
@@ -23,23 +24,8 @@ export function sanitizeEvaluationText(value: string): string {
       // > Invalid response bodies remain omitted by the structured-data filter below.
     }
   }
-  let text = value.split(/\r?\n/, 1)[0] ?? '';
-  for (const [key, secret] of Object.entries(process.env))
-    if (
-      /(?:token|password|secret|api_?key|authorization)/i.test(key) &&
-      secret &&
-      secret.length >= 8
-    )
-      text = text.replaceAll(secret, '<redacted>');
-  return text
-    .replace(/\u001b\[[0-9;]*m/g, '')
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1<redacted>@')
-    .replace(/\b(Bearer|Basic)\s+[^\s,;"']+/gi, '$1 <redacted>')
-    .replace(
-      /((?:api[-_]?key|password|token|secret|authorization)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi,
-      '$1<redacted>',
-    )
-    .replace(/\bsk-[A-Za-z0-9_-]+/g, '<redacted>')
+  const text = value.split(/\r?\n/, 1)[0] ?? '';
+  return redactDiagnosticText(text.replace(/\u001b\[[0-9;]*m/g, ''))
     .replace(/(["'])(?:\/|[A-Z]:\\)[^"'\r\n]*\1/g, '$1<private-path>$1')
     .replace(
       /(?:\/(?:home|Users|tmp|mnt|root)\/[^\s"'<>]+|[A-Z]:\\Users\\[^\s"'<>]+)/g,

@@ -1,5 +1,7 @@
 import { statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { canonicalWorkspace } from '../core/workspace.js';
+import type { Telemetry } from '../diagnostics/telemetry.js';
 import { openRepositoryWorkspace, repositoryWorkspaceIdentity } from '../repository/workspace.js';
 import type { RepositoryIndexService } from '../services/repository-index.js';
 import type { RuntimeController, SessionSnapshot } from '../workflow-api/index.js';
@@ -19,15 +21,6 @@ type ActivateWorkspace = (
 type ActivationResult = { snapshot: SessionSnapshot } | { conflict: string };
 type IndexAuthorization = { identity: string; stopIndexing?: () => void };
 
-function indexWorkspaceIdentity(root: string): string | undefined {
-  try {
-    const info = statSync(root, { bigint: true });
-    if (info.isDirectory()) return repositoryWorkspaceIdentity(info);
-  } catch {
-    // > Optional repository indexing must never disrupt Session activation.
-  }
-}
-
 export class SessionActivation {
   private readonly registered = new Map<string, string>();
   private readonly indexAuthorizations = new Map<string, IndexAuthorization>();
@@ -41,6 +34,7 @@ export class SessionActivation {
   constructor(
     startupEnvironment: NodeJS.ProcessEnv = process.env,
     private readonly repositoryIndex?: Pick<RepositoryIndexService, 'activate'>,
+    private readonly telemetry?: Pick<Telemetry, 'record'>,
   ) {
     this.startupShellEnvironment = captureShellEnvironment(startupEnvironment);
   }
@@ -79,11 +73,37 @@ export class SessionActivation {
   private registerIndexScope(sessionId: string, root: string): void {
     const indexService = this.repositoryIndex;
     if (!indexService) return;
-    const identity = indexWorkspaceIdentity(root);
+    const operationId = randomUUID();
+    const report = (message: string, cause?: unknown) => {
+      void this.telemetry
+        ?.record({
+          component: 'repository-index',
+          code: 'repository-index.activation-blocked',
+          severity: 'warn',
+          outcome: 'blocked',
+          operationId,
+          correlationId: operationId,
+          message,
+          cause,
+          context: { sessionId },
+        })
+        .catch(() => {
+          // > Optional repository indexing must never disrupt Session activation.
+        });
+    };
+    let identity: string;
+    try {
+      const info = statSync(root, { bigint: true });
+      if (!info.isDirectory()) throw new Error('The authorized worktree is not a directory.');
+      identity = repositoryWorkspaceIdentity(info);
+    } catch (error) {
+      this.revokeRepositoryIndex(sessionId);
+      report('The authorized worktree could not be inspected for indexing.', error);
+      return;
+    }
     const previous = this.indexAuthorizations.get(sessionId);
     if (previous?.identity === identity) return;
     this.revokeRepositoryIndex(sessionId);
-    if (!identity) return;
 
     const authorization: IndexAuthorization = { identity };
     this.indexAuthorizations.set(sessionId, authorization);
@@ -92,6 +112,7 @@ export class SessionActivation {
         if (this.indexAuthorizations.get(sessionId) !== authorization) return;
         if (workspace.root !== root || workspace.identity !== identity) {
           this.indexAuthorizations.delete(sessionId);
+          report('The authorized worktree changed before indexing could start.');
           return;
         }
         authorization.stopIndexing = indexService.activate({
@@ -103,9 +124,11 @@ export class SessionActivation {
           },
         });
       })
-      .catch(() => {
-        if (this.indexAuthorizations.get(sessionId) === authorization)
+      .catch((error: unknown) => {
+        if (this.indexAuthorizations.get(sessionId) === authorization) {
           this.indexAuthorizations.delete(sessionId);
+          report('The authorized worktree could not be opened for indexing.', error);
+        }
       });
   }
 

@@ -12,9 +12,11 @@ import type { RepositoryDiagnostic, RepositoryRetrieval } from '../results.js';
 import type { RepositoryWorkspace } from '../workspace.js';
 import { REPO_SEARCH_TIMEOUT_MS } from '../../tools/workspace-tools.js';
 import {
+  REPOSITORY_INDEX_TIMEOUT_MS,
   RepositoryIndexError,
   RepositoryIndexService,
   type IndexJobStatus,
+  type RepositoryIndexDiagnostic,
 } from '../../services/repository-index.js';
 import { ColgrepIndexStore, type ColgrepIndexActivity } from './colgrep-index-store.js';
 import {
@@ -38,7 +40,6 @@ export const COLGREP_MAX_RESULTS = 20;
 const MAX_STDOUT = 4 * 1024 * 1024;
 const MAX_STDERR = 64 * 1024;
 const CHECKPOINT_GRACE_MS = 4000;
-const INDEX_TIMEOUT_MS = 15 * 60_000;
 const PARTIAL_SCAN_REFRESH_MS = 5 * 60_000;
 const REPAIR = 'Repeat LTCook setup with the supported installer or editable registration.';
 const MODEL_FILES = [
@@ -71,6 +72,7 @@ interface ColgrepOptions {
   timeoutMs?: number;
   indexTimeoutMs?: number;
   background?: boolean;
+  onIndexDiagnostic?: (diagnostic: RepositoryIndexDiagnostic) => void | Promise<void>;
 }
 
 interface RepositorySearchRequest {
@@ -514,25 +516,27 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
   const deployment = options.deploymentDirectory ?? process.env.LTCOOK_COLGREP_DEPLOYMENT;
   const cache = options.cacheDirectory ?? process.env.LTCOOK_COLGREP_CACHE_DIR;
   const timeoutMs = options.timeoutMs ?? REPO_SEARCH_TIMEOUT_MS;
-  const indexService = new RepositoryIndexService(async (workspace, signal) => {
-    await buildIndex(workspace, signal, true);
-  });
+  const indexTimeoutMs = options.indexTimeoutMs ?? REPOSITORY_INDEX_TIMEOUT_MS;
+  const indexService = new RepositoryIndexService(
+    async (workspace, signal) => {
+      const { changed } = await buildIndex(workspace, signal, true);
+      if (!changed) return 'unchanged' as const;
+    },
+    { progressDeadlineMs: indexTimeoutMs, onDiagnostic: options.onIndexDiagnostic },
+  );
 
   async function buildIndex(
     workspace: RepositoryWorkspace,
     callerSignal: AbortSignal,
     scheduled = false,
-  ): Promise<number> {
-    const signal = AbortSignal.any([
-      callerSignal,
-      AbortSignal.timeout(options.indexTimeoutMs ?? INDEX_TIMEOUT_MS),
-    ]);
+  ): Promise<{ elapsedMs: number; changed: boolean }> {
+    const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(indexTimeoutMs)]);
     signal.throwIfAborted();
     await workspace.assertUnchanged();
     const started = performance.now();
     const assets = await loadAssets(deployment, verifiedFiles, signal).catch((error: unknown) => {
       signal.throwIfAborted();
-      throw new RepositoryIndexError(error instanceof Error ? error.message : REPAIR, false);
+      throw new RepositoryIndexError(error instanceof Error ? error.message : REPAIR, false, error);
     });
     const store = await ColgrepIndexStore.open(cache, workspace, assets.compatibility, true);
     if (!store) throw new Error('ColGREP could not create its AppRC index storage.');
@@ -541,6 +545,8 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       throw new RepositoryIndexError(
         'Another ColGREP process is indexing. Waiting for its turn.',
         true,
+        undefined,
+        'blocked',
       );
     }
 
@@ -561,7 +567,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         await workspace.assertUnchanged();
         signal.throwIfAborted();
         store.recordActivity('check');
-        return performance.now() - started;
+        return { elapsedMs: performance.now() - started, changed: false };
       }
 
       const seed = previous !== undefined && !requiresFreshColgrepBuild(previous, source);
@@ -596,7 +602,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         if (result.code !== 0) {
           const error = searchFailure(result.stderr);
           if (/no (index|files indexed)|no indexable files/i.test(result.stderr))
-            throw new RepositoryIndexError(error.message, true);
+            throw new RepositoryIndexError(error.message, true, error);
           throw error;
         }
       };
@@ -631,7 +637,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       await writeColgrepSource(candidate.indices, checkpointSource);
       await writer.publish(candidate, signal);
       store.recordActivity('check');
-      return performance.now() - started;
+      return { elapsedMs: performance.now() - started, changed: true };
     } finally {
       await writer.release();
     }
@@ -639,7 +645,9 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
 
   return {
     indexService,
-    buildIndex,
+    async buildIndex(workspace: RepositoryWorkspace, signal: AbortSignal) {
+      return (await buildIndex(workspace, signal)).elapsedMs;
+    },
 
     isIndexingEnabled(): boolean {
       return indexService.isEnabled();

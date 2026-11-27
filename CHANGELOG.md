@@ -33,6 +33,10 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- Repository indexing reports correlated failures, retries, and a stalled refresh
+  in the runtime diagnostics. Startup failures before the owner process launches
+  are recorded in the private backend log.
+
 - Add an issue template and acceptance workflow for the issue-backed backlog.
   The contribution guide explains scheduling and changelog maintenance.
 

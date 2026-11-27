@@ -1,5 +1,7 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import type { DiagnosticEvent } from '../diagnostics/telemetry.js';
 import type { RepositoryWorkspace } from '../repository/workspace.js';
 
 export interface IndexJobStatus {
@@ -8,17 +10,48 @@ export interface IndexJobStatus {
   retryAt?: string;
 }
 
+export const REPOSITORY_INDEX_TIMEOUT_MS = 15 * 60_000;
+const STALLED = 'Repository indexing exceeded its progress deadline.';
+
+export interface RepositoryIndexDiagnostic {
+  code: `repository-index.${'completed' | 'retrying' | 'failed' | 'blocked' | 'cancelled' | 'stalled'}`;
+  severity: 'info' | 'warn' | 'error';
+  outcome: 'success' | 'failure' | 'cancelled' | 'blocked' | 'incomplete';
+  operationId: string;
+  workspaceId: string;
+  elapsedMs: number;
+  message: string;
+  cause?: unknown;
+  retryAt?: string;
+}
+
+export function repositoryIndexDiagnosticEvent({
+  workspaceId,
+  elapsedMs,
+  retryAt,
+  ...event
+}: RepositoryIndexDiagnostic): DiagnosticEvent {
+  return {
+    ...event,
+    component: 'repository-index',
+    correlationId: event.operationId,
+    context: { workspaceId, elapsedMs, retryAt },
+  };
+}
+
 export class RepositoryIndexError extends Error {
   constructor(
     message: string,
     readonly retryable: boolean,
     cause?: unknown,
+    readonly outcome: 'failure' | 'blocked' = 'failure',
   ) {
     super(message, { cause });
   }
 }
 
 interface Job {
+  workspaceId: string;
   authorizations: Set<{ workspace: RepositoryWorkspace }>;
   dueAt: number;
   lastStartedAt: number;
@@ -31,20 +64,28 @@ interface ActiveJob {
   job: Job;
   controller: AbortController;
   done: Promise<void>;
+  deadlineExceeded: boolean;
 }
 
 interface RepositoryIndexOptions {
   reconcileMs?: number;
   retryInitialMs?: number;
   retryMaximumMs?: number;
+  progressDeadlineMs?: number;
+  onDiagnostic?: (diagnostic: RepositoryIndexDiagnostic) => void | Promise<void>;
 }
 
 function workspaceKey(workspace: RepositoryWorkspace): string {
   return JSON.stringify([workspace.root, workspace.identity]);
 }
 
-const noAuthorization = () =>
-  new RepositoryIndexError('The worktree authorization expired. Reopen the workspace.', false);
+const noAuthorization = (cause?: unknown) =>
+  new RepositoryIndexError(
+    'The worktree authorization expired. Reopen the workspace.',
+    false,
+    cause,
+    'blocked',
+  );
 
 /** Schedules reconciliation for worktrees authorized by the current runtime. */
 export class RepositoryIndexService {
@@ -52,6 +93,8 @@ export class RepositoryIndexService {
   private readonly reconcileMs: number;
   private readonly retryInitialMs: number;
   private readonly retryMaximumMs: number;
+  private readonly progressDeadlineMs: number;
+  private readonly onDiagnostic: RepositoryIndexOptions['onDiagnostic'];
   private enabled = true;
   private closed = false;
   private active?: ActiveJob;
@@ -61,16 +104,20 @@ export class RepositoryIndexService {
     private readonly reconcile: (
       workspace: RepositoryWorkspace,
       signal: AbortSignal,
-    ) => Promise<void>,
+    ) => Promise<'unchanged' | void>,
     {
       reconcileMs = 15_000,
       retryInitialMs = 1_000,
       retryMaximumMs = 60_000,
+      progressDeadlineMs = REPOSITORY_INDEX_TIMEOUT_MS,
+      onDiagnostic,
     }: RepositoryIndexOptions = {},
   ) {
     this.reconcileMs = reconcileMs;
     this.retryInitialMs = retryInitialMs;
     this.retryMaximumMs = retryMaximumMs;
+    this.progressDeadlineMs = progressDeadlineMs;
+    this.onDiagnostic = onDiagnostic;
   }
 
   activate(workspace: RepositoryWorkspace): () => void {
@@ -79,6 +126,9 @@ export class RepositoryIndexService {
     let job = this.jobs.get(key);
     if (!job) {
       job = {
+        workspaceId: createHash('sha256')
+          .update(JSON.stringify([workspace.root, workspace.cacheIdentity]))
+          .digest('hex'),
         authorizations: new Set(),
         dueAt: Date.now(),
         lastStartedAt: 0,
@@ -115,7 +165,7 @@ export class RepositoryIndexService {
     const job = this.jobs.get(workspaceKey(workspace));
     if (!job) return { activity: 'idle', diagnostic: null };
     if (this.active?.job === job && !this.active.controller.signal.aborted)
-      return { activity: 'indexing', diagnostic: null };
+      return { activity: 'indexing', diagnostic: this.active.deadlineExceeded ? STALLED : null };
     if (job.failure) {
       const diagnostic = job.failure.message;
       return job.failure.retryable
@@ -195,22 +245,29 @@ export class RepositoryIndexService {
       return;
     }
     const controller = new AbortController();
-    this.active = { job: next, controller, done: this.run(next, controller.signal, now) };
+    this.active = {
+      job: next,
+      controller,
+      deadlineExceeded: false,
+      done: this.run(next, controller.signal, now),
+    };
   }
 
   private async authorizedWorkspace(job: Job, signal: AbortSignal) {
     const authorize = async () => {
       signal.throwIfAborted();
+      let cause: unknown;
       for (const authorization of job.authorizations) {
         try {
           await authorization.workspace.assertUnchanged();
-        } catch {
+        } catch (error) {
+          cause = error;
           continue;
         }
         signal.throwIfAborted();
         if (job.authorizations.has(authorization)) return authorization.workspace;
       }
-      throw noAuthorization();
+      throw noAuthorization(cause);
     };
     const workspace = await authorize();
     return {
@@ -225,10 +282,47 @@ export class RepositoryIndexService {
     job.lastStartedAt = startedAt;
     const scheduledRecheck = startedAt + this.reconcileMs;
     job.dueAt = scheduledRecheck;
+    const operationId = randomUUID();
+    const started = performance.now();
+    const report = (
+      event: Omit<RepositoryIndexDiagnostic, 'operationId' | 'workspaceId' | 'elapsedMs'>,
+    ) => {
+      void this.reportDiagnostic({
+        ...event,
+        operationId,
+        workspaceId: job.workspaceId,
+        elapsedMs: Math.round(performance.now() - started),
+      });
+    };
+    const deadline = setTimeout(() => {
+      if (signal.aborted || this.active?.job !== job) return;
+      this.active.deadlineExceeded = true;
+      report({
+        code: 'repository-index.stalled',
+        severity: 'error',
+        outcome: 'incomplete',
+        message: STALLED,
+      });
+    }, this.progressDeadlineMs);
+    deadline.unref();
+    const cancelled = () => {
+      clearTimeout(deadline);
+      report({
+        code: 'repository-index.cancelled',
+        severity: 'info',
+        outcome: 'cancelled',
+        message:
+          signal.reason instanceof RepositoryIndexError
+            ? signal.reason.message
+            : 'Repository indexing was cancelled.',
+      });
+    };
+    signal.addEventListener('abort', cancelled, { once: true });
     try {
       const workspace = await this.authorizedWorkspace(job, signal);
-      await this.reconcile(workspace, signal);
+      const result = await this.reconcile(workspace, signal);
       if (signal.aborted) return;
+      const recovered = job.failure !== undefined || this.active?.deadlineExceeded;
       job.failure = undefined;
       job.failures = 0;
       const finishedAt = Date.now();
@@ -238,6 +332,14 @@ export class RepositoryIndexService {
       job.followUp =
         !job.followUp && (job.dueAt < scheduledRecheck || finishedAt >= scheduledRecheck);
       job.dueAt = job.followUp ? finishedAt : finishedAt + this.reconcileMs;
+      if (result !== 'unchanged' || recovered) {
+        report({
+          code: 'repository-index.completed',
+          severity: 'info',
+          outcome: 'success',
+          message: 'Repository index reconciliation completed.',
+        });
+      }
     } catch (error) {
       if (signal.aborted) return;
       job.failure =
@@ -246,14 +348,39 @@ export class RepositoryIndexService {
           : new RepositoryIndexError(
               'Could not refresh the repository index. Check worktree access and AppRC cache space.',
               true,
+              error,
             );
       job.failures = Math.min(job.failures + 1, 30);
       job.dueAt = job.failure.retryable
         ? Date.now() + Math.min(this.retryInitialMs * 2 ** (job.failures - 1), this.retryMaximumMs)
         : Infinity;
+      const { message, cause, outcome, retryable } = job.failure;
+      const blocked = outcome === 'blocked';
+      report({
+        code: blocked
+          ? 'repository-index.blocked'
+          : retryable
+            ? 'repository-index.retrying'
+            : 'repository-index.failed',
+        severity: blocked ? 'info' : retryable ? 'warn' : 'error',
+        outcome,
+        message,
+        cause,
+        retryAt: retryable ? new Date(job.dueAt).toISOString() : undefined,
+      });
     } finally {
+      clearTimeout(deadline);
+      signal.removeEventListener('abort', cancelled);
       this.active = undefined;
       this.schedule();
+    }
+  }
+
+  private async reportDiagnostic(diagnostic: RepositoryIndexDiagnostic): Promise<void> {
+    try {
+      await this.onDiagnostic?.(diagnostic);
+    } catch {
+      // > An unavailable log sink must not disrupt reconciliation.
     }
   }
 }

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +15,10 @@ import { verifyDeployedBuild } from './integrations/deployed-build.js';
 import { PaseoWorkspaceServices } from './integrations/paseo-workspace-services.js';
 import { createWorktreeScopeResolver, SessionWorktrees } from './integrations/session-worktrees.js';
 import { createColgrepProvider } from './repository/providers/colgrep.js';
-import type { RepositoryIndexService } from './services/repository-index.js';
+import {
+  repositoryIndexDiagnosticEvent,
+  type RepositoryIndexService,
+} from './services/repository-index.js';
 import { createSessionWorktreeTool } from './tools/session-worktree.js';
 import { isWithin } from './path-containment.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
@@ -30,6 +33,7 @@ import { ServiceInferenceError } from './services/inference-recovery.js';
 import { openConversationProductStore } from './session-memory/product-store.js';
 import { PastedDocuments } from './session-memory/pasted-documents.js';
 import { catalogModelAliases, resolveModel } from './models/aliases.js';
+import { redactDiagnosticText, Telemetry } from './diagnostics/telemetry.js';
 const EX_TEMPFAIL = 75;
 const restartResult = z.looseObject({ state: z.string(), message: z.string() });
 function isListenAddressInUse(error: unknown): boolean {
@@ -45,9 +49,7 @@ function safeErrorMessage(error: unknown): string {
   if (error instanceof AggregateError) {
     return [...error.errors].map(safeErrorMessage).join('; ');
   }
-  return error instanceof Error
-    ? error.message.replace(/(token|password|api.?key)=?[^\s]*/gi, '$1=<redacted>')
-    : 'unknown runtime error';
+  return error instanceof Error ? redactDiagnosticText(error.message) : 'unknown runtime error';
 }
 
 function metadataCommand(argv: string[]): boolean {
@@ -93,7 +95,6 @@ async function run(): Promise<void> {
     { SessionActivation },
     { captureShellEnvironment },
     { createPaseoAgentBackend, startPaseoHost },
-    { Telemetry },
     fs,
     childProcess,
   ] = await Promise.all([
@@ -102,7 +103,6 @@ async function run(): Promise<void> {
     import('./integrations/session-activation.js'),
     import('./integrations/shell-environment.js'),
     import('./integrations/paseo.js'),
-    import('./diagnostics/telemetry.js'),
     import('node:fs/promises'),
     import('node:child_process'),
   ]);
@@ -278,6 +278,14 @@ async function run(): Promise<void> {
     const buildFingerprint = installedRuntime
       ? await verifyDeployedBuild(appRoot, fileURLToPath(import.meta.url), receipt.fingerprint)
       : undefined;
+    const entrypointDigest = buildFingerprint
+      ? undefined
+      : createHash('sha256')
+          .update(await fs.readFile(fileURLToPath(import.meta.url)))
+          .digest('hex');
+    telemetry.setBuildIdentity(
+      buildFingerprint ? `deployment:${buildFingerprint}` : `entrypoint:${entrypointDigest}`,
+    );
     let summarizerModel = '';
     try {
       summarizerModel = resolveModel('local-tiny', process.env).model;
@@ -307,7 +315,18 @@ async function run(): Promise<void> {
       workspaceShellEnvironments.get(id),
     );
     await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
-    const colgrep = createColgrepProvider({ background: true });
+    const colgrep = createColgrepProvider({
+      background: true,
+      onIndexDiagnostic: (diagnostic) => {
+        void telemetry
+          .record(repositoryIndexDiagnosticEvent(diagnostic))
+          .catch((error: unknown) => {
+            process.stderr.write(
+              `Could not record indexing diagnostics: ${safeErrorMessage(error)}\n`,
+            );
+          });
+      },
+    });
     repositoryIndex = colgrep.indexService;
     const preferences = new ActivityPreferences(
       path.join(stateDirectory, 'activity-settings.json'),
@@ -315,7 +334,7 @@ async function run(): Promise<void> {
     const worktrees = new SessionWorktrees(process.env.PATH ?? '');
     const resolveScope = createWorktreeScopeResolver((id) => runtime?.snapshot(id));
     const worktreeTool = createSessionWorktreeTool(worktrees, resolveScope);
-    const activation = new SessionActivation(process.env, repositoryIndex);
+    const activation = new SessionActivation(process.env, repositoryIndex, telemetry);
     api = new RuntimeApi(undefined, apiToken, apiListen, activation, process.env, telemetry, {
       activity: { colgrep, preferences },
       worktrees: { store: worktrees, resolveScope },
@@ -724,6 +743,20 @@ async function run(): Promise<void> {
     });
     await new Promise<void>((resolve) => process.once('beforeExit', resolve));
   } catch (error) {
+    await telemetry
+      .record({
+        component: 'runtime',
+        code: 'runtime.startup-failed',
+        severity: 'error',
+        outcome: 'failure',
+        operationId: instanceId,
+        correlationId: startup.correlationId,
+        message: 'The runtime stopped before completing its lifecycle.',
+        cause: error,
+      })
+      .catch(() => {
+        // > The launcher still records the original startup failure on stderr.
+      });
     await cleanup('startup failure', 1);
     throw error;
   } finally {
