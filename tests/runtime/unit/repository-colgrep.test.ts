@@ -66,7 +66,9 @@ if (process.argv[2] === 'init') {
   const countFile = ${JSON.stringify(path.join(root, 'init-count'))};
   const count = Number(await Bun.file(countFile).text().catch(() => '0')) + 1;
   await Bun.write(countFile, String(count));
-  await fs.mkdir(directory, { recursive: true });
+  await fs.mkdir(path.join(directory, 'index'), { recursive: true });
+  await Bun.write(path.join(directory, 'index', 'metadata.db'), 'fixture');
+  await Bun.write(path.join(directory, 'index', 'metadata.json'), '{}');
   await Bun.write(path.join(directory, 'project.json'), JSON.stringify({ model, project_path: workspace }));
   await Bun.write(path.join(directory, '.building'), 'building');
   if (count > 1 && await Bun.file(${JSON.stringify(path.join(root, 'hold-refresh'))}).exists()) {

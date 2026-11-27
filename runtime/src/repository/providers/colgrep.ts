@@ -332,14 +332,15 @@ function searchFailure(stderr: string, pattern?: string): Error {
 }
 
 function nativeIndexFailure(stderr: string): boolean {
-  return /index appears corrupted|index load failed|no index found|no data to merge/i.test(stderr);
+  return /index appears corrupted|index load failed|failed to load index|no index found|no data to merge|database disk image is malformed|file is not a database/i.test(
+    stderr,
+  );
 }
 
-async function checkCandidate(
+async function checkIndexLayout(
   assets: Awaited<ReturnType<typeof loadAssets>>,
   workspace: RepositoryWorkspace,
   indices: string,
-  signal: AbortSignal,
 ) {
   const entries = await readdir(indices, { withFileTypes: true });
   const directories = entries.filter((entry) => entry.isDirectory());
@@ -361,6 +362,31 @@ async function checkCandidate(
     if (!missing(error)) throw error;
   });
   if (building) throw new Error('ColGREP left an incomplete index checkpoint.');
+  const vector = path.join(directory, 'index');
+  const files = await Promise.all(
+    ['metadata.json', 'metadata.db'].map((file) => regularFile(path.join(vector, file))),
+  );
+  if (files.some(({ size }) => size === 0n)) throw new Error('ColGREP index metadata is empty.');
+}
+
+function hasIndexLayout(
+  assets: Awaited<ReturnType<typeof loadAssets>>,
+  workspace: RepositoryWorkspace,
+  indices: string,
+): Promise<boolean> {
+  return checkIndexLayout(assets, workspace, indices).then(
+    () => true,
+    () => false,
+  );
+}
+
+async function checkCandidate(
+  assets: Awaited<ReturnType<typeof loadAssets>>,
+  workspace: RepositoryWorkspace,
+  indices: string,
+  signal: AbortSignal,
+) {
+  await checkIndexLayout(assets, workspace, indices);
   const result = await execute(
     assets,
     [
@@ -520,7 +546,9 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
     try {
       const source = await captureColgrepSource(workspace, signal);
       const published = await store.readPublished();
-      const previous = published && (await readColgrepSource(published.indices));
+      const usable = published && (await hasIndexLayout(assets, workspace, published.indices));
+      if (published && !usable) await store.invalidatePublished(published.id);
+      const previous = usable ? await readColgrepSource(published.indices) : undefined;
       if (previous && sameColgrepSource(previous, source)) return performance.now() - started;
       if (!source.length)
         throw new RepositoryIndexError('The worktree has no files to index yet.', true);
@@ -613,14 +641,18 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         failure = 'ColGREP could not read its AppRC index storage.';
         const store = await ColgrepIndexStore.open(cache, workspace, assets.compatibility, false);
         const published = await store?.readPublished();
+        const usable = published && (await hasIndexLayout(assets, workspace, published.indices));
         failure = 'The authorized worktree is unavailable.';
         await workspace.assertUnchanged();
         const job = indexService.status(workspace);
         return {
           ...job,
-          availability: published ? 'ready' : 'not-ready',
-          activity: published && job.activity === 'indexing' ? 'updating' : job.activity,
-          ...(published && { generation: published.id, publishedAt: published.publishedAt }),
+          availability: usable ? 'ready' : 'not-ready',
+          activity: usable && job.activity === 'indexing' ? 'updating' : job.activity,
+          diagnostic:
+            job.diagnostic ??
+            (published && !usable ? 'ColGREP index files are missing or damaged.' : null),
+          ...(usable && { generation: published.id, publishedAt: published.publishedAt }),
         };
       } catch {
         return { availability: 'unavailable', activity: 'error', diagnostic: failure };
@@ -675,7 +707,15 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
           return outcome;
         }
 
+        const retireDamagedIndex = async () => {
+          if (await store.invalidatePublished(published.id)) indexService.request(workspace);
+          report(outcome, 'index-recovery', 'ColGREP index files are missing or damaged.');
+        };
         try {
+          if (!(await hasIndexLayout(assets, workspace, published.indices))) {
+            await retireDamagedIndex();
+            throw new Error('ColGREP could not open the published index.');
+          }
           const args = [
             'search',
             '--json',
@@ -697,15 +737,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
           const result = await execute(assets, args, published.indices, signal);
           signal.throwIfAborted();
           if (result.code !== 0) {
-            if (nativeIndexFailure(result.stderr)) {
-              await store.invalidatePublished(published.id);
-              indexService.request(workspace);
-              report(
-                outcome,
-                'index-recovery',
-                'ColGREP could not load the index. A rebuild is needed.',
-              );
-            }
+            if (nativeIndexFailure(result.stderr)) await retireDamagedIndex();
             throw searchFailure(result.stderr, input.pattern);
           }
           await workspace.assertUnchanged();
