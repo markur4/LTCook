@@ -20,6 +20,8 @@ export interface RepositoryIndexDiagnostic {
   operationId: string;
   workspaceId: string;
   elapsedMs: number;
+  progressDeadlineMs?: number;
+  generation?: string;
   message: string;
   cause?: unknown;
   retryAt?: string;
@@ -28,14 +30,16 @@ export interface RepositoryIndexDiagnostic {
 export function repositoryIndexDiagnosticEvent({
   workspaceId,
   elapsedMs,
+  progressDeadlineMs,
   retryAt,
+  generation,
   ...event
 }: RepositoryIndexDiagnostic): DiagnosticEvent {
   return {
     ...event,
     component: 'repository-index',
     correlationId: event.operationId,
-    context: { workspaceId, elapsedMs, retryAt },
+    context: { workspaceId, elapsedMs, progressDeadlineMs, retryAt, generation },
   };
 }
 
@@ -110,7 +114,7 @@ export class RepositoryIndexService {
     private readonly reconcile: (
       workspace: RepositoryWorkspace,
       signal: AbortSignal,
-    ) => Promise<'unchanged' | void>,
+    ) => Promise<'unchanged' | { generation: string } | void>,
     {
       reconcileMs = 15_000,
       retryInitialMs = 1_000,
@@ -307,6 +311,7 @@ export class RepositoryIndexService {
           code: 'repository-index.stalled',
           severity: 'error',
           outcome: 'incomplete',
+          progressDeadlineMs: this.progressDeadlineMs,
           message: STALLED,
         });
       },
@@ -344,6 +349,7 @@ export class RepositoryIndexService {
           code: 'repository-index.completed',
           severity: 'info',
           outcome: 'success',
+          generation: result && typeof result === 'object' ? result.generation : undefined,
           message: 'Repository index reconciliation completed.',
         });
       }

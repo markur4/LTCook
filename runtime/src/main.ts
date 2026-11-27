@@ -362,6 +362,7 @@ async function run(): Promise<void> {
     const colgrep = createColgrepProvider({
       background: true,
       onIndexDiagnostic: (diagnostic) => {
+        bugFix?.observeIndexDiagnostic(diagnostic);
         void telemetry
           .record(repositoryIndexDiagnosticEvent(diagnostic))
           .catch((error: unknown) => {
@@ -626,14 +627,17 @@ async function run(): Promise<void> {
           .positive()
           .parse(Number(process.env.LTCOOK_BUGHUNTER_MANUAL_MODEL_REQUESTS ?? 12));
         const bugHunterStateDirectory = await fs.realpath(stateDirectory);
+        let backgroundAllowed = false;
+        const canStartBugHunterWork = () => backgroundAllowed && preferences.enabled('bughunter');
         bugScan = await startBugScan({
           runtime: runtimeController,
           logPath: path.resolve(logs),
           stateDirectory: bugHunterStateDirectory,
           configuredWorkspace,
           budgetMs,
+          canStartAutomatic: () => preferences.enabled('bughunter'),
           canStartHunt: () =>
-            preferences.enabled('bughunter') &&
+            canStartBugHunterWork() &&
             !bugFix?.service.list().some(({ status }) => status === 'running'),
           resolveSessionWorkspace: (id) => {
             const current = activation.registeredWorkspace(id);
@@ -674,10 +678,15 @@ async function run(): Promise<void> {
               workspaceRoot: scanScope,
               stateDirectory: bugHunterStateDirectory,
               budgetMs,
+              canStart: canStartBugHunterWork,
+              async readPublishedIndex(workspace) {
+                const status = await colgrep.readStatus(workspace);
+                return status.availability === 'ready' ? status.generation : undefined;
+              },
               runningBuild: sourceRevision
                 ? { identity: runningBuildIdentity, sourceRevision }
                 : undefined,
-              // > Unattended merges remain disabled until the qualification Pass.
+              // > This target has no server-side protection for the reviewed base revision.
               qualified: () => false,
             });
             api.setBugFix(bugFix);
@@ -694,9 +703,19 @@ async function run(): Promise<void> {
               .catch(() => {});
           }
         }
+        let checking = false;
+        let urgentPending = false;
         const poll = () => {
-          void bugScan?.service
-            .ingest()
+          if (checking || stopping) return;
+          urgentPending = false;
+          checking = true;
+          void runtimeController
+            .canStartBackgroundBugHunterWork()
+            .catch(() => false)
+            .then((allowed) => {
+              backgroundAllowed = allowed;
+              return bugScan?.service.ingest();
+            })
             .then(() => {
               if (preferences.enabled('bughunter')) bugFix?.poll();
             })
@@ -710,7 +729,15 @@ async function run(): Promise<void> {
                 cause: error,
               }),
             )
-            .catch(() => {});
+            .catch(() => {})
+            .finally(() => {
+              checking = false;
+              if (urgentPending) poll();
+            });
+        };
+        telemetry.onUrgentDiagnostic = () => {
+          urgentPending = true;
+          poll();
         };
         poll();
         bugScanTimer = setInterval(poll, 15_000);

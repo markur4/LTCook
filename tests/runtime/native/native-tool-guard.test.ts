@@ -1,6 +1,6 @@
 import { Value } from 'typebox/value';
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
@@ -606,5 +606,74 @@ test('failed managed activation publishes a source diagnostic after binding retr
   } finally {
     server.stop(true);
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('native BugHunter loads applicable Core, user, project, and shared skill guidance', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-bughunter-guidance-'));
+  const project = path.join(directory, 'project');
+  const user = path.join(directory, 'user');
+  const shared = path.join(directory, 'shared');
+  try {
+    await Promise.all([
+      mkdir(project),
+      mkdir(path.join(user, 'rules'), { recursive: true }),
+      mkdir(path.join(shared, 'audit-fixture'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(project, 'AGENTS.md'), '# Project scope\nKeep observed tests local.\n'),
+      writeFile(
+        path.join(user, 'rules/audit.md'),
+        '# User scope\nPreserve the original evidence.\n',
+      ),
+      writeFile(
+        path.join(shared, 'audit-fixture/SKILL.md'),
+        '---\nname: audit-fixture\ndescription: Fixture guidance for the native audit.\n---\nRecord test evidence.\n',
+      ),
+    ]);
+    const entry = path.resolve(import.meta.dir, '../../../runtime/src/integrations/pi-rpc.ts');
+    const script = `const { createPiRpcRuntime } = await import(${JSON.stringify(entry)});
+const runtime = await createPiRpcRuntime(['--offline', '--no-session']);
+process.stdout.write(runtime.session.systemPrompt);
+runtime.session.dispose();`;
+    const child = Bun.spawn([process.execPath, '-e', script], {
+      cwd: project,
+      env: {
+        ...process.env,
+        LTCOOK_JS_ROOT: path.resolve(import.meta.dir, '../../..'),
+        LTCOOK_GUIDANCE_DIR: user,
+        LTCOOK_SHARED_SKILLS_DIR: shared,
+        LTCOOK_PI_AUTH_DIR: path.join(directory, 'auth'),
+        PI_CODING_AGENT_DIR: path.join(directory, 'pi'),
+        LTCOOK_NATIVE_AGENT_ID: 'fixture-native',
+        LTCOOK_SESSION_ID: 'fixture-session',
+        LTCOOK_TEAM_INSTANCE_ID: 'fixture-team',
+        LTCOOK_TEAM: bugHunterTeamId,
+        LTCOOK_TEAM_ID: bugHunterTeamId,
+        LTCOOK_MEMBER_KEY: 'leader',
+        LTCOOK_RUNTIME_API_URL: 'http://127.0.0.1:1',
+        LTCOOK_AGENT_API_TOKEN: 'audit-fixture',
+        PI_OFFLINE: '1',
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const kill = setTimeout(() => child.kill(), 5000);
+    try {
+      const [prompt, stderr, status] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect({ status, stderr }).toMatchObject({ status: 0 });
+      expect(prompt.includes('Keep observed tests local.')).toBe(true);
+      expect(prompt.includes('Preserve the original evidence.')).toBe(true);
+      expect(prompt.includes('Fixture guidance for the native audit.')).toBe(true);
+      expect(prompt.includes('Use component-qualified names')).toBe(true);
+    } finally {
+      clearTimeout(kill);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });

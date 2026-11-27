@@ -369,8 +369,11 @@ for the current inventory and known evidence gaps.
 
 BugScan reads this diagnostic stream into the existing coordination database.
 An explicit host-wide BugHunter setting enables the service and can name the
-checkout to investigate. Open Activity → Services for that scope and use
-**Run BugScan** to investigate the pending evidence. The card shows the current
+checkout to investigate. The service queues a hunt after three distinct failed
+or degraded operations in a component within 30 minutes, an unexpected
+critical failure, or a single indexing stall. It holds new background work
+while a foreground agent is running. Open Activity → Services to manually run,
+pause, or resume a hunt. The card shows the current
 status, supported causes or hypotheses, remedies, and explicit immediate or
 deferred architecture decisions. Native builds include the source revision in
 their verified deployment assets. A clean checkout running the runtime directly
@@ -398,6 +401,19 @@ The supported repair classes are `proper-fix` and `workaround`. Actions include
 `pr.open`, `pr.merge`, `issue.write`, and `worktree.cleanup`. The native
 agents use scoped worktrees. The runtime owns verification, Git operations,
 and reconciliation. Dev mode and all consequential actions remain opt-in.
+Automatic merges remain disabled for LTCook until the repository can enforce
+the exact reviewed target at merge time. GitHub's matching-head option checks
+the PR branch, and LTCook's target currently lacks branch protection. After
+a human merges a reviewed repair, resume BugFix to reconcile its GitHub state.
+
+For a managed repository indexing stall, recovery requires a fresh published
+index generation in the affected workspace before the original progress limit,
+a readiness check for that same generation, and build provenance matching the
+integrated revision. This observation verifies the managed progress
+deadline for that workspace. Findings with no recorded original deadline, or
+with a different workload or failure condition, keep their recovery pending
+until the formerly failing behavior can be verified. Read [the qualification plan](bughunter-qualification/PLAN.md)
+for the acceptance cases and fixtures.
 
 ## Local Ollama and Agent Evals
 

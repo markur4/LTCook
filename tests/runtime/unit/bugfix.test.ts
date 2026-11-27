@@ -8,6 +8,7 @@ import {
   type BugFixStage,
   type BugFixState,
 } from '../../../runtime/src/services/bugfix.js';
+import { indexProgressProof } from '../../../runtime/src/services/bugfix-integration.js';
 import type { BugScanHunt } from '../../../runtime/src/services/bugscan.js';
 
 const source = 'a'.repeat(40);
@@ -343,6 +344,70 @@ test('keeps the execution slot until the native Pass settles', async () => {
     expect((await settled(service, 'second')).status).toBe('completed');
   } finally {
     release();
+    await service.close();
+  }
+});
+
+test('index recovery requires a new published generation for the same stalled operation scope', async () => {
+  const sourceHunt = hunt();
+  sourceHunt.groups[0] = {
+    id: 'group',
+    component: 'repository-index',
+    sourceRevision: source,
+    evidence: [
+      {
+        eventId: 'original-event',
+        code: 'repository-index.stalled',
+        severity: 'error',
+        outcome: 'incomplete',
+        component: 'repository-index',
+        workspaceId: 'fixture-index',
+        progressDeadlineMs: 500,
+        operationId: 'original-operation',
+        receivedAt: 0,
+      },
+    ],
+  };
+  const service = fixture().open();
+  try {
+    const remedy = service.enqueue(sourceHunt, grant)!.remedies[0]!;
+    const observation = {
+      code: 'repository-index.completed' as const,
+      severity: 'info' as const,
+      outcome: 'success' as const,
+      generation: 'new-generation',
+      workspaceId: 'fixture-index',
+      operationId: 'verification-replay',
+      message: 'Published the checked generation.',
+      elapsedMs: 250,
+    };
+    expect(indexProgressProof(sourceHunt, remedy, observation)).toBe(true);
+    for (const changed of [
+      { generation: undefined },
+      { workspaceId: 'other-index' },
+      { operationId: 'original-operation' },
+      { elapsedMs: 500, progressDeadlineMs: 600 },
+    ])
+      expect(indexProgressProof(sourceHunt, remedy, { ...observation, ...changed })).toBe(false);
+    delete sourceHunt.groups[0].evidence[0]!.progressDeadlineMs;
+    expect(indexProgressProof(sourceHunt, remedy, observation)).toBe(false);
+  } finally {
+    await service.close();
+  }
+});
+
+test('foreground work keeps new repair Tasks queued without discarding the batch', async () => {
+  let canStart = false;
+  const { open, stages } = fixture({ canStart: () => canStart });
+  const service = open();
+  try {
+    service.enqueue(hunt(), grant);
+    expect(service.list()[0]?.status).toBe('queued');
+    expect(stages).toEqual([]);
+    canStart = true;
+    service.dispatch();
+    expect((await settled(service)).status).toBe('completed');
+  } finally {
     await service.close();
   }
 });

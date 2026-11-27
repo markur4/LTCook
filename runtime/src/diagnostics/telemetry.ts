@@ -74,6 +74,7 @@ export class Telemetry {
   private traceEvents: Array<Record<string, unknown>> = [];
   private pendingLog: Promise<void> = Promise.resolve();
   private sourceRevision?: string;
+  onUrgentDiagnostic?: () => void;
   constructor(
     private readonly logsPath: string,
     private readonly tracePath: string,
@@ -108,6 +109,8 @@ export class Telemetry {
     const write = this.pendingLog.then(async () => {
       await mkdir(path.dirname(this.logsPath), { recursive: true, mode: 0o700 });
       await appendFile(this.logsPath, `${JSON.stringify(row)}\n`, { mode: 0o600 });
+      if (diagnostic.severity === 'critical' || diagnostic.code === 'repository-index.stalled')
+        this.onUrgentDiagnostic?.();
     });
     this.pendingLog = write.catch(() => {});
     return write;

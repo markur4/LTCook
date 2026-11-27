@@ -493,8 +493,8 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
   const indexTimeoutMs = options.indexTimeoutMs ?? REPOSITORY_INDEX_TIMEOUT_MS;
   const indexService = new RepositoryIndexService(
     async (workspace, signal) => {
-      const { changed } = await buildIndex(workspace, signal, true);
-      if (!changed) return 'unchanged' as const;
+      const { generation } = await buildIndex(workspace, signal, true);
+      return generation ? { generation } : 'unchanged';
     },
     { progressDeadlineMs: indexTimeoutMs, onDiagnostic: options.onIndexDiagnostic },
   );
@@ -503,7 +503,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
     workspace: RepositoryWorkspace,
     callerSignal: AbortSignal,
     scheduled = false,
-  ): Promise<{ elapsedMs: number; changed: boolean }> {
+  ): Promise<{ elapsedMs: number; generation?: string }> {
     const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(indexTimeoutMs)]);
     signal.throwIfAborted();
     await workspace.assertUnchanged();
@@ -541,7 +541,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         await workspace.assertUnchanged();
         signal.throwIfAborted();
         store.recordActivity('check');
-        return { elapsedMs: performance.now() - started, changed: false };
+        return { elapsedMs: performance.now() - started };
       }
 
       const seed = previous !== undefined && !requiresFreshColgrepBuild(previous, source);
@@ -609,9 +609,9 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       signal.throwIfAborted();
       // > Keep the observation from before the last native pass so late edits are checked again.
       await writeColgrepSource(candidate.indices, checkpointSource);
-      await writer.publish(candidate, signal);
+      const publishedGeneration = await writer.publish(candidate, signal);
       store.recordActivity('check');
-      return { elapsedMs: performance.now() - started, changed: true };
+      return { elapsedMs: performance.now() - started, generation: publishedGeneration.id };
     } finally {
       await writer.release();
     }

@@ -710,6 +710,21 @@ ${redactDiagnosticText(changes)}`;
     return task.status === 'running' ? task : undefined;
   }
 
+  /** Prefer foreground native work before starting a new background hunt or repair. */
+  async canStartBackgroundBugHunterWork(): Promise<boolean> {
+    const native = await this.agents.list();
+    const internal = new Set(
+      this.store
+        .listSessions()
+        .filter(({ teamId }) => teamId === bugHunterTeamId)
+        .flatMap(({ id }) => this.store.listBindings(id))
+        .map(({ nativeAgentId }) => nativeAgentId),
+    );
+    return native.every(
+      ({ id, status }) => internal.has(id) || (status !== 'running' && status !== 'starting'),
+    );
+  }
+
   /** Provider requests are chargeable only to the active assignment of the bound native actor. */
   bugHunterModelScope(
     sessionId: string,
