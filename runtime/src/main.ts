@@ -649,7 +649,12 @@ async function run(): Promise<void> {
             }
           },
         });
-        api.setBugScan(bugScan.service, bugScan.scope, configuredWorkspace !== undefined);
+        api.setBugScan(
+          bugScan.service,
+          bugScan.scope,
+          configuredWorkspace !== undefined,
+          (scope, hunts) => runtimeController.bugHunterConversations(scope, hunts),
+        );
         const scanScope = bugScan.scope;
         const modelUsage = runtimeController.bugHunterRecords<Record<string, number>>(
           scanScope,

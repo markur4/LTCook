@@ -213,6 +213,12 @@ beside its agent conversation.
   For Codex, Activity recognizes successful direct reads of `SKILL.md` with
   `cat`, `head`, or `sed -n` when the returned front matter names a
   skill in the provider's catalog.
+- **BugHunter** in **Activity → Services** opens a workspace tab with recent
+  hunts, findings, and repair progress. Select a hunt and an agent to follow
+  its read-only conversation. **Open native chat** opens the matching Paseo
+  agent tab when the conversation is available. The tab keeps messages it
+  already received after the session ends. Open the native chat for available
+  archived history.
 - **Tracker** in **Activity → Services** shows the conversation's extraction
   state and recorded coverage. **Open Tracker** opens its full notebook tab.
   The tab stays bound to that conversation when you switch to another agent.

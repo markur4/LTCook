@@ -9,7 +9,9 @@ import {
 } from '../paseo-plugin/shared/repository-query.js';
 import type { createColgrepProvider } from '../repository/providers/colgrep.js';
 import type { BugScanService } from '../services/bugscan.js';
-import type { BugFixService } from '../services/bugfix.js';
+import type { BugFixBatch, BugFixService } from '../services/bugfix.js';
+import type { BugHunterConversation } from '../paseo-plugin/shared/bughunter.js';
+import type { BugScanFinding } from '../services/bugscan.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from '../repository/workspace.js';
 import type { ConversationRecords } from '../session-memory/conversation.js';
 import type { ToolCatalog } from '../tools/catalog.js';
@@ -39,6 +41,10 @@ export interface BugScanActivity {
   service: BugScanService;
   scope: string;
   requireWorkspace: boolean;
+  conversations?(
+    scope: string,
+    hunts: readonly { id: string; fixId?: string }[],
+  ): Map<string, BugHunterConversation[]>;
 }
 
 interface ActivityDependencies {
@@ -112,6 +118,28 @@ async function activityRepositoryScope(
           .catch(() => undefined)
       : undefined;
   return { session, workspace };
+}
+
+function describeFinding({ confidence, cause, remedy, technicalDebt }: BugScanFinding) {
+  return { confidence, cause, remedy: remedy?.description, technicalDebt };
+}
+
+function describeBugFix(fix?: BugFixBatch) {
+  if (!fix) return;
+  const ready = fix.remedies.filter(({ status }) => status === 'ready');
+  return {
+    id: fix.id,
+    status: fix.status,
+    failure: fix.failure,
+    implemented: fix.operations.some(
+      ({ stage, result }) =>
+        ['implement', 'correct'].includes(stage.kind) && result?.status === 'completed',
+    ),
+    verified: Boolean(fix.verifiedTree),
+    integrated: Boolean(fix.integratedRevision),
+    installed: Boolean(fix.installedBuild),
+    recovered: ready.length > 0 && ready.every(({ id }) => fix.recoveredRemedies.includes(id)),
+  };
 }
 
 const activityRoutes = {
@@ -314,6 +342,52 @@ const activityRoutes = {
       response.off('close', cancel);
     }
   },
+  async '/v1/activity/bughunter'(parsed, response, dependencies) {
+    const { workspaceRoot } = z.strictObject({ workspaceRoot: paseoWorkspaceRoot }).parse(parsed);
+    const workspace = await openPaseoRepositoryWorkspace(workspaceRoot);
+    const scan = dependencies.bugScan;
+    if (!scan || !workspace || (scan.requireWorkspace && workspace.root !== scan.scope)) {
+      response.writeHead(200).end(JSON.stringify({ available: false, hunts: [] }));
+      return;
+    }
+    const hunts = scan.service
+      .list()
+      .filter(({ scope }) => scope === scan.scope)
+      .slice(-30)
+      .reverse();
+    const repairs = new Map(
+      dependencies.bugFix
+        ?.list()
+        .filter(({ scope }) => scope === scan.scope)
+        .map((fix) => [fix.huntId, fix]),
+    );
+    const conversations = scan.conversations?.(
+      scan.scope,
+      hunts.map(({ id }) => ({ id, fixId: repairs.get(id)?.id })),
+    );
+    response.writeHead(200).end(
+      JSON.stringify({
+        available: true,
+        enabled: dependencies.activity?.preferences.enabled('bughunter') ?? true,
+        hunts: hunts.map((hunt) => ({
+          id: hunt.id,
+          createdAt: hunt.createdAt,
+          automatic: hunt.automatic,
+          status: hunt.status,
+          components: [...new Set(hunt.groups.map(({ component }) => component))],
+          failure: hunt.failure,
+          findings: hunt.findings.map((finding) => ({
+            ...describeFinding(finding),
+            expectedBehavior: finding.violatedExpectation,
+            mechanism: finding.mechanism,
+            acceptanceCriteria: finding.remedy?.acceptanceCriteria ?? [],
+          })),
+          fix: describeBugFix(repairs.get(hunt.id)),
+          conversations: conversations?.get(hunt.id) ?? [],
+        })),
+      }),
+    );
+  },
   async '/v1/activity/services'(parsed, response, dependencies) {
     const input = parsed as { nativeAgentId?: string; sessionId?: string };
     const agentId = input.nativeAgentId;
@@ -346,8 +420,11 @@ const activityRoutes = {
     const bugScan = dependencies.bugScan;
     const showBugScan = bugScan && (!bugScan.requireWorkspace || workspace?.root === bugScan.scope);
     const hunt = showBugScan ? bugScan.service.list().at(-1) : undefined;
-    const fix = showBugScan ? dependencies.bugFix?.list().at(-1) : undefined;
-    const readyRepairs = fix?.remedies.filter(({ status }) => status === 'ready') ?? [];
+    const fixes = showBugScan ? dependencies.bugFix?.list() : undefined;
+    const fix =
+      fixes?.findLast(({ status }) => status === 'queued' || status === 'running') ??
+      fixes?.findLast(({ status }) => status === 'paused' || status === 'blocked') ??
+      fixes?.at(-1);
     response.writeHead(200).end(
       JSON.stringify({
         rag: {
@@ -368,29 +445,8 @@ const activityRoutes = {
                 id: hunt?.id,
                 enabled: dependencies.activity?.preferences.enabled('bughunter') ?? true,
                 failure: hunt?.failure,
-                fix: fix && {
-                  id: fix.id,
-                  status: fix.status,
-                  failure: fix.failure,
-                  implemented: fix.operations.some(
-                    ({ stage, result }) =>
-                      ['implement', 'correct'].includes(stage.kind) &&
-                      result?.status === 'completed',
-                  ),
-                  verified: Boolean(fix.verifiedTree),
-                  integrated: Boolean(fix.integratedRevision),
-                  installed: Boolean(fix.installedBuild),
-                  recovered:
-                    readyRepairs.length > 0 &&
-                    readyRepairs.every(({ id }) => fix.recoveredRemedies.includes(id)),
-                },
-                findings:
-                  hunt?.findings.map(({ confidence, cause, remedy, technicalDebt }) => ({
-                    confidence,
-                    cause,
-                    remedy: remedy?.description,
-                    technicalDebt,
-                  })) ?? [],
+                fix: describeBugFix(fix),
+                findings: hunt?.findings.map(describeFinding) ?? [],
               },
             }
           : {}),

@@ -100,6 +100,27 @@ test('uses one Pass for bounded writes, correction and current-tree independent 
       }
     };
     const [proper, workaround] = runtime.snapshot(sessionId).assignments;
+    expect(
+      runtime
+        .bugHunterConversations(directory, [
+          { id: input.huntId, fixId: input.requestId },
+          { id: 'unrelated', fixId: 'another-batch' },
+        ])
+        .get(input.huntId),
+    ).toEqual([
+      {
+        id: proper?.nativeAgentId,
+        role: 'BugHunter Proper Fix Worker',
+        stage: 'fix',
+        archived: false,
+      },
+      {
+        id: workaround?.nativeAgentId,
+        role: 'BugHunter Workaround Worker',
+        stage: 'fix',
+        archived: false,
+      },
+    ]);
     expect(proper).toBeDefined();
     expect(workaround).toBeDefined();
     expect(agents.selections.get(proper!.nativeAgentId)?.member).toMatchObject({

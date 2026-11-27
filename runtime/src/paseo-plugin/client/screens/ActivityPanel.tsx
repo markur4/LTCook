@@ -17,7 +17,7 @@ import {
 } from '../../shared/activity';
 import { ActivityStatus, ActivityText } from '../components/ActivityCard';
 import { ActivityAgentCard } from '../components/ActivityAgentCard';
-import { ActivityServices } from '../components/ActivityServices';
+import { ActivityServices, BugHunterActivity } from '../components/ActivityServices';
 import { WorkspaceServices } from '../components/WorkspaceServices';
 import { TrackerService } from '../components/TrackerService';
 import type { Theme } from '../components/PanelChrome';
@@ -25,6 +25,7 @@ import { useFocusedAgent } from '../explorer-panels';
 import { openTracker } from '../tracker-navigation';
 import { openSkillDocument } from './SkillDocument';
 import { openRepositoryQuery } from './RepositoryQuery';
+import { BUG_HUNTER_PANEL_ID } from './BugHunter';
 
 type ActivityPanelProps = PluginWorkspacePanelProps & {
   client: Pick<PluginClientContext, 'composers' | 'openPanel'>;
@@ -74,9 +75,14 @@ function Section({
 }
 
 function ObservedActivity(
-  props: ActivityPanelProps & { selectedAgentId: string; selectedWorkspaceId: string },
+  props: ActivityPanelProps & {
+    selectedAgentId: string;
+    selectedWorkspaceId: string;
+    openBugHunter: () => void;
+  },
 ) {
-  const { selectedAgentId, selectedWorkspaceId, theme, navigation, host, client } = props;
+  const { selectedAgentId, selectedWorkspaceId, theme, navigation, host, client, openBugHunter } =
+    props;
   const toast = useToast();
   const [snapshot, setSnapshot] = useState<ActivitySnapshot>();
   const stream = useSubscription(activitySubscription, { agentId: selectedAgentId }, (next) => {
@@ -129,6 +135,12 @@ function ObservedActivity(
   const ragWorktree = snapshot?.rag.worktree;
   return (
     <>
+      <BugHunterActivity
+        theme={theme}
+        agentId={selectedAgentId}
+        scan={unavailable ? undefined : snapshot?.bugScan}
+        onOpen={openBugHunter}
+      />
       <TrackerService
         theme={theme}
         agentId={selectedAgentId}
@@ -153,8 +165,6 @@ function ObservedActivity(
           <ActivityServices
             theme={theme}
             rag={snapshot.rag}
-            bugScan={snapshot.bugScan}
-            agentId={snapshot.selectedAgentId}
             lastHandoff={snapshot.lastHandoff}
             agentWorktree={snapshot.agent.worktree?.path}
             onQueryRepo={
@@ -220,13 +230,28 @@ function ObservedActivity(
 }
 
 function FocusedActivity(props: ActivityPanelProps) {
+  const toast = useToast();
   const focused = useFocusedAgent(props.client, props.host.id);
   const workspaceId = useAgent(focused ?? '', (agent) => agent.workspaceId);
+  function openBugHunter() {
+    try {
+      props.client.openPanel(BUG_HUNTER_PANEL_ID, {
+        workspaceId: props.workspaceId,
+        location: 'workspace',
+      });
+    } catch {
+      toast.error('Could not open BugHunter.');
+    }
+  }
+
   if (!focused || workspaceId !== props.workspaceId) {
     return (
-      <ActivityText theme={props.theme} tone="muted">
-        Select an agent to view conversation activity.
-      </ActivityText>
+      <>
+        <BugHunterActivity theme={props.theme} onOpen={openBugHunter} />
+        <ActivityText theme={props.theme} tone="muted">
+          Select an agent to view conversation activity.
+        </ActivityText>
+      </>
     );
   }
   return (
@@ -235,6 +260,7 @@ function FocusedActivity(props: ActivityPanelProps) {
       key={`${props.host.id}:${focused.id}`}
       selectedAgentId={focused.id}
       selectedWorkspaceId={workspaceId}
+      openBugHunter={openBugHunter}
     />
   );
 }

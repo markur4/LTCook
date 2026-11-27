@@ -145,15 +145,88 @@ export class RuntimeController implements RuntimeControllerContract {
     });
   }
 
+  private bugScanSessionId(workspaceRoot: string): string {
+    return `bugscan-${createHash('sha256').update(workspaceRoot).digest('hex')}`;
+  }
+
   private bugScanSession(workspaceRoot: string): Session {
     this.assertOpen();
     if (this.evaluationSessionId) throw new Error('This runtime is reserved for evaluation');
     const root = canonicalWorkspace(workspaceRoot);
-    const id = `bugscan-${createHash('sha256').update(root).digest('hex')}`;
+    const id = this.bugScanSessionId(root);
     const session = this.loadOrCreateSession(id, root, bugHunterTeamId);
     if (session.teamId !== bugHunterTeamId || session.workspaceRoot !== root)
       throw new Error('BugScan Session identity does not match the authorized scope');
     return session;
+  }
+
+  /** Resolve native conversations through the service's durable assignment records. */
+  bugHunterConversations(scope: string, hunts: readonly { id: string; fixId?: string }[]) {
+    const requests = this.store.records<{
+      id: string;
+      sessionId: string;
+      taskId: string;
+      huntId?: string;
+    }>(this.bugScanSessionId(scope), 'bugscan-native-task');
+    const assignments = new Map<string, ReturnType<CoordinationStore['listAssignments']>>();
+    const activeAgents = new Map<string, Set<string>>();
+    const describe = (
+      items: ReturnType<CoordinationStore['listAssignments']>,
+      stage: 'scan' | 'fix',
+    ) =>
+      items.flatMap(({ nativeAgentId, memberKey, sessionId }) => {
+        const member = bugHunterTeam.definition.members.find(({ key }) => key === memberKey);
+        if (!member) return [];
+        let live = activeAgents.get(sessionId);
+        if (!live) {
+          live = new Set(
+            this.store
+              .listBindings(sessionId)
+              .flatMap(({ state, nativeAgentId }) =>
+                state === 'bound' && nativeAgentId ? [nativeAgentId] : [],
+              ),
+          );
+          activeAgents.set(sessionId, live);
+        }
+        // > The native archive call can still be in progress after the runtime ends
+        // > the assignment scope. A timeline request at that point can reload the agent.
+        const observing =
+          stage === 'scan'
+            ? this.bugScanModelScopes.has(nativeAgentId)
+            : this.bugFixExecutions.get(sessionId)?.stopped === false;
+        return [
+          {
+            id: nativeAgentId,
+            role: member.name,
+            stage,
+            archived: !observing || !live.has(nativeAgentId),
+          },
+        ];
+      });
+    const read = (sessionId: string) => {
+      const cached = assignments.get(sessionId);
+      if (cached) return cached;
+      const rows = this.store.listAssignments(sessionId);
+      assignments.set(sessionId, rows);
+      return rows;
+    };
+    return new Map(
+      hunts.map(({ id, fixId }) => {
+        const scan = requests.flatMap((request) => {
+          const matches =
+            request.huntId === id ||
+            (!request.huntId &&
+              (request.id.startsWith(`${id}:`) ||
+                (fixId !== undefined && request.id === `${fixId}:failure-report`)));
+          return matches
+            ? read(request.sessionId).filter(({ taskId }) => taskId === request.taskId)
+            : [];
+        });
+        const fix = fixId ? read(this.bugFixSessionId(scope, fixId)) : [];
+        const conversations = [...describe(scan, 'scan'), ...describe(fix, 'fix')];
+        return [id, [...new Map(conversations.map((item) => [item.id, item])).values()]];
+      }),
+    );
   }
 
   /** Keep one service checkpoint in the existing coordination owner. */
@@ -837,6 +910,7 @@ ${redactDiagnosticText(changes)}`;
         id: input.requestId,
         sessionId: session.id,
         taskId: task.id,
+        ...(input.huntId ? { huntId: input.huntId } : {}),
       });
       this.store.updateTask(session.id, { taskId: task.id, status: 'running' });
       const activeAssignment = assignment;
@@ -1362,7 +1436,7 @@ Task to register: ${input.description}`,
           });
           this.bugScanReportWaiters.get(assignment.id)?.(report);
         }
-        this.options.memory?.finalize(actor.nativeAgentId);
+        if (!bugScan) this.options.memory?.finalize(actor.nativeAgentId);
         this.emit({
           type: 'assignment.reported',
           sessionId,
@@ -1428,7 +1502,8 @@ Task to register: ${input.description}`,
               }
             : command,
         );
-        if (actor.kind === 'agent') this.options.memory?.finalize(actor.nativeAgentId);
+        if (actor.kind === 'agent' && session.teamId !== bugHunterTeamId)
+          this.options.memory?.finalize(actor.nativeAgentId);
         return review;
       }
       case 'approval.create':
@@ -1799,10 +1874,12 @@ Task to register: ${input.description}`,
     if (this.closed) return undefined;
     const sessions = this.store
       .listSessions()
-      .filter(({ id }) =>
-        this.store
-          .listBindings(id)
-          .some(({ nativeAgentId, state }) => nativeAgentId === agentId && state === 'bound'),
+      .filter(
+        ({ id, teamId }) =>
+          teamId !== bugHunterTeamId &&
+          this.store
+            .listBindings(id)
+            .some(({ nativeAgentId, state }) => nativeAgentId === agentId && state === 'bound'),
       );
     if (sessions.length !== 1) return undefined;
     const sessionId = sessions[0]!.id;

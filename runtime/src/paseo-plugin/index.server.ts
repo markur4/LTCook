@@ -14,8 +14,14 @@ import {
   TURN_SKILLS_TIMELINE_KIND,
   TurnSkillsTimelineSchema,
 } from './shared/activity';
+import {
+  BUG_HUNTER_AGENT_METADATA,
+  bugHunterDetailsSchema,
+  bugHunterSubscription,
+} from './shared/bughunter';
 import { observeActivity, observedTimestamp } from './server/activity';
 import { readTurnSkills, type RegisteredSkill } from './server/activity-uses';
+import { observeBugHunter } from './server/bughunter';
 import { readSkillDocument } from './server/skill-documents';
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
 import { SessionWorktreesSchema, sessionWorktreesSubscription } from './shared/session-worktrees';
@@ -338,6 +344,22 @@ export default function contribute(server: PluginServerContext) {
   server.handle(activityToggleRpc, async (input) =>
     activityToggleRpc.output.parse(await runtimeJson('/v1/activity/toggle', input)),
   );
+  server.handle(bugHunterSubscription, (input, { paseo, signal, push }) =>
+    observeBugHunter(paseo, input, signal, push, async () => {
+      const workspace = await paseo.workspaces.ref(input.workspaceId).refresh();
+      if (workspace && !workspace.internal && !workspace.archivingAt) {
+        const roots = new Set([workspace.workspaceDirectory, workspace.projectRootPath]);
+        for (const workspaceRoot of roots) {
+          if (!workspaceRoot || signal.aborted) continue;
+          const details = bugHunterDetailsSchema.parse(
+            await runtimeJson('/v1/activity/bughunter', { workspaceRoot }, signal),
+          );
+          if (details.available) return details;
+        }
+      }
+      return { available: false, hunts: [] };
+    }),
+  );
   server.handle(bugScanRunRpc, async ({ agentId, action, id }, { paseo }) => {
     const current = await paseo.agents.ref(agentId).refresh();
     if (!current) throw new Error('The selected agent is unavailable.');
@@ -586,16 +608,21 @@ export default function contribute(server: PluginServerContext) {
     return { items: [item] };
   });
   const observeMemory = (
-    agent: { id: string; provider: string },
+    agent: { id: string; provider: string; metadata: Record<string, unknown> },
     event: Record<string, unknown> = {},
   ) => {
-    if (!['ltcook', 'pi', 'codex'].includes(agent.provider)) return Promise.resolve(undefined);
+    if (
+      agent.metadata[BUG_HUNTER_AGENT_METADATA] === true ||
+      !['ltcook', 'pi', 'codex'].includes(agent.provider)
+    )
+      return Promise.resolve(undefined);
     return runtimeJson('/v1/session-memory/observe', { nativeAgentId: agent.id, ...event }).catch(
       () => undefined,
     );
   };
   const cleanup = [
     server.addHook('agent.turn.before', async ({ agent, turnId }, context) => {
+      if (agent.metadata[BUG_HUNTER_AGENT_METADATA] === true) return;
       const model = ResolvedModelDtoSchema.safeParse(agent.metadata[RESOLVED_MODEL_METADATA_KEY]);
       const reference = context.paseo.agents.ref(agent.id);
       const current = model.success
@@ -607,6 +634,7 @@ export default function contribute(server: PluginServerContext) {
       void observeMemory(agent, { turnId, outcome: 'running', local });
     }),
     server.addHook('agent.turn.after', async ({ agent, turnId, outcome }, { paseo, signal }) => {
+      if (agent.metadata[BUG_HUNTER_AGENT_METADATA] === true) return;
       await observeMemory(agent, { turnId, outcome: outcome.kind });
       if (
         !turnId ||

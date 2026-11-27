@@ -58,6 +58,7 @@ test('dispatches a hidden read-only investigation and persists its sanitized res
       sourceRevision,
       sourceRepositoryRoot: repositoryRoot,
       role: 'coordinator' as const,
+      huntId: 'hunt-1',
       requestId: 'hunt-1:coordinator',
       brief: 'Investigate the fixture.',
       evidence: { apiKey: 'fixture-private-key', message: 'Untrusted diagnostic text' },
@@ -68,7 +69,30 @@ test('dispatches a hidden read-only investigation and persists its sanitized res
     const { sessionId, member } = agents.options!;
     const assignment = runtime.snapshot(sessionId).assignments[0]!;
     const actor = { kind: 'agent' as const, nativeAgentId: assignment.nativeAgentId };
+    expect(
+      runtime.bugHunterConversations(repositoryRoot, [{ id: 'hunt-1' }, { id: 'different-hunt' }]),
+    ).toEqual(
+      new Map([
+        [
+          'hunt-1',
+          [
+            {
+              id: actor.nativeAgentId,
+              role: 'BugHunter Coordinator',
+              stage: 'scan',
+              archived: false,
+            },
+          ],
+        ],
+        ['different-hunt', []],
+      ]),
+    );
+    expect(runtime.bugHunterConversations(workspaceRoot, [{ id: 'hunt-1' }]).get('hunt-1')).toEqual(
+      [],
+    );
+
     expect(member).toMatchObject({ modelAlias: 'medium', thinking: 'high', readOnly: true });
+    expect(runtime.memoryContext(actor.nativeAgentId)).toBeUndefined();
     expect(runtime.teamCatalog().some((entry) => entry.teamId === bugHunterTeamId)).toBe(false);
     expect(runtime.listSessions(workspaceRoot)).toEqual([]);
     await expect(
@@ -125,6 +149,9 @@ test('dispatches a hidden read-only investigation and persists its sanitized res
       }),
     ).toMatchObject({ summary: 'Diagnosis' });
     expect(agents.sends).toHaveLength(1);
+    expect(
+      runtime.bugHunterConversations(repositoryRoot, [{ id: 'hunt-1' }]).get('hunt-1'),
+    ).toMatchObject([{ id: actor.nativeAgentId, stage: 'scan', archived: true }]);
   } finally {
     await runtime.close();
     rmSync(directory, { recursive: true, force: true });

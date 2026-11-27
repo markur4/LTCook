@@ -100,7 +100,7 @@ export default async function activate(
       body: JSON.stringify({ sessionId, nativeAgentId, ...payload }),
     });
   const evaluation = Boolean(process.env.LTCOOK_EVAL_ARM);
-  const memoryEnabled = !evaluation;
+  const memoryEnabled = !evaluation && !bugScan;
   if (memoryEnabled) {
     pi.on('session_before_compact', () => {
       void rpc('/v1/session-memory/observe', { force: true }).catch(() => {});

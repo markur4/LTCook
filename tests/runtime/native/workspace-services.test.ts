@@ -519,6 +519,25 @@ test('Native snapshot version ignores title, label, and UI activity changes whil
   await f.services.close();
 });
 
+test('workspace organization skips BugHunter history but still protects its active workspace', async () => {
+  const f = nativeFixture();
+  const before = await f.services.read(f.workspace.id, signal);
+  f.agentPages.push([
+    {
+      ...f.agent,
+      id: 'bughunter-fixture',
+      labels: { 'ltcook.team': '@ltcook/internal-bughunter' },
+      status: 'running',
+    },
+  ]);
+  const snapshot = await f.services.read(f.workspace.id, signal);
+  expect(f.calls).not.toContain('timeline:bughunter-fixture');
+  expect(snapshot?.contentVersion).toBe(before?.contentVersion);
+  expect(snapshot?.busy).toBe(true);
+  expect(snapshot?.archiveSafe).toBe(false);
+  await f.services.close();
+});
+
 test('Native inventories visit all workspace and agent pages before applying organization', async () => {
   const f = nativeFixture();
   const second = { ...f.workspace, id: 'workspace-two', labels: ['Personal'] };

@@ -7,6 +7,7 @@ import {
   ActivityButton,
   ActivityCard,
   ActivityField,
+  ActivityStatus,
   ActivityText,
   activityColor,
   statusLabel,
@@ -132,25 +133,30 @@ function ActivityTimestamp({
   );
 }
 
-function BugScanCard({
+export function BugHunterActivity({
   theme,
   agentId,
   scan,
+  onOpen,
 }: {
   theme: Theme;
-  agentId: string;
-  scan: NonNullable<ActivitySnapshot['bugScan']>;
+  agentId?: string;
+  scan?: ActivitySnapshot['bugScan'];
+  onOpen: () => void;
 }) {
   const run = useRpc(bugScanRunRpc);
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const canControl = scan.enabled && !pending;
-  const canRun = canControl && scan.status !== 'running' && scan.status !== 'queued';
+  const canControl = Boolean(agentId && scan?.enabled && !pending);
+  const canRun = canControl && scan?.status !== 'running' && scan?.status !== 'queued';
+  const fix = scan?.fix;
+  const fixRunning = fix?.status === 'queued' || fix?.status === 'running';
   async function trigger(
     action: 'run' | 'pause' | 'resume' | 'pause-fix' | 'resume-fix',
     id?: string,
   ) {
+    if (!agentId) return;
     setPending(true);
     setError(null);
     try {
@@ -162,129 +168,137 @@ function BugScanCard({
     }
   }
   return (
-    <ActivityCard
-      theme={theme}
-      title="BugHunter"
-      icon="Search"
-      status={scan.enabled ? statusLabel(scan.status) : 'Disabled'}
-      statusTone={scan.status === 'failed' || scan.status === 'blocked' ? 'warning' : 'muted'}
-      open={open}
-      onToggle={() => setOpen(!open)}
-      summaryLabel={`${scan.findings.length} findings`}
-      summary={<ActivityText theme={theme}>{scan.findings.length} findings</ActivityText>}
+    <View
+      style={{
+        backgroundColor: theme.colors.surface1,
+        borderColor: theme.colors.border,
+        borderWidth: 1,
+        borderRadius: 6,
+      }}
     >
-      <ActivitySwitch
-        theme={theme}
-        label="BugHunter execution"
-        enabled={scan.enabled}
-        feature="bughunter"
-      />
-      {canRun && (
-        <ActivityButton theme={theme} label="Run BugScan" onPress={() => void trigger('run')}>
-          <ActivityText theme={theme} strong>
-            Run BugScan
-          </ActivityText>
-        </ActivityButton>
-      )}
-      {canControl && scan.status === 'running' && (
-        <ActivityButton theme={theme} label="Pause BugScan" onPress={() => void trigger('pause')}>
-          <ActivityText theme={theme}>Pause BugScan</ActivityText>
-        </ActivityButton>
-      )}
-      {canControl && scan.status === 'paused' && scan.id && (
-        <ActivityButton
-          theme={theme}
-          label="Resume BugScan"
-          onPress={() => void trigger('resume', scan.id)}
-        >
-          <ActivityText theme={theme}>Resume BugScan</ActivityText>
-        </ActivityButton>
-      )}
-      {scan.fix && (
-        <>
-          <ActivityField theme={theme} label="BugFix">
-            {statusLabel(scan.fix.status)}
-          </ActivityField>
-          <ActivityField theme={theme} label="Delivery">
-            {[
-              scan.fix.implemented && 'Implemented',
-              scan.fix.verified && 'Verified',
-              scan.fix.integrated && 'Integrated',
-              scan.fix.installed && 'Installed',
-              scan.fix.recovered && 'Recovery verified',
-            ]
-              .filter(Boolean)
-              .join(' · ') || 'Pending'}
-          </ActivityField>
-          {scan.fix.failure && (
-            <ActivityText theme={theme} tone="warning">
-              {scan.fix.failure}
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingRight: scan ? 5 : 0 }}>
+        <ActivityButton theme={theme} label="Open BugHunter" onPress={onOpen} header>
+          <Icon name="Bug" size={15} color={theme.colors.accent} />
+          <View style={{ flex: 1, gap: 3 }}>
+            <ActivityText theme={theme} strong size={12}>
+              BugHunter
             </ActivityText>
-          )}
-          {canControl && ['queued', 'running', 'paused', 'blocked'].includes(scan.fix.status) && (
-            <ActivityButton
+            {scan && (
+              <ActivityText theme={theme} tone="muted">
+                {scan.findings.length === 1 ? '1 finding' : `${scan.findings.length} findings`}
+              </ActivityText>
+            )}
+          </View>
+          {scan && (
+            <ActivityStatus
               theme={theme}
-              label={
-                ['queued', 'running'].includes(scan.fix.status) ? 'Pause BugFix' : 'Resume BugFix'
-              }
-              onPress={() =>
-                void trigger(
-                  ['queued', 'running'].includes(scan.fix!.status) ? 'pause-fix' : 'resume-fix',
-                  scan.fix?.id,
-                )
-              }
-            >
-              <ActivityText theme={theme}>
-                {['queued', 'running'].includes(scan.fix.status) ? 'Pause BugFix' : 'Resume BugFix'}
+              label={scan.enabled ? statusLabel(scan.status) : 'Disabled'}
+              tone={scan.status === 'running' ? 'running' : scan.failure ? 'warning' : 'muted'}
+            />
+          )}
+          <Icon name="ArrowUpRight" size={13} color={theme.colors.foregroundMuted} />
+        </ActivityButton>
+        {scan && (
+          <ActivityButton
+            theme={theme}
+            label="BugHunter controls"
+            expanded={open}
+            onPress={() => setOpen((value) => !value)}
+          >
+            <Icon
+              name={open ? 'ChevronDown' : 'ChevronRight'}
+              size={13}
+              color={theme.colors.foregroundMuted}
+            />
+          </ActivityButton>
+        )}
+      </View>
+      {open && scan && (
+        <View style={{ paddingHorizontal: 10, paddingBottom: 10, gap: 6 }}>
+          <ActivitySwitch
+            theme={theme}
+            label="BugHunter execution"
+            enabled={scan.enabled}
+            feature="bughunter"
+          />
+          {canRun && (
+            <ActivityButton theme={theme} label="Run BugScan" onPress={() => void trigger('run')}>
+              <ActivityText theme={theme} strong>
+                Run BugScan
               </ActivityText>
             </ActivityButton>
           )}
-        </>
-      )}
-      {(error || scan.failure) && (
-        <ActivityText theme={theme} tone="warning">
-          {error || scan.failure}
-        </ActivityText>
-      )}
-      {scan.findings.map((finding, index) => (
-        <View key={`${index}-${finding.cause}`} style={{ gap: 4 }}>
-          <ActivityField
-            theme={theme}
-            label={finding.confidence === 'demonstrated' ? 'Cause' : 'Hypothesis'}
-          >
-            {finding.cause}
-          </ActivityField>
-          {finding.remedy && (
-            <ActivityField theme={theme} label="Remedy">
-              {finding.remedy}
-            </ActivityField>
-          )}
-          {finding.technicalDebt.map((item, debtIndex) => (
-            <ActivityField
+          {canControl && scan.status === 'running' && (
+            <ActivityButton
               theme={theme}
-              key={`${debtIndex}-${item.problem}`}
-              label={item.decision === 'immediate' ? 'Address now' : 'Deferred'}
+              label="Pause BugScan"
+              onPress={() => void trigger('pause')}
             >
-              {`${item.problem} · ${item.rationale}`}
-            </ActivityField>
-          ))}
+              <ActivityText theme={theme}>Pause BugScan</ActivityText>
+            </ActivityButton>
+          )}
+          {canControl && scan.status === 'paused' && scan.id && (
+            <ActivityButton
+              theme={theme}
+              label="Resume BugScan"
+              onPress={() => void trigger('resume', scan.id)}
+            >
+              <ActivityText theme={theme}>Resume BugScan</ActivityText>
+            </ActivityButton>
+          )}
+          {fix && (
+            <>
+              <ActivityField theme={theme} label="BugFix">
+                {statusLabel(fix.status)}
+              </ActivityField>
+              <ActivityField theme={theme} label="Delivery">
+                {[
+                  fix.implemented && 'Implemented',
+                  fix.verified && 'Verified',
+                  fix.integrated && 'Integrated',
+                  fix.installed && 'Installed',
+                  fix.recovered && 'Recovery verified',
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || 'Pending'}
+              </ActivityField>
+              {fix.failure && (
+                <ActivityText theme={theme} tone="warning">
+                  {fix.failure}
+                </ActivityText>
+              )}
+              {canControl && ['queued', 'running', 'paused', 'blocked'].includes(fix.status) && (
+                <ActivityButton
+                  theme={theme}
+                  label={fixRunning ? 'Pause BugFix' : 'Resume BugFix'}
+                  onPress={() => void trigger(fixRunning ? 'pause-fix' : 'resume-fix', fix.id)}
+                >
+                  <ActivityText theme={theme}>
+                    {fixRunning ? 'Pause BugFix' : 'Resume BugFix'}
+                  </ActivityText>
+                </ActivityButton>
+              )}
+            </>
+          )}
+          {(error || scan.failure) && (
+            <ActivityText theme={theme} tone="warning">
+              {error || scan.failure}
+            </ActivityText>
+          )}
         </View>
-      ))}
-    </ActivityCard>
+      )}
+    </View>
   );
 }
 
 export function ActivityServices({
   theme,
   rag,
-  bugScan,
-  agentId,
   lastHandoff,
   agentWorktree,
   onQueryRepo,
-}: Pick<ActivitySnapshot, 'rag' | 'lastHandoff' | 'bugScan'> & {
+}: Pick<ActivitySnapshot, 'rag' | 'lastHandoff'> & {
   theme: Theme;
-  agentId: string;
   agentWorktree?: string;
   onQueryRepo?: () => void;
 }) {
@@ -373,7 +387,6 @@ export function ActivityServices({
           </ActivityText>
         )}
       </ActivityCard>
-      {bugScan && <BugScanCard theme={theme} agentId={agentId} scan={bugScan} />}
       {lastHandoff && (
         <ActivityCard
           theme={theme}

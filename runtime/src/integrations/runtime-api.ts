@@ -198,8 +198,13 @@ export class RuntimeApi {
     this.evals = service;
   }
 
-  setBugScan(service: BugScanService, scope: string, requireWorkspace: boolean): void {
-    this.bugScan = { service, scope, requireWorkspace };
+  setBugScan(
+    service: BugScanService,
+    scope: string,
+    requireWorkspace: boolean,
+    conversations?: BugScanActivity['conversations'],
+  ): void {
+    this.bugScan = { service, scope, requireWorkspace, conversations };
   }
 
   setBugHunterModelGate(gate: (sessionId: string, nativeAgentId: string) => boolean): void {
