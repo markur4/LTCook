@@ -219,3 +219,58 @@ test('BugHunter does not reopen an archived native agent as a live observation',
   expect(opened).toEqual([]);
   expect(snapshot?.chat).toEqual({ agentId: 'allowed-agent', archived: true, messages: [] });
 });
+
+test('a rejected history request cannot suppress a replacement timeline', async () => {
+  const stop = new AbortController();
+  const snapshots: BugHunterSnapshot[] = [];
+  let replace: (() => void) | undefined;
+  let historyReads = 0;
+  const paseo = {
+    agents: {
+      ref(id: string) {
+        return {
+          timeline: {
+            subscribe(listener: (input: { event: { type: string; epoch: string } }) => void) {
+              replace = () => listener({ event: { type: 'replacement', epoch: 'new' } });
+              return { ready: Promise.resolve(), async release() {} };
+            },
+            async refetch() {
+              historyReads++;
+              if (historyReads === 1) {
+                replace?.();
+                throw new Error('Old generation failed.');
+              }
+              return {
+                agentId: id,
+                epoch: 'new',
+                entries: [
+                  { seqStart: 1, item: { type: 'assistant_message', text: 'New history' } },
+                ],
+              };
+            },
+          },
+        };
+      },
+    },
+  } as unknown as PaseoApi;
+  const deadline = setTimeout(() => stop.abort(), 3_000);
+  try {
+    await observeBugHunter(
+      paseo,
+      { workspaceId: 'workspace', huntId: 'selected-hunt', agentId: 'allowed-agent' },
+      stop.signal,
+      async (snapshot) => {
+        snapshots.push(snapshot);
+        if (snapshots.length === 2) stop.abort();
+      },
+      async () => details,
+    );
+    expect(snapshots[0]?.chat).toMatchObject({ messages: [] });
+    expect(snapshots[1]?.chat).toMatchObject({
+      messages: [{ id: 'new:1', role: 'assistant', text: 'New history' }],
+    });
+    expect(historyReads).toBe(2);
+  } finally {
+    clearTimeout(deadline);
+  }
+});

@@ -40,6 +40,7 @@ function observeConversation(agentId: string, timeline: Timeline, signal: AbortS
   let epoch: string | undefined;
   let generation = 0;
   let seeded = false;
+  let subscribed = false;
   let unavailable = false;
   let through = -1;
   let released = false;
@@ -81,6 +82,7 @@ function observeConversation(agentId: string, timeline: Timeline, signal: AbortS
     });
 
   const observation = timeline.subscribe((update) => {
+    subscribed = true;
     const { event } = update;
     if (event.type === 'replacement') reset(event.epoch);
     if (event.type === 'subscription_restored') reset();
@@ -103,9 +105,12 @@ function observeConversation(agentId: string, timeline: Timeline, signal: AbortS
     if (seeded) append(part);
     else waiting = [...waiting.slice(-(tailLimit - 1)), part];
   });
-  void observation.ready.catch(() => {
-    unavailable = true;
-  });
+  void observation.ready.then(
+    () => {
+      subscribed = true;
+    },
+    () => {},
+  );
   const release = () => {
     if (released) return;
     released = true;
@@ -120,8 +125,9 @@ function observeConversation(agentId: string, timeline: Timeline, signal: AbortS
       if (!seeded) {
         const observedGeneration = generation;
         try {
-          await observation.ready;
-          if (signal.aborted || released) return { agentId, messages: [] };
+          if (!subscribed) await observation.ready;
+          if (signal.aborted || released || generation !== observedGeneration)
+            return { agentId, messages: renderMessages() };
           const tail = await timeline.refetch({
             direction: 'tail',
             projection: 'canonical',
@@ -141,6 +147,8 @@ function observeConversation(agentId: string, timeline: Timeline, signal: AbortS
           }
           through = Math.max(through, tail.endCursor?.seq ?? -1);
         } catch {
+          if (signal.aborted || released || generation !== observedGeneration)
+            return { agentId, messages: renderMessages() };
           // > A failed history load must not cause additional native reads while
           // > a session is closing. Live events can still arrive on this subscription.
           unavailable = true;
