@@ -9,6 +9,7 @@ import {
 } from '../paseo-plugin/shared/repository-query.js';
 import type { createColgrepProvider } from '../repository/providers/colgrep.js';
 import type { BugScanService } from '../services/bugscan.js';
+import type { BugFixService } from '../services/bugfix.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from '../repository/workspace.js';
 import type { ConversationRecords } from '../session-memory/conversation.js';
 import type { ToolCatalog } from '../tools/catalog.js';
@@ -44,6 +45,7 @@ interface ActivityDependencies {
   shutdownSignal: AbortSignal;
   activity?: ActivityServices;
   bugScan?: BugScanActivity;
+  bugFix?: BugFixService;
   catalog?: ToolCatalog;
   workspaceServices?: PaseoWorkspaceServices;
   lastDelivered: ConversationRecords['lastDelivered'];
@@ -115,19 +117,50 @@ async function activityRepositoryScope(
 const activityRoutes = {
   async '/v1/activity/bugscan'(parsed, response, dependencies) {
     const input = z
-      .object({ nativeAgentId: z.string().min(1), sessionId: z.string().optional() })
+      .object({
+        nativeAgentId: z.string().min(1),
+        sessionId: z.string().optional(),
+        action: z.enum(['run', 'pause', 'resume', 'pause-fix', 'resume-fix']).default('run'),
+        id: z.string().optional(),
+      })
       .parse(parsed);
     const scope = await activityRepositoryScope(input.nativeAgentId, input.sessionId, dependencies);
     const bugScan = dependencies.bugScan;
     if (
       !bugScan ||
       !scope ||
+      dependencies.activity?.preferences.enabled('bughunter') === false ||
       (bugScan.requireWorkspace && scope.workspace?.root !== bugScan.scope)
     ) {
       response.writeHead(403).end('{"error":"BugScan is unavailable for this scope"}');
       return;
     }
-    await bugScan.service.trigger(bugScan.scope);
+    const fixes = dependencies.bugFix;
+    switch (input.action) {
+      case 'run':
+        await bugScan.service.trigger(bugScan.scope);
+        break;
+      case 'pause':
+        bugScan.service.pause(bugScan.scope);
+        break;
+      case 'resume':
+        if (
+          input.id &&
+          bugScan.service.list().some(({ id, scope }) => id === input.id && scope === bugScan.scope)
+        )
+          bugScan.service.resume(input.id);
+        break;
+      case 'pause-fix':
+      case 'resume-fix':
+        if (
+          input.id &&
+          fixes?.list().some(({ id, scope }) => id === input.id && scope === bugScan.scope)
+        ) {
+          if (input.action === 'pause-fix') fixes.pause(input.id);
+          else fixes.resume(input.id);
+        }
+        break;
+    }
     response.writeHead(200).end('{"accepted":true}');
   },
   async '/v1/activity/workspace-touch'(parsed, response, dependencies) {
@@ -159,7 +192,11 @@ const activityRoutes = {
       return;
     }
     activity.preferences.set(feature, enabled);
-    activity.colgrep.setIndexingEnabled(enabled);
+    if (feature === 'rag-index') activity.colgrep.setIndexingEnabled(enabled);
+    else if (!enabled) {
+      if (dependencies.bugScan) dependencies.bugScan.service.pause(dependencies.bugScan.scope);
+      for (const bugFix of dependencies.bugFix?.list() ?? []) dependencies.bugFix?.pause(bugFix.id);
+    }
     response.writeHead(200).end(JSON.stringify({ enabled }));
   },
   async '/v1/activity/repository-query-workspace'(parsed, response, { activity, shutdownSignal }) {
@@ -309,6 +346,8 @@ const activityRoutes = {
     const bugScan = dependencies.bugScan;
     const showBugScan = bugScan && (!bugScan.requireWorkspace || workspace?.root === bugScan.scope);
     const hunt = showBugScan ? bugScan.service.list().at(-1) : undefined;
+    const fix = showBugScan ? dependencies.bugFix?.list().at(-1) : undefined;
+    const readyRepairs = fix?.remedies.filter(({ status }) => status === 'ready') ?? [];
     response.writeHead(200).end(
       JSON.stringify({
         rag: {
@@ -326,7 +365,25 @@ const activityRoutes = {
           ? {
               bugScan: {
                 status: hunt?.status ?? 'idle',
+                id: hunt?.id,
+                enabled: dependencies.activity?.preferences.enabled('bughunter') ?? true,
                 failure: hunt?.failure,
+                fix: fix && {
+                  id: fix.id,
+                  status: fix.status,
+                  failure: fix.failure,
+                  implemented: fix.operations.some(
+                    ({ stage, result }) =>
+                      ['implement', 'correct'].includes(stage.kind) &&
+                      result?.status === 'completed',
+                  ),
+                  verified: Boolean(fix.verifiedTree),
+                  integrated: Boolean(fix.integratedRevision),
+                  installed: Boolean(fix.installedBuild),
+                  recovered:
+                    readyRepairs.length > 0 &&
+                    readyRepairs.every(({ id }) => fix.recoveredRemedies.includes(id)),
+                },
                 findings:
                   hunt?.findings.map(({ confidence, cause, remedy, technicalDebt }) => ({
                     confidence,

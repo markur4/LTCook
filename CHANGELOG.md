@@ -36,6 +36,10 @@ All notable changes to `ltcook` will be documented in this file.
 - Hosted Decision Tracker Agent Evals verify persisted decisions, budgeting,
   evidence, and recovery. The opt-in baseline runs both setups under one deadline.
 
+- BugHunter Dev mode can run eligible repairs under a revocable standing
+  grant. Services reports delivery and recovery separately and offers pause
+  and resume controls. Unattended merging remains gated on qualification.
+
 - BugHunter can collect diagnostics and run an opt-in, read-only BugScan.
   Activity → Services shows findings, proposed remedies, and deferred work.
 
