@@ -303,6 +303,10 @@ test.skipIf(!deploymentDirectory)(
         status: 'ready',
         results: [{ path: 'nested/nested.ts' }],
       });
+      await observer.buildIndex(
+        await openRepositoryWorkspace(nested),
+        new AbortController().signal,
+      );
       expect(await byName(nested, 'nestedChecksum')).toMatchObject({
         status: 'ready',
         results: [{ path: 'nested.ts' }],
