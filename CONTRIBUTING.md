@@ -11,14 +11,16 @@ detailed environment, packaging, and verification guidance.
 ### Table of Contents
 
 1. [Before starting](#before-starting)
-2. [Quick start](#quick-start)
+2. [Issues and backlog](#issues-and-backlog)
+3. [Quick start](#quick-start)
    1. [Set up development](#set-up-development)
    2. [Run checks](#run-checks)
-3. [Working conventions](#working-conventions)
-4. [Documentation and generated files](#documentation-and-generated-files)
+4. [Working conventions](#working-conventions)
+5. [Documentation and generated files](#documentation-and-generated-files)
    1. [README maintenance](#readme-maintenance)
    2. [Generated files](#generated-files)
-5. [Before submitting](#before-submitting)
+6. [Changelog](#changelog)
+7. [Before submitting](#before-submitting)
 
 ---
 
@@ -35,58 +37,208 @@ unrelated changes. Coding agents must also follow [AGENTS.md](AGENTS.md).
 
 <br>
 
+# Issues and backlog
+
+## Record roles
+
+| Record | Owns |
+| --- | --- |
+| GitHub Issues | Durable work and its details, evidence, scope, discussion, labels, and resolution. |
+| `BACKLOG.md` | Concise issue summaries grouped into ordered planned Passes. Every actionable entry links to its GitHub Issue. |
+| `PLAN.md` | The scope and approach of the active Pass. |
+| `TODO.md` beside `PLAN.md` | The active Pass's operational checklist for reproduction, implementation, tests, documentation, and delivery as applicable. |
+| `CHANGELOG.md` | Notable delivered changes. |
+| `CONTRIBUTING.md` | Shared rules for maintaining these records. |
+
+Several TODO steps may implement one issue, and one Pass may address several
+issues. Do not create an issue for each operational step. Keep one authoritative
+active checklist rather than duplicating editable checkboxes across documents.
+
+## Labels and focus
+
+Use only the workflow labels `accepted`, `needs info`, and `Deferred`, alongside
+unrelated labels and GitHub's native issue states.
+
+| Label | Meaning |
+| --- | --- |
+| `accepted` | The issue belongs to the focused work. It does not assert that all information is available. |
+| `needs info` | Specific missing information prevents the next step. State the unanswered question in the issue. |
+| `Deferred` | The work is deliberately retained for later. |
+
+These labels are independent. `accepted` may coexist with `needs info`,
+`Deferred`, or both. Adding `needs info` must not remove `accepted`. Remove
+`needs info` when the information is supplied. Promote deferred work deliberately
+when scheduling it. An issue in `BACKLOG.md` is accepted. New findings recorded as
+issues do not automatically enter the focused backlog. If Actions is unavailable,
+apply the required labels additively through the GitHub CLI or API.
+
+## Schedule work
+
+> [!CAUTION]
+> These records can be published: Never record secrets, absolute paths, credentials, private host data, or speculative security claims. Use repository-relative source paths and complete GitHub issue URLs. 
+
+
+> [!IMPORTANT]
+> 
+> ## Rules
+> 1) Preserve the BACKLOG header and TOC. Follow the rules in this contribution guide.
+> 1) Order planned Passes and their entries by intended execution. Group work by priorities, dependencies, shared implementation and checks, and effort. Keep `Deferred` last and preserve Ignore and other context before the queue.
+> 1) Do not suggest issues for paths that are under `## Ignore`
+> 1) Create or update a GitHub Issue for real, actionable, out-of-scope work. Add a concise, linked backlog entry when selected for scheduling. Reorder, batch, reconcile, or remove entries when useful.
+> 1) Search open and closed issues and the backlog for the same outstanding scope. Reuse a matching issue, preserve relevant closed history, and reference related distinct issues from both records using complete issue URLs.
+> 1) For a complete fix, use a closing issue reference in the pull request to `main` and remove the backlog entry in the same change. Use an ordinary reference for a partial fix and keep unresolved scope open. Follow this repository's [changelog rules](#changelog).
+> 1) **Types:**
+>       - **Bug risk**: Potential defect with concrete evidence, not yet confirmed.
+>       - **Code smell**: Implementation, architectural, maintainability or clarity issue that is not currently a defect.
+>       - **Docs drift**: Documentation is stale, incomplete, or inconsistent.
+>       - **Tooling**: Issue with build, test, lint, type-check, and general slowdown of developer workflow.
+>       - **Security**: Evidence-backed security risk. Use Question for uncertainty.
+>       - **Question**: Design, behavior, or ownership uncertainty needing investigation & maybe decision.
+> 
+> 1) **Priorities:**
+>       - **P1**: Should be handled ASAP.
+>       - **P2**: Should be handled before next release or milestone.
+>       - **P3**: Useful cleanup for a later focused pass.
+> 1) **Effort:**
+>       - **E1**: Issue deserves its own focused pass.
+>       - **E2**: Can be batched with a few other issues.
+>       - **E3**: Can be batched with many other issues.
+> 1) **Format:**
+> ```markdown
+> 
+> <br>
+> 
+> # Planned Pass — <pass name>
+>
+> ## <Priority> / <Effort> [<Type>] - *Short problem title*
+> - **Issue:** <complete GitHub issue URL>
+> - **Area:**  `path/or/symbol`
+> - **Observed while:** short context
+> - **Why not fixed now:** scope, risk, uncertainty, or user decision needed
+> - **Evidence:** concrete observation
+> - **Context:** explanation to ensure the problem is understood in the big-picture of the repo.
+> - **Suggested next step:** smallest reasonable follow-up. If applicable, reference related issues by their complete URLs.
+> 
+> ## <Priority> / <Effort> [<Type>] - *Short problem title*
+> - **Issue:** <complete GitHub issue URL>
+> - **Area:** `path/or/symbol`
+> - ...
+> 
+> <br>
+> 
+> # Planned Pass — <pass name>
+>
+> ## <Priority> / <Effort> [<Type>] - *Short problem title*
+> - **Issue:** <complete GitHub issue URL>
+> - **Area:** `path/or/symbol`
+> - ...
+> ```
+
+
+
+<br>
+
+---
+
+<br>
+
+Agents may reorder the backlog to handle dependencies and blockers. When one item
+cannot proceed, record its blocker on the existing issue and update the backlog
+order when needed. Independent Tasks within an authorized Pass may continue. Do
+not create an issue merely because work stalled. Create another issue only when
+it represents separate actionable work. A `needs info` label does not
+automatically defer the issue or remove it from the focus. Backlog organization
+does not itself authorize a Pass to start.
+
+## Create and maintain issues
+
+Read this policy, the relevant backlog entries, and the issue's current body,
+labels, state, and relevant comments before working. Search open and closed
+issues before creating a record. Reuse an issue only when it covers the same
+outstanding scope. Preserve relevant closed issues as history instead of
+reopening them solely to avoid a similar title. After an uncertain creation
+result, search for the created issue before retrying. Preserve source evidence
+until the issue exists and covers its scope. Link related work in both issues
+when useful.
+
+Use the repository's work item template for findings. Keep the existing priority,
+effort, and type format. Record concrete evidence and preserve useful detail. Do
+not require new reproduction before transferring findings already supported by
+recorded evidence. Create an issue only for real, actionable work not already
+covered by another issue. Do not create issues for paths in the backlog's Ignore
+section. Preserve existing content when updating an issue. Keep repository paths
+relative in issue content, and follow the privacy rules above.
+Link each scheduled issue using its canonical GitHub URL. Reference issues from
+the active Pass plan, checklist, and implementing pull request when applicable.
+
+Use the repository's existing report field order: Area, Observed while, Why not
+fixed now, Evidence, Context where present, and Suggested next step. Backlog
+entries add a mandatory **Issue** field with the complete issue URL. Keep the
+report heading style of priority, effort, and type in the issue body.
+
+If information blocks the next step, add `needs info` with the specific question
+and keep `accepted` unchanged. Use issue comments for meaningful evidence,
+questions, decisions, and delivery results. Avoid transcripts of routine agent
+activity.
+
+## Complete and hand off work
+
+For a complete fix, link the issue to the pull request with a closing reference
+such as `Closes #123` that closes it when merged to `main`. Remove its completed
+backlog entry in the same change, finish the relevant TODO steps, and follow the
+existing changelog policy. A partial fix uses an ordinary issue reference and
+leaves unresolved scope open. A reopened issue needs a scheduling decision in
+`BACKLOG.md`.
+
+Before unfinished work leaves an active Pass, preserve its durable scope in an
+existing or new issue and the appropriate backlog entry. Do not let the active
+TODO become the only record of durable follow-up work.
+
+Reconcile the issue, backlog, active plan, checklist, and pull request while
+discovering, organizing, working, deferring, and completing work. If a GitHub
+write fails, record the operation, source evidence, and current outcome in the
+active TODO. Before retiring that TODO, carry any pending operation and its
+evidence into the existing unfinished-work handoff. Do not claim a write
+succeeded or discard the only copy of a finding. If GitHub is unavailable, keep
+the finding locally as pending publication and continue independent authorized
+work.
+
+Preserve the backlog's existing report fields and Ignore exclusions. Use its
+heading format and add the canonical GitHub Issue URL to every actionable entry.
+Keep full issue details in GitHub and concise summaries and planning context in
+the backlog.
+
+---
+
+<br>
+
 # Quick start
 
 ## Set up development
 
-The project requires Python 3.13+, Bun 1.4.4+, Node matching `.node-version`,
-uv, and just. From the project root:
+Use Python 3.13+, Bun 1.4.4+, Node matching `.node-version`, uv, and just. From
+the project root:
 
 ```shell
 uv venv --python 3.13 .venv
 just sync
 ```
 
-This uses the checkout's `.venv` (or explicit `UV_PROJECT_ENVIRONMENT`), installs
-frozen Bun dependencies, builds and stages runtime/team assets, then synchronizes
-the Python environment from `uv.lock`. It does not install Podman or run
-application setup. You may use the
-normal Python package tooling without uv for Python-only work, but changes to the
-runtime bundle, Python lock, or packaged assets should use the locked root setup.
-If Bun is not on PATH, set `BUN` to its executable path for root and runtime tasks.
-
-The [maintainer environment](docs/Development.md#maintainer-environment) guide
-explains the dependency locks, portable lock export, staged wheel payload, and
-restored scaffold recipes.
-Entering the repository does not install or start Pi, Paseo, browser files, or
-containers.
+See [Maintainer environment](docs/Development.md#maintainer-environment) for the
+locked setup, environment variables, and packaging details.
 
 ## Run checks
 
-The default quick checks are split by language:
+Run the normal checks from the project root:
 
 ```shell
-just runtime check
-just runtime test
 just check
 just test
 ```
 
-`just check` enforces Prettier and Ruff formatting, TypeScript types, Python lint,
-and Pyright. Use `just format` to apply formatting. `just test` runs
-Bun unit/native/runtime-integration/team-contract tests and Python tests excluding
-the `integration` and `system` markers. The runtime integration tests use fake
-agents and in-memory coordination; these quick commands do not start native
-agents, call models, or start containers. The separate marked Python integration
-and system commands are documented in the
-[verification guide](docs/Development.md#verification); use them only when their
-scenario prerequisites are available.
-
-Do not run installation smoke tests as a default loop. They require an explicitly
-built native setup and its immutable source commit, plus compiler/download prerequisites.
-Windows and macOS behavior is not established by Linux execution. The guides explain these
-limits; the [release guide](docs/Development.md#releases) covers the Linux asset
-rehearsal and explicit publication commands.
+See [Verification](docs/Development.md#verification) for check coverage,
+prerequisites, and platform limits. Native and model-backed procedures are
+documented there when a task requires them.
 
 ---
 
@@ -141,9 +293,9 @@ installations, shared services and external workspaces are outside the instance.
   when they clarify a real shared responsibility. Preserve package initializer
   boundaries and use Sphinx-style docstrings for public Python behavior.
 
-[BACKLOG.md](BACKLOG.md) holds durable actionable work deferred from the current
-change. Keep active execution checklists beside their plan, not as a second
-repository backlog.
+Follow [Issues and backlog](#issues-and-backlog) for durable issue records and
+planned Pass order. Keep the active execution checklist in `TODO.md` beside its
+`PLAN.md`.
 
 ---
 
@@ -174,6 +326,29 @@ native setup through AppRC. Native authoring needs uv 0.11.6 or newer and Rust/L
 editable registration does not. Never hand-edit generated payloads or stage
 incomplete assets into a distributable package. See
 [asset packaging](docs/Development.md#asset-packaging).
+
+---
+
+<br>
+
+# Changelog
+
+> [!IMPORTANT]
+> ## Rules
+> This changelog follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) and
+> [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0/).
+>
+> Keep one cumulative section per target version. Use `## [X.Y.Z] - YYYY-MM-DD`
+> for stable and append `(b1)` or `(rc1)` for an optional preview. The notes
+> describe what ships since the previous stable version.
+> Link the section to that stable tag once one exists. Include only stable
+> `X.Y.0` releases in the table of contents.
+>
+> Keep all six category headings under `[Unreleased]` and empty them before a
+> release. Omit empty categories from versioned sections. Preserve the emojis
+> and layout markers. Prefix breaking entries with `**Breaking:** 💥` in the
+> applicable category. Describe the final shipped behavior under Added for a
+> new feature. Use Fixed for defects in previously released behavior.
 
 ---
 

@@ -3,21 +3,7 @@
 All notable changes to `ltcook` will be documented in this file.
 
 > [!IMPORTANT]
-> ## Rules
-> This changelog follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) and
-> [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0/).
->
-> Keep one cumulative section per target version. Use `## [X.Y.Z] - YYYY-MM-DD`
-> for stable and append `(b1)` or `(rc1)` for an optional preview. The notes
-> describe what ships since the previous stable version.
-> Link the section to that stable tag once one exists. Include only stable
-> `X.Y.0` releases in the table of contents.
->
-> Keep all six category headings under `[Unreleased]` and empty them before a
-> release. Omit empty categories from versioned sections. Preserve the emojis
-> and layout markers. Prefix breaking entries with `**Breaking:** 💥` in the
-> applicable category. Describe the final shipped behavior under Added for a
-> new feature. Use Fixed for defects in previously released behavior.
+> Follow the [changelog rules in CONTRIBUTING.md](CONTRIBUTING.md#changelog).
 
 
 
@@ -46,6 +32,9 @@ All notable changes to `ltcook` will be documented in this file.
 <br>
 
 ### ✨ Added
+
+- Add an issue template and acceptance workflow for the issue-backed backlog.
+  The contribution guide explains scheduling and changelog maintenance.
 
 - Agent chats show live generation speed in the composer, refreshing every two
   seconds. The bundled Turn Speed component marks estimated token rates and

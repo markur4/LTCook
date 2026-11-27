@@ -9,11 +9,11 @@ The follow-up checked the affected paths against `58e951c` on November 26.
 The scan covered the repository tree and selected implementation paths, tests,
 documentation, and backlog entries. The optional deep edge-case scan was
 declined. Evidence below distinguishes source observations, verified fixes, and
-performance hypotheses. [BACKLOG.md](BACKLOG.md#2026-11-26) tracks outstanding
+performance hypotheses. [BACKLOG.md](BACKLOG.md#architecture-follow-ups) tracks outstanding
 work. The following checklist is an index.
 
 - [Decisions and acceptance](#decisions-and-acceptance)
-- [Execution order](#execution-order)
+- [Original CSC sequencing decisions](#original-csc-sequencing-decisions)
 - [Findings](#findings)
 - [Coverage and existing backlog](#coverage-and-existing-backlog)
 - [Implementation evidence](#implementation-evidence)
@@ -62,7 +62,13 @@ work. The following checklist is an index.
   Model-backed Agent Evals or live cross-harness comparisons follow the
   repository's authorization and verification policy.
 
-## Execution order
+<a id="execution-order"></a>
+
+## Original CSC sequencing decisions
+
+The decisions below record the sequencing rationale in this report. The current
+planned Pass order is maintained in [BACKLOG.md](BACKLOG.md), which is the
+repository's scheduling source.
 
 1. **Explorer fix (CSC-01).** Independent change `176b072` is reviewed in
    [draft PR #62](https://github.com/markur4/LTCook/pull/62). The two role
@@ -351,7 +357,7 @@ The composition pass passed native Paseo browser worktree acceptance. The
 broader offline browser team-flow case timed out waiting for `12.5 tokens/s`
 during the live Session Memory rate stage. The matched pre-change run reached
 the same timeout. Live-rate display remains unverified. See the
-[focused tooling follow-up](BACKLOG.md#p3--e2-tooling---investigate-the-native-activity-live-rate-timeout).
+[original tooling report](https://github.com/markur4/LTCook/blob/7dbb8eec46f416e0ba93c64beca08fa576a7b544/BACKLOG.md#p3--e2-tooling---investigate-the-native-activity-live-rate-timeout).
 
 Existing backlog entries remain authoritative for detached runtime shutdown,
 mobile Activity observation, chat diff/worktree selection, host-skill fixture
@@ -402,7 +408,7 @@ expected sources. The measured search and handoff paths stayed inside their
 5-second and 500-ms deadlines. These warm loopback results show the scaling
 of small fixture messages. Installed latency under load and recall on other
 corpora remain open questions.
-See [Measure authorized conversation retrieval scaling](BACKLOG.md#p3--e1-question---measure-authorized-conversation-retrieval-scaling).
+See [Measure authorized conversation retrieval scaling](https://github.com/markur4/LTCook/issues/98).
 
 ### Workspace preparation measurements
 
@@ -419,4 +425,4 @@ Python-emitted guards through the TypeScript parser and cache. Stable input
 still reuses the prepared environment. Installed cold overhead and hit rates
 remain unmeasured. [Workspace preparation](https://github.com/markur4/LTCook/pull/75)
 
-See [Measure live workspace preparation and cache growth](BACKLOG.md#p3--e2-question---measure-live-workspace-preparation-and-cache-growth).
+See [Measure live workspace preparation and cache growth](https://github.com/markur4/LTCook/issues/99).

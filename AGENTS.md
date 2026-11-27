@@ -3,6 +3,12 @@
 Before making changes, read [Contributing](CONTRIBUTING.md) and follow its shared
 conventions. Consult the relevant [Development](docs/Development.md) guides.
 
+Repository work records have distinct roles. GitHub Issues retain durable work
+and its details, `BACKLOG.md` orders planned Passes, and `TODO.md` beside
+`PLAN.md` holds the active Pass checklist. `CHANGELOG.md` records notable
+delivered changes. `CONTRIBUTING.md` owns the shared rules for maintaining these
+records.
+
 ## Agent workflow
 
 - Use the fixed [Pass and Task definitions](docs/Explanations.md#domain-terminology) in all LTCook instructions, skills, plans, and reports. Keep acceptance and requirements for reporting Done in the workflow.
@@ -27,7 +33,8 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
   Leave independent installations, shared services and external workspaces alone.
 - Inspect the existing owner and shared helpers before adding an implementation;
   warn the user when documented paths appear stale.
-- Check [BACKLOG.md](BACKLOG.md) and assess related durable work for the pass.
+- Read [Issues and backlog](CONTRIBUTING.md#issues-and-backlog), including the
+  issue details and current order in [BACKLOG.md](BACKLOG.md), before planning.
 - Keep one authoritative active checklist beside its plan. Before closing a
   pass, transfer unfinished work according to the shared contribution rules.
 
