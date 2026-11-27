@@ -69,15 +69,78 @@ These labels are independent. `accepted` may coexist with `needs info`,
 `Deferred`, or both. Adding `needs info` must not remove `accepted`. Remove
 `needs info` when the information is supplied. Promote deferred work deliberately
 when scheduling it. An issue in `BACKLOG.md` is accepted. New findings recorded as
-issues do not automatically enter the focused backlog.
+issues do not automatically enter the focused backlog. If Actions is unavailable,
+apply the required labels additively through the GitHub CLI or API.
 
 ## Schedule work
 
-Use `BACKLOG.md` to determine the current order. Put planned Passes in the order
-they are expected to run, with the next planned Pass at the top. Organize issues
-using priority, effort, dependencies, shared implementation, and shared checks,
-while keeping independently meaningful work identifiable. Keep `Deferred` in a
-dedicated final section. Preserve Ignore and other context before the work queue.
+> [!CAUTION]
+> These records can be published: Never record secrets, absolute paths, credentials, private host data, or speculative security claims. Use repository-relative source paths and complete GitHub issue URLs. 
+
+
+> [!IMPORTANT]
+> 
+> ## Rules
+> 1) Preserve the BACKLOG header and TOC. Follow the rules in this contribution guide.
+> 1) Order planned Passes and their entries by intended execution. Group work by priorities, dependencies, shared implementation and checks, and effort. Keep `Deferred` last and preserve Ignore and other context before the queue.
+> 1) Do not suggest issues for paths that are under `## Ignore`
+> 1) Create or update a GitHub Issue for real, actionable, out-of-scope work. Add a concise, linked backlog entry when selected for scheduling. Reorder, batch, reconcile, or remove entries when useful.
+> 1) Search open and closed issues and the backlog for the same outstanding scope. Reuse a matching issue, preserve relevant closed history, and reference related distinct issues from both records using complete issue URLs.
+> 1) For a complete fix, use a closing issue reference in the pull request to `main` and remove the backlog entry in the same change. Use an ordinary reference for a partial fix and keep unresolved scope open. Follow this repository's [changelog rules](#changelog).
+> 1) **Types:**
+>       - **Bug risk**: Potential defect with concrete evidence, not yet confirmed.
+>       - **Code smell**: Implementation, architectural, maintainability or clarity issue that is not currently a defect.
+>       - **Docs drift**: Documentation is stale, incomplete, or inconsistent.
+>       - **Tooling**: Issue with build, test, lint, type-check, and general slowdown of developer workflow.
+>       - **Security**: Evidence-backed security risk. Use Question for uncertainty.
+>       - **Question**: Design, behavior, or ownership uncertainty needing investigation & maybe decision.
+> 
+> 1) **Priorities:**
+>       - **P1**: Should be handled ASAP.
+>       - **P2**: Should be handled before next release or milestone.
+>       - **P3**: Useful cleanup for a later focused pass.
+> 1) **Effort:**
+>       - **E1**: Issue deserves its own focused pass.
+>       - **E2**: Can be batched with a few other issues.
+>       - **E3**: Can be batched with many other issues.
+> 1) **Format:**
+> ```markdown
+> 
+> <br>
+> 
+> # Planned Pass — <pass name>
+>
+> ## <Priority> / <Effort> [<Type>] - *Short problem title*
+> - **Issue:** <complete GitHub issue URL>
+> - **Area:**  `path/or/symbol`
+> - **Observed while:** short context
+> - **Why not fixed now:** scope, risk, uncertainty, or user decision needed
+> - **Evidence:** concrete observation
+> - **Context:** explanation to ensure the problem is understood in the big-picture of the repo.
+> - **Suggested next step:** smallest reasonable follow-up. If applicable, reference related issues by their complete URLs.
+> 
+> ## <Priority> / <Effort> [<Type>] - *Short problem title*
+> - **Issue:** <complete GitHub issue URL>
+> - **Area:** `path/or/symbol`
+> - ...
+> 
+> <br>
+> 
+> # Planned Pass — <pass name>
+>
+> ## <Priority> / <Effort> [<Type>] - *Short problem title*
+> - **Issue:** <complete GitHub issue URL>
+> - **Area:** `path/or/symbol`
+> - ...
+> ```
+
+
+
+<br>
+
+---
+
+<br>
 
 Agents may reorder the backlog to handle dependencies and blockers. When one item
 cannot proceed, record its blocker on the existing issue and update the backlog
@@ -104,27 +167,9 @@ not require new reproduction before transferring findings already supported by
 recorded evidence. Create an issue only for real, actionable work not already
 covered by another issue. Do not create issues for paths in the backlog's Ignore
 section. Preserve existing content when updating an issue. Keep repository paths
-relative in issue content, and follow the privacy rules in the backlog callout.
+relative in issue content, and follow the privacy rules above.
 Link each scheduled issue using its canonical GitHub URL. Reference issues from
 the active Pass plan, checklist, and implementing pull request when applicable.
-
-Keep these existing report types and definitions:
-
-- **Bug risk:** Potential defect with concrete evidence, not yet confirmed.
-- **Code smell:** Implementation, architectural, maintainability or clarity issue that is not currently a defect.
-- **Docs drift:** Documentation is stale, incomplete, or inconsistent.
-- **Tooling:** Issue with build, test, lint, type-check, and general slowdown of developer workflow.
-- **Security:** Evidence-backed security risk. Use Question for uncertainty.
-- **Question:** Design, behavior, or ownership uncertainty needing investigation and possibly a decision.
-
-Keep the existing priorities and effort definitions:
-
-- **P1:** Should be handled ASAP.
-- **P2:** Should be handled before the next release or milestone.
-- **P3:** Useful cleanup for a later focused Pass.
-- **E1:** The issue deserves its own focused Pass.
-- **E2:** The issue can be batched with a few other issues.
-- **E3:** The issue can be batched with many other issues.
 
 Use the repository's existing report field order: Area, Observed while, Why not
 fixed now, Evidence, Context where present, and Suggested next step. Backlog

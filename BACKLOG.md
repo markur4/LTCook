@@ -37,16 +37,18 @@ entry to its issue.
    2. [P3 / E2 \[Code smell\] - *Give LTCook Services and container deployment distinct homes*](#p3--e2-code-smell---give-ltcook-services-and-container-deployment-distinct-homes)
 4. [Planned Pass 3 — Session Memory and model contracts](#planned-pass-3--session-memory-and-model-contracts)
    1. [P3 / E3 \[Code smell\] - *Clarify model contract and documentation ownership*](#p3--e3-code-smell---clarify-model-contract-and-documentation-ownership)
-5. [Planned Pass 4 — Lifecycle and review surfaces](#planned-pass-4--lifecycle-and-review-surfaces)
+5. [Planned Pass 4 — Detached runtime uninstall](#planned-pass-4--detached-runtime-uninstall)
    1. [P1 / E1 \[Tooling\] - *Quiesce the detached runtime during uninstall*](#p1--e1-tooling---quiesce-the-detached-runtime-during-uninstall)
-   2. [P2 / E2 \[Question\] - *Align the chat diff count with the reviewed worktree*](#p2--e2-question---align-the-chat-diff-count-with-the-reviewed-worktree)
-   3. [P2 / E2 \[Tooling\] - *Release Activity observation when native mobile hides a retained tab*](#p2--e2-tooling---release-activity-observation-when-native-mobile-hides-a-retained-tab)
-   4. [P2 / E2 \[Tooling\] - *Make effective Codex approval settings visible in Paseo*](#p2--e2-tooling---make-effective-codex-approval-settings-visible-in-paseo)
-6. [Planned Pass 5 — Qualification and fixture maintenance](#planned-pass-5--qualification-and-fixture-maintenance)
+6. [Planned Pass 5 — Paseo review and Activity](#planned-pass-5--paseo-review-and-activity)
+   1. [P2 / E2 \[Question\] - *Align the chat diff count with the reviewed worktree*](#p2--e2-question---align-the-chat-diff-count-with-the-reviewed-worktree)
+   2. [P2 / E2 \[Tooling\] - *Release Activity observation when native mobile hides a retained tab*](#p2--e2-tooling---release-activity-observation-when-native-mobile-hides-a-retained-tab)
+   3. [P2 / E2 \[Tooling\] - *Make effective Codex approval settings visible in Paseo*](#p2--e2-tooling---make-effective-codex-approval-settings-visible-in-paseo)
+7. [Planned Pass 6 — Qualification and fixture maintenance](#planned-pass-6--qualification-and-fixture-maintenance)
    1. [P3 / E3 \[Tooling\] - *Isolate native guidance test fixtures from host skills*](#p3--e3-tooling---isolate-native-guidance-test-fixtures-from-host-skills)
    2. [P2 / E2 \[Tools\] - *Improve local summarizer fidelity on operational notes*](#p2--e2-tools---improve-local-summarizer-fidelity-on-operational-notes)
-   3. [P1 / E1 \[Tooling\] - *Investigate intermittent Agent Evals retries*](#p1--e1-tooling---investigate-intermittent-agent-evals-retries)
-7. [Deferred](#deferred)
+8. [Planned Pass 7 — Agent Evals reliability](#planned-pass-7--agent-evals-reliability)
+   1. [P1 / E1 \[Tooling\] - *Investigate intermittent Agent Evals retries*](#p1--e1-tooling---investigate-intermittent-agent-evals-retries)
+9. [Deferred](#deferred)
    1. [P3 / E1 \[Question\] - *Measure authorized conversation retrieval scaling*](#p3--e1-question---measure-authorized-conversation-retrieval-scaling)
 
 <br>
@@ -131,7 +133,7 @@ Start Session Memory extraction (CSC-03 and CSC-07) after production-profile rec
 
 <br>
 
-# Planned Pass 4 — Lifecycle and review surfaces
+# Planned Pass 4 — Detached runtime uninstall
 
 ## P1 / E1 [Tooling] - *Quiesce the detached runtime during uninstall*
 - **Issue:** https://github.com/markur4/LTCook/issues/105
@@ -141,6 +143,14 @@ Start Session Memory extraction (CSC-03 and CSC-07) after production-profile rec
 - **Evidence:** Cleanup stops Compose. The detached Node runtime can remain live while uninstall removes managed state.
 - **Context:** The removal guide requires explicit stop commands today.
 - **Suggested next step:** Reuse the authenticated runtime stop path and fail safely when the recorded runtime cannot be confirmed stopped.
+
+<br>
+
+---
+
+<br>
+
+# Planned Pass 5 — Paseo review and Activity
 
 ## P2 / E2 [Question] - *Align the chat diff count with the reviewed worktree*
 - **Issue:** https://github.com/markur4/LTCook/issues/101
@@ -173,7 +183,7 @@ Start Session Memory extraction (CSC-03 and CSC-07) after production-profile rec
 
 <br>
 
-# Planned Pass 5 — Qualification and fixture maintenance
+# Planned Pass 6 — Qualification and fixture maintenance
 
 ## P3 / E3 [Tooling] - *Isolate native guidance test fixtures from host skills*
 - **Issue:** https://github.com/markur4/LTCook/issues/102
@@ -188,9 +198,17 @@ Start Session Memory extraction (CSC-03 and CSC-07) after production-profile rec
 - **Issue:** https://github.com/markur4/LTCook/issues/104
 - **Area:** `runtime/src/tools/summarize.ts` and the summarization evaluations.
 - **Observed while:** Qualifying local summarizers with fixed operational passages.
+- **Why not fixed now:** Candidate settings need comparison in the existing qualification suite.
 - **Evidence:** Some attempts omitted operational identifiers or reversed a recovery decision.
 - **Suggested next step:** Compare prompts or generation settings using the existing qualification before changing the default.
-- **Why not fixed now:** Candidate settings need comparison in the existing qualification suite.
+
+<br>
+
+---
+
+<br>
+
+# Planned Pass 7 — Agent Evals reliability
 
 ## P1 / E1 [Tooling] - *Investigate intermittent Agent Evals retries*
 - **Issue:** https://github.com/markur4/LTCook/issues/106

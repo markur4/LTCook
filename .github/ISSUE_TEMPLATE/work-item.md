@@ -1,10 +1,9 @@
 ---
 name: Work item
 about: Record evidence-backed repository work
-title: "[P2 / E2] [Tooling] - "
 ---
 
-Read the repository's [issue and backlog rules](../../CONTRIBUTING.md#issues-and-backlog).
+Read the repository's [issue and backlog rules](https://github.com/markur4/LTCook/blob/main/CONTRIBUTING.md#issues-and-backlog).
 
 ## P2 / E2 [Tooling] - *Short problem title*
 
