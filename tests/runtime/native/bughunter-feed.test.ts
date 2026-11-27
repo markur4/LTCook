@@ -89,25 +89,38 @@ test('BugHunter follows only the selected hunt’s authorized native chat and re
   expect(releaseCount).toBe(1);
 });
 
-test('BugHunter appends native chat updates and retains messages after a timeline read fails', async () => {
+test('BugHunter streams chat without repeated history reads and clears replaced archived text', async () => {
   const stop = new AbortController();
   const snapshots: BugHunterSnapshot[] = [];
-  const entries = [{ seqStart: 1, item: { type: 'user_message', text: 'Check indexing.' } }];
+  const entries: Array<{
+    seqStart: number;
+    item: { type: string; text: string; messageId?: string };
+  }> = [{ seqStart: 1, item: { type: 'user_message', text: 'Check indexing.' } }];
   let updated: ((type?: string) => void) | undefined;
-  let failTimeline = false;
+  let historyReads = 0;
   let archived = false;
   const paseo = {
     agents: {
       ref(id: string) {
         return {
           timeline: {
-            subscribe(listener: (input: { event: { type: string; item: unknown } }) => void) {
+            subscribe(
+              listener: (input: {
+                epoch: string;
+                seq?: number;
+                event: { type: string; epoch: string; item: unknown };
+              }) => void,
+            ) {
               updated = (type = 'timeline') =>
-                listener({ event: { type, item: entries.at(-1)?.item } });
+                listener({
+                  epoch: 'fixture',
+                  seq: entries.at(-1)?.seqStart,
+                  event: { type, epoch: 'replaced', item: entries.at(-1)?.item },
+                });
               return { ready: Promise.resolve(), async release() {} };
             },
             async refetch() {
-              if (failTimeline) throw new Error('Timeline unavailable.');
+              historyReads++;
               return { agentId: id, epoch: 'fixture', entries: [...entries] };
             },
           },
@@ -126,12 +139,16 @@ test('BugHunter appends native chat updates and retains messages after a timelin
         if (snapshots.length === 1) {
           entries.push({
             seqStart: 2,
-            item: { type: 'assistant_message', text: 'Investigating.' },
+            item: { type: 'assistant_message', text: 'Investi', messageId: 'assistant' },
+          });
+          updated?.();
+          entries.push({
+            seqStart: 3,
+            item: { type: 'assistant_message', text: 'gating.', messageId: 'assistant' },
           });
           updated?.();
         } else if (snapshots.length === 2) {
-          failTimeline = true;
-          updated?.();
+          updated?.('error');
         } else if (snapshots.length === 3) {
           updated?.('replacement');
           archived = true;
@@ -161,6 +178,7 @@ test('BugHunter appends native chat updates and retains messages after a timelin
     ]);
     expect(snapshots[2]?.chat?.unavailable).toBe(true);
     expect(snapshots[3]?.chat?.archived).toBe(true);
+    expect(historyReads).toBe(1);
   } finally {
     clearTimeout(deadline);
   }

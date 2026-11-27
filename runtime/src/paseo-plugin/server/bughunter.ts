@@ -8,56 +8,104 @@ type Details = z.infer<typeof bugHunterDetailsSchema>;
 type Snapshot = z.infer<typeof bugHunterSubscription.event>;
 type Chat = NonNullable<Snapshot['chat']>;
 type Timeline = PaseoAgentHandle['timeline'];
-type TimelinePage = Awaited<ReturnType<Timeline['refetch']>>;
 
 const refreshMs = 1_000;
 const tailLimit = 60;
-const pageLimit = 3;
 const messageLimit = 24;
 const textLimit = 4_000;
 
-function chatMessages(page: TimelinePage): Chat['messages'] {
-  return page.entries.flatMap(({ item, seqStart }) => {
-    if (item.type !== 'user_message' && item.type !== 'assistant_message') return [];
-    const clean = redactDiagnosticText(item.text, process.env).trim();
-    if (!clean) return [];
-    const text = clean.length > textLimit ? `${clean.slice(0, textLimit - 1)}…` : clean;
-    const role = item.type === 'user_message' ? 'user' : 'assistant';
-    return [{ id: `${page.epoch}:${seqStart}`, role, text }];
-  });
+type MessagePart = {
+  sequence: number;
+  role: 'user' | 'assistant';
+  messageId?: string;
+  text: string;
+};
+
+type MessageItem = {
+  type: 'user_message' | 'assistant_message';
+  text: string;
+  messageId?: string;
+};
+
+function messagePart(item: MessageItem, sequence: number): MessagePart {
+  return {
+    sequence,
+    role: item.type === 'user_message' ? 'user' : 'assistant',
+    messageId: item.messageId,
+    text: item.text,
+  };
 }
 
 function observeConversation(agentId: string, timeline: Timeline, signal: AbortSignal) {
-  let revision = 0;
-  let replacements = 0;
-  let deliveredRevision = -1;
-  let refreshWithoutEvents = false;
+  let epoch: string | undefined;
+  let generation = 0;
+  let seeded = false;
+  let unavailable = false;
+  let through = -1;
   let released = false;
-  let chat: Chat = { agentId, messages: [] };
-  const observation = timeline.subscribe(({ event }) => {
-    if (event.type === 'replacement' || event.type === 'subscription_restored') {
-      replacements++;
-      chat = { agentId, messages: [] };
-    } else if (event.type === 'error') {
-      refreshWithoutEvents = true;
+  const messages = new Map<string, MessagePart>();
+  let waiting: MessagePart[] = [];
+
+  const reset = (next?: string) => {
+    epoch = next;
+    generation++;
+    seeded = false;
+    unavailable = false;
+    through = -1;
+    messages.clear();
+    waiting = [];
+  };
+  const append = (part: MessagePart) => {
+    if (part.sequence <= through) return;
+    through = part.sequence;
+    const key = part.messageId ? `${part.role}:${part.messageId}` : String(part.sequence);
+    const previous = messages.get(key);
+    messages.set(key, {
+      ...part,
+      sequence: previous?.sequence ?? part.sequence,
+      text: ((previous?.text ?? '') + part.text).slice(0, textLimit * 2),
+    });
+    if (messages.size > messageLimit) messages.delete(messages.keys().next().value!);
+  };
+  const renderMessages = (): Chat['messages'] =>
+    [...messages.values()].flatMap(({ sequence, role, text }) => {
+      const clean = redactDiagnosticText(text, process.env).trim();
+      if (!clean) return [];
+      return [
+        {
+          id: `${epoch}:${sequence}`,
+          role,
+          text: clean.length > textLimit ? `${clean.slice(0, textLimit - 1)}…` : clean,
+        },
+      ];
+    });
+
+  const observation = timeline.subscribe((update) => {
+    const { event } = update;
+    if (event.type === 'replacement') reset(event.epoch);
+    if (event.type === 'subscription_restored') reset();
+    if (event.type === 'error') {
+      unavailable = true;
+      seeded = true;
     }
     if (
-      event.type === 'replacement' ||
-      event.type === 'subscription_restored' ||
-      event.type === 'error' ||
-      (event.type === 'timeline' &&
-        (event.item.type === 'user_message' || event.item.type === 'assistant_message'))
+      event.type !== 'timeline' ||
+      !('epoch' in update) ||
+      !update.epoch ||
+      !('seq' in update) ||
+      typeof update.seq !== 'number' ||
+      (event.item.type !== 'user_message' && event.item.type !== 'assistant_message')
     )
-      revision++;
+      return;
+    if (epoch && update.epoch !== epoch) reset(update.epoch);
+    epoch = update.epoch;
+    const part = messagePart(event.item, update.seq);
+    if (seeded) append(part);
+    else waiting = [...waiting.slice(-(tailLimit - 1)), part];
   });
-  void observation.ready.then(
-    () => {
-      revision++;
-    },
-    () => {
-      refreshWithoutEvents = true;
-    },
-  );
+  void observation.ready.catch(() => {
+    unavailable = true;
+  });
   const release = () => {
     if (released) return;
     released = true;
@@ -67,57 +115,41 @@ function observeConversation(agentId: string, timeline: Timeline, signal: AbortS
   signal.addEventListener('abort', release, { once: true });
   return {
     release,
-    messages: () => chat.messages,
+    messages: renderMessages,
     async read(): Promise<Chat> {
-      if (revision === deliveredRevision && !refreshWithoutEvents && !chat.unavailable) return chat;
-      const capturedRevision = revision;
-      const capturedReplacements = replacements;
-      try {
-        const tail = await timeline.refetch({
-          direction: 'tail',
-          projection: 'canonical',
-          limit: tailLimit,
-        });
-        if (tail.error || tail.agentId !== agentId)
-          throw new Error('BugHunter conversation is unavailable.');
-        let messages = chatMessages(tail);
-        let page = tail;
-        for (
-          let pages = 1;
-          pages < pageLimit && messages.length < messageLimit && !signal.aborted;
-          pages++
-        ) {
-          if (!page.hasOlder || !page.startCursor) break;
-          const older = await timeline
-            .refetch({
-              direction: 'before',
-              cursor: page.startCursor,
-              projection: 'canonical',
-              limit: tailLimit,
-            })
-            .catch(() => undefined);
-          if (
-            !older ||
-            older.error ||
-            older.agentId !== agentId ||
-            older.epoch !== tail.epoch ||
-            older.reset ||
-            older.staleCursor ||
-            !older.entries.length
-          )
-            break;
-          messages = [...chatMessages(older), ...messages];
-          page = older;
+      if (!seeded) {
+        const observedGeneration = generation;
+        try {
+          await observation.ready;
+          if (signal.aborted || released) return { agentId, messages: [] };
+          const tail = await timeline.refetch({
+            direction: 'tail',
+            projection: 'canonical',
+            limit: tailLimit,
+          });
+          if (signal.aborted || released || generation !== observedGeneration)
+            return { agentId, messages: renderMessages() };
+          if (tail.error || tail.agentId !== agentId) throw new Error('Timeline unavailable.');
+          if (epoch !== undefined && tail.epoch !== epoch) {
+            reset(tail.epoch);
+            return { agentId, messages: [] };
+          }
+          epoch = tail.epoch;
+          for (const { item, seqStart } of tail.entries) {
+            if (item.type === 'user_message' || item.type === 'assistant_message')
+              append(messagePart(item, seqStart));
+          }
+          through = Math.max(through, tail.endCursor?.seq ?? -1);
+        } catch {
+          // > A failed history load must not cause additional native reads while
+          // > a session is closing. Live events can still arrive on this subscription.
+          unavailable = true;
         }
-        if (capturedReplacements !== replacements || signal.aborted) return chat;
-        const distinct = new Map(messages.map((message) => [message.id, message]));
-        chat = { agentId, messages: [...distinct.values()].slice(-messageLimit) };
-        // > A newer live event may have arrived while the tail request was in flight.
-        deliveredRevision = capturedRevision;
-      } catch {
-        chat = { ...chat, unavailable: true };
+        seeded = true;
+        for (const part of waiting) append(part);
+        waiting = [];
       }
-      return chat;
+      return { agentId, ...(unavailable ? { unavailable: true } : {}), messages: renderMessages() };
     },
   };
 }
