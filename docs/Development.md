@@ -806,8 +806,8 @@ tags and require successful hosted CI on the exact release tag and commit.
 `RELEASE_PYPI` is independently set to `false`, so publication goes to GitHub.
 
 Follow the [changelog-writing rules](../CONTRIBUTING.md#changelog) when preparing
-release notes. This section covers the repository's release checks, preparation,
-and publication procedures.
+release notes. Use `b2` or `rc2` when a fix needs another preview. Move the
+release entries out of `[Unreleased]` before running `just release-prepare`.
 
 ```shell
 just release-check
