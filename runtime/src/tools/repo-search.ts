@@ -75,6 +75,12 @@ export async function openAuthorizedSearchWorkspace(
   return workspace;
 }
 
+function fallbackPattern(query: string, pattern: string | undefined): string | undefined {
+  if (pattern) return pattern;
+  const words = query.match(/[\p{L}\p{N}_]{3,}/gu);
+  return words ? [...new Set(words)].slice(0, 6).join('|') : undefined;
+}
+
 export function createRepoSearchTool(
   colgrep = createColgrepProvider(),
   ripgrep = createRipgrepProvider(),
@@ -108,7 +114,7 @@ export function createRepoSearchTool(
         : await repositorySearchPriority(workspace, input.base, signal));
     const prioritize = priority?.prioritize;
     const collection = prioritize ? { ...options.collection, prioritize } : options.collection;
-    const { value, ...metadata } = await (lexical
+    let retrieval = await (lexical
       ? ripgrep.search(workspace, { query, mode, paths, limit }, signal, source, collection)
       : colgrep.search(
           workspace,
@@ -123,6 +129,42 @@ export function createRepoSearchTool(
           signal,
           source,
         ));
+    if (
+      !lexical &&
+      mode !== 'semantic' &&
+      options.updateIndex !== false &&
+      retrieval.value.status !== 'ready' &&
+      retrieval.diagnostics.some(({ code }) =>
+        ['indexing', 'index-unavailable', 'index-recovery'].includes(code),
+      )
+    ) {
+      const queryPattern = fallbackPattern(query, pattern);
+      if (queryPattern) {
+        const fallback = await ripgrep.search(
+          workspace,
+          { query: queryPattern, mode: 'regex', paths, limit },
+          signal,
+          source,
+          collection,
+        );
+        if (fallback.value.status === 'ready') {
+          retrieval = {
+            ...fallback,
+            partial: true,
+            diagnostics: [
+              ...retrieval.diagnostics,
+              ...fallback.diagnostics,
+              {
+                source: 'repository',
+                code: 'lexical-fallback',
+                message: 'Ranked search is unavailable. These are approximate lexical matches.',
+              },
+            ],
+          };
+        }
+      }
+    }
+    const { value, ...metadata } = retrieval;
     const { status, kind, hits } = value;
     const results = hits.filter(({ path }) => isRepositoryPathVisible(path));
     if (results.length < hits.length) {

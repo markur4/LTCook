@@ -146,8 +146,8 @@ requirement imposed on users of the application.
 The Python application resolves settings through AppRC. Keep native component
 translation in LTCook-owned paths and avoid a second hidden settings layer. The
 TypeScript runtime owns coordination; team packages use its public Team API v3.
-Runtime startup constructs the ColGREP provider, Activity preferences, and
-Session worktree store. The HTTP routes and workspace catalog use the same
+Runtime startup constructs the ColGREP provider and its indexing service,
+Activity preferences, and the Session worktree store. The HTTP routes and workspace catalog use the same
 instances. The HTTP listener starts before its native host and Core controller
 are ready. Worktree reads and reports share Session and Pass scope resolution.
 The Activity HTTP routes live in `runtime/src/integrations/runtime-activity.ts`.

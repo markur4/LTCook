@@ -416,10 +416,25 @@ types give providers a common boundary for future composition. See the
 
 Repository Core's ColGREP provider searches code locally with a managed
 LateOn-Code-edge model and ONNX Runtime. The repository search tool forwards
-authorized ranked requests to that provider. It builds and updates an index on demand under the AppRC
-cache, with separate storage for each canonical workspace identity. ColGREP
-uses its native file discovery and ignore rules. The process runs on the host
-with LTCook's filesystem access.
+authorized ranked requests to that provider. A runtime service schedules one
+native build or refresh at a time for active, authorized worktrees. It checks
+for changes periodically, including branch switches, and automatically resumes
+after workspace authorization is restored. Closing or cancelling a search
+releases that query's generation without cancelling indexing.
+
+The AppRC cache keys compatible indexes by canonical worktree path and
+directory incarnation. The runtime also checks live directory identity for
+authorization. On filesystems with reliable directory birth time, an ordinary
+update or WSL remount can reuse a compatible index. ColGREP uses its native
+file discovery and ignore rules and runs on the host with LTCook's filesystem
+access.
+
+The service builds a private candidate and publishes it after the native
+command succeeds and ColGREP can search it. Search pins one completed
+generation through native process exit. A refresh can seed its candidate from
+the published generation, and a failed refresh leaves the published
+generation searchable. A shared cache catalog coordinates publication,
+reader lifetimes, and cleanup across the runtime and standalone Pi.
 
 Repository Core verifies each candidate against its current workspace file
 before returning an excerpt. A hit names a workspace-relative path and a
@@ -454,8 +469,8 @@ source outlines, and file summarization. LTCook binds the connection to the
 canonical workspace and applies each tool's path checks. Native editors and
 shells use the harness's own permissions and any Team execution rules.
 
-LTCook setup prepares the optional ColGREP assets. Indexing starts on the first
-ranked search.
+LTCook setup prepares the optional ColGREP assets. Indexing starts when a
+worktree is activated with repository search access.
 
 ## Coordination and recovery
 

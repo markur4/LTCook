@@ -1,3 +1,4 @@
+import type { BigIntStats } from 'node:fs';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { isWithin } from '../path-containment.js';
@@ -8,6 +9,7 @@ type RepositoryPath = { absolute: string; relative: string; kind: PathKind };
 export interface RepositoryWorkspace {
   readonly root: string;
   readonly identity: string;
+  readonly cacheIdentity: string;
   assertUnchanged(): Promise<void>;
   resolvePath(
     input: string,
@@ -15,11 +17,21 @@ export interface RepositoryWorkspace {
   ): Promise<RepositoryPath>;
 }
 
-async function directoryIdentity(directory: string): Promise<string> {
+/** Match a live directory observation to the authorization granted for it. */
+export function repositoryWorkspaceIdentity(info: Pick<BigIntStats, 'dev' | 'ino'>): string {
+  return `${info.dev}:${info.ino}`;
+}
+
+async function directoryIdentity(directory: string) {
   const info = await stat(directory, { bigint: true });
   if (!info.isDirectory())
     throw new Error('Repository discovery requires an existing workspace directory');
-  return `${info.dev}:${info.ino}`;
+  const live = repositoryWorkspaceIdentity(info);
+  // > Mount device numbers can change across boots, including for WSL's ext4 disk.
+  const birth = info.ino > 0n && info.birthtimeNs > 0n ? info.birthtimeNs : undefined;
+  // > Without a birth time, avoid reusing persisted evidence of uncertain origin.
+  const cache = birth === undefined ? `stat:${live}:${info.ctimeNs}` : `birth:${info.ino}:${birth}`;
+  return { live, cache, birth };
 }
 
 /** Open a root supplied by an already authenticated workspace/session binding. */
@@ -29,10 +41,16 @@ export async function openRepositoryWorkspace(root: string): Promise<RepositoryW
 
   return {
     root: canonical,
-    identity,
+    identity: identity.live,
+    cacheIdentity: identity.cache,
     async assertUnchanged() {
       const unchanged = await Promise.all([realpath(canonical), directoryIdentity(canonical)])
-        .then(([current, currentIdentity]) => current === canonical && currentIdentity === identity)
+        .then(
+          ([current, observed]) =>
+            current === canonical &&
+            observed.live === identity.live &&
+            observed.birth === identity.birth,
+        )
         .catch(() => false);
       if (!unchanged) throw new Error('The authorized workspace changed during repository search.');
     },

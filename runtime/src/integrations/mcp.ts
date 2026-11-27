@@ -16,7 +16,8 @@ import type { ToolCatalog } from '../tools/catalog.js';
 import { WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
 import { isRepositoryTool, WORKTREE_TOOL_NAME } from '../tools/workspace-tools.js';
 import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
-import { openRepositoryWorkspace } from '../repository/workspace.js';
+import { openRepositoryWorkspace, repositoryWorkspaceIdentity } from '../repository/workspace.js';
+import type { RepositoryIndexService } from '../services/repository-index.js';
 import type { WebToolService } from '../tools/web.js';
 import type { PlanningDialogEvent } from './planning-dialogs.js';
 
@@ -27,6 +28,7 @@ type Grant = {
   workspaceFileAccess: boolean;
   repositorySearchAccess: boolean;
   token: string;
+  stopIndexing?: () => void;
 };
 
 type Connection = {
@@ -63,7 +65,7 @@ function requiresRepositoryAccess(name: string): boolean {
 function directoryIdentity(directory: string): string {
   const stats = statSync(directory, { bigint: true });
   if (!stats.isDirectory()) throw new Error('MCP requires a workspace directory.');
-  return `${stats.dev}:${stats.ino}`;
+  return repositoryWorkspaceIdentity(stats);
 }
 
 /** In-memory grants remain stable on warm resume and expire with the runtime. */
@@ -79,6 +81,7 @@ export class WorkspaceMcp {
     private readonly authority: string,
     private readonly web?: WebToolService,
     private readonly requestRestart?: (update: boolean) => Promise<Record<string, unknown>>,
+    private readonly repositoryIndex?: Pick<RepositoryIndexService, 'activate'>,
   ) {
     this.descriptors = tools.definitions.map(({ name, description, inputSchema, outputSchema }) =>
       ToolSchema.parse({
@@ -108,10 +111,12 @@ export class WorkspaceMcp {
       existing.workspaceIdentity === workspaceIdentity &&
       existing.workspaceFileAccess === workspaceFileAccess &&
       existing.repositorySearchAccess === repositorySearchAccess
-    )
+    ) {
+      await this.activateIndex(existing);
       return existing.token;
+    }
     const previous = this.revoke(agentId);
-    const grant = {
+    const grant: Grant = {
       agentId,
       workspaceRoot,
       workspaceIdentity,
@@ -122,7 +127,15 @@ export class WorkspaceMcp {
     this.grants.set(agentId, grant);
     this.tokens.set(grant.token, grant);
     await previous;
+    await this.activateIndex(grant);
     return grant.token;
+  }
+
+  private async activateIndex(grant: Grant): Promise<void> {
+    if (!this.repositoryIndex || !grant.repositorySearchAccess || grant.stopIndexing) return;
+    const workspace = await this.repositorySearchWorkspace(grant.agentId);
+    if (workspace && this.grants.get(grant.agentId) === grant && !grant.stopIndexing)
+      grant.stopIndexing = this.repositoryIndex.activate(workspace);
   }
 
   async repositorySearchWorkspace(agentId: string) {
@@ -153,6 +166,7 @@ export class WorkspaceMcp {
     }
     this.grants.delete(agentId);
     this.tokens.delete(grant.token);
+    grant.stopIndexing?.();
     await Promise.all([
       this.web?.disposeAgent(agentId),
       ...[...this.connections.values()]
@@ -162,6 +176,7 @@ export class WorkspaceMcp {
   }
 
   async close(): Promise<void> {
+    for (const grant of this.grants.values()) grant.stopIndexing?.();
     this.grants.clear();
     this.tokens.clear();
     await Promise.all([

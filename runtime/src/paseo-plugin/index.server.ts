@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { defineRpc, PluginAttachmentItemSchema } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
 import {
+  RagIndexActivitySchema,
   activitySkillDocumentRpc,
   activitySubscription,
   activityToggleRpc,
@@ -282,16 +283,10 @@ const activityServices = z.object({
   rag: z.object({
     indexingEnabled: z.boolean().nullable(),
     availability: z.enum(['ready', 'not-ready', 'unavailable', 'unknown']),
-    activity: z.enum([
-      'idle',
-      'checking',
-      'indexing',
-      'updating',
-      'interrupted',
-      'error',
-      'unknown',
-    ]),
+    activity: RagIndexActivitySchema,
     diagnostic: z.string().nullable(),
+    publishedAt: z.string().optional(),
+    retryAt: z.string().optional(),
   }),
   workspace: z.object({ root: z.string(), identity: z.string() }).optional(),
   task: z.string().optional(),
@@ -460,6 +455,8 @@ export default function contribute(server: PluginServerContext) {
             indexingEnabled: services?.rag.indexingEnabled ?? null,
             availability: services?.rag.availability ?? 'unknown',
             activity: services?.rag.activity ?? 'unknown',
+            publishedAt: services?.rag.publishedAt,
+            retryAt: services?.rag.retryAt,
             ...(services?.rag.diagnostic ? { diagnostic: services.rag.diagnostic } : {}),
           },
           lastHandoff: delivery

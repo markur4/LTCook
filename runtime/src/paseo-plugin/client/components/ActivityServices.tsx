@@ -21,10 +21,11 @@ const ragAvailabilityTones = {
 
 const ragActivityTones = {
   idle: 'muted',
-  checking: 'running',
+  queued: 'muted',
   indexing: 'running',
   updating: 'running',
-  interrupted: 'warning',
+  paused: 'muted',
+  retrying: 'warning',
   error: 'danger',
   unknown: 'muted',
 } as const;
@@ -95,8 +96,17 @@ export function ActivityServices({
 }) {
   const [ragOpen, setRagOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
-  const ragActivity =
-    rag.indexingEnabled === false ? 'Index updates off' : statusLabel(rag.activity);
+  const activity = rag.indexingEnabled === false ? 'paused' : rag.activity;
+  const ragActivity = {
+    idle: 'Idle',
+    queued: 'Queued',
+    indexing: 'Building first index',
+    updating: 'Refreshing',
+    paused: 'Paused',
+    retrying: 'Retrying',
+    error: 'Needs attention',
+    unknown: 'Unknown',
+  }[activity];
   const ragAvailability = statusLabel(rag.availability);
   return (
     <>
@@ -112,7 +122,7 @@ export function ActivityServices({
         summary={
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
             {rag.provider} ·{' '}
-            <Text style={{ color: activityColor(theme, ragActivityTones[rag.activity]) }}>
+            <Text style={{ color: activityColor(theme, ragActivityTones[activity]) }}>
               {ragActivity}
             </Text>
           </Text>
@@ -133,6 +143,16 @@ export function ActivityServices({
         <ActivityField theme={theme} label="Activity">
           {ragActivity}
         </ActivityField>
+        {rag.publishedAt && (
+          <ActivityField theme={theme} label="Last completed index">
+            {new Date(rag.publishedAt).toLocaleString()}
+          </ActivityField>
+        )}
+        {rag.retryAt && (
+          <ActivityField theme={theme} label="Next attempt">
+            {new Date(rag.retryAt).toLocaleTimeString()}
+          </ActivityField>
+        )}
         {rag.diagnostic && (
           <ActivityText theme={theme} tone="muted">
             {rag.diagnostic}

@@ -515,9 +515,12 @@ being built. `unavailable` reports operational failures such as missing assets
 or a failed search. Both include a `hint`. Invalid input and denied workspace
 access still return tool errors, and cancellation aborts the call.
 
-The outer call has a two-minute deadline. If ColGREP indexing persists, check
-the AppRC cache's storage and file locking. Lexical search uses an existing
-`rg` on the runtime's trusted executable path.
+The search call has a two-minute deadline. Indexing is scheduled separately
+for active authorized worktrees and can continue after a search is cancelled.
+During an initial build or recovery, hybrid search can return partial
+`ripgrep` evidence with a `lexical-fallback` diagnostic. Semantic mode
+reports that ranked retrieval is unavailable until a generation is published.
+Lexical search uses an existing `rg` on the runtime's trusted executable path.
 
 LTCook setup installs ColGREP 1.8.5, ONNX Runtime 1.23.0, and the
 `lightonai/LateOn-Code-edge` snapshot
