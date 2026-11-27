@@ -584,6 +584,6 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
 
   private observeNaming(workspace: PaseoWorkspace): void {
     if (!workspace.internal && workspace.metadata?.['ltcook.namingPending'] === true)
-      void this.renamer.visit(workspace.id, this.abort.signal);
+      void this.renamer.visit(workspace.id, workspace.projectDisplayName, this.abort.signal);
   }
 }

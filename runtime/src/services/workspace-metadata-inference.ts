@@ -226,11 +226,14 @@ export function createWorkspaceMetadataGenerator(
         'Return {"workspaceTitle":string,"agents":[{"id":string,"title":string}]}. ' +
           'Include workspaceTitle only when requested. Return every requested agent ID exactly once. ' +
           'Workspace titles have at most 20 displayed characters; agent titles have at most 15. ' +
-          'Use recognizable task names and ordinary words. Do not include status, host, or category prefixes.',
+          'Use recognizable task names and ordinary words. Do not include status, host, or category prefixes. ' +
+          'Omit the Paseo project name (workspace.projectName) from workspaceTitle, even if it appears in the prompt or current title. ' +
+          'The sidebar already shows the project. Use the title to describe the task.',
         {
           ...(job.nameWorkspace
             ? {
                 workspace: {
+                  projectName: excerpt(job.projectName, 256),
                   title: excerpt(job.workspaceTitle, 128),
                   conversation: excerpt(job.prompt, 4000),
                 },

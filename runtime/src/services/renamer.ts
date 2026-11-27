@@ -60,7 +60,7 @@ export class Renamer {
     await Promise.all(this.active.values());
   }
 
-  visit(workspaceId: string, signal: AbortSignal): Promise<void> {
+  visit(workspaceId: string, projectName: string, signal: AbortSignal): Promise<void> {
     const host = this.options.host;
     if (!this.options.enabled || !host || signal.aborted) return Promise.resolve();
     const active = this.active.get(workspaceId);
@@ -68,7 +68,7 @@ export class Renamer {
       this.signaled.add(workspaceId);
       return active;
     }
-    const work = this.run(host, workspaceId, signal)
+    const work = this.run(host, workspaceId, projectName, signal)
       .catch((error: unknown) => {
         if (!signal.aborted) {
           this.details.diagnostic = 'Renamer could not update titles on this Paseo host.';
@@ -83,14 +83,19 @@ export class Renamer {
     return work;
   }
 
-  private async run(host: WorkspaceNamingHost, workspaceId: string, signal: AbortSignal) {
+  private async run(
+    host: WorkspaceNamingHost,
+    workspaceId: string,
+    projectName: string,
+    signal: AbortSignal,
+  ) {
     const now = this.options.now ?? Date.now;
     do {
       this.signaled.delete(workspaceId);
       for (const job of await host.pending(workspaceId, signal)) {
         signal.throwIfAborted();
         this.details.lastRunAt = now();
-        const titles = await this.titles(job, signal);
+        const titles = await this.titles(job, projectName, signal);
         signal.throwIfAborted();
         if (await host.apply(job, titles, signal)) {
           this.details.lastSuccessAt = now();
@@ -102,12 +107,15 @@ export class Renamer {
 
   private async titles(
     job: WorkspaceNamingJob,
+    projectName: string,
     signal: AbortSignal,
   ): Promise<WorkspaceNamingTitles> {
     const limit = AbortSignal.any([signal, AbortSignal.timeout(8_000)]);
     let proposal: ReturnType<typeof RenameProposalSchema.parse> | undefined;
     try {
-      proposal = RenameProposalSchema.parse(await this.options.generator.rename(job, limit));
+      proposal = RenameProposalSchema.parse(
+        await this.options.generator.rename({ ...job, projectName }, limit),
+      );
       limit.throwIfAborted();
       if (proposal.agents.length > 1 || proposal.agents.some(({ id }) => id !== job.agentId))
         throw new Error('Renamer received a title for an unexpected target.');
