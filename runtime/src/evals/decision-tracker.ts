@@ -823,7 +823,7 @@ async function effectiveInstructions(directory: string): Promise<string> {
 }
 
 async function createGrader(directory: string, candidate: ResolvedModel, signal: AbortSignal) {
-  const modelId = candidate.model === 'gpt-6.2-sol' ? 'gpt-6-luna' : 'gpt-6.2-sol';
+  const modelId = candidate.model === 'gpt-6.1-sol' ? 'gpt-6-luna' : 'gpt-6.1-sol';
   await mkdir(directory, { recursive: true });
   const createSession = await prepareHostedPiEvaluation(directory, signal, modelId, 'high', {
     subscriptionOnly: true,
