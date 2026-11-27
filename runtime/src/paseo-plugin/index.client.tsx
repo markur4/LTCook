@@ -1,5 +1,11 @@
-import { ScrollView, SidebarRow } from '@getpaseo/plugin/client/ui';
-import type { PluginClientContext } from '@getpaseo/plugin/client';
+import { Action, ScrollView, SidebarRow, useToast } from '@getpaseo/plugin/client/ui';
+import {
+  useAgent,
+  useAgents,
+  useComposer,
+  type PluginClientContext,
+  type PluginComposerItemProps,
+} from '@getpaseo/plugin/client';
 import { TeamsBrowser } from './client/screens/TeamsBrowser';
 import { TeamStatus } from './client/screens/TeamStatus';
 import { TurnSkills } from './client/components/TurnSkills';
@@ -23,9 +29,38 @@ import { TeamComposerItem } from './client/components/TeamComposerItem';
 import { ModelComposerItem } from './client/components/ModelComposerItem';
 import { PastedTextComposerItem } from './client/components/PastedTextComposerItem';
 import { pastedTextSource } from './shared/pasted-text';
+import { openTracker, TRACKER_PANEL_ID } from './client/tracker-navigation';
 
 const workspaceServicesPanelId = 'workspace-services';
-const trackedItemsPanelId = 'tracked-items';
+
+function TrackerComposerItem({
+  client,
+  host,
+}: PluginComposerItemProps & { client: PluginClientContext }) {
+  const composer = useComposer();
+  const agents = useAgents({ hosts: [host.id] });
+  const agent =
+    composer.context === 'agent'
+      ? agents.find(({ id }) => client.composers({ agentId: id })[0] === composer)
+      : undefined;
+  const workspaceId = useAgent(agent ?? '', (snapshot) => snapshot.workspaceId);
+  const toast = useToast();
+  if (!agent || !workspaceId) return null;
+
+  return (
+    <Action
+      title="Tracker"
+      icon="Notebook"
+      onPress={() => {
+        try {
+          openTracker(client, workspaceId, agent.id);
+        } catch {
+          toast.error('Could not open Tracker for this conversation.');
+        }
+      }}
+    />
+  );
+}
 
 function loadedWebBuild(): string | undefined {
   const { document } = globalThis as {
@@ -99,12 +134,12 @@ export default function contribute(client: PluginClientContext) {
         );
       },
     }),
-    client.addWorkspacePanel({
-      id: trackedItemsPanelId,
-      title: 'Tracked Items',
+    client.addAgentPanel({
+      id: TRACKER_PANEL_ID,
+      title: 'Tracker',
       icon: 'Notebook',
-      locations: ['explorer'],
-      Component: (props) => <TrackedItems {...props} client={client} />,
+      locations: ['workspace'],
+      Component: TrackedItems,
     }),
     client.addAgentPanel({
       id: SKILL_DOCUMENT_PANEL_ID,
@@ -138,12 +173,13 @@ export default function contribute(client: PluginClientContext) {
       },
     }),
     client.addCommandCenterItem({
-      id: 'open-tracked-items',
-      title: 'Open Tracked Items',
+      id: 'open-tracker',
+      title: 'Open Tracker',
       icon: 'Notebook',
-      context: 'workspace',
+      keywords: ['notebook', 'tracked items', 'decisions'],
+      context: 'agent',
       onSelect({ openPanel }) {
-        openPanel(trackedItemsPanelId, { location: 'explorer' });
+        openPanel(TRACKER_PANEL_ID, { location: 'workspace' });
       },
     }),
     client.addComposerItem({
@@ -152,6 +188,10 @@ export default function contribute(client: PluginClientContext) {
     }),
     client.addComposerItem({ id: 'team-selector', Component: TeamComposerItem }),
     client.addComposerItem({ id: 'model-selector', Component: ModelComposerItem }),
+    client.addComposerItem({
+      id: 'tracker',
+      Component: (props) => <TrackerComposerItem {...props} client={client} />,
+    }),
     client.addAttachmentSource(pastedTextSource),
     client.addComposerItem({ id: 'paste-text', Component: PastedTextComposerItem }),
     client.addCommandCenterItem({
