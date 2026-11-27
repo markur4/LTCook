@@ -374,8 +374,8 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🔥 Removed
 
-- **Breaking:** 💥 Removed Clarify, including the reply button and its saved
-  rewrites. The original replies remain available in Paseo.
+- **Breaking:** 💥 Removed the Clarify reply button. Saved rewrites are no
+  longer accessible. The original replies remain available in Paseo.
 - **Breaking:** 💥 Tracked Items replaces continuous Session Memory summaries
   and redo controls. Fresh stores hold deterministic conversation evidence
   and Tracker state. Native Paseo history and pasted attachments remain
