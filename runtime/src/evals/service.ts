@@ -18,6 +18,7 @@ import {
   EvalStartRequestSchema,
   EvalSummarySchema,
   evaluationCaseCount,
+  decisionTrackerSessionLimitMs,
   type EvalStartRequest,
   type EvalEvent,
   type EvalPreset,
@@ -38,6 +39,7 @@ type EvalMetadata = Partial<
     | 'provenance'
     | 'limitations'
     | 'summarizationQualification'
+    | 'decisionTrackerQualification'
   >
 >;
 
@@ -66,6 +68,7 @@ const checkpointSchema = z.object({
   result: z.unknown(),
   trace: z.unknown(),
   completed: z.number().int().nonnegative(),
+  decisionTrackerQualification: EvalSummarySchema.shape.decisionTrackerQualification,
   timingSamples: z.array(
     z.object({
       scenario: z.string(),
@@ -111,6 +114,7 @@ export type EvalEngine = (input: {
   repetitions?: number;
   scenario?: EvalScenario;
   summarizationGrader?: SummarizationGrader;
+  deterministicOnly?: boolean;
   timingHardware?: string;
   budget?(identity: EvalTimingIdentity): EvalBudget;
   learned?(
@@ -301,7 +305,21 @@ export class EvalRunService {
     limitations: string[] = [],
   ): Promise<void> {
     const started = Date.now();
-    const hardware = this.timingHardware();
+    const decisionTracker = request.scenario === 'decision-tracker';
+    const timeout = decisionTracker
+      ? setTimeout(
+          () =>
+            controller.abort(
+              new DOMException('Decision Tracker evaluation deadline expired', 'TimeoutError'),
+            ),
+          Math.max(
+            0,
+            Math.min(request.deadlineAt ?? Infinity, started + decisionTrackerSessionLimitMs) -
+              started,
+          ),
+        )
+      : undefined;
+    const hardware = decisionTracker ? undefined : this.timingHardware();
     try {
       const output = await this.engine({
         preset: summary.preset,
@@ -310,6 +328,7 @@ export class EvalRunService {
         repetitions: request.repetitions,
         scenario: request.scenario,
         summarizationGrader: request.summarizationGrader,
+        deterministicOnly: request.deterministicOnly,
         timingHardware: hardware,
         budget: (identity) => this.budget(identity),
         learned: async (identity, sample) => {
@@ -318,7 +337,7 @@ export class EvalRunService {
             controller.signal.aborted ||
             !Number.isFinite(sample.elapsedMs) ||
             sample.elapsedMs <= 0 ||
-            this.timingHardware() !== hardware
+            (!decisionTracker && this.timingHardware() !== hardware)
           )
             return;
           const samples = this.timingSamples.get(summary.runId) ?? [];
@@ -360,7 +379,7 @@ export class EvalRunService {
       const terminal: EvalSummary = {
         ...summary,
         status: controller.signal.aborted ? 'cancelled' : 'completed',
-        completed: summary.total,
+        completed: decisionTracker ? summary.completed : summary.total,
         updatedAt: new Date().toISOString(),
       };
       await this.saveSummary(terminal);
@@ -378,6 +397,9 @@ export class EvalRunService {
         ...summary,
         status: controller.signal.aborted ? 'cancelled' : 'failed',
         error: safeError(error),
+        ...(decisionTracker && summary.decisionTrackerQualification !== 'failed'
+          ? { decisionTrackerQualification: 'blocked' }
+          : {}),
         updatedAt: new Date().toISOString(),
       };
       try {
@@ -399,6 +421,7 @@ export class EvalRunService {
       }
       Object.assign(summary, terminal);
     } finally {
+      clearTimeout(timeout);
       this.active = undefined;
     }
   }
@@ -416,6 +439,7 @@ export class EvalRunService {
       result,
       trace,
       completed: summary.completed,
+      decisionTrackerQualification: summary.decisionTrackerQualification,
       timingSamples: this.timingSamples.get(summary.runId) ?? [],
     });
     this.results.set(summary.runId, result);
@@ -503,6 +527,8 @@ export class EvalRunService {
       );
       this.results.set(runId, checkpoint.result);
       this.traces.set(runId, checkpoint.trace);
+      if (checkpoint.decisionTrackerQualification)
+        summary.decisionTrackerQualification = checkpoint.decisionTrackerQualification;
       if (summary.status === 'interrupted') {
         summary.completed = Math.min(summary.completed, checkpoint.completed);
         await this.saveSummary(summary);

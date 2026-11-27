@@ -87,23 +87,29 @@ export async function prepareLunaPiEvaluation(
   reasoning: 'low' | 'high' = LUNA_EVALUATION.reasoning,
   options?: { subscriptionOnly: boolean },
 ) {
+  return prepareHostedPiEvaluation(directory, signal, LUNA_EVALUATION.model, reasoning, options);
+}
+
+export async function prepareHostedPiEvaluation(
+  directory: string,
+  signal: AbortSignal,
+  modelId: string,
+  reasoning: 'low' | 'high',
+  options?: { subscriptionOnly: boolean },
+) {
   const { authMethod } = await codexAuthorization(signal);
   if (options?.subscriptionOnly && authMethod === 'apikey')
-    throw new Error('This Luna evaluation requires the Codex subscription sign-in.');
+    throw new Error('This hosted Pi evaluation requires the Codex subscription sign-in.');
 
   const provider = authMethod === 'apikey' ? 'openai' : 'openai-codex';
-  const modelRuntime = useCodexOpenAiAuth(
-    await ModelRuntime.create({
-      authPath: path.join(directory, 'auth.json'),
-      modelsPath: null,
-      modelsStorePath: path.join(directory, 'model-store.json'),
-      refreshOnCreate: false,
-    }),
+  const modelRuntime = await hostedPiModelRuntime(directory, null);
+  const model = modelRuntime.getModel(provider, modelId);
+  if (!model) throw new Error(`The Codex-authenticated Pi catalog cannot resolve ${modelId}.`);
+  return Object.assign(
+    (input: PiEvaluationSessionOptions) =>
+      createPiEvaluationSession(input, modelRuntime, model, reasoning),
+    { provider, model: model.id },
   );
-  const model = modelRuntime.getModel(provider, LUNA_EVALUATION.model);
-  if (!model) throw new Error('The Codex-authenticated Pi catalog cannot resolve GPT-6 Luna.');
-  return (input: PiEvaluationSessionOptions) =>
-    createPiEvaluationSession(input, modelRuntime, model, reasoning);
 }
 
 /** Use the managed Codex sign-in and exact AppRC model registration for a disposable case. */
@@ -115,14 +121,7 @@ export async function createHostedPiEvaluationSession(
     thinking: 'high' | 'xhigh';
   },
 ) {
-  const modelRuntime = useCodexOpenAiAuth(
-    await ModelRuntime.create({
-      authPath: path.join(input.directory, 'auth.json'),
-      modelsPath: input.modelsPath,
-      modelsStorePath: path.join(input.directory, 'model-store.json'),
-      refreshOnCreate: false,
-    }),
-  );
+  const modelRuntime = await hostedPiModelRuntime(input.directory, input.modelsPath);
   const model = modelRuntime.getModel(input.provider, input.modelId);
   if (!model?.reasoning || model.thinkingLevelMap?.[input.thinking] === null)
     throw new Error('Pi cannot resolve the requested hosted evaluation model and reasoning.');
@@ -132,6 +131,17 @@ export async function createHostedPiEvaluationSession(
     throw new Error('Pi did not retain the requested evaluation reasoning level.');
   }
   return result;
+}
+
+async function hostedPiModelRuntime(directory: string, modelsPath: string | null) {
+  return useCodexOpenAiAuth(
+    await ModelRuntime.create({
+      authPath: path.join(directory, 'auth.json'),
+      modelsPath,
+      modelsStorePath: path.join(directory, 'model-store.json'),
+      refreshOnCreate: false,
+    }),
+  );
 }
 
 async function createPiEvaluationSession(

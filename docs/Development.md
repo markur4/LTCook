@@ -555,15 +555,36 @@ inference. The focused tests for Tracker exercise manual edits and deletions,
 rewind, restart, pause gaps, input-budget outcomes, and independently valid
 changes across Trackers.
 
-Run the focused Hosted Agent Eval with a Codex subscription sign-in and
-`@tiny` resolving to GPT-6 Luna with low reasoning.
+Run the Hosted Decision Tracker suite through the shared Agent Evals CLI.
+Use the offline command for request-budget, persistence, evidence, and
+recovery checks. The baseline adds Hosted tracking, Instruction Audit,
+and independently calibrated semantic grading through Pi. It requires
+Codex subscription sign-in and the built Pi runtime for the native timeline
+fixture.
 
 ```shell
-bun evals/tracker.ts
+ltcook eval run --case decision-tracker --setup synthetic --deterministic-only
+ltcook eval run --all --case decision-tracker --baseline
 ```
 
-The eval uses a synthetic conversation to check that Tracker avoids false
-approvals, cites earlier proposals, and replaces superseded decisions.
+Synthetic Setup uses a pinned Hosted profile and annotated conversations.
+Current Setup uses the running LTCook instance's Hosted Tracker model,
+reasoning, and input budget against the same fixture data. Each case uses
+a disposable conversation-products database so the evaluation can read
+persisted Notebook state without touching any real conversation.
+
+The baseline runs the two setups in sequence under one 20-minute deadline,
+including calibration. `--retry-blocked` permits one additional run within
+that same deadline. The report shows deterministic and semantic verdicts,
+prepared evidence, request estimates and provider usage, item and revision
+checks, and coverage and recovery gaps. `ltcook eval report RUN_ID --json`
+returns the checkpointed case details. A confirmed failure remains
+`FAILED` when later checks are `BLOCKED`. The evaluation-only baseline is
+expected to expose the current budget stall while the Traditional Test
+that verifies detection passes.
+
+See the [Hosted Decision Tracker baseline](../evals/decision-tracker-baseline.md)
+for the measured results and the next runtime changes to investigate.
 
 The fresh `conversation-records-v1.sqlite` holds deterministic receipts and
 AABs. `conversation-products-v1.sqlite` holds Tracker state. Both

@@ -1,4 +1,9 @@
 import { describe, expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { runDecisionTrackerCase } from '../../../runtime/src/evals/decision-tracker.js';
 import team from '@ltcook/team-default-minimal';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import type { AgentBackend, Assignment, Task } from '../../../runtime/src/workflow-api/index.js';
@@ -179,3 +184,55 @@ describe('evaluation execution scope', () => {
     }
   });
 });
+
+const nativeFixtureRoot = path.resolve(import.meta.dir, '../../..');
+test.skipIf(!existsSync(path.join(nativeFixtureRoot, 'runtime/dist/integrations/pi-rpc.js')))(
+  'Decision Tracker persists a decision sourced from a native Pi/Paseo timeline offline',
+  async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'decision-tracker-native-test-'));
+    try {
+      const text = 'Keep the release artifacts in Europe.';
+      const result = await runDecisionTrackerCase(
+        {
+          id: 'native-timeline-test',
+          title: 'Native timeline provenance',
+          mode: 'deterministic',
+          native: true,
+          expectedDecisions: [{ alias: 'region', kind: 'explicit', sources: [1], facts: [text] }],
+          steps: [
+            {
+              messages: [{ seq: 1, author: 'user', text }],
+              expect: {
+                coverage: { 1: 'changes' },
+                items: [{ alias: 'region', sources: [1] }],
+                requests: 1,
+                revisions: 1,
+              },
+            },
+            {
+              action: 'reopen',
+              expect: { items: [{ alias: 'region', sources: [1] }], requests: 0, revisions: 1 },
+            },
+          ],
+          responses: { 1: { type: 'add', text, sources: [1] } },
+        },
+        {
+          directory,
+          inputTokens: 8000,
+          signal: AbortSignal.timeout(25_000),
+          nativeTimeline: {
+            appRoot: nativeFixtureRoot,
+            nodeExecutable: Bun.which('node') ?? 'node',
+          },
+        },
+      );
+      expect(result.checks.filter(({ verdict }) => verdict !== 'passed')).toEqual([]);
+      expect(result.verdict).toBe('passed');
+      expect(result.checkpoints[1]?.items).toMatchObject([{ text, sources: [1] }]);
+      expect(result.requests).toContainEqual(expect.objectContaining({ seq: 1, sent: true }));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+  30_000,
+);
