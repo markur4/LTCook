@@ -4,6 +4,17 @@ export type TrackerEvent = TrackerSnapshot['events'][number];
 export type TrackerCoverage = TrackerEvent['trackers'][number];
 export type TrackerTone = 'running' | 'success' | 'warning' | 'danger' | 'muted';
 
+/** Export current saved notes from every collection, independent of view filters. */
+export function formatTrackerNotes(trackers: TrackerSnapshot['trackers']): string {
+  return trackers
+    .filter(({ items }) => items.length > 0)
+    .map(
+      ({ name, items }) =>
+        `${name}\n${items.map(({ text }) => `- ${text.replace(/\r?\n/g, '\n  ')}`).join('\n')}`,
+    )
+    .join('\n\n');
+}
+
 export const trackerEventLabels = {
   pending: 'Queued',
   changes: 'Changes applied',

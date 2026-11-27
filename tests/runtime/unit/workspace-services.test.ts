@@ -9,6 +9,8 @@ import {
   type WorkspaceMetadataGenerator,
   type WorkspaceMetadataHost,
   type WorkspaceMetadataSnapshot,
+  type WorkspaceNamingJob,
+  type WorkspaceNamingTitles,
 } from '../../../runtime/src/services/workspace-metadata.js';
 import {
   WORKSPACE_ARCHIVE_AFTER_MS,
@@ -17,7 +19,6 @@ import {
 } from '../../../runtime/src/services/workspace-organizer.js';
 import {
   AGENT_TAB_TITLE_LIMIT,
-  WORKSPACE_RENAME_INTERVAL_MS,
   WORKSPACE_TITLE_LIMIT,
   Renamer,
 } from '../../../runtime/src/services/renamer.js';
@@ -78,28 +79,14 @@ function fixture() {
       snapshot.archived = true;
       return true;
     },
-    async renameWorkspace(_expected, title) {
-      writes.push(`workspace:${title}`);
-      snapshot.title = title;
-      return true;
-    },
-    async renameAgent(_expected, id, title) {
-      writes.push(`agent:${id}:${title}`);
-      snapshot.agents.find((agent) => agent.id === id)!.title = title;
-      return true;
-    },
   };
   const generator: WorkspaceMetadataGenerator = {
     async classify() {
       inferred.push('classify');
       return { category: 'Bugfix' };
     },
-    async rename(_snapshot, selection) {
-      inferred.push('rename');
-      return {
-        ...(selection.workspace ? { workspaceTitle: 'Fix login crash' } : {}),
-        agents: selection.agentIds.map((id) => ({ id, title: 'Login crash' })),
-      };
+    async rename() {
+      return { agents: [] };
     },
   };
   const options = {
@@ -119,8 +106,6 @@ function fixture() {
     options,
     organizer: () =>
       new WorkspaceOrganizer({ ...options, stateFile: join(root, 'organizer.json') }),
-    renamer: (settings: { renameWorkspaces?: () => boolean; renameTabs?: () => boolean } = {}) =>
-      new Renamer({ ...options, ...settings, stateFile: join(root, 'renamer.json') }),
     advance: (ms: number) => (now += ms),
     now: () => now,
     snapshots: () => [structuredClone(snapshot)],
@@ -370,104 +355,106 @@ test('Initial inference failures keep the ordinary twelve-hour backoff', async (
   expect(f.snapshot.labels).toEqual(['My label', 'Feature']);
 });
 
-test('Renamer enforces displayed-character limits and ignores unchanged content and metadata', async () => {
-  const f = fixture();
-  const emoji = '👨‍👩‍👧‍👦';
-  f.generator.rename = async (_snapshot, selection) => {
-    f.inferred.push('rename');
-    return {
-      ...(selection.workspace ? { workspaceTitle: `${emoji.repeat(21)} trailing` } : {}),
-      agents: selection.agentIds.map((id) => ({ id, title: '  Investigate\nlogin crash  ' })),
-    };
+function namingFixture() {
+  const job: WorkspaceNamingJob = {
+    workspaceId: 'workspace-one',
+    agentId: 'agent-one',
+    id: 'job-one',
+    prompt: 'Repair the login crash.\nAdditional notes',
+    nameWorkspace: true,
+    nameTab: true,
+    workspaceTitle: 'Existing workspace',
+    agentTitle: 'Existing agent',
   };
-  const renamer = f.renamer();
-  await renamer.tick(f.snapshots(), f.signal);
-  expect(f.snapshot.title).toBe(emoji.repeat(WORKSPACE_TITLE_LIMIT));
-  expect(f.snapshot.agents[0]!.title).toBe('Investigate log');
+  const jobs = [job];
+  const writes: WorkspaceNamingTitles[] = [];
+  const generator: WorkspaceMetadataGenerator = {
+    async classify() {
+      return { category: 'Bugfix' };
+    },
+    async rename({ agentId, nameWorkspace }) {
+      return {
+        ...(nameWorkspace ? { workspaceTitle: 'Fix login crash' } : {}),
+        agents: [{ id: agentId, title: 'Login crash' }],
+      };
+    },
+  };
+  const renamer = new Renamer({
+    enabled: true,
+    generator,
+    host: {
+      async pending() {
+        return [...jobs];
+      },
+      async apply(job, titles) {
+        jobs.splice(jobs.indexOf(job), 1);
+        writes.push(titles);
+        return true;
+      },
+    },
+  });
+  return { job, jobs, writes, generator, renamer, signal: new AbortController().signal };
+}
+
+test('Renamer names the first prompt and names a later tab without a workspace cooldown', async () => {
+  const f = namingFixture();
+  await f.renamer.visit(f.job.workspaceId, 'LTCook', f.signal);
+  f.jobs.push({ ...f.job, id: 'job-two', agentId: 'agent-two', nameWorkspace: false });
+  await f.renamer.visit(f.job.workspaceId, 'LTCook', f.signal);
+  expect(f.writes).toEqual([
+    { workspaceTitle: 'Fix login crash', agentTitle: 'Login crash' },
+    { agentTitle: 'Login crash' },
+  ]);
+});
+
+test('Renamer limits displayed characters without splitting graphemes', async () => {
+  const f = namingFixture();
+  const emoji = '👨‍👩‍👧‍👦';
+  f.generator.rename = async () => ({
+    workspaceTitle: `${emoji.repeat(21)} trailing`,
+    agents: [{ id: f.job.agentId, title: '  Investigate\nlogin crash  ' }],
+  });
+  await f.renamer.visit(f.job.workspaceId, 'LTCook', f.signal);
+  expect(f.writes).toEqual([
+    { workspaceTitle: emoji.repeat(WORKSPACE_TITLE_LIMIT), agentTitle: 'Investigate log' },
+  ]);
   expect(boundedWorkspaceTitle('e\u0301'.repeat(16), AGENT_TAB_TITLE_LIMIT)).toBe(
     'e\u0301'.repeat(15),
   );
-  f.snapshot.labels = ['Research'];
-  f.advance(WORKSPACE_RENAME_INTERVAL_MS);
-  await f.renamer().tick(f.snapshots(), f.signal);
-  expect(f.inferred).toEqual(['rename']);
 });
 
-test('Renamer lets workspace names be paused independently and catches up only after its deadline', async () => {
-  const f = fixture();
-  let renameWorkspaces = false;
-  const renamer = f.renamer({ renameWorkspaces: () => renameWorkspaces });
-  await renamer.tick(f.snapshots(), f.signal);
-  expect(f.snapshot.title).toBe('Existing workspace');
-  expect(f.snapshot.agents[0]!.title).toBe('Login crash');
-  renameWorkspaces = true;
-  await renamer.tick(f.snapshots(), f.signal);
-  expect(f.snapshot.title).toBe('Existing workspace');
-  f.advance(WORKSPACE_RENAME_INTERVAL_MS);
-  await renamer.tick(f.snapshots(), f.signal);
-  expect(f.snapshot.title).toBe('Fix login crash');
-  expect(f.writes.filter((value) => value.startsWith('agent:'))).toHaveLength(1);
+test('Renamer falls back to the first prompt when a proposal names an unexpected tab', async () => {
+  const f = namingFixture();
+  f.generator.rename = async () => ({
+    workspaceTitle: 'Unrelated title',
+    agents: [{ id: 'someone-elses-agent', title: 'Overwrite' }],
+  });
+  await f.renamer.visit(f.job.workspaceId, 'LTCook', f.signal);
+  expect(f.writes).toEqual([
+    { workspaceTitle: 'Repair the login cra', agentTitle: 'Repair the logi' },
+  ]);
+  expect(f.renamer.status().diagnostic).toContain('fallback');
 });
 
-test('Renamer rejects invented targets without changing any titles or immediately retrying', async () => {
-  const f = fixture();
-  let calls = 0;
-  f.generator.rename = async () => {
-    calls++;
-    return {
-      workspaceTitle: 'Untrusted result',
-      agents: [{ id: 'someone-elses-agent', title: 'Overwrite' }],
-    };
-  };
-  await f.renamer().tick(f.snapshots(), f.signal);
-  expect(f.writes).toEqual([]);
-  expect(f.snapshot.title).toBe('Existing workspace');
-  expect(f.failures).toHaveLength(1);
-  await f.renamer().tick(f.snapshots(), f.signal);
-  expect(calls).toBe(1);
-});
-
-test('Renamer discards results after content changes and preserves a concurrent manual title', async () => {
-  const f = fixture();
-  f.generator.rename = async () => {
-    f.snapshot.contentVersion = 'new-content';
-    return { workspaceTitle: 'Old task', agents: [{ id: 'agent-one', title: 'Old task' }] };
-  };
-  await f.renamer().tick(f.snapshots(), f.signal);
-  expect(f.writes).toEqual([]);
-  f.advance(WORKSPACE_RENAME_INTERVAL_MS);
-  f.generator.rename = async () => {
-    f.snapshot.title = 'User name';
-    f.snapshot.agents[0]!.title = 'User agent name';
-    return { workspaceTitle: 'Auto name', agents: [{ id: 'agent-one', title: 'Auto name' }] };
-  };
-  await f.renamer().tick(f.snapshots(), f.signal);
-  expect(f.writes).toEqual([]);
-  expect(f.snapshot.title).toBe('User name');
-});
-
-test('Concurrent ticks share one attempt and cancellation prevents native writes', async () => {
-  const f = fixture();
+test('Renamer coalesces repeated notifications and never writes after cancellation', async () => {
+  const f = namingFixture();
   const abort = new AbortController();
-  let release!: (value: unknown) => void;
   let calls = 0;
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<unknown>();
   f.generator.rename = async () => {
     calls++;
-    return new Promise((resolve) => {
-      release = resolve;
-    });
+    entered.resolve();
+    return release.promise;
   };
-  const renamer = f.renamer();
-  const first = renamer.tick(f.snapshots(), abort.signal);
-  const second = renamer.tick(f.snapshots(), abort.signal);
-  expect(first).toBe(second);
+  const first = f.renamer.visit(f.job.workspaceId, 'LTCook', abort.signal);
+  expect(f.renamer.visit(f.job.workspaceId, 'LTCook', abort.signal)).toBe(first);
+  await entered.promise;
   expect(calls).toBe(1);
   abort.abort();
-  release({ workspaceTitle: 'Stopped', agents: [{ id: 'agent-one', title: 'Stopped' }] });
-  await expect(first).rejects.toThrow();
+  release.resolve({ workspaceTitle: 'Stopped', agents: [] });
+  await first;
   expect(f.writes).toEqual([]);
-  await f.renamer().tick(f.snapshots(), f.signal);
-  expect(calls).toBe(1);
 });
 
 test('Unsupported service state fails unchanged instead of resetting archive clocks silently', () => {
@@ -510,41 +497,6 @@ test('Organizer preserves classification failure while archive and label sync su
   expect(f.snapshot.labels).toContain('Bugfix');
 });
 
-test('Renamer waits for an observed credential correction and immediately retries due work', async () => {
-  const f = fixture();
-  let revision = 'old-login';
-  let checks = 0;
-  let calls = 0;
-  f.generator.validate = async () => {
-    checks++;
-    return revision;
-  };
-  const rename = f.generator.rename;
-  f.generator.rename = async (...args) => {
-    calls++;
-    if (revision === 'old-login')
-      throw new ServiceInferenceError('authentication', 'Sign in again.', revision);
-    return rename(...args);
-  };
-
-  const renamer = f.renamer();
-  await renamer.tick(f.snapshots(), f.signal);
-  await renamer.tick(f.snapshots(), f.signal);
-  expect(checks).toBe(1);
-  expect(calls).toBe(1);
-  expect(renamer.status().diagnostic).toBe('Sign in again.');
-  f.advance(60_000);
-  await renamer.tick(f.snapshots(), f.signal);
-  expect(checks).toBe(2);
-  expect(calls).toBe(1);
-  revision = 'new-login';
-  f.advance(60_000);
-  await renamer.tick(f.snapshots(), f.signal);
-  expect(calls).toBe(2);
-  expect(f.snapshot.title).toBe('Fix login crash');
-  expect(renamer.status().diagnostic).toBeUndefined();
-});
-
 test('Classification backs off across restart and unchanged labels do not count as a change', async () => {
   const f = fixture();
   let attempts = 0;
@@ -572,21 +524,12 @@ test('Classification backs off across restart and unchanged labels do not count 
   expect(f.writes.filter((value) => value.startsWith('label:'))).toEqual([]);
 });
 
-test('An unchanged rename result clears its failure and leaves change counters alone', async () => {
-  const f = fixture();
-  const renamer = f.renamer();
+test('Renamer falls back on provider failure and exposes the correction', async () => {
+  const f = namingFixture();
   f.generator.rename = async () => {
-    throw new ServiceInferenceError('transient', 'The provider is busy.');
+    throw new ServiceInferenceError('authentication', 'Sign in again.');
   };
-  await renamer.tick(f.snapshots(), f.signal);
-  f.advance(60_000);
-  f.generator.rename = async ({ title, agents }) => ({
-    workspaceTitle: title,
-    agents: agents.map(({ id, title: agentTitle }) => ({ id, title: agentTitle })),
-  });
-  await renamer.tick(f.snapshots(), f.signal);
-  expect(renamer.status()).toMatchObject({ processed: 0, lastSuccessAt: null });
-  expect(renamer.status().diagnostic).toBeUndefined();
-  expect(f.renamer().status().diagnostic).toBeUndefined();
-  expect(f.writes).toEqual([]);
+  await f.renamer.visit(f.job.workspaceId, 'LTCook', f.signal);
+  expect(f.writes).toHaveLength(1);
+  expect(f.renamer.status().diagnostic).toBe('Sign in again.');
 });

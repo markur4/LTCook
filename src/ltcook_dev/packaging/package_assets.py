@@ -18,6 +18,7 @@ REQUIRED_RUNTIME_ENTRIES = (
     "dist/paseo-idle-restart/register.mjs",
     "dist/paseo-idle-restart/patch.mjs",
     "dist/paseo-idle-restart/gate.mjs",
+    "dist/paseo-idle-restart/workspace-naming.mjs",
     "dist/tools/web-mcp.js",
     "dist/tools/pi-web-access.LICENSE",
     "dist/evals/worker.js",

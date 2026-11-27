@@ -1,5 +1,8 @@
 import { expect, test } from 'bun:test';
-import { presentTracker } from '../../../runtime/src/paseo-plugin/client/tracker-presentation';
+import {
+  formatTrackerNotes,
+  presentTracker,
+} from '../../../runtime/src/paseo-plugin/client/tracker-presentation';
 import type { TrackerSnapshot } from '../../../runtime/src/paseo-plugin/shared/tracker';
 
 type Entry = TrackerSnapshot['events'][number]['trackers'][number];
@@ -21,6 +24,38 @@ function snapshot(events: TrackerSnapshot['events'] = []): TrackerSnapshot {
 function event(seq: number, trackers: Entry[], epoch = 'timeline') {
   return { source: { epoch, seq }, trackers };
 }
+
+test('copies saved notes from all collections, including disabled Trackers, as grouped plain text', () => {
+  const current = snapshot();
+  current.trackers[0]!.items = [
+    { id: 'd1', text: 'Keep the approved design.', manual: true, sources: [] },
+    { id: 'd2', text: 'First line\r\nSecond line\nThird line', manual: false, sources: [] },
+  ];
+  current.trackers[1]!.enabled = false;
+  current.trackers[1]!.items = [
+    { id: 'q1', text: 'What about “Öffnen”?', manual: false, sources: [] },
+  ];
+  current.trackers.push({
+    id: 'empty',
+    name: 'Empty Tracker',
+    instructions: 'Nothing yet',
+    enabled: true,
+    items: [],
+  });
+  expect(formatTrackerNotes(current.trackers)).toBe(
+    'Decisions\n- Keep the approved design.\n- First line\n  Second line\n  Third line\n\nQuestions\n- What about “Öffnen”?',
+  );
+  current.trackers[0]!.items[0]!.text = 'Use the latest saved edit.';
+  current.trackers[0]!.items.splice(1, 1);
+  expect(formatTrackerNotes(current.trackers)).toBe(
+    'Decisions\n- Use the latest saved edit.\n\nQuestions\n- What about “Öffnen”?',
+  );
+});
+
+test('empty notebooks export no headings or placeholder notes', () => {
+  expect(formatTrackerNotes([])).toBe('');
+  expect(formatTrackerNotes(snapshot().trackers)).toBe('');
+});
 
 test('retains a coverage gap after a later successful extraction', () => {
   const current = snapshot([

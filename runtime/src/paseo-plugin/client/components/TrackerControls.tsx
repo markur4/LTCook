@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Platform, Pressable, Text, View } from 'react-native';
 import { Icon } from '@getpaseo/plugin/client/ui';
 import type { Theme } from './PanelChrome';
 
@@ -25,7 +25,7 @@ export function TrackerText({
       style={{
         color: muted ? theme.colors.foregroundMuted : theme.colors.foreground,
         fontSize: size,
-        lineHeight: Math.round(size * 1.55),
+        lineHeight: Math.round(size * 1.45),
         fontWeight: strong ? '600' : '400',
         flexShrink: 1,
         minWidth: 0,
@@ -63,6 +63,11 @@ export function TrackerButton({
   testID?: string;
 }) {
   const [focused, setFocused] = useState(false);
+  const touch =
+    Platform.OS !== 'web' ||
+    (globalThis as { matchMedia?: (query: string) => { matches: boolean } }).matchMedia?.(
+      '(pointer: coarse)',
+    ).matches === true;
   const color = primary
     ? theme.colors.accentForeground
     : danger
@@ -80,14 +85,14 @@ export function TrackerButton({
       onBlur={() => setFocused(false)}
       hitSlop={4}
       style={({ pressed, hovered }: { pressed: boolean; hovered?: boolean }) => ({
-        minHeight: 36,
+        minHeight: touch ? 44 : 30,
         maxWidth: '100%',
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 7,
         paddingHorizontal: 11,
-        paddingVertical: 7,
+        paddingVertical: 4,
         borderRadius: 7,
         borderWidth: 1,
         borderColor: focused
@@ -140,8 +145,9 @@ export function TrackerNotice({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 12,
-        padding: 12,
+        gap: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
         borderLeftWidth: 3,
         borderLeftColor: warning ? theme.colors.statusWarning : theme.colors.accent,
         backgroundColor: theme.colors.surface1,

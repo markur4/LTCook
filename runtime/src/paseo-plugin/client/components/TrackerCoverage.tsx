@@ -43,7 +43,7 @@ export function TrackerCoverage({
     .reverse();
 
   return (
-    <View style={{ gap: 16 }}>
+    <View style={{ gap: 10 }}>
       <View style={{ gap: 4 }}>
         <TrackerText theme={theme} strong>
           {current.coverageLabel}
@@ -67,8 +67,8 @@ export function TrackerCoverage({
           style={{
             borderTopWidth: 1,
             borderTopColor: theme.colors.border,
-            paddingTop: 14,
-            gap: 10,
+            paddingTop: 10,
+            gap: 7,
           }}
         >
           <SourceLinks theme={theme} sources={[event.source]} onReveal={onReveal} />

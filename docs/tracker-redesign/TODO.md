@@ -11,5 +11,12 @@
 - [x] Complete desktop/narrow visual and interaction checks.
 - [x] Run final relevant Traditional Tests, formatting, and type checks.
 - [x] Prepare the reviewed change and verification details for a draft PR.
+- [x] Obtain approval of the interactive preview before further implementation.
+- [x] Apply the approved compact spacing, Notes label, and Copy all notes action.
+- [x] Integrate the newer workspace naming and Services sidebar changes from main.
+- [x] Complete final Traditional Tests, static checks, and copy-action browser checks.
+
+The user authorized implementation and merge on 2026-11-27. Integration is
+recorded by [PR #88](https://github.com/markur4/LTCook/pull/88).
 
 See [VALIDATION.md](VALIDATION.md) for the observed results.

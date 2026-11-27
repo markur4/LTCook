@@ -16,8 +16,15 @@ editing controls, and coverage compete for a narrow column.
   **All items**, collection selection, a local text search, and item sources.
 - Use quiet rows with readable item text. Put collection instructions, item
   editing, and service controls in their own focused views.
-- Keep **Notebook** and **Coverage** separate within the same tab. Coverage is
+- Keep **Notes** and **Coverage** separate within the same tab. Coverage is
   a per-message processing record, not a fabricated item-change log.
+- Use the approved compact header, row, and control spacing without reducing
+  text sizes. Retain larger control targets on native and coarse-pointer clients.
+- Put **Copy all notes** beside search. Export all saved notes from the bound
+  conversation as plain text, grouped under Tracker headings with bullet points,
+  independent of selected collection or search filter. Include disabled
+  collections and omit empty collections. Use Paseo's clipboard API and expose
+  selectable text when clipboard access fails.
 - Show processing state separately from coverage. Paused and skipped messages
   remain gaps. Missing original evidence remains visible on the affected item.
 - Use only existing snapshot fields. Message timestamps are not extraction
@@ -60,6 +67,8 @@ is independent of the redesign and remains deferred.
 - Users can create/edit/disable/remove Trackers and edit/remove items using the
   existing API. Destructive actions are explicit.
 - Search and collection selection work without changing stored data.
+- Copy includes every saved note, reflects saved edits and removals, and reports
+  success only after the clipboard operation completes.
 - Source navigation uses complete source identity and the host capability.
 - Coverage shows first-blocker recovery and preserves skipped-message gaps.
 - Disconnected views are labelled; mutations cannot silently appear successful.

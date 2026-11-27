@@ -55,33 +55,39 @@ export interface WorkspaceMetadataHost {
   ): Promise<boolean>;
   /** Recheck activity, agent state, and filesystem preservation immediately before archive. */
   archive(expected: WorkspaceMetadataSnapshot, signal: AbortSignal): Promise<boolean>;
-  renameWorkspace(
-    expected: WorkspaceMetadataSnapshot,
-    title: string,
-    signal: AbortSignal,
-  ): Promise<boolean>;
-  renameAgent(
-    expected: WorkspaceMetadataSnapshot,
-    agentId: string,
-    title: string,
+}
+
+export const WorkspaceNamingJobSchema = z.strictObject({
+  id: z.string().min(1).max(256),
+  workspaceId: z.string().min(1).max(256),
+  agentId: z.string().min(1).max(256),
+  prompt: z.string().max(2500),
+  nameWorkspace: z.boolean(),
+  nameTab: z.boolean(),
+  workspaceTitle: z.string(),
+  agentTitle: z.string(),
+});
+export type WorkspaceNamingJob = z.infer<typeof WorkspaceNamingJobSchema>;
+
+export interface WorkspaceNamingTitles {
+  workspaceTitle?: string;
+  agentTitle?: string;
+}
+
+export interface WorkspaceNamingHost {
+  pending(workspaceId: string, signal: AbortSignal): Promise<WorkspaceNamingJob[]>;
+  apply(
+    job: WorkspaceNamingJob,
+    titles: WorkspaceNamingTitles,
     signal: AbortSignal,
   ): Promise<boolean>;
 }
 
-export interface RenameSelection {
-  workspace: boolean;
-  agentIds: string[];
-}
-
-/** Only proposes data. Scheduling, validation, native writes, and archive remain runtime-owned. */
+/** Only proposes data. Native writes remain guarded by the daemon. */
 export interface WorkspaceMetadataGenerator {
   validate?(signal: AbortSignal): Promise<string>;
   classify(snapshot: WorkspaceMetadataSnapshot, signal: AbortSignal): Promise<unknown>;
-  rename(
-    snapshot: WorkspaceMetadataSnapshot,
-    selection: RenameSelection,
-    signal: AbortSignal,
-  ): Promise<unknown>;
+  rename(job: WorkspaceNamingJob & { projectName: string }, signal: AbortSignal): Promise<unknown>;
 }
 
 export const ClassificationSchema = z.strictObject({ category: WorkspaceCategorySchema });

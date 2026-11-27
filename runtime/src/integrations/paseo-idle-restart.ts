@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import {
+  WorkspaceNamingJobSchema,
+  type WorkspaceNamingHost,
+} from '../services/workspace-metadata.js';
 
 const busy = z.object({ status: z.literal('busy'), activeTurns: z.number().int().nonnegative() });
 const reply = z.discriminatedUnion('status', [
@@ -100,4 +104,47 @@ export async function connectPaseoMaintenance(listen: string, token: string) {
         }
       : undefined;
   return { reserveIdleRestart, archiveWorkspacePreservingFiles };
+}
+
+export async function connectPaseoWorkspaceNaming(
+  listen: string,
+  token: string,
+): Promise<WorkspaceNamingHost | undefined> {
+  const controlUrl = loopbackControlUrl(listen);
+  if (!controlUrl) return undefined;
+  const url = new URL('/api/ltcook/workspace-naming', controlUrl);
+  const request = async (body: object, signal?: AbortSignal): Promise<unknown> => {
+    const response = await fetch(url, {
+      method: 'POST',
+      redirect: 'error',
+      signal: AbortSignal.any([
+        ...(signal ? [signal] : []),
+        AbortSignal.timeout(5_000),
+      ]) as NonNullable<RequestInit['signal']>,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error('Paseo workspace naming is unavailable.');
+    return response.json();
+  };
+  const status = z
+    .object({ workspaceNaming: z.literal(true) })
+    .safeParse(await request({ operation: 'status' }).catch(() => undefined));
+  if (!status.success) return undefined;
+  return {
+    async pending(workspaceId, signal) {
+      const { jobs } = z
+        .object({ jobs: z.array(WorkspaceNamingJobSchema) })
+        .parse(await request({ operation: 'pending', workspaceId }, signal));
+      if (jobs.some((job) => job.workspaceId !== workspaceId))
+        throw new Error('Paseo returned naming jobs for a different workspace.');
+      return jobs;
+    },
+    async apply({ workspaceId, agentId, id }, titles, signal) {
+      const { applied } = z
+        .object({ applied: z.boolean() })
+        .parse(await request({ operation: 'apply', workspaceId, agentId, id, ...titles }, signal));
+      return applied;
+    },
+  };
 }

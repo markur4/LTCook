@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { useWindowDimensions } from 'react-native';
 import { Action, ScrollView, SidebarRow, useToast } from '@getpaseo/plugin/client/ui';
 import {
   useAgent,
@@ -5,6 +7,7 @@ import {
   useComposer,
   type PluginClientContext,
   type PluginComposerItemProps,
+  type PluginSidebarItemProps,
 } from '@getpaseo/plugin/client';
 import { TeamsBrowser } from './client/screens/TeamsBrowser';
 import { TeamStatus } from './client/screens/TeamStatus';
@@ -70,6 +73,28 @@ function loadedWebBuild(): string | undefined {
   return build && /^[a-f0-9]{64}$/.test(build) ? build.slice(0, 12) : undefined;
 }
 
+function ServicesSidebar({ theme, layout }: PluginSidebarItemProps) {
+  const [open, setOpen] = useState(false);
+  const { height } = useWindowDimensions();
+  return (
+    <>
+      <SidebarRow
+        icon={open ? 'ChevronDown' : 'ChevronRight'}
+        onPress={() => setOpen((value) => !value)}
+      />
+      {open && (
+        <ScrollView
+          testID="ltcook-sidebar-workspace-services"
+          style={layout.compact ? { maxHeight: Math.floor(height * 0.4) } : undefined}
+          nestedScrollEnabled
+        >
+          <WorkspaceServices theme={theme} />
+        </ScrollView>
+      )}
+    </>
+  );
+}
+
 export default function contribute(client: PluginClientContext) {
   const ActivityDefault = createActivityDefault(client);
   const cleanup = [
@@ -84,6 +109,11 @@ export default function contribute(client: PluginClientContext) {
           onPress={() => openScreen({ screenId: 'teams-browser' })}
         />
       ),
+    }),
+    client.addSidebarHeaderItem({
+      id: 'services',
+      title: 'Services',
+      Component: ServicesSidebar,
     }),
     client.addCommandCenterItem({
       id: 'browse-workspace-teams',

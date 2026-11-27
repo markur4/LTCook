@@ -21,6 +21,7 @@ import { TrackerButton, TrackerNotice, TrackerText } from '../components/Tracker
 import { presentTracker } from '../tracker-presentation';
 import { TrackedItem, type TrackerSource as Source } from '../components/TrackedItem';
 import { TrackerCoverage } from '../components/TrackerCoverage';
+import { TrackerCopyNotes } from '../components/TrackerCopyNotes';
 import {
   TrackerEditorDialog,
   TrackerServiceDialog,
@@ -173,14 +174,14 @@ function TrackerNotebook({ params, theme, navigation, host, tab, layout }: Plugi
       <View
         style={{
           paddingHorizontal: narrow ? 16 : 28,
-          paddingTop: 24,
-          paddingBottom: 18,
-          gap: 16,
+          paddingTop: 14,
+          paddingBottom: 10,
+          gap: 10,
           borderBottomWidth: 1,
           borderBottomColor: theme.colors.border,
         }}
       >
-        <View style={{ ...row, justifyContent: 'space-between', gap: 16 }}>
+        <View style={{ ...row, justifyContent: 'space-between', gap: 10 }}>
           <View style={{ gap: 3, flex: 1, minWidth: 140 }}>
             <View style={row}>
               <Icon name="Notebook" size={22} color={theme.colors.accent} />
@@ -301,8 +302,9 @@ function TrackerNotebook({ params, theme, navigation, host, tab, layout }: Plugi
                 }
           }
           contentContainerStyle={{
-            padding: 16,
-            gap: 8,
+            paddingHorizontal: 16,
+            paddingVertical: 10,
+            gap: 5,
             ...(narrow ? { flexDirection: 'row', flexWrap: 'wrap' } : {}),
           }}
         >
@@ -323,7 +325,7 @@ function TrackerNotebook({ params, theme, navigation, host, tab, layout }: Plugi
             ),
           )}
           {!narrow && (
-            <View style={{ paddingHorizontal: 11, marginTop: 18, gap: 8 }}>
+            <View style={{ paddingHorizontal: 11, marginTop: 10, gap: 8 }}>
               <TrackerText theme={theme} muted size={12}>
                 Each Tracker follows the instructions you give it.
               </TrackerText>
@@ -335,9 +337,13 @@ function TrackerNotebook({ params, theme, navigation, host, tab, layout }: Plugi
         </ScrollView>
         <ScrollView
           style={{ flex: 1, minWidth: 0 }}
-          contentContainerStyle={{ padding: narrow ? 16 : 28, paddingTop: 20, gap: 20 }}
+          contentContainerStyle={{
+            paddingHorizontal: narrow ? 16 : 28,
+            paddingVertical: 12,
+            gap: 12,
+          }}
         >
-          <View style={{ maxWidth: 960, width: '100%', alignSelf: 'center', gap: 18 }}>
+          <View style={{ maxWidth: 960, width: '100%', alignSelf: 'center', gap: 10 }}>
             <View style={{ ...row, justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <View style={{ flex: 1, minWidth: 150, gap: 5 }}>
                 <TrackerText theme={theme} heading strong size={20}>
@@ -373,13 +379,13 @@ function TrackerNotebook({ params, theme, navigation, host, tab, layout }: Plugi
                 justifyContent: 'space-between',
                 borderBottomWidth: 1,
                 borderBottomColor: theme.colors.border,
-                paddingBottom: 12,
+                paddingBottom: 8,
               }}
             >
               <View style={row}>
                 <TrackerButton
                   theme={theme}
-                  label="Notebook"
+                  label="Notes"
                   icon="NotebookPen"
                   quiet
                   selected={state.view === 'notebook'}
@@ -410,8 +416,8 @@ function TrackerNotebook({ params, theme, navigation, host, tab, layout }: Plugi
                 >
                   <Icon name="Search" size={14} color={theme.colors.foregroundMuted} />
                   <TextInput
-                    accessibilityLabel="Find in notebook"
-                    placeholder="Find in notebook…"
+                    accessibilityLabel="Find in notes"
+                    placeholder="Find in notes…"
                     placeholderTextColor={theme.colors.foregroundMuted}
                     value={state.query}
                     onChangeText={(query) => setState({ ...state, query })}
@@ -420,18 +426,20 @@ function TrackerNotebook({ params, theme, navigation, host, tab, layout }: Plugi
                       minWidth: 0,
                       color: theme.colors.foreground,
                       fontSize: 12,
-                      paddingVertical: 9,
+                      paddingVertical: 6,
                     }}
                   />
                 </View>
               )}
+              <TrackerCopyNotes theme={theme} trackers={snapshot.trackers} />
             </View>
             {state.view === 'notebook' ? (
               <>
                 {selected && (
                   <View
                     style={{
-                      padding: 14,
+                      paddingHorizontal: 14,
+                      paddingVertical: 9,
                       borderRadius: 7,
                       backgroundColor: theme.colors.surface1,
                       gap: 5,

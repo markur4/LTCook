@@ -81,13 +81,13 @@ export function TrackedItem({
     <View
       testID={`tracker-item-${item.id}`}
       style={{
-        paddingVertical: 19,
+        paddingVertical: 10,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border,
-        gap: 10,
+        gap: 5,
       }}
     >
-      <Text selectable style={{ color: theme.colors.foreground, fontSize: 15, lineHeight: 24 }}>
+      <Text selectable style={{ color: theme.colors.foreground, fontSize: 15, lineHeight: 22 }}>
         {item.text}
       </Text>
       <View style={{ ...row, justifyContent: 'space-between' }}>
