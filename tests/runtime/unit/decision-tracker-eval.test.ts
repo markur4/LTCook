@@ -5,6 +5,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { decisionTrackerFixtures } from '../../../runtime/src/evals/decision-tracker-fixtures.js';
 import {
+  auditDecisionTrackerInstructions,
   gradeDecisionTrackerCase,
   summarizeDecisionTrackerGrades,
 } from '../../../runtime/src/evals/decision-tracker-grading.js';
@@ -155,7 +156,9 @@ test('a plausible stored item fails when required proposal evidence was excluded
 test('semantic metrics exclude grading with a fabricated source quotation', async () => {
   const text = 'Keep the release artifacts in Europe.';
   const decision = { alias: 'region', kind: 'explicit' as const, sources: [1], facts: [text] };
-  function assess(quote: string) {
+  const rationale = 'The compliance team is based in Berlin.';
+  function assess(quote: string, missingRationale = false) {
+    const source = missingRationale ? `${text} ${rationale}` : text;
     return gradeDecisionTrackerCase(
       async () =>
         JSON.stringify({
@@ -171,6 +174,16 @@ test('semantic metrics exclude grading with a fabricated source quotation', asyn
                   itemEvidence: [{ itemId: 'item-1', quote: text }],
                   sourceEvidence: [{ seq: 1, quote }],
                 },
+                ...(missingRationale
+                  ? [
+                      {
+                        factIndex: 1,
+                        verdict: 'missing',
+                        itemEvidence: [],
+                        sourceEvidence: [{ seq: 1, quote: rationale }],
+                      },
+                    ]
+                  : []),
               ],
             },
           ],
@@ -189,8 +202,10 @@ test('semantic metrics exclude grading with a fabricated source quotation', asyn
           id: 'region',
           title: 'A grounded decision',
           mode: 'live',
-          steps: [{ messages: [{ seq: 1, author: 'user', text }] }],
-          expectedDecisions: [decision],
+          steps: [{ messages: [{ seq: 1, author: 'user', text: source }] }],
+          expectedDecisions: [
+            missingRationale ? { ...decision, facts: [...decision.facts, rationale] } : decision,
+          ],
         },
         items: [{ id: 'item-1', text, sources: [1] }],
         requests: [{ seq: 1, evidence: [1], sent: true }],
@@ -206,4 +221,157 @@ test('semantic metrics exclude grading with a fabricated source quotation', asyn
   expect(summary.status).toBe('blocked');
   expect(summary.blocked).toBe(1);
   expect(summary.metrics.explicitRecall).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+
+  const omittedRationale = await assess(text, true);
+  expect(omittedRationale.status).toBe('failed');
+  expect(omittedRationale.metrics.precision).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+  expect(omittedRationale.metrics.explicitRecall).toEqual({
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+  });
+  expect(omittedRationale.metrics.informationFidelity).toEqual({
+    numerator: 1,
+    denominator: 2,
+    rate: 0.5,
+  });
+});
+
+test('a provider failure preserves a completed message mismatch in the same step', () =>
+  isolated(async (directory) => {
+    const result = await runDecisionTrackerCase(
+      {
+        id: 'hosted-partial-step',
+        title: 'A completed mismatch before a provider failure',
+        mode: 'live',
+        expectedDecisions: [],
+        steps: [
+          {
+            messages: [
+              { seq: 1, author: 'user', text: 'Keep the existing queue.' },
+              { seq: 2, author: 'user', text: 'Retain events for 14 days.' },
+            ],
+            expect: { coverage: { 1: 'changes', 2: 'changes' } },
+          },
+        ],
+      },
+      {
+        directory,
+        inputTokens: 8000,
+        signal: new AbortController().signal,
+        provider: async ({ input }) => {
+          if (JSON.parse(input).current.seq === 2) throw new Error('Provider unavailable');
+          return {
+            text: JSON.stringify({ trackers: [{ trackerId: 'design-decisions', changes: [] }] }),
+            complete: true,
+          };
+        },
+      },
+    );
+
+    expect(result.verdict).toBe('failed');
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({
+        name: 'Coverage for message 1',
+        verdict: 'failed',
+        observed: { seq: 1, status: 'no-change', reason: undefined },
+      }),
+    );
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({ name: 'Hosted provider availability', verdict: 'blocked' }),
+    );
+    expect(result.checks.some(({ name }) => name === 'Coverage for message 2')).toBe(false);
+  }));
+
+test('a returned incomplete response is a Hosted candidate failure', () =>
+  isolated(async (directory) => {
+    const result = await runDecisionTrackerCase(
+      {
+        id: 'incomplete-hosted-response',
+        title: 'A Hosted response that stops before completion',
+        mode: 'live',
+        expectedDecisions: [],
+        steps: [
+          {
+            messages: [{ seq: 1, author: 'user', text: 'Keep the existing queue.' }],
+            expect: { coverage: { 1: 'changes' } },
+          },
+        ],
+      },
+      {
+        directory,
+        inputTokens: 8000,
+        signal: new AbortController().signal,
+        provider: async () => ({ text: '{"trackers":[', complete: false }),
+      },
+    );
+    expect(result.verdict).toBe('failed');
+    expect(result.failureStage).toBe('hosted-inference');
+    expect(result.checks.some(({ verdict }) => verdict === 'blocked')).toBe(false);
+  }));
+
+test('semantic precision rejects a merged item and preserves its grounded facts', async () => {
+  const facts = ['Use the existing queue.', 'Retain audit records for 14 days.'];
+  const text = facts.join(' ');
+  const expectedDecisions = facts.map((fact, index) => ({
+    alias: `decision-${index}`,
+    kind: 'explicit' as const,
+    sources: [1],
+    facts: [fact],
+  }));
+  const result = await gradeDecisionTrackerCase(
+    async () =>
+      JSON.stringify({
+        decisions: expectedDecisions.map(({ alias, facts: [quote] }) => ({
+          alias,
+          verdict: 'preserved',
+          matchedItemIds: ['merged'],
+          facts: [
+            {
+              factIndex: 0,
+              verdict: 'preserved',
+              itemEvidence: [{ itemId: 'merged', quote }],
+              sourceEvidence: [{ seq: 1, quote }],
+            },
+          ],
+        })),
+        items: [
+          {
+            itemId: 'merged',
+            verdict: 'supported',
+            decisionAliases: expectedDecisions.map(({ alias }) => alias),
+            itemQuote: text,
+            sourceEvidence: [{ seq: 1, quote: text }],
+          },
+        ],
+      }),
+    {
+      fixture: {
+        id: 'merge',
+        title: 'Two decisions in one item',
+        mode: 'live',
+        steps: [{ messages: [{ seq: 1, author: 'user', text }] }],
+        expectedDecisions,
+      },
+      items: [{ id: 'merged', text, sources: [1] }],
+      requests: [{ seq: 1, evidence: [1], sent: true }],
+      signal: new AbortController().signal,
+    },
+  );
+  expect(result.status).toBe('failed');
+  expect(result.metrics.precision).toEqual({ numerator: 0, denominator: 1, rate: 0 });
+  expect(result.metrics.informationFidelity).toEqual({ numerator: 2, denominator: 2, rate: 1 });
+});
+
+test('a blocked semantic instruction audit preserves a failed static audit', async () => {
+  const result = await auditDecisionTrackerInstructions(
+    'Use good judgment.',
+    async () => {
+      throw new Error('Grader unavailable');
+    },
+    new AbortController().signal,
+  );
+  expect(result.staticAudit.status).toBe('failed');
+  expect(result.status).toBe('failed');
+  expect(result.diagnostics.join(' ')).toContain('Grader unavailable');
 });

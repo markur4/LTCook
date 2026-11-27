@@ -184,6 +184,7 @@ export async function runDecisionTrackerCase(
   const observations: TrackerObservation[] = [];
   const aliases = new Map<string, string>();
   const completedRequests = new Set<number>();
+  const incompleteResponses = new Set<number>();
   const attempts = new Map<number, number>();
   const inferenceUsage: NonNullable<InferenceResponse['usage']>[] = [];
   const requests: { seq: number; evidence: number[]; sent: boolean }[] = [];
@@ -218,7 +219,20 @@ export async function runDecisionTrackerCase(
       }
       result = scriptedCompletion(fixture, prompt, logicalSeq, nativeSeq, fixtureItemId, attempts);
     }
-    if (seq !== undefined && result.complete) completedRequests.add(seq);
+    bounded.throwIfAborted();
+    if (seq !== undefined) {
+      if (result.complete && result.text.trim()) completedRequests.add(seq);
+      else if (provider) {
+        incompleteResponses.add(seq);
+        check(
+          `Hosted candidate completes response for message ${seq}`,
+          'hosted-inference',
+          false,
+          'Complete non-empty response',
+          { complete: result.complete, hasText: Boolean(result.text.trim()) },
+        );
+      }
+    }
     return result;
   };
   const validate = provider?.validate;
@@ -444,18 +458,19 @@ export async function runDecisionTrackerCase(
         'Plain decision text',
         actual.items.map(({ id, text }) => ({ id, text })),
       );
-      signal.throwIfAborted();
       providerUnavailable ||= Boolean(
         provider &&
         actual.events.some(
-          ({ reason }) =>
-            reason === 'authentication' || reason === 'configuration' || reason === 'transient',
+          ({ seq, reason }) =>
+            reason === 'authentication' ||
+            reason === 'configuration' ||
+            (reason === 'transient' && !incompleteResponses.has(seq)),
         ),
       );
-      if (providerUnavailable) break;
+      const partial = providerUnavailable || signal.aborted;
       const expected = step.expect;
-      if (!expected) continue;
-      for (const [seq, status] of Object.entries(expected.coverage ?? {})) {
+      for (const [seq, status] of Object.entries(expected?.coverage ?? {})) {
+        if (partial && !completedRequests.has(Number(seq))) continue;
         const event = actual.events.find((entry) => entry.seq === Number(seq));
         const observedFailure = observations.findLast(
           (entry) => entry.seq === Number(seq) && 'outcome' in entry,
@@ -485,7 +500,7 @@ export async function runDecisionTrackerCase(
               : undefined,
         );
       }
-      if (expected.requests !== undefined) {
+      if (!partial && expected?.requests !== undefined) {
         check(
           'Inference requests for checkpoint',
           'request-construction',
@@ -495,7 +510,7 @@ export async function runDecisionTrackerCase(
           step.action === 'observe' ? 'idempotency' : undefined,
         );
       }
-      if (expected.revisions !== undefined) {
+      if (!partial && expected?.revisions !== undefined) {
         const revisionCount = actual.revisions.filter(({ invalidated }) => !invalidated).length;
         check(
           'Persisted revision count',
@@ -506,7 +521,7 @@ export async function runDecisionTrackerCase(
           step.action === 'observe' ? 'idempotency' : undefined,
         );
       }
-      if (expected.invalidatedRevisions !== undefined) {
+      if (!partial && expected?.invalidatedRevisions !== undefined) {
         const invalidatedCount = actual.revisions.filter(({ invalidated }) => invalidated).length;
         check(
           'Persisted invalidated revision count',
@@ -517,7 +532,7 @@ export async function runDecisionTrackerCase(
           'recoveryCorrectness',
         );
       }
-      if (expected.items) {
+      if (!partial && expected?.items) {
         check(
           'Active Notebook item count',
           'state-mutation',
@@ -551,6 +566,7 @@ export async function runDecisionTrackerCase(
         }
       }
       for (const { seq } of step.messages ?? []) {
+        if (partial && !completedRequests.has(seq)) continue;
         const response = fixture.responses?.[seq];
         if (
           !response ||
@@ -582,9 +598,10 @@ export async function runDecisionTrackerCase(
           'revisionAccuracy',
         );
       }
+      if (partial) break;
     }
     for (const [seq, expected] of Object.entries(fixture.requiredEvidence ?? {})) {
-      if (!providerUnavailable || completedRequests.has(Number(seq))) {
+      if ((!providerUnavailable && !signal.aborted) || completedRequests.has(Number(seq))) {
         const sentEvidence = [
           ...new Set(
             requests
@@ -607,6 +624,7 @@ export async function runDecisionTrackerCase(
         );
       }
     }
+    signal.throwIfAborted();
     if (!providerUnavailable) {
       if (fixture.eventualProgress) {
         const { seq, status, itemAlias } = fixture.eventualProgress;
@@ -658,7 +676,10 @@ export async function runDecisionTrackerCase(
       await native?.close();
     }
   }
-  const failure = checks.find(({ verdict }) => verdict === 'failed');
+  const failures = checks.filter(({ verdict }) => verdict === 'failed');
+  const failure =
+    failures.find(({ stage }) => stage === 'evidence-selection' || stage === 'token-budgeting') ??
+    failures[0];
   return {
     id: fixture.id,
     title: fixture.title,
@@ -811,7 +832,7 @@ async function createGrader(directory: string, candidate: ResolvedModel, signal:
     const bounded = AbortSignal.any([active, AbortSignal.timeout(120_000)]);
     bounded.throwIfAborted();
     const { session } = await createSession({ directory, instructions });
-    const abort = () => void session.abort();
+    const abort = () => void session.abort().catch(() => undefined);
     bounded.addEventListener('abort', abort, { once: true });
     try {
       bounded.throwIfAborted();
@@ -899,9 +920,7 @@ export async function evaluateDecisionTracker(
         );
     report.verdict = resultVerdict([
       ...cases,
-      ...(!deterministicOnly && report.instructionAudit
-        ? [{ verdict: report.instructionAudit.status }]
-        : []),
+      ...(report.instructionAudit ? [{ verdict: report.instructionAudit.status }] : []),
     ]);
     report.elapsedMs = performance.now() - started;
     await onProgress?.(report, caseId);
@@ -932,7 +951,15 @@ export async function evaluateDecisionTracker(
     }
   };
 
-  report.instructionAudit = await auditDecisionTrackerInstructions(instructions);
+  const staticAudit = await auditDecisionTrackerInstructions(instructions);
+  report.instructionAudit =
+    !deterministicOnly && staticAudit.status === 'passed'
+      ? {
+          ...staticAudit,
+          status: 'blocked',
+          diagnostics: ['The Hosted semantic instruction audit has not completed.'],
+        }
+      : staticAudit;
   for (const [index, fixture] of selected.entries()) {
     if (signal.aborted) {
       cases[index] = blockedCase(
@@ -982,22 +1009,27 @@ export async function evaluateDecisionTracker(
       };
       cases[index] = outcome;
       await checkpoint();
-      if (fixture.mode === 'live' && result.verdict !== 'blocked') {
+      if (fixture.mode === 'live' && result.verdict !== 'blocked' && !signal.aborted) {
         await prepareGrader();
-        if (!active.aborted && grader && report.calibration?.status === 'passed') {
+        // > The learned Tracker execution safeguard excludes calibration and semantic grading.
+        if (!signal.aborted && grader && report.calibration?.status === 'passed') {
           outcome.semantic = await gradeDecisionTrackerCase(grader, {
             fixture,
             items: result.checkpoints.at(-1)?.items ?? [],
             requests: result.requests,
-            signal: active,
+            signal,
           });
           outcome.verdict = resultVerdict([result, { verdict: outcome.semantic.status }]);
+          if (outcome.semantic.status === 'failed')
+            outcome.failureStage ??= outcome.semantic.evidenceGaps.length
+              ? 'evidence-selection'
+              : 'semantic-grading';
         } else {
           outcome.verdict = resultVerdict([result, { verdict: 'blocked' }]);
           outcome.blocker = 'Calibrated Hosted grading was unavailable or timed out.';
         }
       }
-      if (identity && options.learned && !active.aborted)
+      if (identity && options.learned && !signal.aborted)
         await options.learned(identity, {
           elapsedMs: result.elapsedMs,
           success: outcome.verdict === 'passed',

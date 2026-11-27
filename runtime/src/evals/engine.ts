@@ -157,7 +157,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         });
         results[suite] = report;
         metadata.decisionTrackerQualification = report.verdict;
-        completed = 1;
+        completed = report.complete ? 1 : 0;
         progress({
           event: report.verdict === 'failed' ? 'case.failed' : 'case.completed',
           suite,

@@ -453,6 +453,35 @@ def test_tracker_baseline_keeps_confirmed_failure_and_retries_one_blocked_setup(
     )
 
 
+def test_tracker_baseline_preserves_a_failure_if_another_setup_cannot_start(
+    monkeypatch,
+):
+    import typer
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    calls = []
+
+    def start(_preset, **options):
+        calls.append(options["setup"].value)
+        if options["setup"] == cli.EvalSetup.current:
+            raise typer.BadParameter("Runtime request outcome is unavailable.")
+        return {
+            "summary": {"status": "completed", "decisionTrackerQualification": "failed"}
+        }
+
+    monkeypatch.setattr(cli, "_start_and_follow", start)
+    result = CliRunner().invoke(
+        cli.eval_cli,
+        ["run", "--case", "decision-tracker", "--baseline", "--retry-blocked"],
+    )
+    assert result.exit_code == 1
+    assert "current · BLOCKED" in result.output
+    assert "baseline · FAILED" in result.output
+    assert calls == ["synthetic", "current"]
+
+
 def test_tracker_baseline_does_not_launch_another_setup_after_deadline(monkeypatch):
     from typer.testing import CliRunner
 

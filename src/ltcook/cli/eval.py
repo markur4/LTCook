@@ -393,6 +393,23 @@ def _decision_tracker_baseline(*, retry_blocked: bool) -> None:
     """Run the two Tracker setups with one server-enforced session deadline."""
     deadline = time.time_ns() // 1_000_000 + 20 * 60 * 1000
     setups = [EvalSetup.synthetic, EvalSetup.current]
+
+    def attempt(setup: EvalSetup) -> str | None:
+        try:
+            report = _start_and_follow(
+                "full",
+                setup=setup,
+                scenario=EvalCase.decision_tracker,
+                deadline_at=deadline,
+                defer_verdict=True,
+            )
+        except typer.BadParameter as error:
+            console.print(f"{setup.value} · BLOCKED · {error.message}", markup=False)
+            return None
+        if report is None:
+            raise typer.Exit(1)
+        return _run_verdict(report)
+
     verdicts: list[str] = []
     retry_setup = None
     for setup in setups:
@@ -400,31 +417,13 @@ def _decision_tracker_baseline(*, retry_blocked: bool) -> None:
             console.print(f"{setup.value} · BLOCKED · baseline deadline expired")
             verdicts.append("blocked")
             continue
-        report = _start_and_follow(
-            "full",
-            setup=setup,
-            scenario=EvalCase.decision_tracker,
-            deadline_at=deadline,
-            defer_verdict=True,
-        )
-        if report is None:
-            raise typer.Exit(1)
-        verdict = _run_verdict(report)
-        verdicts.append(verdict)
+        verdict = attempt(setup)
+        verdicts.append(verdict or "blocked")
         if retry_blocked and verdict == "blocked" and retry_setup is None:
             retry_setup = setup
 
     if retry_setup and time.time_ns() // 1_000_000 < deadline:
-        report = _start_and_follow(
-            "full",
-            setup=retry_setup,
-            scenario=EvalCase.decision_tracker,
-            deadline_at=deadline,
-            defer_verdict=True,
-        )
-        if report is None:
-            raise typer.Exit(1)
-        verdicts[setups.index(retry_setup)] = _run_verdict(report)
+        verdicts[setups.index(retry_setup)] = attempt(retry_setup) or "blocked"
 
     verdict = (
         "failed"
