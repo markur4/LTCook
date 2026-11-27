@@ -95,15 +95,17 @@ function QueryForm({
   const running = pending !== undefined;
   const label = advanced ? 'Tool arguments (JSON)' : tool === 'search' ? 'Search query' : 'Symbol';
   const value = advanced ? argumentsText : query;
+  const lexical = !advanced && tool === 'search' && mode !== 'hybrid' && mode !== 'semantic';
+  const hasInput = (lexical ? value : value.trim()).length > 0;
 
   function submit() {
-    if (running || !value.trim()) return;
+    if (running || !hasInput) return;
     let input;
     try {
       input = advanced
         ? toolArgumentsSchema.parse(JSON.parse(argumentsText))
         : tool === 'search'
-          ? { query: query.trim(), mode }
+          ? { query, mode }
           : { symbol: query.trim() };
     } catch {
       setOutput({ error: 'Enter a valid JSON object with the tool arguments.' });
@@ -151,7 +153,7 @@ function QueryForm({
           placeholder={label}
           placeholderTextColor={theme.colors.foregroundMuted}
           value={value}
-          maxLength={advanced ? 16000 : 1024}
+          maxLength={advanced ? undefined : 1024}
           multiline={advanced}
           editable={!running}
           autoCapitalize="none"
@@ -175,7 +177,7 @@ function QueryForm({
               onPress={() => finish({ error: 'Query canceled.' })}
             />
           ) : (
-            <Action theme={theme} title="Run query" disabled={!value.trim()} onPress={submit} />
+            <Action theme={theme} title="Run query" disabled={!hasInput} onPress={submit} />
           )}
           <Action
             theme={theme}
