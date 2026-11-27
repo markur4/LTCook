@@ -281,6 +281,12 @@ for diagnosis; it does not change the default. Small scheduling batches
 (`--maxschedchunk=1`) keep the slow process-based checks distributed across
 workers.
 
+Run the full local Traditional Test suite before merging. Require model-backed
+Agent Evals when the change affects behavior that needs model-backed
+qualification, such as a recommended model, its prompt, or the way an agent
+uses model output. Documentation and deterministic interface changes can be
+verified with Traditional Tests and the relevant native checks.
+
 A complete test-suite measurement includes Traditional Tests and model-backed
 Agent Evals. Report elapsed time and outcomes for each category and their combined
 total. For complete live coverage, use the full evaluation preset in

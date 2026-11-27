@@ -48,7 +48,8 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
 - Repository policy: keep pytest-xdist in the development dependency group and run Python tests with six workers by default. Do not remove the dependency or reduce this default without explicit user approval. A complete test-suite measurement includes both Traditional Tests and model-backed Agent Evals; report their times and outcomes separately and together.
 - Repository policy: call the two categories Traditional Tests and Agent Evals. Use the established labels Instruction Audit, Behavior Evaluation, and Bottleneck Attribution in interfaces, documentation, and reports. Routine Agent Evals use full instructions in the selected setup, with one repetition by default. Behavior Evaluation and Bottleneck Attribution share the same executions; do not add reduced-instruction runs or repeated timing runs by default.
 - Agent Evals safeguards use three times the slowest of the five most recent comparable successful attempts, with separate no-reasoning and low-reasoning histories. Preserve diagnostics before fallback, cancellation, or failure; failed attempts must not increase the safeguard. The 120-second safeguard applies only when there is no compatible successful history.
-- Run the project’s relevant lint, type-check, and test commands before considering the task done.
+- Run the project’s relevant lint and type checks and the full local Traditional Test suite before merging.
+  Require model-backed Agent Evals when the changed behavior needs model-backed qualification.
 - Before native installer work, follow the
   [integration and system procedures](docs/Development.md#integration-and-system-procedures).
 - From WSL, never launch native Windows verification executables, directly or
