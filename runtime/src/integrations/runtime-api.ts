@@ -500,6 +500,8 @@ export class RuntimeApi {
               modification.itemId,
               modification.text,
             );
+          else if (modification.type === 'retry' || modification.type === 'skip')
+            this.tracker.recover(agentId, modification);
           else this.tracker.configure(agentId, modification);
         }
         const snapshot = await this.tracker.snapshot(agentId);

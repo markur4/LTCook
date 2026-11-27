@@ -150,6 +150,7 @@ test.each([false, true])(
     const configured = path.join(tmpdir(), 'ltcook-configured-models.json');
     const calls: Parameters<typeof ModelRuntime.create>[0][] = [];
     let completions = 0;
+    let credential: string | undefined;
     const generator = createWorkspaceMetadataGenerator(
       {
         LTCOOK_PI_AUTH_DIR: authDir,
@@ -163,11 +164,11 @@ test.each([false, true])(
             getModel: () =>
               fallback && options?.modelsPath === configured
                 ? undefined
-                : { provider: 'custom', id: 'provider-model' },
+                : { provider: 'custom', id: 'provider-model', reasoning: true },
             login: async () => {},
             logout: async () => {},
             checkAuth: async () => ({}),
-            getAuth: async () => ({}),
+            getAuth: async () => (credential ? { auth: { apiKey: credential } } : undefined),
             async complete(
               _model: unknown,
               context: { tools: unknown[]; messages: unknown[] },
@@ -193,6 +194,15 @@ test.each([false, true])(
       },
     );
     const signal = new AbortController().signal;
+    await expect(generator.validate!(signal)).rejects.toMatchObject({
+      kind: 'authentication',
+      message: expect.stringContaining('shared Pi authentication directory'),
+    });
+    credential = 'fixture-key-one';
+    const original = await generator.validate!(signal);
+    credential = 'fixture-key-two';
+    expect(await generator.validate!(signal)).not.toBe(original);
+    expect(completions).toBe(0);
     expect(await generator.classify(snapshot(), signal)).toEqual({ category: 'CSC' });
     expect(await generator.classify(snapshot(), signal)).toEqual({ category: 'CSC' });
     expect(completions).toBe(2);

@@ -3,9 +3,12 @@ import { z } from 'zod';
 
 const id = z.string().min(1);
 const selection = z.strictObject({ agentId: id });
-const source = z.object({
+const cursor = {
   epoch: id,
   seq: z.number().int().nonnegative(),
+};
+const source = z.object({
+  ...cursor,
   messageId: id.optional(),
   author: z.enum(['user', 'agent']).optional(),
   timestamp: z.string().optional(),
@@ -22,6 +25,8 @@ const modification = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('enable'), id, enabled: z.boolean() }),
   z.strictObject({ type: z.literal('remove'), id }),
   z.strictObject({ type: z.literal('pause'), paused: z.boolean() }),
+  z.strictObject({ type: z.literal('retry'), trackerId: id, source: z.strictObject(cursor) }),
+  z.strictObject({ type: z.literal('skip'), trackerId: id, source: z.strictObject(cursor) }),
   z.strictObject({
     type: z.literal('item'),
     trackerId: id,
@@ -58,7 +63,27 @@ export const TrackerSnapshotSchema = z.object({
       trackers: z.array(
         z.object({
           trackerId: id,
-          status: z.enum(['pending', 'changes', 'no-change', 'incomplete', 'failed', 'paused']),
+          status: z.enum([
+            'pending',
+            'changes',
+            'no-change',
+            'incomplete',
+            'failed',
+            'paused',
+            'skipped',
+          ]),
+          reason: z
+            .enum([
+              'budget',
+              'source',
+              'changed',
+              'configuration',
+              'authentication',
+              'transient',
+              'output',
+            ])
+            .optional(),
+          detail: z.string().optional(),
         }),
       ),
     }),

@@ -396,6 +396,7 @@ def start_runtime(
     workspace_root: Path | None,
     shell_environment: Mapping[str, str],
     detached: bool,
+    restart_instance_id: UUID | None = None,
 ) -> StartedRuntime:
     """Spawn one owner candidate with durable output and original shell provenance."""
     native = Path(environment["LTCOOK_JS_ROOT"]) / "runtime" / "dist" / "main.js"
@@ -415,10 +416,13 @@ def start_runtime(
         creationflags = (
             subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
         )
+    command = [node, str(native)]
+    if restart_instance_id is not None:
+        command.extend(("--restart-instance-id", str(restart_instance_id)))
     with _open_log(path, append=True) as output:
         offset = os.fstat(output.fileno()).st_size
         process = subprocess.Popen(
-            [node, str(native)],
+            command,
             cwd=workspace_root,
             env=child_environment,
             stdin=subprocess.DEVNULL if detached else None,
@@ -629,12 +633,14 @@ def stop_runtime(
     *,
     when_idle: bool = False,
     expected_instance_id: str | None = None,
+    expected_build_fingerprint: str | None = None,
 ) -> int:
     """Stop only the authenticated observed instance, optionally reserving idle Paseo.
 
     :param environment: Resolved launch credentials and installation identity.
     :param when_idle: Require an atomic Paseo idle reservation before shutdown.
     :param expected_instance_id: Fail when the queued job's runtime was replaced.
+    :param expected_build_fingerprint: Require the active owner's verified build.
     :return: Process exit status after the stop is confirmed.
     """
     status = probe_runtime(environment)
@@ -651,6 +657,13 @@ def stop_runtime(
     if status == "starting":
         raise RuntimeClientError(
             "The runtime is still starting or unresponsive; retry ltcook stop when ready."
+        )
+    if (
+        expected_build_fingerprint is not None
+        and status.build_fingerprint != expected_build_fingerprint
+    ):
+        raise RuntimeClientError(
+            "The running LTCook runtime differs from the installed build."
         )
     if when_idle and not status.idle_restart:
         raise RuntimeClientError("This runtime does not support restarting when idle.")

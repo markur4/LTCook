@@ -436,7 +436,7 @@ test('Automatic archive is paused without the negotiated directory-preserving ca
   expect(withoutCapability.archiveSafe).toBe(false);
   expect(await f.services.archive(before, signal)).toBe(false);
   await f.services.poll();
-  expect(f.services.status().diagnostic).toContain('directory-preserving archive');
+  expect(f.services.status().organizer.diagnostic).toContain('directory-preserving archive');
   expect(f.calls).not.toContain(`archive:${f.workspace.id}`);
   expect(f.calls).not.toContain(`unsafe-archive:${f.workspace.id}`);
   await f.services.close();
@@ -620,4 +620,21 @@ test('Unreadable conversation evidence prevents archive and exposes no workspace
   expect(snapshot.archiveSafe).toBe(false);
   expect(JSON.stringify(f.services.status())).not.toContain(f.root);
   await f.services.close();
+});
+
+test('An invalid Renamer setting reports its correction while Organizer continues', async () => {
+  const f = nativeFixture({
+    LTCOOK_RENAMER_ENABLED: 'invalid private input',
+  });
+  await f.services.poll();
+  const status = f.services.status();
+  expect(status.organizer.diagnostic).toBeUndefined();
+  expect(status.renamer.enabled).toBe(false);
+  expect(status.renamer.diagnostics).toEqual([
+    {
+      operation: 'settings',
+      message: 'Set LTCOOK_RENAMER_ENABLED to true or false in AppRC and restart LTCook.',
+    },
+  ]);
+  expect(f.workspace.labels).toContain('Bugfix');
 });

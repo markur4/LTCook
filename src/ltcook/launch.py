@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, NotRequired, TypedDict
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import typer
 from apprc import ResolvedConfig
@@ -578,7 +578,11 @@ def _open_existing_runtime(
 
 
 def _run_foreground_runtime(
-    launch: LaunchConfig, shell: Mapping[str, str], *, verbose: bool = False
+    launch: LaunchConfig,
+    shell: Mapping[str, str],
+    *,
+    verbose: bool = False,
+    restart_instance_id: UUID | None = None,
 ) -> int:
     """Run explicit server-only startup while preserving terminal output and Ctrl+C."""
     child = start_runtime(
@@ -586,6 +590,7 @@ def _run_foreground_runtime(
         workspace_root=launch.workspace_root,
         shell_environment=shell,
         detached=False,
+        restart_instance_id=restart_instance_id,
     )
     try:
         status = wait_for_runtime(launch.environment, child)
@@ -599,6 +604,10 @@ def _run_foreground_runtime(
                     "The owned runtime did not stop after startup interruption; inspect its backend log."
                 ) from error
         return 130
+    if restart_instance_id is not None and status.instance_id != str(
+        restart_instance_id
+    ):
+        raise RuntimeClientError("Another runtime won the restart launch race.")
     if child.process.poll() == 75:
         if launch.workspace_root is None:
             typer.echo("Reusing LTCook runtime.")
@@ -626,10 +635,14 @@ def launch_runtime(
     verbose: Annotated[
         bool, typer.Option("--verbose", help="Show complete runtime diagnostics.")
     ] = False,
+    restart_instance_id: Annotated[
+        UUID | None, typer.Option("--restart-instance-id", hidden=True)
+    ] = None,
 ) -> None:
     """Start the global runtime or explicitly open a project session.
 
     :param workspace: Optional project directory to open when starting.
+    :param restart_instance_id: Identify the sole owner candidate for a registered restart.
     :return: None.
     """
     shell = _shell_environment(os.environ)
@@ -637,6 +650,10 @@ def launch_runtime(
     launch = resolve_launch(workspace, original_environment=shell)
     try:
         status = probe_runtime(launch.environment)
+        if restart_instance_id is not None and status is not None:
+            raise RuntimeClientError(
+                "Another runtime appeared before the restart launch."
+            )
         if status == "starting":
             status = wait_for_runtime(launch.environment, None)
         if isinstance(status, RuntimeStatus) and (
@@ -651,7 +668,11 @@ def launch_runtime(
                     follow_runtime_logs(launch.environment, status, verbose=True)
                 )
             return
-        raise typer.Exit(_run_foreground_runtime(launch, shell, verbose=verbose))
+        raise typer.Exit(
+            _run_foreground_runtime(
+                launch, shell, verbose=verbose, restart_instance_id=restart_instance_id
+            )
+        )
     except RuntimeClientError as error:
         raise typer.BadParameter(str(error)) from error
 
