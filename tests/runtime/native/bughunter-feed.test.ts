@@ -93,15 +93,17 @@ test('BugHunter appends native chat updates and retains messages after a timelin
   const stop = new AbortController();
   const snapshots: BugHunterSnapshot[] = [];
   const entries = [{ seqStart: 1, item: { type: 'user_message', text: 'Check indexing.' } }];
-  let updated: (() => void) | undefined;
+  let updated: ((type?: string) => void) | undefined;
   let failTimeline = false;
+  let archived = false;
   const paseo = {
     agents: {
       ref(id: string) {
         return {
           timeline: {
             subscribe(listener: (input: { event: { type: string; item: unknown } }) => void) {
-              updated = () => listener({ event: { type: 'timeline', item: entries.at(-1)?.item } });
+              updated = (type = 'timeline') =>
+                listener({ event: { type, item: entries.at(-1)?.item } });
               return { ready: Promise.resolve(), async release() {} };
             },
             async refetch() {
@@ -113,7 +115,7 @@ test('BugHunter appends native chat updates and retains messages after a timelin
       },
     },
   } as unknown as PaseoApi;
-  const deadline = setTimeout(() => stop.abort(), 4_000);
+  const deadline = setTimeout(() => stop.abort(), 5_000);
   try {
     await observeBugHunter(
       paseo,
@@ -130,18 +132,35 @@ test('BugHunter appends native chat updates and retains messages after a timelin
         } else if (snapshots.length === 2) {
           failTimeline = true;
           updated?.();
+        } else if (snapshots.length === 3) {
+          updated?.('replacement');
+          archived = true;
         } else {
           stop.abort();
         }
       },
-      async () => details,
+      async () =>
+        !archived
+          ? details
+          : {
+              ...details,
+              hunts: details.hunts.map((hunt) => ({
+                ...hunt,
+                conversations: hunt.conversations.map((conversation) => ({
+                  ...conversation,
+                  archived: true,
+                })),
+              })),
+            },
     );
     expect(snapshots.map(({ chat }) => chat?.messages.map(({ text }) => text))).toEqual([
       ['Check indexing.'],
       ['Check indexing.', 'Investigating.'],
       ['Check indexing.', 'Investigating.'],
+      [],
     ]);
-    expect(snapshots.at(-1)?.chat?.unavailable).toBe(true);
+    expect(snapshots[2]?.chat?.unavailable).toBe(true);
+    expect(snapshots[3]?.chat?.archived).toBe(true);
   } finally {
     clearTimeout(deadline);
   }
