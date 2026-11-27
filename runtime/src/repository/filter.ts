@@ -1,6 +1,7 @@
 import { posix } from 'node:path';
 import { RE2JS } from 're2js';
 import { Type, type Static } from 'typebox';
+import { Value } from 'typebox/value';
 
 const pathRules = Type.Optional(
   Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { maxItems: 12 }),
@@ -23,11 +24,25 @@ export const RepositoryFilterSchema = Type.Object(
 
 export type RepositoryFilterInput = Static<typeof RepositoryFilterSchema>;
 
+export class RepositoryFilterError extends Error {}
+
+export function invalidRepositoryFilterArgument(input: unknown): RepositoryFilterError | undefined {
+  if (!input || typeof input !== 'object' || !('filter' in input)) return;
+  const error = Value.Errors(RepositoryFilterSchema, input.filter)[0];
+  if (!error) return;
+  const [, field, index] = error.instancePath.split('/');
+  if (field && !Object.hasOwn(RepositoryFilterSchema.properties, field))
+    return new RepositoryFilterError('Use only the six include and exclude fields in filter.');
+  const location = field ? `filter.${field}${index ? `[${index}]` : ''}` : 'filter';
+  return new RepositoryFilterError(`${location} ${error.message}.`);
+}
+
 export const RepositoryFilterReportSchema = Type.Object({
   effective: RepositoryFilterSchema,
   rejectedPaths: Type.Integer({ minimum: 0 }),
   rejectedUnits: Type.Integer({ minimum: 0 }),
   budgetExhausted: Type.Boolean(),
+  providerPruning: Type.Optional(Type.Literal('count-unavailable')),
 });
 
 export type RepositoryFilterReport = Static<typeof RepositoryFilterReportSchema>;
@@ -52,7 +67,7 @@ function compilePaths(values: string[] | undefined, field: string): PathRule[] {
       segments.filter((segment) => segment === '**').length > 4 ||
       (glob.match(/[*?]/g)?.length ?? 0) > 24
     ) {
-      throw new Error(
+      throw new RepositoryFilterError(
         `filter.${field}[${index}] must be a workspace-relative glob using /, *, ? or **.`,
       );
     }
@@ -67,7 +82,7 @@ function compileRegex(values: string[] | undefined, field: string): RE2JS[] {
     try {
       return RE2JS.compile(value);
     } catch {
-      throw new Error(
+      throw new RepositoryFilterError(
         `filter.${field}[${index}] must be a valid RE2 regular expression. Use a literal text filter for plain text.`,
       );
     }
@@ -94,6 +109,7 @@ export class RepositoryFilter {
   private rejectedUnits = 0;
   private testedBytes = 0;
   private exhausted = false;
+  private prunedByProvider = false;
   readonly effective: RepositoryFilterInput;
 
   constructor(input: RepositoryFilterInput) {
@@ -181,12 +197,17 @@ export class RepositoryFilter {
     return allowed;
   }
 
+  noteProviderPruning(): void {
+    this.prunedByProvider = true;
+  }
+
   report(budgetExhausted = false): RepositoryFilterReport {
     return {
       effective: this.effective,
       rejectedPaths: this.rejected.size,
       rejectedUnits: this.rejectedUnits,
       budgetExhausted: budgetExhausted || this.exhausted,
+      ...(this.prunedByProvider && { providerPruning: 'count-unavailable' }),
     };
   }
 }
@@ -203,7 +224,7 @@ export function compileRepositoryFilter(
       (supported === 'paths' && field !== 'includePaths' && field !== 'excludePaths'),
   );
   if (supported === 'none' || unsupported.length)
-    throw new Error(
+    throw new RepositoryFilterError(
       `${operation} does not support ${unsupported.map((field) => 'filter.' + field).join(', ') || 'filter'}.`,
     );
   return new RepositoryFilter(input);

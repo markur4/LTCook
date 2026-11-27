@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { access, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { RepositoryFilter } from '../../../runtime/src/repository/filter.js';
 import { createRipgrepProvider } from '../../../runtime/src/repository/providers/ripgrep.js';
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 
@@ -126,7 +127,10 @@ test.skipIf(!Bun.which('rg'))(
       expect(
         await provider.search(
           workspace,
-          { query: '-e', paths: ['nested', './nested/b.ts'] },
+          {
+            query: '-e',
+            filter: new RepositoryFilter({ includePaths: ['nested/**', './nested/b.ts'] }),
+          },
           signal,
         ),
       ).toMatchObject({
@@ -136,7 +140,11 @@ test.skipIf(!Bun.which('rg'))(
       expect(
         await provider.search(
           workspace,
-          { query: 'reserve[A-Z]\\w+', mode: 'regex', paths: ['a.ts'] },
+          {
+            query: 'reserve[A-Z]\\w+',
+            mode: 'regex',
+            filter: new RepositoryFilter({ includePaths: ['a.ts'] }),
+          },
           signal,
         ),
       ).toMatchObject({
@@ -154,8 +162,26 @@ test.skipIf(!Bun.which('rg'))(
           value: { status: 'unavailable', hits: [] },
         },
       );
-      await expect(
-        provider.search(workspace, { query: 'reserve', paths: ['../outside.ts'] }, signal),
-      ).rejects.toThrow(/traversal/);
+    }),
+);
+
+test.skipIf(!Bun.which('rg'))(
+  'ripgrep filters verified lines before applying the result limit',
+  () =>
+    fixture(async (_root, source) => {
+      await writeFile(path.join(source, 'a.py'), 'match = "__main__"\nmatch = "unrelated"\n');
+      const workspace = await openRepositoryWorkspace(source);
+      const filter = new RepositoryFilter({ includeRegex: ['match'], excludeText: ['__main__'] });
+      const result = await createRipgrepProvider().search(
+        workspace,
+        { query: 'match', limit: 1, filter },
+        new AbortController().signal,
+      );
+      expect(result).toMatchObject({
+        partial: false,
+        truncated: false,
+        value: { hits: [{ path: 'a.py', startLine: 2, excerpt: 'match = "unrelated"' }] },
+      });
+      expect(filter.report().rejectedUnits).toBe(1);
     }),
 );

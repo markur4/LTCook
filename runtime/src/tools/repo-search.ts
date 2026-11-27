@@ -1,7 +1,13 @@
 import { Type, type Static } from 'typebox';
 import { REPO_SEARCH_TOOL_NAME } from './workspace-tools.js';
 import { RepositorySourceReader } from '../repository/evidence.js';
-import { assertRepositoryPathVisible, isRepositoryPathVisible } from '../repository/filesystem.js';
+import { isRepositoryPathVisible } from '../repository/filesystem.js';
+import {
+  compileRepositoryFilter,
+  RepositoryFilterReportSchema,
+  RepositoryFilterSchema,
+  type RepositoryFilter,
+} from '../repository/filter.js';
 import { COLGREP_MAX_RESULTS, createColgrepProvider } from '../repository/providers/colgrep.js';
 import { createRipgrepProvider, type RipgrepCollection } from '../repository/providers/ripgrep.js';
 import {
@@ -23,11 +29,6 @@ export { REPO_SEARCH_TIMEOUT_MS, REPO_SEARCH_TOOL_NAME } from './workspace-tools
 export const repositoryEvidenceGuidance =
   ' Cite the exact supporting numbered lines for each claim. Search again only to close a specific evidence gap. A ready, complete empty response means this search found no matches. Partial, unavailable, or indexing results can leave the evidence unresolved.';
 
-export const RepositorySearchPathsSchema = Type.Array(
-  Type.String({ minLength: 1, maxLength: 1024 }),
-  { maxItems: 12 },
-);
-
 export const RepositorySearchBaseSchema = Type.String({ minLength: 1, maxLength: 512 });
 
 const RepositorySearchInputSchema = Type.Object(
@@ -42,8 +43,7 @@ const RepositorySearchInputSchema = Type.Object(
         Type.Literal('regex'),
       ]),
     ),
-    pattern: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
-    paths: Type.Optional(RepositorySearchPathsSchema),
+    filter: Type.Optional(RepositoryFilterSchema),
     base: Type.Optional(RepositorySearchBaseSchema),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: COLGREP_MAX_RESULTS })),
   },
@@ -52,6 +52,7 @@ const RepositorySearchInputSchema = Type.Object(
 
 export const RepositorySearchOutputSchema = Type.Object({
   status: RepositoryRetrievalStatusSchema,
+  filter: Type.Optional(RepositoryFilterReportSchema),
   base: Type.Optional(Type.Object({ reference: Type.String(), commit: Type.String() })),
   results: Type.Optional(Type.Array(RepositoryHitSchema)),
   hint: Type.Optional(Type.String()),
@@ -78,8 +79,7 @@ export async function openAuthorizedSearchWorkspace(
   return workspace;
 }
 
-function fallbackPattern(query: string, pattern: string | undefined): string | undefined {
-  if (pattern) return pattern;
+function fallbackPattern(query: string): string | undefined {
   const words = query.match(/[\p{L}\p{N}_]{3,}/gu);
   return words ? [...new Set(words)].slice(0, 6).join('|') : undefined;
 }
@@ -94,6 +94,7 @@ export function createRepoSearchTool(
     signal: AbortSignal,
     options: {
       source?: RepositorySourceReader;
+      filter?: RepositoryFilter;
       collection?: RipgrepCollection;
       priority?: RepositorySearchPriority;
       updateIndex?: boolean;
@@ -101,14 +102,9 @@ export function createRepoSearchTool(
   ): Promise<Static<typeof RepositorySearchOutputSchema>> {
     signal.throwIfAborted();
     await workspace.assertUnchanged();
-    const { mode, pattern, query, paths, limit = 8 } = input;
+    const { mode, query, limit = 8 } = input;
+    const filter = options.filter ?? compileRepositoryFilter(input.filter, 'Search');
     const lexical = mode === 'exact' || mode === 'literal' || mode === 'regex';
-    if (lexical && pattern !== undefined)
-      throw new Error('Use query for lexical search. Pattern is a filter for ranked modes.');
-    for (const requested of paths ?? []) {
-      const { relative } = await workspace.resolvePath(requested, { allowRoot: true });
-      assertRepositoryPathVisible(relative);
-    }
     const source = options.source ?? new RepositorySourceReader(workspace);
     const priority =
       options.priority ??
@@ -118,14 +114,13 @@ export function createRepoSearchTool(
     const prioritize = priority?.prioritize;
     const collection = prioritize ? { ...options.collection, prioritize } : options.collection;
     let retrieval = await (lexical
-      ? ripgrep.search(workspace, { query, mode, paths, limit }, signal, source, collection)
+      ? ripgrep.search(workspace, { query, mode, filter, limit }, signal, source, collection)
       : colgrep.search(
           workspace,
           {
             query,
             mode,
-            pattern,
-            paths,
+            filter,
             limit: prioritize ? COLGREP_MAX_RESULTS : limit,
             updateIndex: options.updateIndex,
           },
@@ -141,11 +136,11 @@ export function createRepoSearchTool(
         ['indexing', 'index-unavailable', 'index-recovery'].includes(code),
       )
     ) {
-      const queryPattern = fallbackPattern(query, pattern);
+      const queryPattern = fallbackPattern(query);
       if (queryPattern) {
         const fallback = await ripgrep.search(
           workspace,
-          { query: queryPattern, mode: 'regex', paths, limit },
+          { query: queryPattern, mode: 'regex', filter, limit },
           signal,
           source,
           collection,
@@ -196,6 +191,12 @@ export function createRepoSearchTool(
     }
     return {
       ...metadata,
+      ...(filter &&
+        !options.filter && {
+          filter: filter.report(
+            metadata.diagnostics.some(({ code }) => code === 'filter-budget-exhausted'),
+          ),
+        }),
       ...(priority?.base ? { base: priority.base } : {}),
       kind,
       status,
@@ -207,7 +208,7 @@ export function createRepoSearchTool(
     ...defineTool({
       name: REPO_SEARCH_TOOL_NAME,
       description:
-        'Search the authorized local workspace. Use semantic for conceptual queries when common words produce irrelevant keyword matches. Semantic ranks by meaning alone and reports index unavailability directly. Hybrid combines semantic and keyword signals. Use exact for whole identifiers, literal for substrings, and regex for patterns. Optionally supply base (a local Git ref) to prioritize changed paths and matching test names within the results.' +
+        'Search the authorized local workspace. Use semantic for conceptual queries when common words produce irrelevant keyword matches. Semantic ranks by meaning alone and reports index unavailability directly. Hybrid combines semantic and keyword signals. Use exact for whole identifiers, literal for substrings, and regex for patterns. Use filter to scope paths and verified source units. Prefer includeText and excludeText for literal content. Optionally supply base (a local Git ref) to prioritize changed paths and matching test names within the results.' +
         repositoryEvidenceGuidance,
       inputSchema: RepositorySearchInputSchema,
       outputSchema: RepositorySearchOutputSchema,

@@ -63,12 +63,12 @@ export function repositoryEvidenceText(name: string, output: unknown): string {
     if (output.trace) {
       const { leads, connections, evidence } = output.trace;
       return [
-        escapeControls(JSON.stringify({ leads, connections })),
+        escapeControls(JSON.stringify({ leads, connections, filter: output.filter })),
         ...evidence.map((hit) => formatHit(hit)),
       ].join('\n\n');
     }
     return [
-      JSON.stringify({ followUp: output.followUp }),
+      JSON.stringify({ followUp: output.followUp, filter: output.filter }),
       ...(output.source ? [formatHit(output.source)] : []),
       ...output.searches.map(formatSearch),
     ].join('\n\n');

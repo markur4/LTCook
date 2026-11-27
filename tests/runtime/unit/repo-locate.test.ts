@@ -122,7 +122,7 @@ test('Locate uses exact search for a symbol and a verified identifier for concep
       searches: [{ query: 'known', mode: 'exact' }],
     });
     await expect(
-      tool.invoke({ query: 'reserve a slot', paths: ['.'] }, context(root)),
+      tool.invoke({ query: 'reserve a slot', filter: { includePaths: ['**'] } }, context(root)),
     ).resolves.toMatchObject({
       followUp: 'attempted',
       searches: [
@@ -130,10 +130,10 @@ test('Locate uses exact search for a symbol and a verified identifier for concep
         { mode: 'exact', query: 'reserveSlot', provider: 'ripgrep' },
       ],
     });
-    expect(calls.map(({ mode, query, paths }) => [mode, query, paths])).toEqual([
-      ['exact', 'known', undefined],
-      ['hybrid', 'reserve a slot', ['.']],
-      ['exact', 'reserveSlot', ['.']],
+    expect(calls.map(({ mode, query }) => [mode, query])).toEqual([
+      ['exact', 'known'],
+      ['hybrid', 'reserve a slot'],
+      ['exact', 'reserveSlot'],
     ]);
     await expect(tool.invoke({ symbol: 'x', query: 'y' }, context(root))).rejects.toThrow(
       /exactly one/,
@@ -607,9 +607,9 @@ test.skipIf(process.platform === 'win32')(
       await expect(
         locate.invoke({ location }, { ...context(root), repositorySearchAccess: false }),
       ).rejects.toThrow(/unavailable/);
-      await expect(locate.invoke({ location, paths: ['link.ts'] }, context(root))).rejects.toThrow(
-        /symbolic links/,
-      );
+      await expect(
+        locate.invoke({ location, filter: { includePaths: ['link.ts'] } }, context(root)),
+      ).rejects.toThrow(/does not support filter.includePaths/);
       await expect(
         locate.invoke({ location: { ...location, path: '.env' } }, context(root)),
       ).rejects.toThrow(/outside the search scope/);
@@ -675,10 +675,34 @@ test.skipIf(!Bun.which('rg'))(
       ]);
       expect(result.searches[3]?.results).toEqual([]);
       const restricted = await locate.invoke(
-        { symbol: 'aliased', paths: ['caller.ts'], follow: true },
+        { symbol: 'aliased', filter: { includePaths: ['caller.ts'] }, follow: true },
         context(root),
       );
       expect(restricted.searches[0]?.connections).toBeUndefined();
+      const traceRequest = {
+        trace: {
+          question: 'Where is aliased declared?',
+          leads: [{ mode: 'exact', query: 'aliased' }],
+        },
+      };
+      const traced = await locate.invoke(traceRequest, context(root));
+      expect(traced).toMatchObject({
+        trace: {
+          connections: expect.arrayContaining([expect.objectContaining({ kind: 'import' })]),
+        },
+      });
+      const filteredTrace = await locate.invoke(
+        {
+          ...traceRequest,
+          filter: { excludePaths: ['barrel.ts'] },
+        },
+        context(root),
+      );
+      const evidence = (filteredTrace as { trace: { evidence: { path: string }[] } }).trace
+        .evidence;
+      expect(evidence.some(({ path }) => path === 'caller.ts')).toBe(true);
+      expect(evidence.some(({ path }) => path === 'barrel.ts')).toBe(false);
+      expect(filteredTrace.filter).toMatchObject({ rejectedPaths: 1 });
       await expect(
         locate.invoke({ symbols: ['wrapper', ' wrapper '] }, context(root)),
       ).rejects.toThrow(/distinct/);
@@ -760,5 +784,28 @@ test.skipIf(!Bun.which('git') || !Bun.which('rg'))(
       expect(
         grouped.searches[0]?.results?.filter(({ role }) => role === 'reference').at(-1)?.path,
       ).toBe('a-other.ts');
+    }),
+);
+
+test.skipIf(!Bun.which('rg'))(
+  'Locate filters the matched line before adding surrounding context',
+  () =>
+    fixture(async (root) => {
+      await writeFile(
+        path.join(root, 'source.ts'),
+        'export function reserve() {\n  return "__main__";\n}\n',
+      );
+      const locate = createRepoLocateTool();
+      const result = await locate.execute(
+        {
+          symbol: 'reserve',
+          filter: { excludeText: ['__main__'] },
+        },
+        context(root),
+      );
+      expect(result.searches[0]?.results).toMatchObject([
+        { path: 'source.ts', excerpt: 'export function reserve() {\n  return "__main__";\n}' },
+      ]);
+      expect(result.filter?.rejectedUnits).toBe(0);
     }),
 );
