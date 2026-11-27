@@ -386,8 +386,11 @@ export default async function activate(
     }
   });
   pi.on('tool_call', async (event, ctx) => {
-    if (bugScan && event.toolName !== 'read' && event.toolName !== 'ltcook_team')
-      return { block: true, reason: 'BugScan permits only approved source reads and reports.' };
+    if (bugScan && !['read', 'write', 'edit', 'ltcook_team'].includes(event.toolName))
+      return {
+        block: true,
+        reason: 'BugHunter permits only its approved source and Task operations.',
+      };
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
     // > Repository and web tools use their existing invocation-time authorization.

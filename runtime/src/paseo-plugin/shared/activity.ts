@@ -89,6 +89,8 @@ const handoff = z.object({
   aab: count,
 });
 export const bugScanActivity = z.object({
+  id: z.string().optional(),
+  enabled: z.boolean().default(true),
   status: z.enum([
     'idle',
     'queued',
@@ -100,6 +102,18 @@ export const bugScanActivity = z.object({
     'budget-exhausted',
   ]),
   failure: z.string().optional(),
+  fix: z
+    .object({
+      id: z.string(),
+      status: z.string(),
+      failure: z.string().optional(),
+      implemented: z.boolean(),
+      verified: z.boolean(),
+      integrated: z.boolean(),
+      installed: z.boolean(),
+      recovered: z.boolean(),
+    })
+    .optional(),
   findings: z.array(
     z.object({
       confidence: z.enum(['demonstrated', 'hypothesis']),
@@ -136,13 +150,17 @@ export const activitySubscription = defineSubscription({
 
 export const activityToggleRpc = defineRpc({
   name: 'ltcook.activity.toggle',
-  input: z.strictObject({ feature: z.literal('rag-index'), enabled: z.boolean() }),
+  input: z.strictObject({ feature: z.enum(['rag-index', 'bughunter']), enabled: z.boolean() }),
   output: z.object({ enabled: z.boolean() }),
 });
 
 export const bugScanRunRpc = defineRpc({
   name: 'ltcook.activity.bugscan',
-  input: z.strictObject({ agentId: id }),
+  input: z.strictObject({
+    agentId: id,
+    action: z.enum(['run', 'pause', 'resume', 'pause-fix', 'resume-fix']).optional(),
+    id: z.string().optional(),
+  }),
   output: z.object({ accepted: z.literal(true) }),
 });
 

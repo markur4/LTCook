@@ -35,6 +35,8 @@ import { PastedDocuments } from './session-memory/pasted-documents.js';
 import { catalogModelAliases, resolveModel } from './models/aliases.js';
 import { redactDiagnosticText, Telemetry } from './diagnostics/telemetry.js';
 import { cleanSourceRevision, startBugScan } from './services/bugscan-integration.js';
+import { startBugFix } from './services/bugfix-integration.js';
+import { reserveBugHunterModelRequest } from './services/bughunter-model-usage.js';
 const EX_TEMPFAIL = 75;
 const restartResult = z.looseObject({ state: z.string(), message: z.string() });
 function isListenAddressInUse(error: unknown): boolean {
@@ -184,6 +186,7 @@ async function run(): Promise<void> {
   let workspaceServices: PaseoWorkspaceServices | undefined;
   let repositoryIndex: RepositoryIndexService | undefined;
   let bugScan: Awaited<ReturnType<typeof startBugScan>> | undefined;
+  let bugFix: Awaited<ReturnType<typeof startBugFix>> | undefined;
   let bugScanTimer: ReturnType<typeof setInterval> | undefined;
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
@@ -224,6 +227,7 @@ async function run(): Promise<void> {
       );
       if (workspaceServices) await attempt(() => workspaceServices!.close());
       if (bugScanTimer !== undefined) clearInterval(bugScanTimer);
+      if (bugFix) await attempt(() => bugFix!.service.close());
       if (bugScan) await attempt(() => bugScan!.service.close());
       if (repositoryIndex) await attempt(() => repositoryIndex!.close());
       if (tracker) await attempt(() => tracker!.close());
@@ -295,14 +299,12 @@ async function run(): Promise<void> {
     const sourceRevision = executingSource
       ? await cleanSourceRevision(await fs.realpath(appRoot))
       : deployedBuild?.sourceRevision;
-    telemetry.setBuildIdentity(
-      buildFingerprint
-        ? `deployment:${buildFingerprint}`
-        : sourceRevision
-          ? `source:${sourceRevision}`
-          : `entrypoint:${entrypointDigest}`,
-      sourceRevision,
-    );
+    const runningBuildIdentity = buildFingerprint
+      ? `deployment:${buildFingerprint}`
+      : sourceRevision
+        ? `source:${sourceRevision}`
+        : `entrypoint:${entrypointDigest}`;
+    telemetry.setBuildIdentity(runningBuildIdentity, sourceRevision);
     let summarizerModel = '';
     try {
       summarizerModel = resolveModel('local-tiny', process.env).model;
@@ -602,13 +604,31 @@ async function run(): Promise<void> {
     if (process.env.LTCOOK_BUGHUNTER_ENABLED === 'true') {
       try {
         const configuredWorkspace = process.env.LTCOOK_BUGHUNTER_WORKSPACE || undefined;
+        const mode = z.enum(['user', 'dev']).parse(process.env.LTCOOK_BUGHUNTER_MODE ?? 'user');
         if (configuredWorkspace && !path.isAbsolute(configuredWorkspace))
           throw new Error('BugHunter workspace must be an absolute authorized directory.');
+        const activeMinutes = Number(process.env.LTCOOK_BUGHUNTER_ACTIVE_MINUTES ?? 45);
+        const budgetMs = z
+          .number()
+          .int()
+          .positive()
+          .max(2_147_483_647)
+          .parse(activeMinutes * 60_000);
+        const manualModelRequests = z
+          .number()
+          .int()
+          .positive()
+          .parse(Number(process.env.LTCOOK_BUGHUNTER_MANUAL_MODEL_REQUESTS ?? 12));
+        const bugHunterStateDirectory = await fs.realpath(stateDirectory);
         bugScan = await startBugScan({
           runtime: runtimeController,
           logPath: path.resolve(logs),
-          stateDirectory: await fs.realpath(stateDirectory),
+          stateDirectory: bugHunterStateDirectory,
           configuredWorkspace,
+          budgetMs,
+          canStartHunt: () =>
+            preferences.enabled('bughunter') &&
+            !bugFix?.service.list().some(({ status }) => status === 'running'),
           resolveSessionWorkspace: (id) => {
             const current = activation.registeredWorkspace(id);
             if (current) return current;
@@ -620,9 +640,60 @@ async function run(): Promise<void> {
           },
         });
         api.setBugScan(bugScan.service, bugScan.scope, configuredWorkspace !== undefined);
+        const scanScope = bugScan.scope;
+        const modelUsage = runtimeController.bugHunterRecords<Record<string, number>>(
+          scanScope,
+          'model-requests',
+        );
+        api.setBugHunterModelGate((sessionId, agentId) => {
+          if (!preferences.enabled('bughunter')) return false;
+          const scope = runtimeController.bugHunterModelScope(sessionId, agentId);
+          if (!scope || scope.workspaceRoot !== scanScope) return false;
+          const activeFix = bugFix?.service
+            .list()
+            .find(({ huntId, status }) => huntId === scope.huntId && status === 'running');
+          const grant = bugFix?.authorization.current();
+          if (activeFix && grant?.revision !== activeFix.grantRevision) return false;
+          return reserveBugHunterModelRequest(
+            modelUsage,
+            scope.huntId,
+            grant?.maxModelRequests ?? manualModelRequests,
+          );
+        });
+        if (mode === 'dev' && configuredWorkspace) {
+          try {
+            bugFix = await startBugFix({
+              runtime: runtimeController,
+              bugScan: bugScan.service,
+              workspaceRoot: scanScope,
+              stateDirectory: bugHunterStateDirectory,
+              budgetMs,
+              runningBuild: sourceRevision
+                ? { identity: runningBuildIdentity, sourceRevision }
+                : undefined,
+              // > Unattended merges remain disabled until the qualification Pass.
+              qualified: () => false,
+            });
+            api.setBugFix(bugFix);
+          } catch (error) {
+            await telemetry
+              .record({
+                code: 'bugfix.setup-blocked',
+                component: 'bugfix',
+                severity: 'warn',
+                outcome: 'blocked',
+                message: 'BugFix could not bind the authorized repository.',
+                cause: error,
+              })
+              .catch(() => {});
+          }
+        }
         const poll = () => {
           void bugScan?.service
             .ingest()
+            .then(() => {
+              if (preferences.enabled('bughunter')) bugFix?.poll();
+            })
             .catch((error: unknown) =>
               telemetry.record({
                 code: 'bugscan.intake-failed',

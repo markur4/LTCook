@@ -1,10 +1,16 @@
 import { Value } from 'typebox/value';
 import { afterEach, expect, test } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { Model } from '@earendil-works/pi-ai';
 import activate from '../../../runtime/src/integrations/pi-extension.js';
-import { guardEvaluationModelRuntime } from '../../../runtime/src/integrations/pi-rpc.js';
+import {
+  guardBugHunterModelRuntime,
+  guardEvaluationModelRuntime,
+} from '../../../runtime/src/integrations/pi-rpc.js';
 import { bugHunterTeamId } from '../../../runtime/src/services/bughunter-team.js';
 import {
   EVAL_CONTEXT_WINDOW,
@@ -107,6 +113,92 @@ test('evaluation stream guard rejects wrong model/provider/endpoint before SDK p
   ).toThrow('provider invoked');
   expect(providerInvocations).toBe(3);
 });
+
+test('BugHunter budget refusal and gate failure prevent Pi from contacting the provider', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'ltcook-native-budget-'));
+  let gateStatus = 403;
+  const admissions: unknown[] = [];
+  const providerHeaders: Array<string | null> = [];
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(request) {
+      const pathname = new URL(request.url).pathname;
+      if (pathname === '/v1/activity/bughunter-model-request') {
+        admissions.push({
+          token: request.headers.get('authorization'),
+          body: await request.json(),
+        });
+        return new Response(null, { status: gateStatus });
+      }
+      if (pathname === '/model/chat/completions') {
+        providerHeaders.push(request.headers.get('x-fixture-provider'));
+        return new Response('data: [DONE]\n\n', {
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }
+      return new Response(null, { status: 404 });
+    },
+  });
+  try {
+    const endpoint = `http://127.0.0.1:${server.port}`;
+    const modelsPath = path.join(directory, 'models.json');
+    const authPath = path.join(directory, 'auth.json');
+    await writeFile(
+      authPath,
+      JSON.stringify({ fixture: { type: 'api_key', key: 'provider-fixture' } }),
+    );
+    await writeFile(
+      modelsPath,
+      JSON.stringify({
+        providers: {
+          fixture: {
+            baseUrl: `${endpoint}/model`,
+            api: 'openai-completions',
+            models: [{ id: 'fixture-budget', name: 'Budget fixture' }],
+          },
+        },
+      }),
+    );
+    const runtime = await ModelRuntime.create({
+      authPath,
+      modelsPath,
+      modelsStorePath: path.join(directory, 'models-store.json'),
+      refreshOnCreate: false,
+    });
+    const model = runtime.getModel('fixture', 'fixture-budget')!;
+    const context = { messages: [{ role: 'user' as const, content: 'fixture', timestamp: 0 }] };
+    const gateIdentity = {
+      endpoint,
+      token: 'runtime-fixture',
+      nativeAgentId: 'native',
+      sessionId: 'session',
+    };
+    guardBugHunterModelRuntime(runtime, gateIdentity);
+    for (const status of [403, 503]) {
+      gateStatus = status;
+      const denied = await runtime.completeSimple(model, context);
+      expect(denied.stopReason).toBe('error');
+      expect(denied.errorMessage).toContain('no model request capacity');
+    }
+    expect(providerHeaders).toEqual([]);
+    gateStatus = 204;
+    await runtime.complete(model, context, {
+      transformHeaders: (headers) => ({ ...headers, 'x-fixture-provider': 'preserved' }),
+    });
+    expect(providerHeaders).toEqual(['preserved']);
+    expect(admissions).toEqual(
+      Array.from({ length: 3 }, () => ({
+        token: 'Bearer runtime-fixture',
+        body: { sessionId: 'session', nativeAgentId: 'native' },
+      })),
+    );
+  } finally {
+    server.stop(true);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('every native call requires runtime authorization and runtime failures block calls', async () => {
   const requests: string[] = [];
   const paths: unknown[] = [];

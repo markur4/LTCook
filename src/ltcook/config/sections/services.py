@@ -68,3 +68,8 @@ class BugHunterSettings(rc.Config):
 
     enabled: bool = rc.field("LTCOOK_BUGHUNTER_ENABLED", default=False)
     workspace: str = rc.field("LTCOOK_BUGHUNTER_WORKSPACE", default="")
+    mode: str = rc.field("LTCOOK_BUGHUNTER_MODE", default="user")
+    active_minutes: int = rc.field("LTCOOK_BUGHUNTER_ACTIVE_MINUTES", default=45)
+    manual_model_requests: int = rc.field(
+        "LTCOOK_BUGHUNTER_MANUAL_MODEL_REQUESTS", default=12
+    )

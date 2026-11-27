@@ -80,6 +80,20 @@ const findingSchema = z.object({
   cause: recordText,
   contributingConditions: z.array(recordText).max(32),
   evidence: z.array(recordText).min(1).max(32),
+  repairPaths: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(1024)
+        .refine(
+          (value) =>
+            !/[\\:\u0000-\u001f\u007f]/u.test(value) &&
+            value.split('/').every((part) => part && part !== '.' && part !== '..'),
+        ),
+    )
+    .max(64)
+    .optional(),
   remedy: remedySchema.optional(),
   technicalDebt: z
     .array(
@@ -151,6 +165,7 @@ interface BugScanOptions {
   ) => Promise<string | undefined>;
   investigate: (request: BugScanRequest, signal: AbortSignal) => Promise<unknown>;
   canStartAutomatic?: () => boolean;
+  canStartHunt?: () => boolean;
   now?: () => number;
   maxConcurrentAgents?: number;
   budgetMs?: number;
@@ -256,6 +271,7 @@ function cleanFindings(raw: unknown, groups: BugScanGroup[]): BugScanFinding[] {
       cause: sanitize(finding.cause),
       contributingConditions: finding.contributingConditions.map(sanitize),
       evidence: finding.evidence.map(sanitize),
+      repairPaths: finding.repairPaths?.filter((entry) => sanitize(entry) === entry),
       remedy: cleanRemedy,
       technicalDebt: finding.technicalDebt.map((debt) => ({
         problem: sanitize(debt.problem),
@@ -488,7 +504,7 @@ export class BugScanService {
   }
 
   private dispatch(): void {
-    if (this.closed) return;
+    if (this.closed || this.options.canStartHunt?.() === false) return;
     const allowAutomatic = this.options.canStartAutomatic?.() ?? false;
     if (allowAutomatic) this.queueAutomatic();
     // > A single runtime Team controls the delegated-agent budget across repositories.

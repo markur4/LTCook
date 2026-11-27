@@ -4,8 +4,10 @@ import { z } from 'zod';
 
 const preferencesSchema = z.object({
   'rag-index': z.boolean(),
+  bughunter: z.boolean().default(true),
 });
 type Preferences = z.infer<typeof preferencesSchema>;
+type ActivityFeature = keyof Preferences;
 
 export class ActivityPreferences {
   private values: Preferences;
@@ -15,15 +17,15 @@ export class ActivityPreferences {
       this.values = preferencesSchema.parse(JSON.parse(readFileSync(file, 'utf8')));
     } catch (error) {
       if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
-      this.values = { 'rag-index': true };
+      this.values = preferencesSchema.parse({ 'rag-index': true });
     }
   }
 
-  enabled(feature: 'rag-index'): boolean {
+  enabled(feature: ActivityFeature): boolean {
     return this.values[feature];
   }
 
-  set(feature: 'rag-index', enabled: boolean): void {
+  set(feature: ActivityFeature, enabled: boolean): void {
     if (this.enabled(feature) === enabled) return;
     this.save({ ...this.values, [feature]: enabled });
   }
