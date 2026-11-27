@@ -474,6 +474,7 @@ try {
   await inspectStage('new-workspace-desktop');
   await selectLtcook();
   await sendPrompt('GUI desktop launch', 'Create');
+  await browser('wait', '--text', 'tok/s');
   const initial = runtime.listSessions(workspace, 'default-minimal');
   assert.equal(initial.length, 1, 'Native submission creates exactly one LTCook Session');
   const leaderId = initial[0]!.id;
@@ -503,6 +504,12 @@ try {
   );
   assert(!nativeChat.includes('Team Overview'), 'No intermediary Team Overview replaces the chat');
   await inspectStage('native-leader-chat');
+
+  stage = 'native-turn-speed-breakdown';
+  await browser('find', 'role', 'button', 'click', '--name', 'Turn speed');
+  await browser('wait', '--text', 'whole turn');
+  await browser('wait', '--text', 'tokens');
+  await browser('press', 'Escape');
 
   stage = 'native-explorer-defaults';
   await browser('wait', '--text', 'Recent conversation activity');
