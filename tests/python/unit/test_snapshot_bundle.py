@@ -51,6 +51,7 @@ def _committed_project(root: Path) -> str:
         ".node-version": "26.13.1\n",
         "runtime/package.json": '{"name":"runtime-fixture"}',
         "services/compose.yaml": "services: {}\n",
+        "paseo-patches/build-check.js": "// snapshot update notice\n",
     }
     for team in ("default", "default-minimal"):
         declarations[f"teams/{team}/package.json"] = '{"name":"' + team + '"}'
@@ -179,7 +180,7 @@ def test_finished_snapshot_wheel_initializes_compiled_assets(tmp_path: Path) -> 
         "runtime/resources/rules/planning.md": "Required planning rule\n",
         "runtime/resources/skills/ltcook-planning/SKILL.md": "Planning skill\n",
         "runtime/dist/integrations/pi-rpc.js": "// snapshot Pi RPC\n",
-        "runtime/dist/paseo-web/index.html": "<!doctype html>\n",
+        "runtime/dist/paseo-web/index.html": "<!doctype html><html><head></head></html>\n",
         "runtime/dist/paseo-web/ltcook-paseo-build.json": "{}",
         "runtime/dist/paseo-web/_expo/static/js/web/fixture.js": "// snapshot web bundle\n",
         "runtime/dist/paseo-plugin/paseo-plugin.json": '{"id":"snapshot-plugin"}',
@@ -267,7 +268,16 @@ def test_finished_snapshot_wheel_initializes_compiled_assets(tmp_path: Path) -> 
     assert initialized.returncode == 0, initialized.stdout + initialized.stderr
     deployment = appdata / "deployment"
     for name, content in expected.items():
-        assert (deployment / "app" / name).read_text(encoding="utf-8") == content
+        deployed = (deployment / "app" / name).read_text(encoding="utf-8")
+        if name == "runtime/dist/paseo-web/index.html":
+            build = json.loads(
+                (deployment / "app/runtime/dist/paseo-web/ltcook-build.json").read_text(
+                    encoding="utf-8"
+                )
+            )["build"]
+            assert f'name="ltcook-web-build" content="{build}"' in deployed
+        else:
+            assert deployed == content
     runtime = json.loads((deployment / "runtime.json").read_text(encoding="utf-8"))
     services = json.loads((deployment / "services.json").read_text(encoding="utf-8"))
     assert runtime["node_version"] == "26.13.1"

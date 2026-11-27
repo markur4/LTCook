@@ -6,6 +6,7 @@ import importlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import apprc as rc
 import pytest
@@ -114,80 +115,172 @@ def test_app_help_lists_its_immediate_commands(
         assert command_name in result.output
 
 
+def test_restart_leaves_a_competing_runtime_running_if_initially_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ltcook import _app_update
+    from ltcook._app_update import InstalledBuild, Registration
+
+    cli = importlib.import_module("ltcook.cli.app")
+    launcher = tmp_path / "ltcook"
+    registration = Registration(
+        tmp_path, uuid4(), "registered", tmp_path, tmp_path, True
+    )
+    monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
+    monkeypatch.setattr(cli, "_registered_launcher", lambda **_: launcher)
+    monkeypatch.setattr(cli, "registration", lambda *_, **__: registration)
+    monkeypatch.setattr(
+        cli, "read_registered_build", lambda *_: InstalledBuild("build", None)
+    )
+    monkeypatch.setattr(
+        cli, "resolve_launch", lambda *_, **__: SimpleNamespace(environment={})
+    )
+    monkeypatch.setattr(cli, "probe_runtime", lambda *_: None)
+    monkeypatch.setattr(
+        cli,
+        "stop_runtime",
+        lambda *_, **__: pytest.fail("No runtime was observed to stop."),
+    )
+    monkeypatch.setattr(_app_update, "probe_runtime", lambda *_: "starting")
+
+    result = RUNNER.invoke(app, ["restart"], color=False)
+
+    assert result.exit_code == 2, result.output
+    assert "Another runtime appeared after stop" in result.output
+
+
 @pytest.mark.parametrize(
-    ("options", "stop_status", "update_status", "expected_calls", "exit_code"),
+    ("options", "stop_status", "update_status", "recovered", "exit_code"),
     [
-        ([], 0, 0, ["stop", "serve"], 19),
-        (["-u"], 0, 0, ["stop", "update", "serve"], 19),
-        (["--update"], 0, 0, ["stop", "update", "serve"], 19),
-        (["-u", "-y"], 0, 0, ["stop", "update", "serve"], 19),
-        (["--update", "--yes"], 0, 0, ["stop", "update", "serve"], 19),
-        (["--update"], 7, 0, ["stop"], 7),
-        (["--update"], 0, 8, ["stop", "update"], 8),
+        ([], 0, 0, True, 19),
+        (["-u"], 0, 0, True, 19),
+        (["--update"], 0, 0, True, 19),
+        (["-u", "-y"], 0, 0, True, 19),
+        (["--update", "--yes"], 0, 0, True, 19),
+        (["--update"], 7, 0, False, 7),
+        (["--update"], 0, 8, True, 8),
+        (["--update"], 0, 8, False, 8),
+        (["--update"], 0, 0, False, 1),
     ],
 )
-def test_restart_orders_lifecycle_and_propagates_failures(
+def test_restart_reports_update_and_recovery_outcomes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     options: list[str],
     stop_status: int,
     update_status: int,
-    expected_calls: list[str],
+    recovered: bool,
     exit_code: int,
 ) -> None:
-    """Restart reuses the registered updater and starts only after success."""
+    from ltcook._app_update import InstalledBuild, Registration, RestartResult
+    from ltcook._runtime_client import RuntimeStatus
+
     cli = importlib.import_module("ltcook.cli.app")
     launcher = tmp_path / "ltcook"
-    launcher.touch()
-    record = SimpleNamespace(
-        command_name="ltcook",
-        owned_outputs=[rc.OwnedOutput("command", str(launcher), None)],
-    )
     calls: list[str] = []
+    config = {"LTCOOK_RUNTIME_STATE_DIR": str(tmp_path / "state")}
+    registration = Registration(
+        tmp_path / "installation", uuid4(), "registered", tmp_path, tmp_path, True
+    )
+    verified_build = InstalledBuild("verified", None)
+    owner = RuntimeStatus(
+        "old", str(tmp_path), ":memory:", "127.0.0.1:6767", None, "paseo", "events"
+    )
+    replacement = RuntimeStatus(
+        "new",
+        str(tmp_path),
+        ":memory:",
+        "127.0.0.1:6767",
+        None,
+        "paseo",
+        "events",
+        build_fingerprint="replacement",
+    )
 
-    def stop(environment: dict[str, str]) -> int:
-        assert environment == {"installation": "fixture"}
+    def stop(environment: dict[str, str], **kwargs: object) -> int:
+        assert environment == config
+        assert kwargs == {
+            "expected_instance_id": "old",
+            "expected_build_fingerprint": "verified",
+        }
         calls.append("stop")
         return stop_status
 
-    def serve() -> int:
-        calls.append("serve")
-        return 19
-
-    def run(arguments: list[object], *, check: bool) -> SimpleNamespace:
-        flags = ["--yes"] if {"--yes", "-y"}.intersection(options) else []
-        assert arguments == [launcher, "app", "update", *flags]
-        assert check is False
-        calls.append("update")
-        return SimpleNamespace(returncode=update_status)
+    def restart(
+        registered: Path,
+        environment: dict[str, str],
+        shell: dict[str, str],
+        previous: str,
+        installed: object,
+        build: InstalledBuild,
+        **kwargs: object,
+    ) -> RestartResult:
+        assert registered == launcher
+        assert environment == config
+        assert previous == "old"
+        assert installed is registration
+        assert build == verified_build
+        assert kwargs == {
+            "update": bool(options),
+            "assume_yes": bool({"--yes", "-y"}.intersection(options)),
+            "detached": True,
+        }
+        calls.append("restart")
+        return RestartResult(
+            replacement if recovered else None,
+            update_status,
+            "AppRC update failed." if update_status else None,
+            None if recovered else "Could not start the replacement runtime.",
+            "registered" if recovered else None,
+        )
 
     def execv(command: Path, arguments: list[str]) -> None:
         assert command == launcher
         assert arguments == [str(launcher), "serve"]
-        raise SystemExit(serve())
+        calls.append("serve")
+        raise SystemExit(19)
 
     monkeypatch.setattr(rc.cli.CliRuntime, "prepare", _skip_runtime_prepare)
     monkeypatch.setattr(cli, "sys", SimpleNamespace(platform="linux"))
-    monkeypatch.setattr(cli, "os", SimpleNamespace(execv=execv))
-    monkeypatch.setattr(cli, "subprocess", SimpleNamespace(run=run))
+    monkeypatch.setattr(cli, "os", SimpleNamespace(execv=execv, environ={}))
+    monkeypatch.setattr(cli, "_registered_launcher", lambda **_: launcher)
+    monkeypatch.setattr(cli, "registration", lambda *_, **__: registration)
+    monkeypatch.setattr(cli, "read_registered_build", lambda *_: verified_build)
+    monkeypatch.setattr(cli, "probe_runtime", lambda *_: owner)
     monkeypatch.setattr(cli, "stop_runtime", stop)
-    monkeypatch.setattr(cli, "desktop_command", serve)
+    monkeypatch.setattr(cli, "restart_stopped_runtime", restart)
     monkeypatch.setattr(
-        cli,
-        "resolve_launch",
-        lambda _: SimpleNamespace(environment={"installation": "fixture"}),
-    )
-    installation = SimpleNamespace(
-        inspect=lambda: SimpleNamespace(require_usable=lambda: record)
-    )
-    monkeypatch.setattr(
-        cli, "APP_RC", SimpleNamespace(installation=lambda: installation)
+        cli, "resolve_launch", lambda *_, **__: SimpleNamespace(environment=config)
     )
 
     result = RUNNER.invoke(app, ["restart", *options], color=False)
 
     assert result.exit_code == exit_code, result.output
-    assert calls == expected_calls
+    expected = ["stop"]
+    if not stop_status:
+        expected.append("restart")
+    if recovered and not update_status:
+        expected.append("serve")
+    assert calls == expected
+    assert ("LTCook is running again." in result.output) == (
+        recovered and bool(update_status)
+    )
+    assert ("AppRC update failed." in result.output) == bool(update_status)
+    recorded = RUNNER.invoke(app, ["restart", "--last-result", "--json"], color=False)
+    assert recorded.exit_code == 0, recorded.output
+    if stop_status:
+        assert json.loads(recorded.output) is None
+    else:
+        assert json.loads(recorded.output) == {
+            "build_fingerprint": "replacement" if recovered else None,
+            "instance_id": "new" if recovered else None,
+            "registration_revision": "registered" if recovered else None,
+            "runtime_error": None
+            if recovered
+            else "Could not start the replacement runtime.",
+            "update_error": "AppRC update failed." if update_status else None,
+            "update_exit": update_status if options else None,
+        }
 
 
 @pytest.mark.parametrize(

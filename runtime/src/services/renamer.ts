@@ -1,11 +1,15 @@
 import { z } from 'zod';
+import { ServiceInferenceError } from './inference-recovery.js';
 import {
   RenameProposalSchema,
+  WorkspaceInferenceRecovery,
   boundedWorkspaceTitle,
   readMetadataState,
   sameWorkspaceContent,
+  workspaceInferenceState,
   writeMetadataState,
   type WorkspaceMetadataSnapshot,
+  type WorkspaceServiceDiagnostic,
   type WorkspaceServiceOptions,
   type WorkspaceServiceStatus,
 } from './workspace-metadata.js';
@@ -16,6 +20,7 @@ export const AGENT_TAB_TITLE_LIMIT = 15;
 
 const renamerState = z.strictObject({
   version: z.literal(1),
+  inference: workspaceInferenceState.optional(),
   workspaces: z.record(
     z.string(),
     z.strictObject({
@@ -34,6 +39,7 @@ export interface RenamerOptions extends WorkspaceServiceOptions {
 
 export class Renamer {
   private readonly state: RenamerState;
+  private readonly inference: WorkspaceInferenceRecovery;
   private pending: Promise<void> | undefined;
   private details: Omit<WorkspaceServiceStatus, 'enabled' | 'running'> = {
     lastRunAt: null,
@@ -46,11 +52,24 @@ export class Renamer {
       version: 1,
       workspaces: {},
     });
+    this.inference = new WorkspaceInferenceRecovery(
+      options,
+      'rename',
+      'Renamer could not apply titles. Check that the workspace and agent tabs are available.',
+      (this.state.inference ??= { failures: {} }),
+      () => this.save(),
+    );
   }
 
   status(): WorkspaceServiceStatus {
+    const diagnostics: WorkspaceServiceDiagnostic[] = [];
+    if (this.options.settingsDiagnostic)
+      diagnostics.push({ operation: 'settings', message: this.options.settingsDiagnostic });
+    const failure = this.inference.diagnostic();
+    if (failure) diagnostics.push(failure);
     return {
       ...this.details,
+      ...(diagnostics.length ? { diagnostics, diagnostic: diagnostics[0]!.message } : {}),
       enabled: this.options.enabled?.() ?? true,
       running: this.pending !== undefined,
     };
@@ -72,14 +91,22 @@ export class Renamer {
     writeMetadataState(this.options.stateFile, this.state);
   }
 
+  private recordChange(): void {
+    this.details.processed++;
+    this.details.lastSuccessAt = this.now();
+  }
+
   private async run(snapshots: WorkspaceMetadataSnapshot[], signal: AbortSignal): Promise<void> {
     if (!(this.options.enabled?.() ?? true)) return;
     signal.throwIfAborted();
     this.details.lastRunAt = this.now();
-    delete this.details.diagnostic;
+    if (!(this.options.renameWorkspaces?.() ?? true) && !(this.options.renameTabs?.() ?? true))
+      return;
+    if (this.options.generator.validate && !(await this.inference.ready(signal))) return;
     for (const snapshot of snapshots) {
       signal.throwIfAborted();
-      if (snapshot.archived || snapshot.complete === false) continue;
+      if (snapshot.archived || snapshot.complete === false || !this.inference.permits(snapshot.id))
+        continue;
       const entry = (this.state.workspaces[snapshot.id] ??= { nextRenameAt: 0, agents: {} });
       if (this.now() < entry.nextRenameAt) continue;
       const workspace =
@@ -97,6 +124,7 @@ export class Renamer {
           : [];
       if (!workspace && agents.length === 0) continue;
       // Attempt clocks survive failure and process restart. No model poll loop on unchanged work.
+      const previousDeadline = entry.nextRenameAt;
       entry.nextRenameAt = this.now() + WORKSPACE_RENAME_INTERVAL_MS;
       this.save();
       try {
@@ -131,6 +159,7 @@ export class Renamer {
         signal.throwIfAborted();
         if (!(this.options.enabled?.() ?? true)) return;
         if (!sameWorkspaceContent(snapshot, current)) continue;
+        let applied = 0;
         if (
           workspaceTitle &&
           current.title === snapshot.title &&
@@ -140,8 +169,8 @@ export class Renamer {
         ) {
           signal.throwIfAborted();
           entry.workspaceVersion = snapshot.contentVersion;
-          this.details.processed++;
-          this.details.lastSuccessAt = this.now();
+          applied++;
+          if (current.title !== workspaceTitle) this.recordChange();
           this.save();
         }
         for (const { id, title } of titles) {
@@ -165,15 +194,17 @@ export class Renamer {
           ) {
             signal.throwIfAborted();
             entry.agents[id] = agent.contentVersion;
-            this.details.processed++;
-            this.details.lastSuccessAt = this.now();
+            applied++;
+            if (agent.title !== title) this.recordChange();
             this.save();
           }
         }
+        if (applied === titles.length + Number(workspace) && this.inference.succeeded(snapshot.id))
+          this.save();
       } catch (error) {
         signal.throwIfAborted();
-        this.details.diagnostic = 'Renamer could not finish its latest update.';
-        this.options.onError?.(error, snapshot.id);
+        if (error instanceof ServiceInferenceError) entry.nextRenameAt = previousDeadline;
+        this.inference.failed(snapshot.id, error, entry.nextRenameAt);
       }
     }
   }

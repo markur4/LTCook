@@ -35,12 +35,24 @@ type Editor =
   | { type: 'item'; trackerId: string; itemId: string; text: string };
 
 const statuses = {
-  pending: 'Pending',
+  pending: 'Queued',
   changes: 'Changes applied',
   'no-change': 'Processed, no changes',
   incomplete: 'Incomplete coverage',
   failed: 'Extraction failed',
-  paused: 'Skipped while paused',
+  paused: 'Skipped while paused or disabled',
+  skipped: 'Skipped, coverage incomplete',
+} as const;
+
+const gapReasons = {
+  budget:
+    'The input exceeds the Tracker budget. Reduce the input or increase the budget before retrying.',
+  source: 'The original message or earlier evidence is unavailable.',
+  changed: 'The Tracker or an item changed during extraction.',
+  configuration: 'Check the configured inference provider and model.',
+  authentication: 'Restore sign-in or credentials for the configured inference provider.',
+  transient: 'The inference provider could not complete the request.',
+  output: 'The extraction did not return usable evidence and changes.',
 } as const;
 
 function editorFor(item: Item, tracker: Tracker): Editor {
@@ -173,7 +185,7 @@ function ObservedTrackedItems({ agentId, theme, navigation, host }: Props & { ag
   }
   const gaps = snapshot.events.filter((event) =>
     event.trackers.some(
-      ({ status }) => status === 'incomplete' || status === 'failed' || status === 'paused',
+      ({ status }) => status === 'incomplete' || status === 'failed' || status === 'skipped',
     ),
   ).length;
   const pending = snapshot.events.filter((event) =>
@@ -184,7 +196,15 @@ function ObservedTrackedItems({ agentId, theme, navigation, host }: Props & { ag
     : gaps
       ? `${gaps} messages with gaps`
       : 'No recorded gaps';
-  const trackerNames = new Map(snapshot.trackers.map(({ id, name }) => [id, name]));
+  const trackersById = new Map(snapshot.trackers.map((tracker) => [tracker.id, tracker]));
+  const firstOutstanding = new Map<string, { seq: number; blocked: boolean }>();
+  for (const { source, trackers } of snapshot.events) {
+    for (const { trackerId, status } of trackers) {
+      const blocked = status === 'incomplete' || status === 'failed';
+      if ((blocked || status === 'pending') && !firstOutstanding.has(trackerId))
+        firstOutstanding.set(trackerId, { seq: source.seq, blocked });
+    }
+  }
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 10 }}>
       {stale && (
@@ -214,7 +234,7 @@ function ObservedTrackedItems({ agentId, theme, navigation, host }: Props & { ag
         <Card key={tracker.id} theme={theme}>
           <Action
             theme={theme}
-            title={`${tracker.name} (${tracker.items.length})${tracker.enabled ? '' : ' · disabled'}`}
+            title={`${tracker.name} (${tracker.items.length})${!tracker.enabled ? ' · disabled' : firstOutstanding.get(tracker.id)?.blocked ? ' · blocked' : ''}`}
             selected={Boolean(open[tracker.id])}
             onPress={() =>
               setOpen((current) => ({ ...current, [tracker.id]: !current[tracker.id] }))
@@ -322,11 +342,42 @@ function ObservedTrackedItems({ agentId, theme, navigation, host }: Props & { ag
           {[...snapshot.events].reverse().map((event) => (
             <Card key={`${event.source.epoch}:${event.source.seq}`} theme={theme}>
               {showSource(event.source)}
-              {event.trackers.map(({ trackerId, status }) => (
-                <Label key={trackerId} theme={theme} muted>
-                  {trackerNames.get(trackerId) ?? 'Removed Tracker'} · {statuses[status]}
-                </Label>
-              ))}
+              {event.trackers.map(({ trackerId, status, reason, detail }) => {
+                const tracker = trackersById.get(trackerId);
+                const first = firstOutstanding.get(trackerId);
+                const blocked = first?.seq === event.source.seq && first.blocked;
+                const skipped = status === 'skipped' && (!first || event.source.seq < first.seq);
+                const source = { epoch: event.source.epoch, seq: event.source.seq };
+                const disabled = saving || stale || snapshot.paused || !tracker?.enabled;
+                return (
+                  <View key={trackerId} style={{ gap: 4 }}>
+                    <Label theme={theme} muted>
+                      {tracker?.name ?? 'Removed Tracker'} · {statuses[status]}
+                    </Label>
+                    {reason && status !== 'pending' && (
+                      <Label theme={theme} muted>
+                        {detail ?? gapReasons[reason]}
+                      </Label>
+                    )}
+                    {tracker && (blocked || skipped) && (
+                      <Action
+                        theme={theme}
+                        title="Retry message"
+                        disabled={disabled}
+                        onPress={() => void modify({ type: 'retry', trackerId, source })}
+                      />
+                    )}
+                    {tracker && blocked && (
+                      <Action
+                        theme={theme}
+                        title="Skip blocked message"
+                        disabled={disabled}
+                        onPress={() => void modify({ type: 'skip', trackerId, source })}
+                      />
+                    )}
+                  </View>
+                );
+              })}
             </Card>
           ))}
         </>

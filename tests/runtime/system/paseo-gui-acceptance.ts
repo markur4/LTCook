@@ -531,6 +531,9 @@ try {
     '0',
     'Returning to the same workspace and reloading respects the closed Activity tab',
   );
+  await openExplorerPanel('Workspace Services');
+  await browser('wait', '--text', 'Workspace Organizer');
+  await browser('wait', '--text', 'Renamer');
   await openExplorerPanel('Activity');
   await browser('wait', '--text', 'Recent conversation activity');
   assert.equal(

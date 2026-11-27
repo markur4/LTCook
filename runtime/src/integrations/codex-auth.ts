@@ -27,7 +27,7 @@ export function codexEnvironment(environment: NodeJS.ProcessEnv = process.env) {
   return shared;
 }
 
-function assertOfficialEndpoint(provider: OpenAiProvider, url: string): void {
+export function assertOfficialEndpoint(provider: OpenAiProvider, url: string): void {
   if (url.replace(/\/$/, '') !== openAiEndpoints[provider]) {
     throw new Error('Codex OpenAI authorization requires the official provider endpoint.');
   }
@@ -94,7 +94,10 @@ export async function codexModelAuth(provider: OpenAiProvider, signal?: AbortSig
 }
 
 /** Use the Codex account for official OpenAI endpoints and keep Pi's other providers intact. */
-export function useCodexOpenAiAuth(runtime: ModelRuntime): ModelRuntime {
+export function useCodexOpenAiAuth(
+  runtime: ModelRuntime,
+  authorize = codexModelAuth,
+): ModelRuntime {
   const login = runtime.login.bind(runtime);
   runtime.login = (provider, ...args) => {
     if (isOpenAiProvider(provider))
@@ -110,7 +113,7 @@ export function useCodexOpenAiAuth(runtime: ModelRuntime): ModelRuntime {
   const checkAuth = runtime.checkAuth.bind(runtime);
   runtime.checkAuth = async (provider, options) => {
     if (!isOpenAiProvider(provider)) return checkAuth(provider, options);
-    await codexModelAuth(provider, options?.signal);
+    await authorize(provider, options?.signal);
     return { source: 'Codex sign-in', type: provider === 'openai-codex' ? 'oauth' : 'api_key' };
   };
   const getAuth = runtime.getAuth.bind(runtime);
@@ -122,7 +125,7 @@ export function useCodexOpenAiAuth(runtime: ModelRuntime): ModelRuntime {
     if (typeof model !== 'string') assertOfficialEndpoint(provider, model.baseUrl);
     if (options?.apiKey)
       throw new Error('Use the centralized Codex sign-in for OpenAI models in LTCook.');
-    return codexModelAuth(provider, options?.signal);
+    return authorize(provider, options?.signal);
   };
   return runtime;
 }

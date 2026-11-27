@@ -1,11 +1,15 @@
 import { z } from 'zod';
+import { ServiceInferenceError } from './inference-recovery.js';
 import {
   ClassificationSchema,
   WORKSPACE_LABELS,
+  WorkspaceInferenceRecovery,
   readMetadataState,
   sameWorkspaceContent,
+  workspaceInferenceState,
   writeMetadataState,
   type WorkspaceMetadataSnapshot,
+  type WorkspaceServiceDiagnostic,
   type WorkspaceServiceOptions,
   type WorkspaceServiceStatus,
 } from './workspace-metadata.js';
@@ -27,15 +31,21 @@ const workspaceState = z.strictObject({
 const organizerState = z.strictObject({
   version: z.literal(1),
   workspaces: z.record(z.string(), workspaceState),
+  inference: workspaceInferenceState.optional(),
+  labelsFailed: z.boolean().optional(),
+  archivesFailed: z.array(z.string()).optional(),
 });
 type OrganizerState = z.infer<typeof organizerState>;
 
 export interface WorkspaceOrganizerOptions extends WorkspaceServiceOptions {
   autoArchive?: () => boolean;
+  archiveDiagnostic?: () => string | undefined;
 }
 
 export class WorkspaceOrganizer {
   private readonly state: OrganizerState;
+  private readonly inference: WorkspaceInferenceRecovery;
+  private readonly archiveFailures: Set<string>;
   private pending: Promise<void> | undefined;
   private nextCatalogAt = 0;
   private details: Omit<WorkspaceServiceStatus, 'enabled' | 'running'> = {
@@ -49,11 +59,37 @@ export class WorkspaceOrganizer {
       version: 1,
       workspaces: {},
     });
+    this.inference = new WorkspaceInferenceRecovery(
+      options,
+      'classification',
+      'Workspace Organizer could not apply classification. Check the selected model and native workspace labels.',
+      (this.state.inference ??= { failures: {} }),
+      () => this.save(),
+    );
+    this.archiveFailures = new Set(this.state.archivesFailed);
   }
 
   status(): WorkspaceServiceStatus {
+    const diagnostics: WorkspaceServiceDiagnostic[] = [];
+    if (this.options.settingsDiagnostic)
+      diagnostics.push({ operation: 'settings', message: this.options.settingsDiagnostic });
+    const classification = this.inference.diagnostic();
+    if (classification) diagnostics.push(classification);
+    if (this.state.labelsFailed)
+      diagnostics.push({
+        operation: 'labels',
+        message:
+          'Workspace Organizer could not synchronize labels. Check Paseo or open an active workspace.',
+      });
+    const archive =
+      this.options.archiveDiagnostic?.() ??
+      (this.archiveFailures.size > 0
+        ? 'Workspace Organizer could not archive a workspace. Check Paseo before its next check.'
+        : undefined);
+    if (archive) diagnostics.push({ operation: 'archive', message: archive });
     return {
       ...this.details,
+      ...(diagnostics.length ? { diagnostics, diagnostic: diagnostics[0]!.message } : {}),
       enabled: this.options.enabled?.() ?? true,
       running: this.pending !== undefined,
     };
@@ -73,6 +109,8 @@ export class WorkspaceOrganizer {
   }
 
   private save(): void {
+    if (this.archiveFailures.size > 0) this.state.archivesFailed = [...this.archiveFailures];
+    else delete this.state.archivesFailed;
     writeMetadataState(this.options.stateFile, this.state);
   }
 
@@ -167,27 +205,30 @@ export class WorkspaceOrganizer {
     );
   }
 
-  private failure(error: unknown, workspaceId?: string): void {
-    this.details.diagnostic = 'Workspace Organizer could not finish its latest update.';
-    this.options.onError?.(error, workspaceId);
-  }
-
   private async run(snapshots: WorkspaceMetadataSnapshot[], signal: AbortSignal): Promise<void> {
     if (!(this.options.enabled?.() ?? true)) return;
     signal.throwIfAborted();
     this.details.lastRunAt = this.now();
-    delete this.details.diagnostic;
     this.observeInventory(snapshots);
+    const inferenceReady = this.options.generator.validate
+      ? await this.inference.ready(signal)
+      : true;
     if (this.now() >= this.nextCatalogAt) {
       try {
         await this.options.host.ensureLabels(WORKSPACE_LABELS, signal);
         signal.throwIfAborted();
         this.nextCatalogAt = this.now() + WORKSPACE_CLASSIFICATION_INTERVAL_MS;
-      } catch (error) {
+        if (this.state.labelsFailed) {
+          delete this.state.labelsFailed;
+          this.save();
+        }
+      } catch {
         signal.throwIfAborted();
-        this.failure(error);
-        // Catalog failures are retried on the next runtime poll, without model calls.
-        return;
+        if (!this.state.labelsFailed) {
+          this.state.labelsFailed = true;
+          this.save();
+          this.options.onError?.(new Error('Workspace label synchronization failed.'));
+        }
       }
     }
     for (const snapshot of snapshots) {
@@ -210,14 +251,32 @@ export class WorkspaceOrganizer {
           ) {
             signal.throwIfAborted();
             latest.archived = true;
+            this.archiveFailures.delete(snapshot.id);
             this.details.processed++;
             this.details.lastSuccessAt = this.now();
             this.save();
             continue;
           }
         }
-        if (!snapshot.context.trim() || entry.classifiedVersion === snapshot.contentVersion)
-          continue;
+      } catch {
+        signal.throwIfAborted();
+        if (!this.archiveFailures.has(snapshot.id)) {
+          this.archiveFailures.add(snapshot.id);
+          this.save();
+          this.options.onError?.(new Error('Automatic archive failed.'), snapshot.id);
+        }
+      }
+      if (
+        !inferenceReady ||
+        this.state.labelsFailed ||
+        !this.inference.permits(snapshot.id) ||
+        !snapshot.context.trim() ||
+        entry.classifiedVersion === snapshot.contentVersion
+      )
+        continue;
+      const previousDeadline = entry.nextClassificationAt;
+      const previousEarlyRetry = entry.initialRetryAt;
+      try {
         const earlyRetry =
           entry.initialRetryAt !== undefined && this.now() < entry.nextClassificationAt;
         if (earlyRetry) {
@@ -244,14 +303,18 @@ export class WorkspaceOrganizer {
         const owned = current.labels.filter((name) =>
           WORKSPACE_LABELS.some((label) => label.name === name),
         );
+        const unchanged = owned.length === 1 && owned[0] === proposal.category;
         if (
-          (owned.length === 1 && owned[0] === proposal.category) ||
+          unchanged ||
           (await this.options.host.setCategory(current, proposal.category, signal))
         ) {
           signal.throwIfAborted();
           entry.classifiedVersion = snapshot.contentVersion;
-          this.details.processed++;
-          this.details.lastSuccessAt = this.now();
+          this.inference.succeeded(snapshot.id);
+          if (!unchanged) {
+            this.details.processed++;
+            this.details.lastSuccessAt = this.now();
+          }
           this.save();
         } else if (firstAttempt) {
           const changed = await this.options.host.read(snapshot.id, signal);
@@ -260,7 +323,11 @@ export class WorkspaceOrganizer {
         }
       } catch (error) {
         signal.throwIfAborted();
-        this.failure(error, snapshot.id);
+        if (error instanceof ServiceInferenceError) {
+          entry.nextClassificationAt = previousDeadline;
+          if (previousEarlyRetry !== undefined) entry.initialRetryAt = previousEarlyRetry;
+        }
+        this.inference.failed(snapshot.id, error, entry.nextClassificationAt);
       }
     }
   }

@@ -12,13 +12,21 @@ from pathlib import Path
 import pytest
 
 from ltcook_distr.payload.app_lifecycle import _colgrep, prepare_runtime
+from ltcook_distr.payload.app_lifecycle._build import (
+    BUILD_MANIFEST,
+    packaged_build,
+    source_build,
+)
 from ltcook_distr.payload.app_lifecycle._common import (
     SetupError,
     extract_archive,
     owned_directory,
     safe_member,
 )
-from ltcook_distr.payload.app_lifecycle.prepare_runtime import _node_asset, _ready
+from ltcook_distr.payload.app_lifecycle.prepare_runtime import (
+    _node_asset,
+    installed_runtime_record,
+)
 from ltcook_distr.payload.app_lifecycle.prepare_services import (
     _provider,
     prepare_services,
@@ -178,32 +186,58 @@ def test_missing_compose_provider_is_installed_under_ltcook_deployment(
     assert calls[1][1] == "--version"
 
 
-def test_runtime_readiness_requires_matching_payload_and_files(
+def test_runtime_readiness_requires_matching_python_bundle_and_deployed_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from zipfile import ZipFile
+
+    from ltcook_distr.payload.app_lifecycle import _build
+
     deployment = tmp_path / "deployment"
     app = deployment / "app"
-    node = deployment / "node" / ("node.exe" if os.name == "nt" else "bin/node")
-    (app / "runtime/dist").mkdir(parents=True)
-    (app / "teams/default/resources").mkdir(parents=True)
-    (app / "teams/default-minimal/resources").mkdir(parents=True)
+    node_directory = deployment / "node"
+    node = node_directory / ("node.exe" if os.name == "nt" else "bin/node")
+    npm = node_directory / ("npm.cmd" if os.name == "nt" else "bin/npm")
+    main = app / "runtime/dist/main.js"
+    main.parent.mkdir(parents=True)
     (app / "node_modules").mkdir()
     node.parent.mkdir(parents=True)
     node.write_text("node")
-    (app / "runtime/dist/main.js").write_text("compiled")
+    npm.write_text("npm")
+    (node_directory / ".ltcook-owned-node").write_text(
+        "LTCook Node installation\n26.13.1\n"
+    )
+    assets = {
+        "runtime/dist/main.js": "compiled",
+        "package.json": "{}",
+        "package-lock.json": "{}",
+        ".node-version": "26.13.1",
+    }
+    bundle = tmp_path / "bundle.zip"
+    with ZipFile(bundle, "w") as archive:
+        for name, contents in assets.items():
+            archive.writestr(name, contents)
+            (app / name).write_text(contents)
+    monkeypatch.setattr(_build.resources, "files", lambda _: tmp_path)
+    expected = packaged_build()
+    assert source_build(app) == expected
+    (app / BUILD_MANIFEST).write_text(json.dumps(expected))
     record = {
         "schema": 1,
-        "fingerprint": "declared-inputs",
+        "fingerprint": expected["fingerprint"],
         "node": str(node),
+        "node_version": "26.13.1",
         "app": str(app),
         "browser_available": True,
     }
-    monkeypatch.setattr(prepare_runtime, "_chrome_binary", lambda _home: node)
     (deployment / "runtime.json").write_text(json.dumps(record))
-    assert _ready(deployment, "declared-inputs")
-    assert not _ready(deployment, "changed-lock")
+    assert installed_runtime_record(deployment, expected) == record
+
+    main.write_text("stale compiled program")
+    assert not installed_runtime_record(deployment, expected)
+    main.write_text("compiled")
     (app / "node_modules").rmdir()
-    assert not _ready(deployment, "declared-inputs")
+    assert not installed_runtime_record(deployment, expected)
 
 
 def test_brief_setup_uses_pinned_digest_and_repairs_only_missing_binary(
@@ -351,7 +385,6 @@ def test_browser_failure_is_retryable_without_invalidating_core(
     }
     (deployment / "runtime.json").write_text(json.dumps(record))
     monkeypatch.setattr(prepare_runtime, "_chrome_binary", lambda _home: None)
-    assert _ready(deployment, "payload")
     calls: list[list[str]] = []
 
     def fake_run(arguments, *, environment, cwd=None, required=True):
@@ -472,6 +505,36 @@ def test_browser_flag_controls_optional_setup_without_skipping_node(
             environment={"LTCOOK_BROWSER_ENABLED": "true"},
         )
         assert retries == [True]
+
+        source_main = root / "runtime/dist/main.js"
+        source_main.write_text("replacement")
+        old_build = source_build(app)
+        publish = prepare_runtime.write_json
+
+        def fail_receipt(path: Path, value: object) -> None:
+            if path == deployment / "runtime.json":
+                raise OSError("simulated interrupted receipt publication")
+            publish(path, value)
+
+        with monkeypatch.context() as interrupted:
+            interrupted.setattr(prepare_runtime, "write_json", fail_receipt)
+            with pytest.raises(OSError, match="interrupted receipt publication"):
+                prepare_runtime.prepare_runtime(
+                    root, tmp_path / "appdata", environment=environment
+                )
+        assert installed_runtime_record(deployment, old_build)
+        assert not installed_runtime_record(deployment, source_build(root))
+        attempt = "1" * 32
+        prepare_runtime.prepare_runtime(
+            root,
+            tmp_path / "appdata",
+            environment={**environment, prepare_runtime.UPDATE_ATTEMPT_ENV: attempt},
+        )
+        assert not installed_runtime_record(deployment, old_build)
+        assert (
+            installed_runtime_record(deployment, source_build(root))["update_attempt"]
+            == attempt
+        )
 
 
 def test_service_secrets_preserve_shell_values(tmp_path: Path) -> None:

@@ -1,7 +1,8 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import type { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import {
   ConversationRecords,
   type MemorySource,
@@ -10,6 +11,10 @@ import {
   hostedConversationProvider,
   validHostedConversationRequest,
 } from '../../../runtime/src/session-memory/hosted.js';
+import {
+  ConversationInference,
+  localConversationProvider,
+} from '../../../runtime/src/session-memory/inference.js';
 import { PastedDocuments } from '../../../runtime/src/session-memory/pasted-documents.js';
 import type { MemorySourceMessage } from '../../../runtime/src/session-memory/units.js';
 
@@ -132,5 +137,95 @@ test('persists exact signed pasted bytes and removes an invalidated attachment',
     ).toBe(false);
   } finally {
     await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test('Hosted validates the subscription route without generating a response', async () => {
+  let key: string | undefined;
+  let completions = 0;
+  const hosted = hostedConversationProvider(
+    {
+      alias: 'tiny',
+      provider: 'openai-codex',
+      model: 'gpt-6-luna',
+      reasoning: 'low',
+      reasoningSource: 'alias',
+    },
+    {
+      async authorize(provider) {
+        expect(provider).toBe('openai-codex');
+        if (!key) throw new Error('A private denial with a credential in it.');
+        return { auth: { apiKey: key }, source: 'Codex sign-in' };
+      },
+      async createRuntime() {
+        return {
+          getModel: () => ({
+            id: 'gpt-6-luna',
+            provider: 'openai-codex',
+            api: 'openai-codex-responses',
+            baseUrl: 'https://chatgpt.com/backend-api',
+            reasoning: true,
+          }),
+          login: async () => {},
+          logout: async () => {},
+          checkAuth: async () => ({}),
+          getAuth: async () => ({}),
+          complete: async () => {
+            completions++;
+            throw new Error('Validation attempted inference.');
+          },
+        } as unknown as ModelRuntime;
+      },
+    },
+  );
+  const inference = new ConversationInference({ hosted }, 'hosted');
+  const signal = new AbortController().signal;
+  try {
+    await expect(inference.validate(signal)).rejects.toMatchObject({
+      kind: 'authentication',
+      message: expect.stringContaining('ltcook auth login openai-codex'),
+    });
+    key = 'credential-a';
+    const first = await inference.validate(signal);
+    expect(first).toBe(await inference.validate(signal));
+    key = 'credential-b';
+    expect(await inference.validate(signal)).not.toBe(first);
+    expect(completions).toBe(0);
+  } finally {
+    await inference.close();
+  }
+});
+
+test('Local conversation validation asks Ollama about the selected model without generating', async () => {
+  let available = false;
+  const requests: { path: string; model: string }[] = [];
+  const fetch = spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    requests.push({
+      path: new URL(String(input)).pathname,
+      model: JSON.parse(String(init?.body)).model,
+    });
+    return new Response(null, { status: available ? 200 : 404 });
+  });
+  const provider = localConversationProvider({
+    endpoint: 'http://127.0.0.1:11434',
+    model: 'fixture:small',
+    keepAlive: -1,
+  });
+  const inference = new ConversationInference({ local: provider }, 'local');
+  const signal = new AbortController().signal;
+  try {
+    await expect(inference.validate(signal)).rejects.toMatchObject({
+      kind: 'configuration',
+      message: expect.stringContaining('LTCOOK_CONVERSATION_LOCAL_MODEL'),
+    });
+    available = true;
+    expect(await inference.validate(signal)).toBeDefined();
+    expect(requests).toEqual([
+      { path: '/api/show', model: 'fixture:small' },
+      { path: '/api/show', model: 'fixture:small' },
+    ]);
+  } finally {
+    fetch.mockRestore();
+    await inference.close();
   }
 });

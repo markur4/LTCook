@@ -88,7 +88,7 @@ default engine selection. Set it to a configured Podman connection name only whe
 a remote engine is intended.
 
 On Linux or macOS, run `just restart` from the checkout to update and restart an
-editable installation. It runs `ltcook stop`, `ltcook app update`, and `ltcook serve` in order.
+editable installation. It runs `ltcook restart --update`.
 AppRC selects the registered checkout, which must be clean and track an upstream
 branch. It runs `just build-assets` before synchronizing Python and refreshing
 registration, even if Git is already current.
@@ -136,8 +136,19 @@ separately by `ltcook services stop`.
 Run `ltcook restart` to stop the runtime and reopen Paseo. On Linux or macOS,
 use `ltcook restart --update` (or `-u`) to apply the registered AppRC update
 before starting. Pass `-y` or `--yes` to confirm AppRC's update without a
-prompt. On Windows, stop LTCook, run `ltcook app update`, and run
-`ltcook serve` once AppRC finishes the update.
+prompt. The command checks that a new runtime instance serves the verified
+installation and reports the build fingerprint. If an update fails after
+shutdown, LTCook attempts to bring back a verified installation and reports
+the update failure separately from the recovery result. On Windows, stop
+LTCook, run `ltcook app update`, and run `ltcook serve` once AppRC finishes the
+update.
+
+Use `ltcook restart --last-result` to inspect the most recent completed
+registered restart later. Add `--json` for the build fingerprint, AppRC
+registration revision, and separate update and runtime results.
+
+The bundled Paseo web app shows the loaded web build in **Workspace Services**.
+An open tab that detects a newer build offers **Reload Paseo**.
 
 On Linux and WSL with user systemd 254 or newer, run
 `ltcook restart --when-idle` to queue a restart for when Paseo finishes its
@@ -181,8 +192,8 @@ for the Leader. For hosted models, [authenticate with Pi](#authenticate-with-pi)
 
 On desktop, **Activity** opens in the right Explorer the first time you open
 an agent conversation in a workspace. Paseo remembers your layout after that.
-Use the Explorer **+** menu to open **Activity**, **Team**, or **Tasks**
-whenever you need them.
+Use the Explorer **+** menu to open **Activity**, **Workspace Services**,
+**Tracked Items**, **Team**, or **Tasks** whenever you need them.
 
 - **Activity** follows the focused agent. Expand the agent or a direct subagent
   to inspect running and recent tools, observed skill loads, and model context
@@ -203,8 +214,8 @@ whenever you need them.
 - **Tasks** opens the Task Board for that Session. Select a Task to inspect its
   description, acceptance criteria, ordered Steps, blocker, and report.
 
-The Command Center also offers **Open Activity panel**, **Open Team panel**,
-and **Open Tasks panel**.
+The Command Center also offers **Open Activity panel**, **Open Workspace
+Services**, **Open Tracked Items**, **Open Team panel**, and **Open Tasks panel**.
 
 In the bundled Paseo web app, **Changes** follows the focused session's active
 Git worktree. Managed Pi and supported Paseo Pi and Codex agents report the
@@ -251,9 +262,15 @@ Trackers by writing plain-language criteria in **Add Tracker**. For example,
 enter “Track open architecture questions and retire them when the user
 resolves them.”
 
+Use **Coverage** to see where extraction stopped. A failed or incomplete message
+blocks only its Tracker. Later eligible messages for that Tracker wait and
+continue in order after the gap is resolved. Use **Retry message** after correcting the
+cause. An oversized input requires less source material or a higher configured
+input budget. **Skip blocked message** resumes later messages and retains the
+skipped message as incomplete coverage.
+
 Use **Pause Tracker everywhere** to stop extraction across conversations.
-Resuming processes new messages. **Coverage** shows which messages were
-processed and which had an incomplete, failed, or skipped extraction. In
+Messages during that user pause are skipped, and resuming processes new messages. In
 Hosted mode, new user messages, relevant earlier text, and existing item text
 can be sent to OpenAI through the Codex subscription. You can select Local
 Ollama through the [conversation inference settings](References.md#environment-variables).
@@ -765,10 +782,11 @@ Renamer and category selection use `@tiny` with low reasoning and the configured
 model authentication. They resume later when inference is unavailable; the
 current names and labels remain usable.
 
-Open **Activity → Services** to see whether each service is enabled or running,
-its latest check and change, and any diagnostic. Workspace Organizer also shows
-why workspaces are protected from automatic archival. Change the service
-switches through AppRC as described below; these cards report status only.
+Open **Explorer → + → Workspace Services** or **Activity → Services** to see
+what each service is doing and any operation that needs attention. Workspace
+Organizer also shows why workspaces are protected from automatic archival.
+Update the reported setting or sign-in to allow blocked inference to resume.
+Change service switches through AppRC as described below.
 
 ### Find and restore archived conversations
 
@@ -796,7 +814,7 @@ Automatic archive keeps the entire working directory, including modified,
 untracked, and ignored files, and skips project teardown commands. This includes
 Paseo-owned worktrees and does not require a commit or remote push. If the
 connected daemon cannot guarantee this behavior, automatic archival stays
-paused and **Activity → Services** asks you to restart LTCook. Paseo's manual
+paused and **Workspace Services** asks you to restart LTCook. Paseo's manual
 archive action can still remove a Paseo-owned worktree directory.
 
 ### Change the service settings

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ServiceInferenceError } from '../../../runtime/src/services/inference-recovery.js';
 import {
   WORKSPACE_LABELS,
   boundedWorkspaceTitle,
@@ -476,4 +477,116 @@ test('Unsupported service state fails unchanged instead of resetting archive clo
   writeFileSync(file, original);
   expect(() => f.organizer()).toThrow('Reset its state file');
   expect(readFileSync(file, 'utf8')).toBe(original);
+});
+
+test('Organizer preserves classification failure while archive and label sync succeed', async () => {
+  const f = fixture();
+  let available = false;
+  f.generator.validate = async () => {
+    if (!available)
+      throw new ServiceInferenceError('configuration', 'Fix LTCOOK_MODEL_SMOL in AppRC.');
+    return 'configured';
+  };
+  const organizer = f.organizer();
+  await organizer.tick(f.snapshots(), f.signal);
+  expect(f.inferred).toEqual([]);
+  expect(organizer.status().diagnostics).toContainEqual({
+    operation: 'classification',
+    message: 'Fix LTCOOK_MODEL_SMOL in AppRC.',
+    nextCheckAt: f.now() + 60_000,
+  });
+  f.advance(WORKSPACE_ARCHIVE_AFTER_MS);
+  await organizer.tick(f.snapshots(), f.signal);
+  expect(f.writes).toEqual(['catalog', 'catalog', 'archive']);
+  expect(organizer.status().diagnostic).toContain('LTCOOK_MODEL_SMOL');
+
+  available = true;
+  const restarted = f.organizer();
+  expect(restarted.status().diagnostic).toContain('LTCOOK_MODEL_SMOL');
+  f.snapshot.archived = false;
+  await restarted.tick(f.snapshots(), f.signal);
+  expect(f.inferred).toEqual(['classify']);
+  expect(restarted.status().diagnostic).toBeUndefined();
+  expect(f.snapshot.labels).toContain('Bugfix');
+});
+
+test('Renamer waits for an observed credential correction and immediately retries due work', async () => {
+  const f = fixture();
+  let revision = 'old-login';
+  let checks = 0;
+  let calls = 0;
+  f.generator.validate = async () => {
+    checks++;
+    return revision;
+  };
+  const rename = f.generator.rename;
+  f.generator.rename = async (...args) => {
+    calls++;
+    if (revision === 'old-login')
+      throw new ServiceInferenceError('authentication', 'Sign in again.', revision);
+    return rename(...args);
+  };
+
+  const renamer = f.renamer();
+  await renamer.tick(f.snapshots(), f.signal);
+  await renamer.tick(f.snapshots(), f.signal);
+  expect(checks).toBe(1);
+  expect(calls).toBe(1);
+  expect(renamer.status().diagnostic).toBe('Sign in again.');
+  f.advance(60_000);
+  await renamer.tick(f.snapshots(), f.signal);
+  expect(checks).toBe(2);
+  expect(calls).toBe(1);
+  revision = 'new-login';
+  f.advance(60_000);
+  await renamer.tick(f.snapshots(), f.signal);
+  expect(calls).toBe(2);
+  expect(f.snapshot.title).toBe('Fix login crash');
+  expect(renamer.status().diagnostic).toBeUndefined();
+});
+
+test('Classification backs off across restart and unchanged labels do not count as a change', async () => {
+  const f = fixture();
+  let attempts = 0;
+  f.generator.classify = async () => {
+    if (++attempts <= 2) throw new ServiceInferenceError('transient', 'The provider is busy.');
+    return { category: 'Feature' };
+  };
+  await f.organizer().tick(f.snapshots(), f.signal);
+  const restarted = f.organizer();
+  expect(restarted.status().diagnostic).toBe('The provider is busy.');
+  f.advance(59_999);
+  await restarted.tick(f.snapshots(), f.signal);
+  expect(attempts).toBe(1);
+  f.advance(1);
+  await restarted.tick(f.snapshots(), f.signal);
+  expect(attempts).toBe(2);
+  f.advance(119_999);
+  await restarted.tick(f.snapshots(), f.signal);
+  expect(attempts).toBe(2);
+  f.advance(1);
+  await restarted.tick(f.snapshots(), f.signal);
+  expect(attempts).toBe(3);
+  expect(restarted.status()).toMatchObject({ processed: 0, lastSuccessAt: null });
+  expect(restarted.status().diagnostic).toBeUndefined();
+  expect(f.writes.filter((value) => value.startsWith('label:'))).toEqual([]);
+});
+
+test('An unchanged rename result clears its failure and leaves change counters alone', async () => {
+  const f = fixture();
+  const renamer = f.renamer();
+  f.generator.rename = async () => {
+    throw new ServiceInferenceError('transient', 'The provider is busy.');
+  };
+  await renamer.tick(f.snapshots(), f.signal);
+  f.advance(60_000);
+  f.generator.rename = async ({ title, agents }) => ({
+    workspaceTitle: title,
+    agents: agents.map(({ id, title: agentTitle }) => ({ id, title: agentTitle })),
+  });
+  await renamer.tick(f.snapshots(), f.signal);
+  expect(renamer.status()).toMatchObject({ processed: 0, lastSuccessAt: null });
+  expect(renamer.status().diagnostic).toBeUndefined();
+  expect(f.renamer().status().diagnostic).toBeUndefined();
+  expect(f.writes).toEqual([]);
 });
