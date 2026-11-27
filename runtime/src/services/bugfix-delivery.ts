@@ -3,6 +3,7 @@ import { lstat, mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { isWithin } from '../path-containment.js';
+import { bugFixVerificationCommand } from './bugfix-verification.js';
 import type {
   BugFixActionResult,
   BugFixBatch,
@@ -12,7 +13,7 @@ import type {
   BugFixTargetEvidence,
 } from './bugfix.js';
 
-type Command = 'git' | 'gh' | 'just';
+type Command = 'git' | 'gh' | 'just' | '/usr/bin/bwrap';
 type CommandInput = {
   command: Command;
   args: string[];
@@ -23,6 +24,8 @@ type CommandInput = {
 };
 type CommandResult = { code: number; stdout: string; stderr: string };
 type CommandRunner = (input: CommandInput) => Promise<CommandResult>;
+
+class DeliveryBlocked extends Error {}
 
 interface DeliveryOptions {
   worktreeDirectory: string;
@@ -38,6 +41,7 @@ interface DeliveryOptions {
     signal: AbortSignal,
   ): Promise<BugFixTargetEvidence>;
   run?: CommandRunner;
+  verificationCommand?: typeof bugFixVerificationCommand;
 }
 
 const objectId = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
@@ -66,12 +70,16 @@ async function execute({
   timeout,
 }: CommandInput): Promise<CommandResult> {
   signal.throwIfAborted();
-  const context: NodeJS.ProcessEnv = {
-    ...process.env,
-    ...env,
-    GIT_TERMINAL_PROMPT: '0',
-    GH_PROMPT_DISABLED: '1',
-  };
+  const context: NodeJS.ProcessEnv =
+    command === '/usr/bin/bwrap'
+      ? { ...env }
+      : {
+          ...process.env,
+          ...env,
+          GIT_TERMINAL_PROMPT: '0',
+          GH_PROMPT_DISABLED: '1',
+          GH_HOST: 'github.com',
+        };
   for (const key of Object.keys(context))
     if (key.startsWith('GIT_') && !Object.hasOwn(env ?? {}, key) && key !== 'GIT_TERMINAL_PROMPT')
       delete context[key];
@@ -166,9 +174,14 @@ function signerUnavailable(result: CommandResult) {
 
 export function createBugFixDelivery(options: DeliveryOptions) {
   const run = options.run ?? execute;
+  const verificationCommand = options.verificationCommand ?? bugFixVerificationCommand;
   const authorize = (batch: BugFixBatch, action: BugFixStage) => {
-    if (options.authorize(batch, action) === false)
-      throw new Error('The standing grant does not authorize this delivery operation.');
+    try {
+      if (options.authorize(batch, action) !== false) return;
+    } catch {
+      // > Authorization could not be established.
+    }
+    throw new DeliveryBlocked('The standing grant does not authorize this delivery operation.');
   };
   const invoke = (
     command: Command,
@@ -189,6 +202,7 @@ export function createBugFixDelivery(options: DeliveryOptions) {
     const top = (await read('git', ['rev-parse', '--show-toplevel'], root, signal)).trim();
     if (root !== directory || path.resolve(top) !== root)
       throw new Error('BugFix authority requires the canonical top-level repository.');
+    await requireNoGitProcessFilters(root, signal);
     const remotes = (await read('git', ['remote'], root, signal)).trim().split(/\r?\n/);
     if (!remotes.includes('origin')) return { root };
     const [fetch, push] = await Promise.all([
@@ -254,6 +268,8 @@ export function createBugFixDelivery(options: DeliveryOptions) {
       selectedBranch.trim() !== checkRef(branch(batch))
     )
       throw new Error('The BugFix checkout changed its repository or branch.');
+    await requireNoGitProcessFilters(directory, signal);
+    await requireNoGitHooks(directory, ['post-index-change'], signal);
     return directory;
   }
 
@@ -276,16 +292,20 @@ export function createBugFixDelivery(options: DeliveryOptions) {
       const relative = entry.slice(3);
       const target = path.resolve(directory, relative);
       if (!isWithin(directory, target) || !options.allowedPath(batch, relative))
-        throw new Error('BugFix found a change outside the authorized file scope.');
+        throw new DeliveryBlocked('BugFix found a change outside the authorized file scope.');
       if (entry[0] !== ' ' && !entry.startsWith('??'))
-        throw new Error('BugFix requires an untouched shared Git index.');
+        throw new DeliveryBlocked('BugFix requires an untouched shared Git index.');
       const stat = await lstat(target).catch((error: unknown) => {
         if (typeof error === 'object' && error && 'code' in error && error.code === 'ENOENT')
           return undefined;
         throw error;
       });
-      if (stat && (!stat.isFile() || (await realpath(target)) !== target))
-        throw new Error('BugFix may only change regular files inside the checkout.');
+      if (!stat?.isFile() || stat.nlink !== 1 || (await realpath(target)) !== target)
+        throw new DeliveryBlocked(
+          'BugFix may only change existing regular files inside the checkout.',
+        );
+      if (entry.startsWith('??'))
+        throw new DeliveryBlocked('BugFix may only change files tracked in the approved checkout.');
     }
     return entries.map((entry) => entry.slice(3));
   }
@@ -314,7 +334,9 @@ export function createBugFixDelivery(options: DeliveryOptions) {
   async function expectedTarget(batch: BugFixBatch, signal: AbortSignal) {
     const current = await targetRevision(batch, signal);
     if (current !== batch.targetRevision)
-      throw new Error('The target advanced since BugFix was approved. Revalidation is required.');
+      throw new DeliveryBlocked(
+        'The target advanced since BugFix was approved. Revalidation is required.',
+      );
     return current;
   }
 
@@ -377,7 +399,72 @@ export function createBugFixDelivery(options: DeliveryOptions) {
   async function noInterruptedHistory(directory: string, signal: AbortSignal) {
     for (const marker of ['MERGE_HEAD', 'rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD'])
       if (await gitState(directory, marker, signal))
-        throw new Error('The checkout has an interrupted history operation.');
+        throw new DeliveryBlocked('The checkout has an interrupted history operation.');
+  }
+
+  async function requireCleanTarget(batch: BugFixBatch, revision: string, signal: AbortSignal) {
+    const [branch, head, status] = await Promise.all([
+      read('git', ['symbolic-ref', 'HEAD'], batch.scope, signal),
+      read('git', ['rev-parse', 'HEAD'], batch.scope, signal),
+      read('git', ['status', '--porcelain', '--untracked-files=all'], batch.scope, signal),
+    ]);
+    if (branch.trim() !== checkRef(batch.targetBranch) || hash(head) !== revision || status)
+      throw new DeliveryBlocked(
+        'The target checkout must be clean and on the approved branch and revision.',
+      );
+    await noInterruptedHistory(batch.scope, signal);
+  }
+
+  async function requireNoGitProcessFilters(directory: string, signal: AbortSignal) {
+    const config = await invoke(
+      'git',
+      ['config', '--get-regexp', '^(filter\\..*\\.(clean|smudge|process)|core\\.fsmonitor)$'],
+      directory,
+      signal,
+    );
+    if (
+      config.code === 1 ||
+      (config.code === 0 &&
+        config.stdout
+          .trim()
+          .split('\n')
+          .every((line) => /^core\.fsmonitor (true|false)$/i.test(line)))
+    )
+      return;
+    throw new DeliveryBlocked(
+      'BugFix cannot safely invoke configured external Git filters or monitors.',
+    );
+  }
+
+  async function requireNoGitHooks(directory: string, names: string[], signal: AbortSignal) {
+    const config = await invoke(
+      'git',
+      ['config', '--path', '--get', 'core.hooksPath'],
+      directory,
+      signal,
+    );
+    if (config.code !== 0 && config.code !== 1)
+      throw new DeliveryBlocked(
+        'BugFix could not establish the repository Git hook configuration.',
+      );
+    const hooks = path.resolve(
+      directory,
+      (config.code === 0
+        ? config.stdout
+        : await read('git', ['rev-parse', '--git-path', 'hooks'], directory, signal)
+      ).trimEnd(),
+    );
+    for (const name of names) {
+      const hook = await lstat(path.join(hooks, name)).catch((error: unknown) => {
+        const { code } = error as NodeJS.ErrnoException;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+        throw error;
+      });
+      if (hook && (hook.isSymbolicLink() || (hook.isFile() && (hook.mode & 0o111) !== 0)))
+        throw new DeliveryBlocked(
+          `BugFix requires manual delivery when the ${name} Git hook is active.`,
+        );
+    }
   }
 
   async function prs(batch: BugFixBatch, origin: string, signal: AbortSignal) {
@@ -424,16 +511,42 @@ export function createBugFixDelivery(options: DeliveryOptions) {
     action: BugFixStage,
     signal: AbortSignal,
   ): Promise<BugFixActionResult> {
+    let changed = false;
+    try {
+      return await performAuthorized(batch, action, signal, () => {
+        signal.throwIfAborted();
+        authorize(batch, action);
+        changed = true;
+      });
+    } catch (error) {
+      if (!changed && !signal.aborted && error instanceof DeliveryBlocked)
+        return { status: 'blocked', evidence: error.message };
+      throw error;
+    }
+  }
+
+  async function performAuthorized(
+    batch: BugFixBatch,
+    action: BugFixStage,
+    signal: AbortSignal,
+    beforeMutation: () => void,
+  ): Promise<BugFixActionResult> {
     authorize(batch, action);
     const origin = await repository(batch, signal);
     switch (action.kind) {
       case 'prepare': {
         const base = await expectedTarget(batch, signal);
+        await requireNoGitHooks(
+          batch.scope,
+          ['post-checkout', 'post-index-change', 'reference-transaction'],
+          signal,
+        );
+        await requireCleanTarget(batch, base, signal);
         await mkdir(options.worktreeDirectory, { recursive: true, mode: 0o700 });
         if ((await realpath(options.worktreeDirectory)) !== options.worktreeDirectory)
           throw new Error('BugFix checkout storage must be a canonical directory.');
         const directory = checkoutPath(batch);
-        authorize(batch, action);
+        beforeMutation();
         const result = await invoke(
           'just',
           ['worktree-create', branch(batch), directory, base],
@@ -452,21 +565,31 @@ export function createBugFixDelivery(options: DeliveryOptions) {
       case 'verify': {
         const directory = await checkout(batch, signal);
         const tree = await captureTree(batch, signal);
-        for (const recipe of ['check', 'test']) {
-          authorize(batch, action);
-          const result = await invoke('just', [recipe], directory, signal, {
-            env: {
-              UV_PROJECT_ENVIRONMENT: path.join(directory, '.venv'),
-              VIRTUAL_ENV: undefined,
-              PYTHONPATH: undefined,
-            },
-            timeout: 600_000,
-          });
-          if (result.code !== 0)
-            return {
-              status: 'failed',
-              evidence: `The repository's just ${recipe} verification failed.`,
-            };
+        const verification = await verificationCommand(directory, tree).catch(() => {
+          throw new DeliveryBlocked('The isolated BugFix verification environment is unavailable.');
+        });
+        try {
+          for (const recipe of ['check', 'test']) {
+            authorize(batch, action);
+            const result = await invoke(
+              '/usr/bin/bwrap',
+              [...verification.args, recipe],
+              directory,
+              signal,
+              { env: verification.env, timeout: 600_000 },
+            );
+            if (result.code !== 0 && result.stderr.startsWith('bwrap:'))
+              throw new DeliveryBlocked(
+                'The isolated BugFix verification process could not start.',
+              );
+            if (result.code !== 0)
+              return {
+                status: 'failed',
+                evidence: `The repository's just ${recipe} verification failed.`,
+              };
+          }
+        } finally {
+          await verification.cleanup?.();
         }
         if ((await captureTree(batch, signal)) !== tree)
           throw new Error('The source tree changed during verification.');
@@ -481,11 +604,22 @@ export function createBugFixDelivery(options: DeliveryOptions) {
         if (hash(await read('git', ['rev-parse', 'HEAD'], directory, signal)) !== parent)
           throw new Error('The checkout tip no longer matches the approved starting revision.');
         await noInterruptedHistory(directory, signal);
+        await requireNoGitHooks(
+          directory,
+          [
+            'pre-commit',
+            'prepare-commit-msg',
+            'commit-msg',
+            'post-commit',
+            'reference-transaction',
+          ],
+          signal,
+        );
         requireVerified(batch, await captureTree(batch, signal));
         const files = await scopedChanges(batch, directory, signal);
         if (!files.length)
           return { status: 'blocked', evidence: 'BugFix has no scoped changes to commit.' };
-        authorize(batch, action);
+        beforeMutation();
         await read('git', ['--literal-pathspecs', 'add', '-A', '--', ...files], directory, signal);
         requireVerified(batch, hash(await read('git', ['write-tree'], directory, signal)));
         authorize(batch, action);
@@ -532,6 +666,7 @@ export function createBugFixDelivery(options: DeliveryOptions) {
         if (!origin) return complete('Disposable local delivery has no GitHub origin.');
         await expectedTarget(batch, signal);
         const directory = await committed(batch, signal);
+        await requireNoGitHooks(directory, ['pre-push'], signal);
         const ref = checkRef(branch(batch));
         const pushed = await remoteRef(batch.scope, ref, signal);
         if (pushed === batch.commitRevision)
@@ -548,7 +683,7 @@ export function createBugFixDelivery(options: DeliveryOptions) {
           ).code !== 0
         )
           throw new Error('The Pass branch on GitHub cannot advance without rewriting history.');
-        authorize(batch, action);
+        beforeMutation();
         await read(
           'git',
           ['push', 'origin', `${hash(batch.commitRevision ?? '')}:${ref}`],
@@ -571,7 +706,7 @@ export function createBugFixDelivery(options: DeliveryOptions) {
             pullRequest: existing.url,
           });
         }
-        authorize(batch, action);
+        beforeMutation();
         await read(
           'gh',
           [
@@ -612,21 +747,21 @@ export function createBugFixDelivery(options: DeliveryOptions) {
           };
         const base = await expectedTarget(batch, signal);
         await committed(batch, signal);
-        const currentBranch = (
-          await read('git', ['symbolic-ref', 'HEAD'], batch.scope, signal)
-        ).trim();
-        if (
-          currentBranch !== checkRef(batch.targetBranch) ||
-          (await read(
-            'git',
-            ['status', '--porcelain', '--untracked-files=all'],
-            batch.scope,
-            signal,
-          ))
-        )
-          throw new Error('The target checkout must be clean and on the approved branch.');
+        await requireNoGitHooks(batch.scope, ['post-index-change'], signal);
+        await requireCleanTarget(batch, base, signal);
         if (!origin) {
-          authorize(batch, action);
+          await requireNoGitHooks(
+            batch.scope,
+            [
+              'pre-merge-commit',
+              'prepare-commit-msg',
+              'commit-msg',
+              'post-merge',
+              'reference-transaction',
+            ],
+            signal,
+          );
+          beforeMutation();
           const result = await invoke(
             'git',
             [
@@ -658,7 +793,7 @@ export function createBugFixDelivery(options: DeliveryOptions) {
             signal,
           );
         if (pr.isDraft) {
-          authorize(batch, action);
+          beforeMutation();
           await read(
             'gh',
             ['pr', 'ready', String(pr.number), '--repo', remoteName(origin)],
@@ -667,7 +802,7 @@ export function createBugFixDelivery(options: DeliveryOptions) {
           );
         }
         await expectedTarget(batch, signal);
-        authorize(batch, action);
+        beforeMutation();
         await read(
           'gh',
           [
@@ -748,6 +883,11 @@ export function createBugFixDelivery(options: DeliveryOptions) {
     action: BugFixStage,
     signal: AbortSignal,
   ): Promise<BugFixReconciliation> {
+    if (action.kind === 'verify')
+      return {
+        state: 'not-applied',
+        evidence: 'The interrupted check ran in a read-only, network-isolated environment.',
+      };
     const applied = (result: BugFixActionResult): BugFixReconciliation => ({
       state: 'applied',
       result,

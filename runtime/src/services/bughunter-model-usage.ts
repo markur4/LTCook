@@ -1,8 +1,3 @@
-export interface BugHunterModelScope {
-  workspaceRoot: string;
-  huntId: string;
-}
-
 /** Reserve one actual provider request before Pi is allowed to send it. */
 export function reserveBugHunterModelRequest(
   records: {

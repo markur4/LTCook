@@ -347,6 +347,7 @@ const activityRoutes = {
     const showBugScan = bugScan && (!bugScan.requireWorkspace || workspace?.root === bugScan.scope);
     const hunt = showBugScan ? bugScan.service.list().at(-1) : undefined;
     const fix = showBugScan ? dependencies.bugFix?.list().at(-1) : undefined;
+    const readyRepairs = fix?.remedies.filter(({ status }) => status === 'ready') ?? [];
     response.writeHead(200).end(
       JSON.stringify({
         rag: {
@@ -379,7 +380,9 @@ const activityRoutes = {
                   verified: Boolean(fix.verifiedTree),
                   integrated: Boolean(fix.integratedRevision),
                   installed: Boolean(fix.installedBuild),
-                  recovered: fix.recoveredRemedies.length > 0,
+                  recovered:
+                    readyRepairs.length > 0 &&
+                    readyRepairs.every(({ id }) => fix.recoveredRemedies.includes(id)),
                 },
                 findings:
                   hunt?.findings.map(({ confidence, cause, remedy, technicalDebt }) => ({

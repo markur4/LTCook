@@ -15,6 +15,7 @@ import { useCodexOpenAiAuth } from './codex-auth.js';
 import { bugHunterTeamId } from '../services/bughunter-team.js';
 import { WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
 import { REPO_SEARCH_TIMEOUT_MS } from '../tools/workspace-tools.js';
+import type { ModelsRequestTransforms } from '@earendil-works/pi-ai';
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
@@ -142,6 +143,48 @@ export function guardEvaluationModelRuntime(
   };
 }
 
+/** Reserve capacity at the SDK request boundary before Pi invokes a model provider. */
+export function guardBugHunterModelRuntime(
+  runtime: Pick<ModelRuntime, 'stream' | 'streamSimple'>,
+  identity: { endpoint: string; token: string; sessionId: string; nativeAgentId: string },
+): void {
+  const { endpoint, token, sessionId, nativeAgentId } = identity;
+  const gatedOptions = <Options extends ModelsRequestTransforms & { signal?: AbortSignal }>(
+    options: Options | undefined,
+  ) => {
+    const transformHeaders: NonNullable<ModelsRequestTransforms['transformHeaders']> = async (
+      headers,
+    ) => {
+      const timeout = globalThis.AbortSignal.timeout(3000);
+      const signal = options?.signal
+        ? globalThis.AbortSignal.any([options.signal, timeout])
+        : timeout;
+      let authorized = false;
+      try {
+        const result = await fetch(`${endpoint}/v1/activity/bughunter-model-request`, {
+          method: 'POST',
+          redirect: 'error',
+          signal: signal as NonNullable<Parameters<typeof fetch>[1]>['signal'],
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId, nativeAgentId }),
+        });
+        authorized = result.status === 204;
+      } catch {
+        // > Gate failure denies the request without exposing credentials or endpoints.
+      }
+      if (!authorized)
+        throw new Error('BugHunter has no model request capacity for this assignment.');
+      return options?.transformHeaders ? options.transformHeaders(headers) : headers;
+    };
+    return Object.assign({}, options, { transformHeaders });
+  };
+  const stream = runtime.stream.bind(runtime);
+  runtime.stream = (model, context, options) => stream(model, context, gatedOptions(options));
+  const streamSimple = runtime.streamSimple.bind(runtime);
+  runtime.streamSimple = (model, context, options) =>
+    streamSimple(model, context, gatedOptions(options));
+}
+
 /** Create native Pi services while keeping credentials outside workspace state. */
 export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRuntime> {
   const { parsed, mcpConfigPaths } = parseRpcArguments(argv);
@@ -167,6 +210,14 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
     );
   const cwd = process.cwd();
   const bugScan = managed && process.env.LTCOOK_TEAM_ID === bugHunterTeamId;
+  const budgetIdentity = bugScan
+    ? {
+        endpoint: process.env.LTCOOK_RUNTIME_API_URL,
+        token: process.env.LTCOOK_AGENT_API_TOKEN,
+        sessionId: process.env.LTCOOK_SESSION_ID,
+        nativeAgentId: process.env.LTCOOK_NATIVE_AGENT_ID,
+      }
+    : undefined;
   const mcpServers = bugScan ? [] : loadMcpServerConfigs(mcpConfigPaths, cwd);
   const injectedWorkspaceTools =
     !managed &&
@@ -231,6 +282,12 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
     if (process.env.LTCOOK_EVAL_ARM)
       guardEvaluationModelRuntime(modelRuntime, process.env.LTCOOK_EVAL_ENDPOINT);
     else useCodexOpenAiAuth(modelRuntime);
+    if (budgetIdentity) {
+      const { endpoint, token, sessionId, nativeAgentId } = budgetIdentity;
+      if (!endpoint || !token || !sessionId || !nativeAgentId)
+        throw new Error('BugHunter requires authenticated model budget context.');
+      guardBugHunterModelRuntime(modelRuntime, { endpoint, token, sessionId, nativeAgentId });
+    }
     const paseoMcpExtension: ExtensionFactory = (pi) => {
       // > Pi validates raw configs at registration; its public type describes
       // > validated input. Keep file values unknown until that native boundary.

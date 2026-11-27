@@ -299,14 +299,12 @@ async function run(): Promise<void> {
     const sourceRevision = executingSource
       ? await cleanSourceRevision(await fs.realpath(appRoot))
       : deployedBuild?.sourceRevision;
-    telemetry.setBuildIdentity(
-      buildFingerprint
-        ? `deployment:${buildFingerprint}`
-        : sourceRevision
-          ? `source:${sourceRevision}`
-          : `entrypoint:${entrypointDigest}`,
-      sourceRevision,
-    );
+    const runningBuildIdentity = buildFingerprint
+      ? `deployment:${buildFingerprint}`
+      : sourceRevision
+        ? `source:${sourceRevision}`
+        : `entrypoint:${entrypointDigest}`;
+    telemetry.setBuildIdentity(runningBuildIdentity, sourceRevision);
     let summarizerModel = '';
     try {
       summarizerModel = resolveModel('local-tiny', process.env).model;
@@ -606,6 +604,7 @@ async function run(): Promise<void> {
     if (process.env.LTCOOK_BUGHUNTER_ENABLED === 'true') {
       try {
         const configuredWorkspace = process.env.LTCOOK_BUGHUNTER_WORKSPACE || undefined;
+        const mode = z.enum(['user', 'dev']).parse(process.env.LTCOOK_BUGHUNTER_MODE ?? 'user');
         if (configuredWorkspace && !path.isAbsolute(configuredWorkspace))
           throw new Error('BugHunter workspace must be an absolute authorized directory.');
         const activeMinutes = Number(process.env.LTCOOK_BUGHUNTER_ACTIVE_MINUTES ?? 45);
@@ -661,7 +660,7 @@ async function run(): Promise<void> {
             grant?.maxModelRequests ?? manualModelRequests,
           );
         });
-        if (process.env.LTCOOK_BUGHUNTER_MODE === 'dev' && configuredWorkspace) {
+        if (mode === 'dev' && configuredWorkspace) {
           try {
             bugFix = await startBugFix({
               runtime: runtimeController,
@@ -669,10 +668,13 @@ async function run(): Promise<void> {
               workspaceRoot: scanScope,
               stateDirectory: bugHunterStateDirectory,
               budgetMs,
+              runningBuild: sourceRevision
+                ? { identity: runningBuildIdentity, sourceRevision }
+                : undefined,
               // > Unattended merges remain disabled until the qualification Pass.
               qualified: () => false,
             });
-            api.setBugFix(bugFix.service, bugFix.authorization);
+            api.setBugFix(bugFix);
           } catch (error) {
             await telemetry
               .record({

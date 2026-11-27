@@ -804,19 +804,24 @@ def services_logs(
 
 @services_cli.command("bughunter-authorization")
 def bughunter_authorization(
-    operation: Literal["status", "grant", "revoke", "prohibit", "clear-prohibition"],
+    operation: Literal[
+        "status", "grant", "revoke", "prohibit", "clear-prohibition", "publish-issue"
+    ],
     data_file: Annotated[Path | None, typer.Option("--file")] = None,
     prohibition_id: Annotated[str | None, typer.Option("--id")] = None,
 ) -> None:
     """Inspect or change BugFix standing authority through the authenticated runtime."""
     request: dict[str, object] = {"operation": operation}
-    if operation in ("grant", "prohibit"):
+    if operation in ("grant", "prohibit", "publish-issue"):
         if data_file is None:
             raise typer.BadParameter("Supply the scope as a JSON file with --file.")
         try:
-            request["grant" if operation == "grant" else "prohibition"] = json.loads(
-                data_file.read_text(encoding="utf-8")
+            field = (
+                "prohibition"
+                if operation == "prohibit"
+                else ("issue" if operation == "publish-issue" else "grant")
             )
+            request[field] = json.loads(data_file.read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
             raise typer.BadParameter("The scope file must be readable JSON.") from error
     elif operation == "clear-prohibition":

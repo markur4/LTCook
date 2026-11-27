@@ -280,6 +280,27 @@ test('publishes a draft before review and publishes corrections on the same Pass
   }
 });
 
+test('retains the native Pass on initial implementation failure for authorized correction', async () => {
+  const f = fixture({
+    perform: async (batch, stage) => {
+      if (stage.kind === 'implement')
+        return { ...success(stage), status: 'failed', evidence: 'Implementation failed.' };
+      if (stage.kind === 'correct') {
+        expect(batch.sessionId).toBe('session');
+        expect(batch.passId).toBe('pass');
+      }
+      return success(stage);
+    },
+  });
+  const service = f.open();
+  try {
+    service.enqueue(hunt(), grant);
+    expect(await settled(service)).toMatchObject({ status: 'completed', passId: 'pass' });
+  } finally {
+    await service.close();
+  }
+});
+
 test('a previously blocked Pass releases the scope so independent work can run', async () => {
   const f = fixture({
     revalidate: async (batch) =>

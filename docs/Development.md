@@ -387,6 +387,12 @@ scope and results. Use `grant --file` to supply a JSON scope with `targetBranch`
 using the applicable `targetBranch`, `repairKind`, `action`, and `path` fields.
 `clear-prohibition --id` removes a specific restriction.
 
+If the grant permits `issue.write`, use `publish-issue --file` to publish a
+repository-policy-compliant issue for a confirmed actionable finding. The JSON
+file supplies the finding `id` from status, a `title`, and the issue `body`.
+BugHunter checks existing issues before creating one and keeps an uncertain
+publication pending until it can reconcile the result.
+
 The supported repair classes are `proper-fix` and `workaround`. Actions include
 `worktree.create`, `source.edit`, `verify`, `git.commit`, `git.push`,
 `pr.open`, `pr.merge`, `issue.write`, and `worktree.cleanup`. The native

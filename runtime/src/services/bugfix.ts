@@ -337,14 +337,14 @@ export class BugFixService {
     const safe = { ...result, evidence: detail(result.evidence) };
     operation.state = 'settled';
     operation.result = safe;
+    if ((kind === 'implement' || kind === 'correct') && result.sessionId && result.passId) {
+      batch.sessionId = result.sessionId;
+      batch.passId = result.passId;
+    }
     if (result.status === 'completed') {
       if (kind === 'prepare') {
         batch.checkout = result.checkout;
         batch.branch = result.branch;
-      }
-      if (kind === 'implement' || kind === 'correct') {
-        batch.sessionId = result.sessionId ?? batch.sessionId;
-        batch.passId = result.passId ?? batch.passId;
       }
       if (kind === 'verify') batch.verifiedTree = result.verifiedTree;
       if (kind === 'review') batch.reviewedRevision = result.reviewedRevision;

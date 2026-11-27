@@ -1,7 +1,5 @@
 """Host-wide organization and naming services in the LTCook runtime."""
 
-from typing import Literal
-
 import apprc as rc
 
 from ltcook.config.app import APP_RC
@@ -70,7 +68,7 @@ class BugHunterSettings(rc.Config):
 
     enabled: bool = rc.field("LTCOOK_BUGHUNTER_ENABLED", default=False)
     workspace: str = rc.field("LTCOOK_BUGHUNTER_WORKSPACE", default="")
-    mode: Literal["user", "dev"] = rc.field("LTCOOK_BUGHUNTER_MODE", default="user")
+    mode: str = rc.field("LTCOOK_BUGHUNTER_MODE", default="user")
     active_minutes: int = rc.field("LTCOOK_BUGHUNTER_ACTIVE_MINUTES", default=45)
     manual_model_requests: int = rc.field(
         "LTCOOK_BUGHUNTER_MANUAL_MODEL_REQUESTS", default=12

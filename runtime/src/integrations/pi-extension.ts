@@ -100,13 +100,6 @@ export default async function activate(
       body: JSON.stringify({ sessionId, nativeAgentId, ...payload }),
     });
   const evaluation = Boolean(process.env.LTCOOK_EVAL_ARM);
-  if (bugScan) {
-    pi.on('before_provider_request', async () => {
-      const response = await rpc('/v1/activity/bughunter-model-request', {});
-      if (!response.ok)
-        throw new Error('BugHunter has no model request capacity for this assignment.');
-    });
-  }
   const memoryEnabled = !evaluation;
   if (memoryEnabled) {
     pi.on('session_before_compact', () => {

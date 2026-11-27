@@ -8,6 +8,7 @@ import type {
 } from '../core/bugfix-authorization.js';
 import type { BugScanService } from './bugscan.js';
 import { createBugFixDelivery } from './bugfix-delivery.js';
+import { createBugHunterIssueReporter, type BugHunterIssueEntry } from './bughunter-issues.js';
 import {
   BugFixService,
   type BugFixActionResult,
@@ -46,6 +47,7 @@ export async function startBugFix(input: {
   stateDirectory: string;
   budgetMs: number;
   qualified: () => boolean;
+  runningBuild?: { identity: string; sourceRevision: string };
 }) {
   const { runtime, bugScan, workspaceRoot, stateDirectory, qualified, budgetMs } = input;
   const worktreeDirectory = path.join(stateDirectory, 'bugfix-worktrees');
@@ -124,6 +126,42 @@ export async function startBugFix(input: {
   repository = { root: verified.root, remote: verified.remote };
   const approved = runtime.bugFixAuthorization(repository);
   authorization = approved;
+  const configuredRepository = repository;
+  const issueRecords = runtime.bugHunterRecords<BugHunterIssueEntry[]>(
+    repository.root,
+    'issue-publication',
+  );
+  const issueReporter = createBugHunterIssueReporter({
+    ...issueRecords,
+    repository: {
+      root: repository.root,
+      slug: new URL(repository.remote).pathname.slice(1),
+    },
+    authorize(draft) {
+      const grant = approved.current();
+      if (
+        !grant ||
+        !approved.authorize({
+          revision: grant.revision,
+          repository: configuredRepository,
+          targetBranch: grant.targetBranch,
+          action: 'issue.write',
+        })
+      )
+        return false;
+      return bugScan
+        .list()
+        .some((hunt) =>
+          hunt.findings.some(
+            (finding, index) =>
+              draft.id === `${hunt.id}:${index + 1}` &&
+              finding.confidence === 'demonstrated' &&
+              (finding.remedy !== undefined ||
+                finding.technicalDebt.some(({ decision }) => decision === 'deferred')),
+          ),
+        );
+    },
+  });
   const records = runtime.bugHunterRecords<BugFixState>(repository.root, 'bugfix');
   const activeNative = new Map<string, { sessionId: string; passId: string }>();
   async function attach(batch: BugFixBatch, signal: AbortSignal) {
@@ -175,6 +213,45 @@ export async function startBugFix(input: {
     targetRevision: delivery.targetRevision,
     revalidate: delivery.revalidate,
     async reconcile(batch, stage, signal) {
+      if (stage.kind === 'implement' || stage.kind === 'review') {
+        if (!batch.checkout)
+          return { state: 'uncertain', evidence: 'The expected shared checkout is unavailable.' };
+        const recorded = runtime.observeBugFixPass({
+          recordWorkspaceRoot: batch.scope,
+          requestId: batch.id,
+          workspaceRoot: batch.checkout,
+          reviewedTree: batch.verifiedTree,
+        });
+        if (stage.kind === 'implement') {
+          if (!recorded)
+            return { state: 'not-applied', evidence: 'No native implementation Pass was created.' };
+          if (recorded.implementation)
+            return {
+              state: 'applied',
+              result: {
+                status: recorded.implementation,
+                evidence: 'Reconciled the persisted native repair Task outcomes.',
+                sessionId: recorded.sessionId,
+                passId: recorded.passId,
+              },
+            };
+        } else if (recorded && !recorded.reviewRecorded) {
+          return { state: 'not-applied', evidence: 'No native review evidence was registered.' };
+        } else if (recorded?.review && batch.verifiedTree) {
+          return {
+            state: 'applied',
+            result:
+              recorded.review === 'accepted'
+                ? {
+                    status: 'completed',
+                    evidence: 'Reconciled native review acceptance for the verified tree.',
+                    reviewedRevision: batch.verifiedTree,
+                  }
+                : { status: 'failed', evidence: 'The recorded review requested corrections.' },
+          };
+        }
+        return { state: 'uncertain', evidence: 'The native Task outcome remains uncertain.' };
+      }
       const result = await delivery.reconcile(batch, stage, signal);
       if (stage.kind === 'integrate' && result.state === 'applied')
         finishIntegration(batch, result.result);
@@ -232,6 +309,7 @@ export async function startBugFix(input: {
           batch.passId,
           batch.verifiedTree,
           signal,
+          batch.targetRevision,
         );
         return result.outcome === 'accepted'
           ? {
@@ -241,7 +319,18 @@ export async function startBugFix(input: {
             }
           : { status: 'failed', evidence: 'The independent review requested corrections.' };
       }
-      if (stage.kind === 'install' || stage.kind === 'recovery')
+      if (stage.kind === 'install') {
+        const build = input.runningBuild;
+        return build && build.sourceRevision === batch.integratedRevision
+          ? {
+              status: 'completed',
+              evidence: 'The running build provenance matches the integrated revision.',
+              installedBuild: build.identity,
+              installedRevision: build.sourceRevision,
+            }
+          : blocked('A running build bound to the integrated revision has not been observed.');
+      }
+      if (stage.kind === 'recovery')
         return blocked(
           'There is no verified observation of the formerly failing behavior on a repaired running build.',
         );
@@ -276,12 +365,22 @@ export async function startBugFix(input: {
   return {
     service,
     authorization: approved,
+    issueReporter,
     poll() {
       if (bugScan.list().some(({ status }) => status === 'running')) return;
       const grant = approved.current();
       if (!grant) return;
       for (const hunt of bugScan.list())
         service.enqueue(hunt, { targetBranch: grant.targetBranch, grantRevision: grant.revision });
+      for (const batch of service.list()) {
+        if (
+          batch.status === 'blocked' &&
+          batch.integratedRevision &&
+          !batch.installedBuild &&
+          batch.integratedRevision === input.runningBuild?.sourceRevision
+        )
+          service.resume(batch.id);
+      }
       service.dispatch();
     },
   };

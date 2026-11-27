@@ -2,6 +2,7 @@ import type { Telemetry } from '../diagnostics/telemetry.js';
 import type { BugScanService } from '../services/bugscan.js';
 import type { BugFixService } from '../services/bugfix.js';
 import type { BugFixAuthorization } from '../core/bugfix-authorization.js';
+import type { createBugHunterIssueReporter } from '../services/bughunter-issues.js';
 import type { BugScanActivity } from './runtime-activity.js';
 import process from 'node:process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -163,7 +164,11 @@ export class RuntimeApi {
   private evals: EvalRunService | undefined;
   private bugScan?: BugScanActivity;
   private bugHunterModelGate?: (sessionId: string, nativeAgentId: string) => boolean;
-  private bugFix?: { authorization: BugFixAuthorization; service: BugFixService };
+  private bugFix?: {
+    authorization: BugFixAuthorization;
+    service: BugFixService;
+    issueReporter: ReturnType<typeof createBugHunterIssueReporter>;
+  };
   private evaluationObserver:
     | ((agentId: string, value: Record<string, unknown>) => EvaluationExecutionScope | void)
     | undefined;
@@ -201,8 +206,8 @@ export class RuntimeApi {
     this.bugHunterModelGate = gate;
   }
 
-  setBugFix(service: BugFixService, authorization: BugFixAuthorization): void {
-    this.bugFix = { service, authorization };
+  setBugFix(bugFix: NonNullable<RuntimeApi['bugFix']>): void {
+    this.bugFix = bugFix;
   }
   setLifecycle(
     identity: RuntimeLifecycleIdentity,
@@ -499,6 +504,14 @@ export class RuntimeApi {
             z.strictObject({ operation: z.literal('revoke') }),
             z.strictObject({ operation: z.literal('prohibit'), prohibition: z.unknown() }),
             z.strictObject({ operation: z.literal('clear-prohibition'), id: z.string().min(1) }),
+            z.strictObject({
+              operation: z.literal('publish-issue'),
+              issue: z.strictObject({
+                id: z.string().min(1).max(128),
+                title: z.string().min(1).max(256),
+                body: z.string().min(1).max(16_384),
+              }),
+            }),
           ])
           .parse(parsed);
         const authorization = bugFix.authorization;
@@ -515,12 +528,30 @@ export class RuntimeApi {
           case 'clear-prohibition':
             authorization.clearProhibition(actor, operation.id);
             break;
+          case 'publish-issue':
+            await bugFix.issueReporter.publish(operation.issue, {
+              signal: AbortSignal.any([
+                this.shutdownController.signal,
+                AbortSignal.timeout(30_000),
+              ]),
+            });
+            break;
         }
         response.writeHead(200).end(
           JSON.stringify({
             grant: authorization.current() ?? null,
             prohibitions: authorization.listProhibitions(),
             batches: bugFix.service.list(),
+            issues: bugFix.issueReporter.list(),
+            findings:
+              this.bugScan?.service.list().flatMap((hunt) =>
+                hunt.findings.map((finding, index) => ({
+                  id: `${hunt.id}:${index + 1}`,
+                  confidence: finding.confidence,
+                  cause: finding.cause,
+                  technicalDebt: finding.technicalDebt,
+                })),
+              ) ?? [],
           }),
         );
         return;

@@ -33,6 +33,17 @@ test('uses one Pass for bounded writes, correction and current-tree independent 
     }).trim();
   git(['init']);
   git(['add', '--', 'app']);
+  git([
+    '-c',
+    'user.name=BugFix test',
+    '-c',
+    'user.email=fixture@localhost',
+    '-c',
+    'commit.gpgsign=false',
+    'commit',
+    '-m',
+    'Initial fixture',
+  ]);
   const agents = new RepairAgents();
   const runtime = createRuntime({
     agents,
@@ -122,6 +133,12 @@ test('uses one Pass for bounded writes, correction and current-tree independent 
       completed: true,
     });
     expect(runtime.snapshot(sessionId).tasks.some((task) => task.phase === 'review')).toBe(false);
+    expect(runtime.observeBugFixPass(input)).toMatchObject({
+      sessionId,
+      passId,
+      implementation: 'completed',
+      reviewRecorded: false,
+    });
 
     const firstTree = captureTree();
     const firstReview = runtime.awaitBugFixReview(sessionId, passId, firstTree, signal);
@@ -173,8 +190,16 @@ test('uses one Pass for bounded writes, correction and current-tree independent 
       ({ id, memberKey }) => id !== firstAssignment.id && memberKey === 'bugfix-reviewer',
     );
     expect(agents.sends.at(-1)?.message).toContain(repairedTree);
+    expect(agents.sends.at(-1)?.message).toContain('+export const value = 2;');
     await reportReview(secondAssignment, 'accepted');
     expect(await secondReview).toMatchObject({ outcome: 'accepted', reviewedTree: repairedTree });
+    expect(runtime.observeBugFixPass({ ...input, reviewedTree: repairedTree })).toMatchObject({
+      reviewRecorded: true,
+      review: 'accepted',
+    });
+    expect(
+      runtime.observeBugFixPass({ ...input, reviewedTree: firstTree })?.review,
+    ).toBeUndefined();
     expect(runtime.snapshot(sessionId).passes).toMatchObject([{ id: passId, status: 'running' }]);
     expect(() =>
       runtime.completeBugFixPass(sessionId, passId, {

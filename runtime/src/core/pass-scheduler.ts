@@ -273,7 +273,7 @@ export class PassScheduler {
         taskId: task.id,
         memberKey: selected,
         nativeAgentId: binding.nativeAgentId,
-        message: `${review ? 'Pass-wide review' : 'Scheduled Task'} ${task.id} in Pass ${task.passId}. ${task.description} ${reviewedTree ? `Verified Git tree: ${reviewedTree}. ` : ''}Acceptance: ${task.acceptance}. Verification requirements: ${JSON.stringify(task.verificationRequirements)}. ${review ? 'Submit review.create with assignmentId and the current Pass revision.' : 'Submit report.create with outcome success or failure and named verification entries with evidence.'}`,
+        message: `${review ? 'Pass-wide review' : 'Scheduled Task'} ${task.id} in Pass ${task.passId}. ${task.description} ${reviewedTree ? `${reviewedTree} ` : ''}Acceptance: ${task.acceptance}. Verification requirements: ${JSON.stringify(task.verificationRequirements)}. ${review ? 'Submit review.create with assignmentId and the current Pass revision.' : 'Submit report.create with outcome success or failure and named verification entries with evidence.'}`,
       });
     if (task.status !== 'running')
       this.store.updateTask(session.id, { taskId: task.id, status: 'running' });

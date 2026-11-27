@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createBugFixDelivery } from '../../../runtime/src/services/bugfix-delivery.js';
@@ -48,6 +48,9 @@ async function createFixture(root: string) {
     qualified: false,
     head: base,
     status: ' M code.ts\0',
+    targetStatus: '',
+    hooks: path.join(root, 'hooks'),
+    sandboxAvailable: true,
     remote: undefined as string | undefined,
   };
   const delivery = createBugFixDelivery({
@@ -56,14 +59,23 @@ async function createFixture(root: string) {
     allowedPath: (_batch, file) => file === 'code.ts',
     expectedRemote: () => undefined,
     qualified: () => state.qualified,
+    async verificationCommand() {
+      if (!state.sandboxAvailable) throw new Error('A local prerequisite is missing.');
+      return { args: ['--unshare-all', '--', 'just'], env: { HOME: '/tmp/home' } };
+    },
     async run({ command, args, cwd, env }) {
       calls.push(`${command} ${args.join(' ')}`);
       const output = (stdout: string) => ({ code: 0, stdout, stderr: '' });
       if (command === 'just') return output('');
+      if (command === '/usr/bin/bwrap') return output('');
+      if (args[0] === 'config') {
+        if (args.at(-1) === 'core.hooksPath') return output(`${state.hooks}\n`);
+        return { code: 1, stdout: '', stderr: '' };
+      }
       if (args[0] === 'remote') return output(state.remote ? 'origin\n' : '');
       if (args[0] === 'symbolic-ref')
         return output(cwd === worktree ? `refs/heads/bughunter/${id}\n` : 'refs/heads/main\n');
-      if (args[0] === 'status') return output(cwd === worktree ? state.status : '');
+      if (args[0] === 'status') return output(cwd === worktree ? state.status : state.targetStatus);
       if (args[0] === 'read-tree') return output('');
       if (args[0] === 'write-tree') return output(`${tree}\n`);
       if (args[0] === '--literal-pathspecs') {
@@ -93,7 +105,11 @@ test('verifies and commits the exact scoped tree before review can gate integrat
   await fixture(async ({ batch, delivery, calls, state }) => {
     const verification = await delivery.perform(batch, { kind: 'verify' }, signal);
     expect(verification).toMatchObject({ status: 'completed', verifiedTree: tree });
-    expect(calls.filter((call) => call.startsWith('just '))).toEqual(['just check', 'just test']);
+    expect(calls.filter((call) => call.startsWith('/usr/bin/bwrap '))).toEqual([
+      '/usr/bin/bwrap --unshare-all -- just check',
+      '/usr/bin/bwrap --unshare-all -- just test',
+    ]);
+    expect(calls.some((call) => call.startsWith('just '))).toBe(false);
     const verified = { ...batch, verifiedTree: verification.verifiedTree };
     const commit = await delivery.perform(verified, { kind: 'commit' }, signal);
     expect(commit).toMatchObject({ status: 'completed', commitRevision: tip });
@@ -108,6 +124,57 @@ test('verifies and commits the exact scoped tree before review can gate integrat
       evidence: expect.stringContaining('independent combined review'),
     });
     expect(calls.some((call) => call.startsWith('git merge '))).toBe(false);
+  });
+});
+
+test('requires a clean approved target before running its worktree recipe', async () => {
+  await fixture(async ({ batch, delivery, calls, state }) => {
+    state.targetStatus = ' M justfile\n';
+    expect(await delivery.perform(batch, { kind: 'prepare' }, signal)).toMatchObject({
+      status: 'blocked',
+      evidence: expect.stringContaining('The target checkout must be clean'),
+    });
+    expect(calls.some((call) => call.startsWith('just worktree-create'))).toBe(false);
+  });
+});
+
+test('preserves a configured executable commit hook without executing it or committing', async () => {
+  await fixture(async ({ batch, delivery, calls, state }) => {
+    await mkdir(state.hooks);
+    await writeFile(path.join(state.hooks, 'pre-commit'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    expect(
+      await delivery.perform({ ...batch, verifiedTree: tree }, { kind: 'commit' }, signal),
+    ).toMatchObject({
+      status: 'blocked',
+      evidence: expect.stringContaining('the pre-commit Git hook is active'),
+    });
+    expect(calls.some((call) => call.startsWith('git commit '))).toBe(false);
+  });
+});
+
+test('rejects a changed tracked path replaced with a symlink before running checks', async () => {
+  await fixture(async ({ batch, delivery, calls }) => {
+    const file = path.join(batch.checkout!, 'code.ts');
+    await rm(file);
+    await symlink(path.join(batch.scope, 'outside.ts'), file);
+    expect(await delivery.perform(batch, { kind: 'verify' }, signal)).toMatchObject({
+      status: 'blocked',
+      evidence: expect.stringContaining('existing regular files inside the checkout'),
+    });
+    expect(calls.some((call) => call.startsWith('/usr/bin/bwrap '))).toBe(false);
+  });
+});
+
+test('reports a missing sandbox as blocked and never falls back to ambient checks', async () => {
+  await fixture(async ({ batch, delivery, calls, state }) => {
+    state.sandboxAvailable = false;
+    expect(await delivery.perform(batch, { kind: 'verify' }, signal)).toEqual({
+      status: 'blocked',
+      evidence: 'The isolated BugFix verification environment is unavailable.',
+    });
+    expect(
+      calls.some((call) => call.startsWith('just ') || call.startsWith('/usr/bin/bwrap ')),
+    ).toBe(false);
   });
 });
 
