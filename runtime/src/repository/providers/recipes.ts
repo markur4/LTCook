@@ -112,12 +112,12 @@ async function stageJustSources(
   workspace: RepositoryWorkspace,
   stage: string,
   filter?: RepositoryFilter,
-): Promise<{ found: boolean; missingFilteredDependency: boolean }> {
+): Promise<{ found: boolean; missingFilteredDependency?: string }> {
   const budget = { entries: 10000, references: MAX_SOURCES };
   const files = new Set(await justfiles(workspace, '.', false, budget, filter));
-  if (!files.size) return { found: false, missingFilteredDependency: false };
+  if (!files.size) return { found: false };
   let remaining = MAX_SOURCE_BYTES;
-  let missingFilteredDependency = false;
+  let missingFilteredDependency: string | undefined;
   for (const relative of files) {
     if (files.size > MAX_SOURCES)
       throw new JustSourceError('source-limit', 'Justfiles reached their source limit');
@@ -152,7 +152,7 @@ async function stageJustSources(
           for (const module of modules) files.add(module);
         }
       }
-      missingFilteredDependency ||= filtered && !available && !entry.optional;
+      if (filtered && !available && !entry.optional) missingFilteredDependency ??= entry.path;
     }
     const destination = path.join(stage, source.relative);
     await mkdir(path.dirname(destination), { recursive: true });
@@ -196,7 +196,7 @@ export async function readRecipes(
       result.diagnostics.push({
         source: 'just',
         code: 'filtered-source-dependency',
-        message: 'Recipe discovery omitted imports or modules excluded by the path filter.',
+        message: `The path filter excluded required Just source ${JSON.stringify(stagedSources.missingFilteredDependency.slice(0, 240))}.`,
       });
       return result;
     }

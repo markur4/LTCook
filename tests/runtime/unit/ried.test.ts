@@ -422,6 +422,7 @@ test.skipIf(!Bun.which('just'))(
         {
           source: 'just',
           code: 'filtered-source-dependency',
+          message: expect.stringContaining('included.just'),
         },
       ],
       value: { items: [] },

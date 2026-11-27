@@ -1,4 +1,3 @@
-import { posix } from 'node:path';
 import { RE2JS } from 're2js';
 import { Type, type Static } from 'typebox';
 import { Value } from 'typebox/value';
@@ -47,8 +46,22 @@ export const RepositoryFilterReportSchema = Type.Object({
 
 export type RepositoryFilterReport = Static<typeof RepositoryFilterReportSchema>;
 
-type PathRule = { glob: string; prefix: string };
+type GlobSegment = '**' | { literal: string } | { pattern: RE2JS; hidden: boolean };
+type PathRule = { glob: string; prefix: string; segments: GlobSegment[] };
 const MAX_FILTER_BYTES = 32 * 1024 * 1024;
+
+export function escapeFilterRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function compileSegment(segment: string): GlobSegment {
+  if (segment === '**') return '**';
+  if (!/[*?]/.test(segment)) return { literal: segment };
+  const pattern = [...segment]
+    .map((part) => (part === '*' ? '[^/]*' : part === '?' ? '[^/]' : escapeFilterRegex(part)))
+    .join('');
+  return { pattern: RE2JS.compile(`^${pattern}\\z`), hidden: segment.startsWith('.') };
+}
 
 function compilePaths(values: string[] | undefined, field: string): PathRule[] {
   return [...new Set(values)].map((value, index) => {
@@ -57,6 +70,7 @@ function compilePaths(values: string[] | undefined, field: string): PathRule[] {
     if (
       !glob ||
       /[\u0000-\u001f\\:[\]{}]/u.test(glob) ||
+      /[@+?!*]\(/.test(glob) ||
       segments.some(
         (segment) =>
           !segment ||
@@ -73,7 +87,7 @@ function compilePaths(values: string[] | undefined, field: string): PathRule[] {
     }
     const wildcard = segments.findIndex((segment) => /[*?]/.test(segment));
     const prefix = wildcard < 0 ? glob : segments.slice(0, wildcard).join('/');
-    return { glob, prefix };
+    return { glob, prefix, segments: segments.map(compileSegment) };
   });
 }
 
@@ -89,11 +103,27 @@ function compileRegex(values: string[] | undefined, field: string): RE2JS[] {
   });
 }
 
-function pathMatches(path: string, glob: string): boolean {
-  return (
-    posix.matchesGlob(path, glob) ||
-    (glob.endsWith('/**') && posix.matchesGlob(path, glob.slice(0, -3)))
-  );
+function pathMatches(parts: readonly string[], { segments }: PathRule): boolean {
+  let reachable = new Set([0]);
+  for (const segment of segments) {
+    const next = new Set<number>();
+    for (let index = 0; index <= parts.length; index++) {
+      const part = parts[index];
+      if (segment === '**') {
+        if (reachable.has(index)) next.add(index);
+        if (part !== undefined && !part.startsWith('.') && next.has(index)) next.add(index + 1);
+      } else if (part !== undefined && reachable.has(index)) {
+        const matches =
+          'literal' in segment
+            ? part === segment.literal
+            : (segment.hidden || !part.startsWith('.')) && segment.pattern.test(part);
+        if (matches) next.add(index + 1);
+      }
+    }
+    if (!next.size) return false;
+    reachable = next;
+  }
+  return reachable.has(parts.length);
 }
 
 function within(path: string, parent: string): boolean {
@@ -144,12 +174,20 @@ export class RepositoryFilter {
     return this.exhausted;
   }
 
+  get includeRoots(): { path: string; subtree: boolean }[] | undefined {
+    if (!this.includedPaths.length || this.includedPaths.some(({ prefix }) => !prefix)) return;
+    return this.includedPaths.map(({ glob, prefix }) => ({
+      path: prefix,
+      subtree: glob !== prefix,
+    }));
+  }
+
   private excludesPath(path: string): boolean {
     if (!this.excludedPaths.length) return false;
     const segments = path.split('/');
     for (let length = segments.length; length > 0; length--) {
-      const ancestor = segments.slice(0, length).join('/');
-      if (this.excludedPaths.some(({ glob }) => pathMatches(ancestor, glob))) return true;
+      const ancestor = segments.slice(0, length);
+      if (this.excludedPaths.some((rule) => pathMatches(ancestor, rule))) return true;
     }
     return false;
   }
@@ -159,13 +197,16 @@ export class RepositoryFilter {
     return allowed;
   }
 
-  allowsPath(path: string): boolean {
-    return this.recordPath(
-      path,
+  matchesPath(path: string): boolean {
+    const parts = path.split('/');
+    return (
       !this.excludesPath(path) &&
-        (!this.includedPaths.length ||
-          this.includedPaths.some(({ glob }) => pathMatches(path, glob))),
+      (!this.includedPaths.length || this.includedPaths.some((rule) => pathMatches(parts, rule)))
     );
+  }
+
+  allowsPath(path: string): boolean {
+    return this.recordPath(path, this.matchesPath(path));
   }
 
   allowsDirectory(path: string): boolean {
@@ -175,7 +216,8 @@ export class RepositoryFilter {
         (path === '.' ||
           !this.includedPaths.length ||
           this.includedPaths.some(
-            ({ prefix }) => !prefix || within(path, prefix) || within(prefix, path),
+            ({ glob, prefix }) =>
+              !prefix || within(prefix, path) || (glob !== prefix && within(path, prefix)),
           )),
     );
   }

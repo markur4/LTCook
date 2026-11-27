@@ -4,6 +4,7 @@ import { RepositorySourceReader } from '../repository/evidence.js';
 import { isRepositoryPathVisible } from '../repository/filesystem.js';
 import {
   compileRepositoryFilter,
+  escapeFilterRegex,
   RepositoryFilterReportSchema,
   RepositoryFilterSchema,
   type RepositoryFilter,
@@ -79,7 +80,20 @@ export async function openAuthorizedSearchWorkspace(
   return workspace;
 }
 
-function fallbackPattern(query: string): string | undefined {
+function fallbackPattern(query: string, filter: RepositoryFilter | undefined): string | undefined {
+  const { includeText, includeRegex } = filter?.effective ?? {};
+  if (includeText) {
+    const pattern = includeText.map(escapeFilterRegex).join('|');
+    return pattern.length <= 1024 && !/[\r\n\0]/.test(pattern) ? pattern : '^';
+  }
+  if (includeRegex) {
+    // > Only push expressions whose mandatory literal prefixes are safe in ripgrep's dialect.
+    const prefixes = includeRegex.map((rule) =>
+      /^[\w-]+(?:\.\*|\.\+)?$/.test(rule) ? rule.replace(/\.[*+]$/, '') : undefined,
+    );
+    const pattern = prefixes.join('|');
+    return prefixes.every(Boolean) && pattern.length <= 1024 ? pattern : '^';
+  }
   const words = query.match(/[\p{L}\p{N}_]{3,}/gu);
   return words ? [...new Set(words)].slice(0, 6).join('|') : undefined;
 }
@@ -136,7 +150,7 @@ export function createRepoSearchTool(
         ['indexing', 'index-unavailable', 'index-recovery'].includes(code),
       )
     ) {
-      const queryPattern = fallbackPattern(query);
+      const queryPattern = fallbackPattern(query, filter);
       if (queryPattern) {
         const fallback = await ripgrep.search(
           workspace,

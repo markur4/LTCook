@@ -106,7 +106,23 @@ export async function readRepositoryMap(
   const capturedAt = new Date().toISOString();
   const { relative } = await workspace.resolvePath(target, { kind: 'directory', allowRoot: true });
   assertRepositoryPathVisible(relative);
-  const { entries, partial, truncated: scanTruncated } = await walk(workspace, relative, options);
+  const walkResult = await walk(workspace, relative, options);
+  const { partial, truncated: scanTruncated } = walkResult;
+  const { filter } = options;
+  let entries = walkResult.entries;
+  if (filter?.hasPathRules) {
+    const retained = new Set<string>();
+    for (const entry of entries) {
+      if (entry.kind === 'directory' && !filter.matchesPath(entry.path)) continue;
+      for (
+        let parent = entry.path;
+        parent !== relative && parent !== '.' && !retained.has(parent);
+        parent = path.posix.dirname(parent)
+      )
+        retained.add(parent);
+    }
+    entries = entries.filter((entry) => retained.has(entry.path) || filter.allowsPath(entry.path));
+  }
   entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   let bytes = 0;
   let truncated = scanTruncated;

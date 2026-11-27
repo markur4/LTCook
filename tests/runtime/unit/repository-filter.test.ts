@@ -43,12 +43,13 @@ test('keeps possible include ancestors and supports segment wildcards', () => {
   expect(filter.allowsDirectory('src/panel/lib')).toBe(true);
   expect(filter.allowsDirectory('other')).toBe(false);
   expect(filter.allowsPath('src/panel/lib/a.ts')).toBe(true);
+  expect(filter.allowsPath('src/panel/lib/a.TS')).toBe(false);
   expect(filter.allowsPath('src/panel/lib/ab.ts')).toBe(false);
   expect(filter.allowsPath('.config/options.json')).toBe(true);
 });
 
 test('reports operation and field errors and bounds matching work', () => {
-  for (const glob of ['../src', '/src', 'C:/src', 'src/**part', 'src/[abc]']) {
+  for (const glob of ['../src', '/src', 'C:/src', 'src/**part', 'src/[abc]', '@(src|tests)']) {
     expect(() => new RepositoryFilter({ includePaths: [glob] })).toThrow('filter.includePaths[0]');
   }
   for (const pattern of ['[', '(a)\\1', '(?=a)a']) {

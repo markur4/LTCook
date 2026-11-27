@@ -87,6 +87,7 @@ test('repository maps prune excluded subtrees and traverse only paths that can m
     const root = path.join(home, 'workspace');
     await mkdir(path.join(root, 'src', 'generated'), { recursive: true });
     await mkdir(path.join(root, 'tests'), { recursive: true });
+    await mkdir(path.join(root, 'notes'), { recursive: true });
     await writeFile(path.join(root, 'src', 'wanted.ts'), 'wanted');
     await writeFile(path.join(root, 'src', 'generated', 'built.ts'), 'built');
     await writeFile(path.join(root, 'tests', 'wanted.test.ts'), 'test');
@@ -106,9 +107,18 @@ test('repository maps prune excluded subtrees and traverse only paths that can m
         includePaths: ['src/**/*.ts'],
         excludePaths: ['**/generated/**'],
       },
-      rejectedPaths: 2,
+      rejectedPaths: 3,
       budgetExhausted: false,
     });
+    const wildcard = await readRepositoryMap(workspace, '.', {
+      maxDepth: 4,
+      maxEntries: 20,
+      filter: new RepositoryFilter({ includePaths: ['**/wanted.ts'] }),
+    });
+    expect(wildcard.value.entries.map(({ path: entry }) => entry)).toEqual([
+      'src',
+      'src/wanted.ts',
+    ]);
   } finally {
     await rm(home, { force: true, recursive: true });
   }

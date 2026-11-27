@@ -85,6 +85,32 @@ process.exitCode = 2;
 );
 
 test.skipIf(!Bun.which('rg'))(
+  'ripgrep starts from fixed inclusion roots instead of exhausting its budget outside them',
+  () =>
+    fixture(async (_root, source) => {
+      await mkdir(path.join(source, 'src'));
+      await writeFile(path.join(source, 'aaa.txt'), 'needle\n'.repeat(40_000));
+      await writeFile(path.join(source, 'src', 'target.ts'), 'needle\n');
+      const workspace = await openRepositoryWorkspace(source);
+      const filter = new RepositoryFilter({ includePaths: ['src/**/*.ts', 'src/target.ts'] });
+      const result = await createRipgrepProvider().search(
+        workspace,
+        {
+          query: 'needle',
+          limit: 2,
+          filter,
+        },
+        new AbortController().signal,
+      );
+      expect(result).toMatchObject({
+        partial: false,
+        truncated: false,
+        value: { hits: [{ path: 'src/target.ts', startLine: 1 }] },
+      });
+    }),
+);
+
+test.skipIf(!Bun.which('rg'))(
   'ripgrep scans exact, literal and regex matches with authorized bounded evidence',
   () =>
     fixture(async (root, source) => {

@@ -83,7 +83,24 @@ export function createRipgrepProvider({
       const excludedSubtrees = (filter?.effective.excludePaths ?? []).filter((glob) =>
         /^[\w./-]+\/\*\*$/.test(glob),
       );
-      if (excludedSubtrees.length) filter?.noteProviderPruning();
+      const fixedRoots = filter?.includeRoots;
+      const roots = new Map<string, boolean>();
+      for (const scope of fixedRoots ?? []) {
+        if (
+          !isRepositoryPathVisible(scope.path) ||
+          !(scope.subtree ? filter?.allowsDirectory(scope.path) : filter?.allowsPath(scope.path))
+        )
+          continue;
+        const target = await workspace.resolvePath(scope.path).catch(() => undefined);
+        if (target && (scope.subtree || target.kind === 'file'))
+          roots.set(target.relative, target.kind === 'directory');
+      }
+      if (excludedSubtrees.length || fixedRoots) filter?.noteProviderPruning();
+      if (fixedRoots && !roots.size) return result;
+      const targets = [...roots.keys()].filter(
+        (target) =>
+          ![...roots].some(([root, directory]) => directory && target.startsWith(root + '/')),
+      );
       const buckets = new Map<string, number>();
       let matchedLines = 0;
       try {
@@ -104,7 +121,7 @@ export function createRipgrepProvider({
             '-e',
             query,
             '--',
-            '.',
+            ...(fixedRoots ? targets.map((target) => `./${target}`) : ['.']),
           ],
           workspace,
           pathValue,

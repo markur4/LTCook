@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { RepositorySourceReader } from '../../../runtime/src/repository/evidence.js';
+import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
 import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
@@ -19,6 +20,43 @@ const unavailable = {
   capturedAt: '2026-11-23T12:00:00Z',
   diagnostics: [{ source: 'colgrep', code: 'fixture', message: 'Search unavailable' }],
 } as const satisfies Awaited<ReturnType<Search>>;
+
+test.skipIf(!Bun.which('rg'))(
+  'hybrid fallback discovers matches from the positive content filter',
+  () =>
+    fixture(async (root) => {
+      await writeFile(path.join(root, 'startup.ts'), 'export const bootstrap_main = 1;\n');
+      const tool = createRepoSearchTool({
+        ...createColgrepProvider(),
+        async search() {
+          const { status, kind, ...metadata } = unavailable;
+          return {
+            ...metadata,
+            value: { status, kind, hits: [] },
+            diagnostics: [{ source: 'colgrep', code: 'indexing', message: 'Indexing' }],
+          };
+        },
+      });
+      for (const filter of [
+        { includeRegex: ['bootstrap_.*'] },
+        { includeText: ['bootstrap_main'] },
+      ]) {
+        await expect(
+          tool.invoke(
+            {
+              query: 'how does initialization work',
+              filter,
+            },
+            context(root),
+          ),
+        ).resolves.toMatchObject({
+          status: 'ready',
+          provider: 'ripgrep',
+          results: [{ path: 'startup.ts', startLine: 1 }],
+        });
+      }
+    }),
+);
 
 async function fixture(run: (workspaceRoot: string) => Promise<void>) {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), 'ltcook-locate-')));
