@@ -48,7 +48,7 @@ All notable changes to `ltcook` will be documented in this file.
   grant. Services reports delivery and recovery separately and offers pause
   and resume controls. Unattended merging remains gated on qualification.
 
-- BugHunter can collect diagnostics and run an opt-in, read-only BugScan.
+- BugHunter can collect diagnostics and run a read-only BugScan.
   Activity → Services shows findings, proposed remedies, and deferred work.
 
 - **Breaking:** 💥 Search, Locate, traces, and applicable RIED discovery share
@@ -276,6 +276,9 @@ All notable changes to `ltcook` will be documented in this file.
   unchanged, and redirected output stays uncolored.
 
 ### 🛠️ Changed
+
+- BugHunter is on by default in `dev` mode and off by default in `user` mode.
+  An explicit `enabled` setting overrides either default.
 
 - **Breaking:** 💥 LTCook requires Python 3.13 or newer. Create the checkout
   environment with Python 3.13 before registering an editable installation.

@@ -289,7 +289,7 @@ apply when the runtime next starts. The typed bundle exposes
 | Environment name | AppRC setting | Default | Effect |
 | --- | --- | --- | --- |
 | `LTCOOK_WORKSPACE_ORGANIZER_ENABLED` | `runtime.services.workspace_organizer.enabled` | `true` | Enable standard label maintenance, classification, and eligible automatic archival. |
-| `LTCOOK_BUGHUNTER_ENABLED` | `runtime.services.bughunter.enabled` | `false` | Enable diagnostic intake and manual read-only BugScan for the runtime. |
+| `LTCOOK_BUGHUNTER_ENABLED` | `runtime.services.bughunter.enabled` | `true` in `dev` mode, `false` in `user` mode | Enable diagnostic intake and manual read-only BugScan for the runtime. An explicit setting overrides the mode default. |
 | `LTCOOK_BUGHUNTER_WORKSPACE` | `runtime.services.bughunter.workspace` | Empty | Absolute checkout authorized for BugScan. Empty limits BugScan to installation-level evidence. |
 | `LTCOOK_BUGHUNTER_MODE` | `runtime.services.bughunter.mode` | `user` | Use `dev` with standing authority for scoped BugFix work. |
 | `LTCOOK_BUGHUNTER_ACTIVE_MINUTES` | `runtime.services.bughunter.active_minutes` | `45` | Active time shared by investigation and repair. |

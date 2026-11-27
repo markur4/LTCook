@@ -66,7 +66,11 @@ class RenamerSettings(rc.Config):
 class BugHunterSettings(rc.Config):
     """Host-wide permission to investigate LTCook diagnostics."""
 
-    enabled: bool = rc.field("LTCOOK_BUGHUNTER_ENABLED", default=False)
+    enabled: bool = rc.field(
+        "LTCOOK_BUGHUNTER_ENABLED",
+        default=False,
+        explanation_short="Override the startup default of on in dev mode and off in user mode.",
+    )
     workspace: str = rc.field("LTCOOK_BUGHUNTER_WORKSPACE", default="")
     mode: str = rc.field("LTCOOK_BUGHUNTER_MODE", default="user")
     active_minutes: int = rc.field("LTCOOK_BUGHUNTER_ACTIVE_MINUTES", default=45)
