@@ -7,7 +7,6 @@ import {
 } from '../integrations/ollama.js';
 import { inferenceRevision, ServiceInferenceError } from '../services/inference-recovery.js';
 
-export type ConversationProduct = 'clarify' | 'tracker';
 export type ConversationPrompt = { instructions: string; input: string };
 export type ConversationInferenceMode = 'hosted' | 'local';
 
@@ -18,16 +17,11 @@ export type InferenceResponse = {
 };
 
 export type ConversationProvider = {
-  (
-    product: ConversationProduct,
-    prompt: ConversationPrompt,
-    signal: AbortSignal,
-  ): Promise<InferenceResponse>;
+  (prompt: ConversationPrompt, signal: AbortSignal): Promise<InferenceResponse>;
   validate?(signal: AbortSignal): Promise<string>;
 };
 
 type Request = {
-  product: ConversationProduct;
   prompt: ConversationPrompt;
   signal: AbortSignal;
   resolve(value: string): void;
@@ -78,7 +72,7 @@ export function localConversationProvider(
     return { chosen, endpoint };
   };
 
-  const provider: ConversationProvider = async (product, prompt, signal) => {
+  const provider: ConversationProvider = async (prompt, signal) => {
     const { chosen } = configured();
     let usage: InferenceResponse['usage'];
     try {
@@ -92,7 +86,7 @@ export function localConversationProvider(
         (tokens) => {
           usage = tokens;
         },
-        product === 'tracker' ? 'json' : undefined,
+        'json',
       );
       return { text: reply.summary, complete: !reply.incomplete, usage };
     } catch (error) {
@@ -148,7 +142,6 @@ export class ConversationInference {
     private readonly providers: Partial<Record<ConversationInferenceMode, ConversationProvider>>,
     private readonly mode: ConversationInferenceMode,
     private readonly record?: (event: {
-      product: ConversationProduct;
       mode: ConversationInferenceMode;
       elapsedMs: number;
       complete: boolean;
@@ -195,17 +188,12 @@ export class ConversationInference {
     return () => this.foregroundEnded(id);
   }
 
-  complete(
-    product: ConversationProduct,
-    prompt: ConversationPrompt,
-    signal: AbortSignal,
-  ): Promise<string> {
+  complete(prompt: ConversationPrompt, signal: AbortSignal): Promise<string> {
     const combined = AbortSignal.any([signal, this.lifetime.signal]);
     return new Promise((resolve, reject) => {
       combined.throwIfAborted();
       if (this.configurationError) throw this.configurationError;
       const request = {
-        product,
         prompt,
         signal: combined,
         resolve: (value: string) => {
@@ -243,8 +231,7 @@ export class ConversationInference {
     while (this.queue.length && !this.lifetime.signal.aborted) {
       const mode = this.mode;
       if (mode === 'local' && this.foreground.size > 0) return;
-      const priority = this.queue.findIndex(({ product }) => product === 'clarify');
-      const [request] = this.queue.splice(Math.max(0, priority), 1);
+      const request = this.queue.shift();
       if (!request) return;
       const releaseLocal = new AbortController();
       this.active = { mode, releaseLocal };
@@ -252,7 +239,7 @@ export class ConversationInference {
       const start = performance.now();
       let result: InferenceResponse | undefined;
       try {
-        result = await this.provider()(request.product, request.prompt, signal);
+        result = await this.provider()(request.prompt, signal);
         signal.throwIfAborted();
         if (!result.complete || !result.text.trim())
           throw new ServiceInferenceError(
@@ -269,7 +256,6 @@ export class ConversationInference {
       } finally {
         this.active = undefined;
         this.record?.({
-          product: request.product,
           mode,
           elapsedMs: Math.round(performance.now() - start),
           complete: Boolean(result?.complete && !signal.aborted),

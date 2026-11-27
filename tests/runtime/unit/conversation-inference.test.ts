@@ -1,24 +1,21 @@
 import { expect, test } from 'bun:test';
-import {
-  ConversationInference,
-  type ConversationProduct,
-} from '../../../runtime/src/session-memory/inference.js';
+import { ConversationInference } from '../../../runtime/src/session-memory/inference.js';
 
 const prompt = { instructions: 'Explain the fixture.', input: 'Fixture source' };
 
-test('Clarify takes priority over queued Hosted Tracker work during a local agent turn', async () => {
+test('Hosted extraction runs in queue order during a local agent turn', async () => {
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const order: ConversationProduct[] = [];
+  const order: string[] = [];
   const inference = new ConversationInference(
     {
-      hosted: async (product) => {
-        order.push(product);
+      hosted: async ({ input }) => {
+        order.push(input);
         if (order.length === 1) {
           started.resolve();
           await release.promise;
         }
-        return { text: product, complete: true };
+        return { text: input, complete: true };
       },
     },
     'hosted',
@@ -26,13 +23,13 @@ test('Clarify takes priority over queued Hosted Tracker work during a local agen
   const signal = new AbortController().signal;
   try {
     inference.foregroundStarted('local-turn');
-    const running = inference.complete('tracker', prompt, signal);
+    const running = inference.complete(prompt, signal);
     await started.promise;
-    const tracker = inference.complete('tracker', prompt, signal);
-    const clarify = inference.complete('clarify', prompt, signal);
+    const second = inference.complete({ ...prompt, input: 'Second source' }, signal);
+    const third = inference.complete({ ...prompt, input: 'Third source' }, signal);
     release.resolve();
-    await Promise.all([running, tracker, clarify]);
-    expect(order).toEqual(['tracker', 'clarify', 'tracker']);
+    await Promise.all([running, second, third]);
+    expect(order).toEqual([prompt.input, 'Second source', 'Third source']);
   } finally {
     release.resolve();
     await inference.close();
@@ -45,7 +42,7 @@ test('Local extraction yields and retries after foreground work ends', async () 
   let calls = 0;
   const inference = new ConversationInference(
     {
-      local: async (_product, _prompt, signal) => {
+      local: async (_prompt, signal) => {
         calls++;
         if (calls > 1) return { text: 'Local result', complete: true };
         started.resolve();
@@ -60,7 +57,7 @@ test('Local extraction yields and retries after foreground work ends', async () 
     'local',
   );
   try {
-    const pending = inference.complete('tracker', prompt, new AbortController().signal);
+    const pending = inference.complete(prompt, new AbortController().signal);
     await started.promise;
     inference.foregroundStarted('local-turn');
     await yielded.promise;

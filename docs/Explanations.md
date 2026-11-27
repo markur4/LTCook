@@ -22,9 +22,9 @@
   - [Interchangeable teams](#interchangeable-teams)
   - [Guidance and planning](#guidance-and-planning)
     - [Instruction sources in Codex and Pi](#instruction-sources-in-codex-and-pi)
-  - [Clarify, Tracker, and conversation evidence](#clarify-tracker-and-conversation-evidence)
+  - [Tracker and conversation evidence](#tracker-and-conversation-evidence)
   - [Coordination and recovery](#coordination-and-recovery)
-  - [Workspace Organizer and Renamer](#workspace-organizer-and-renamer)
+  - [Workspace Organizer](#workspace-organizer)
   - [Web services and diagnostics](#web-services-and-diagnostics)
 
 This page explains LTCook's configuration boundary and its native agent runtime.
@@ -532,7 +532,7 @@ remain separate from coordination state.
 
 <a id="context-aware-session-memory"></a>
 
-## Clarify, Tracker, and conversation evidence
+## Tracker and conversation evidence
 
 Paseo owns the original conversation. LTCook reads its canonical timeline and
 records deterministic Agent Action Batches (AABs) with Task scope, tool
@@ -540,12 +540,6 @@ outcomes, and references to originals. AAB recording and authorized source
 retrieval work independently of inference. The opt-in delegation handoff uses
 bounded original evidence and reports when access is partial. Evidence links
 identify the conversation epoch and original sequence.
-
-**Clarify** rewrites a selected completed reply for readability. It uses the
-exact reply and can include a relevant excerpt from earlier conversation
-history. It carries forward the agent's stated rationale, predictions,
-caveats, and reported outcomes. The saved clarification belongs to that exact
-reply and becomes invalid when its source changes.
 
 **Tracker** processes genuine user messages in order for each conversation.
 An AUMP can provide the preceding agent reply. Bounded earlier evidence
@@ -559,25 +553,27 @@ requests.
 
 Tracker revisions let LTCook reverse conversation-derived changes on rewind.
 Manual deletions survive replay. A manually edited item's text survives as a
-manual item if its original evidence disappears. The sidebar shows current
-items and processing coverage, including pending, incomplete, failed, and
-paused events.
+manual item if its original evidence disappears. **Tracker** has a full tab
+bound to its agent conversation, with collection navigation, current items,
+sources, editing, and processing coverage. Switching agents does not change
+the conversation represented by an open Tracker tab. **Activity → Services**
+provides a compact Tracker entry and opens that tab. Extraction state and
+recorded coverage are separate: waiting, pausing, or processing a later message
+does not make an earlier incomplete, failed, paused, or skipped event disappear.
 
-Clarify and Tracker share inference transport and scheduling. Hosted uses the
-Codex subscription and `@tiny`, which defaults to GPT-6 Luna with low reasoning.
-Hosted requests can run during an agent turn. Local requests yield to foreground
-Local work. Clarify has priority among queued requests. See [Use Clarify and
-Tracked Items](How-To-User-Guides.md#use-clarify-and-tracked-items).
+Tracker's Hosted inference uses the Codex subscription and `@tiny`, which
+defaults to GPT-6 Luna with low reasoning. Hosted requests can run during an
+agent turn. Local requests yield to foreground Local work. See
+[Use Tracked Items](How-To-User-Guides.md#use-tracked-items).
 
-## Workspace Organizer and Renamer
+## Workspace Organizer
 
-Workspace Organizer and Renamer run inside LTCook's existing runtime on each
-Paseo host. They use the host's native workspace and agent records. Their
-[AppRC settings](References.md#workspace-service-settings) are global to that
-installation; project overrides cannot change the host's policy. Both services
-start enabled and resume their persisted schedules when the runtime starts.
+Workspace Organizer runs in LTCook on each managed Paseo host. Its
+[AppRC settings](References.md#workspace-service-settings) apply across that host.
+The **Tagger**, **Renamer**, and **Auto-archive** sections show the status of
+each capability.
 
-Workspace Organizer maintains four standard native Paseo labels:
+Tagger maintains four standard Paseo labels.
 
 | Label | Color | Purpose |
 | --- | --- | --- |
@@ -598,23 +594,21 @@ another sidebar hierarchy. Paseo's native default places newly created
 workspaces first within a project. Existing client sorting preferences remain
 in effect.
 
-Renamer proposes a workspace title and agent-session titles from conversation
-content. Its first eligible update runs without waiting 30 minutes; subsequent
-updates are at least 30 minutes apart and require changed content. A workspace
-revision includes conversation and observed Git changes; each agent title follows
-that agent's conversation. Titles are limited to 20 visible characters for a
-workspace and 15 for an agent tab, counted
-as Unicode grapheme clusters. Workspace and agent-tab renaming have independent
-switches. Supporting file, diff, terminal, browser, and native provider-subagent
-views retain their native titles.
+Renamer names a workspace from its first accepted user prompt and names each
+agent tab from that tab's own first accepted user prompt. It starts while the
+agent works and uses a short prompt-based title if inference fails. It limits
+workspace names to 20 visible characters and agent-tab names to 15.
 
-Both services ask the configured `@tiny` model with low reasoning for bounded
-label or title proposals from conversation excerpts. They do not read project
-file contents into the model prompt. These are independent inference requests
-without a persistent helper chat. The runtime owns schedules, validates the
-proposals, rechecks the target, and applies native updates. An unsuccessful model
-request leaves the current labels or titles in place. Deterministic inactivity and archive
-decisions do not require a model.
+In the bundled Paseo web app, **Auto-rename** in the workspace menu defaults
+to on. Turning it off pauses naming for the workspace and its agent tabs. A
+manual workspace rename also turns the switch off. A manual agent-tab rename
+protects only that tab. Re-enabling naming applies to targets still waiting
+for a first prompt. Paseo saves the preference and overrides on the host and
+checks them when it applies an automatic title.
+
+Tagger and Renamer ask the configured `@tiny` model with low reasoning for
+bounded proposals without project file contents or a persistent helper chat.
+A failed classification leaves the current labels in place.
 
 Workspace Organizer can archive a workspace after 14 days without meaningful
 use. A workspace first discovered by the service, or restored after archival,
@@ -643,11 +637,12 @@ Archived conversations remain accessible through **History**. See the
 [organization and recovery guide](How-To-User-Guides.md#organize-workspaces-and-find-the-archive)
 for restoring a conversation and changing the service settings.
 
-**Activity → Services** shows each service's current state, latest check and
-change, and diagnostics, including reasons workspaces are protected from
-archival. The private `workspace-organizer.json` and `renamer.json` files under
-`LTCOOK_RUNTIME_STATE_DIR` persist observation and attempt schedules. AppRC owns
-the service settings separately; the status cards are read-only.
+Open **Services → Workspace Organizer** in the sidebar for recent checks and
+diagnostics, including reasons workspaces are protected from archival. The
+read-only view also appears in **Activity → Services** and **Workspace Services**
+in the Explorer. The private `workspace-organizer.json` under
+`LTCOOK_RUNTIME_STATE_DIR` holds classification and archive schedules. Paseo
+holds first-prompt naming state with its workspace and agent records.
 
 ## Web services and diagnostics
 

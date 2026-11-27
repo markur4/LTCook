@@ -17,7 +17,7 @@ layout, packaging boundary, verification limits, and current release workflow.
 - [Verify and release](#verify-and-release)
   - [Verification](#verification)
   - [Local Ollama and Agent Evals](#local-ollama-and-agent-evals)
-    - [Clarify and Tracker verification](#clarify-and-tracker-verification)
+    - [Tracker verification](#tracker-verification)
   - [Repository retrieval evaluation](#repository-retrieval-evaluation)
   - [Asset packaging](#asset-packaging)
   - [Integration and system procedures](#integration-and-system-procedures)
@@ -281,6 +281,12 @@ for diagnosis; it does not change the default. Small scheduling batches
 (`--maxschedchunk=1`) keep the slow process-based checks distributed across
 workers.
 
+Run the full local Traditional Test suite before merging. Require model-backed
+Agent Evals when the change affects behavior that needs model-backed
+qualification, such as a recommended model, its prompt, or the way an agent
+uses model output. Documentation and deterministic interface changes can be
+verified with Traditional Tests and the relevant native checks.
+
 A complete test-suite measurement includes Traditional Tests and model-backed
 Agent Evals. Report elapsed time and outcomes for each category and their combined
 total. For complete live coverage, use the full evaluation preset in
@@ -292,8 +298,8 @@ Evals remain separately invoked.
 Run local model inference on GPU for the full development Agent Evals suite.
 Check actual GPU residency with `ollama ps` while the models are loaded. Run
 explicit CPU benchmarks separately and report their timings independently of
-the GPU suite. The Bonsai fallback below applies when local GPU evaluation is
-unavailable or exceeds its safeguard.
+the GPU suite. Use the hosted fallback below for routine Agent Evals when GPU
+inference is unavailable or Bonsai exceeds its safeguard.
 
 Prettier is pinned as a development-only JavaScript dependency. Its commands cover
 authored runtime, team, and test TypeScript, excluding generated distributions.
@@ -374,12 +380,18 @@ Audit and full summarization qualification.
 When the categories run together, semantic audit uses the prompt already
 captured during Behavior Evaluation rather than launching another agent task.
 
-For Bonsai-backed Agent Evals, use GPT-6 Luna at high reasoning on hosts with
-no usable GPU or when Bonsai exhausts its safeguard. Use the authorized hosted
-provider for the evaluation and report the model and reasoning level. Restart
-matched comparisons with the fallback for every arm so model changes cannot
-be confused with differences in the input. Explicitly local candidate
+Use hosted GPT-6 Luna for routine model-backed Agent Evals whenever the
+evaluation host has no usable GPU or Bonsai exhausts its safeguard. Default
+to high reasoning and use a case's specified hosted reasoning level when
+it has one. Run every arm of a matched comparison with the same model and
+reasoning, and report the selection. Explicitly local and CPU-only candidate
 comparisons keep their assigned models and inference settings.
+
+The built-in native agent cases in `ltcook eval run` require local Bonsai.
+On a host without a usable GPU, use an authorized equivalent hosted route
+when available and leave the case pending otherwise. For the Renamer's
+workspace title instruction, `bun evals/renamer.ts` runs one synthetic case
+through hosted `@tiny` with GPT-6 Luna at low reasoning.
 
 ### Summarization qualification
 
@@ -455,29 +467,26 @@ the three agent cases still use their original attempts.
 
 <a id="session-memory-qualification"></a>
 
-### Clarify and Tracker verification
+### Tracker verification
 
 Use the existing Traditional Test suite for deterministic history, AAB
 recording, attachment handling, authorization, delegation, and concurrent
 inference. The focused tests for Tracker exercise manual edits and deletions,
 rewind, restart, pause gaps, input-budget outcomes, and independently valid
-changes across Trackers. Clarify tests cover exact reply identity, cache reuse,
-rewind during inference, and earlier context boundaries.
+changes across Trackers.
 
-Run the focused Hosted Agent Evals with a Codex subscription sign-in and
+Run the focused Hosted Agent Eval with a Codex subscription sign-in and
 `@tiny` resolving to GPT-6 Luna with low reasoning.
 
 ```shell
-bun evals/conversation-products.ts
+bun evals/tracker.ts
 ```
 
-The fixtures use synthetic conversations. Tracker is graded on false approvals,
-older proposal citations, and correct decision replacements. Clarify is graded
-on stated facts, caveats, predictions, and earlier outcomes. Review the returned
-clarification for readability as well as fidelity.
+The eval uses a synthetic conversation to check that Tracker avoids false
+approvals, cites earlier proposals, and replaces superseded decisions.
 
 The fresh `conversation-records-v1.sqlite` holds deterministic receipts and
-AABs. `conversation-products-v1.sqlite` holds Clarify and Tracker state. Both
+AABs. `conversation-products-v1.sqlite` holds Tracker state. Both
 are in runtime state. Preserve native Paseo history and the separate
 `pasted-documents` store. The application starts these databases fresh and
 ignores the old Session Memory records.

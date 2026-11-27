@@ -6,7 +6,7 @@
   - [Install a release](#install-a-release)
   - [Install from a checkout](#install-from-a-checkout)
   - [Run the first command](#run-the-first-command)
-  - [Use Clarify and Tracked Items](#use-clarify-and-tracked-items)
+  - [Use Tracked Items](#use-tracked-items)
   - [Use workspace tools in Pi or Codex](#use-workspace-tools-in-pi-or-codex)
     - [Search conversation evidence](#search-conversation-evidence)
     - [Attach pasted text](#attach-pasted-text)
@@ -190,10 +190,16 @@ On narrow screens, open the composer controls and select a Team from the native
 sheet before sending. Use the Model control to [choose an alias](#choose-a-model-alias)
 for the Leader. For hosted models, [authenticate with Pi](#authenticate-with-pi).
 
+The chat composer shows live generation speed in tokens per second, refreshed
+every two seconds while the agent runs. A rate marked `≈` is estimated from
+streamed text when token counts are unavailable. Select the speed to see the
+turn breakdown; settings are under **Settings → Plugins → Turn speed**.
+
 On desktop, **Activity** opens in the right Explorer the first time you open
 an agent conversation in a workspace. Paseo remembers your layout after that.
 Use the Explorer **+** menu to open **Activity**, **Workspace Services**,
-**Tracked Items**, **Team**, or **Tasks** whenever you need them.
+**Team**, or **Tasks** whenever you need them. **Tracker** opens as a full tab
+beside its agent conversation.
 
 - **Activity** follows the focused agent. Expand the agent or a direct subagent
   to inspect running and recent tools, observed skill loads, and model context
@@ -207,6 +213,9 @@ Use the Explorer **+** menu to open **Activity**, **Workspace Services**,
   For Codex, Activity recognizes successful direct reads of `SKILL.md` with
   `cat`, `head`, or `sed -n` when the returned front matter names a
   skill in the provider's catalog.
+- **Tracker** in **Activity → Services** shows the conversation's extraction
+  state and recorded coverage. **Open Tracker** opens its full notebook tab.
+  The tab stays bound to that conversation when you switch to another agent.
 - **Team** shows the focused LTCook Session's Leader, persistent and temporary
   members, available temporary roles, active Passes, progress, and blockers.
   **Agent Focus** shows role settings, assignments, handoffs, and reports.
@@ -215,7 +224,8 @@ Use the Explorer **+** menu to open **Activity**, **Workspace Services**,
   description, acceptance criteria, ordered Steps, blocker, and report.
 
 The Command Center also offers **Open Activity panel**, **Open Workspace
-Services**, **Open Tracked Items**, **Open Team panel**, and **Open Tasks panel**.
+Services**, **Open Team panel**, and **Open Tasks panel**. With an agent selected,
+**Open Tracker** opens that conversation's notebook.
 
 In the bundled Paseo web app, **Changes** follows the focused session's active
 Git worktree. Managed Pi and supported Paseo Pi and Codex agents report the
@@ -253,22 +263,27 @@ work. Standalone Pi owns its indexing preference for its process.
 and number of action batches represented. The agent card shows model context
 usage when Paseo reports it.
 
-## Use Clarify and Tracked Items
+## Use Tracked Items
 
-In LTCook's bundled Paseo web app, select **Clarify** below a completed
-reply to read a clearer version. In Hosted mode, the control shows which
-content will be sent to OpenAI and asks you to confirm generation. You can
-hide and reopen the saved clarification from the same reply. The original
-reply stays available above it. The additive reply control is supplied by the
-bundled web app.
+Select **Tracker** in the conversation's composer controls, or **Open Tracker**
+under **Activity → Services**. The notebook opens in a full tab beside that
+conversation. Its conversation name stays visible, and selecting another
+agent does not retarget an already open Tracker tab.
 
-Open **Tracked Items** in the Explorer sidebar for the focused conversation.
-Expand **Design Decisions** to see decisions you've made or explicitly
-accepted. Select an item's source to reveal its original message where the
-client supports timeline navigation. You can edit or remove items, and create
-Trackers by writing plain-language criteria in **Add Tracker**. For example,
-enter “Track open architecture questions and retire them when the user
-resolves them.”
+Choose a Tracker collection, such as **Design Decisions**, to read its items.
+Item sources lead to the original messages where the client supports timeline
+navigation. You can edit or remove items, and create Trackers by writing
+plain-language criteria in **Add Tracker**. For example, enter “Track open
+architecture questions and retire them when the user resolves them.” **All
+items** brings the collections together. The notebook keeps reading,
+editing, and coverage inspection together; Activity holds the compact service
+status.
+
+**Notes** returns to the saved items after inspecting Coverage. **Copy all notes**
+copies every saved item in this conversation as plain text, with Tracker headings
+and bullet points. It includes disabled Trackers and ignores the selected
+collection and search filter. Empty collections are omitted. If clipboard access
+fails, a dialog provides the same text for manual copying.
 
 Use **Coverage** to see where extraction stopped. A failed or incomplete message
 blocks only its Tracker. Later eligible messages for that Tracker wait and
@@ -277,11 +292,16 @@ cause. An oversized input requires less source material or a higher configured
 input budget. **Skip blocked message** resumes later messages and retains the
 skipped message as incomplete coverage.
 
-Use **Pause Tracker everywhere** to stop extraction across conversations.
+Open **Service** and use **Pause Tracker everywhere** to stop extraction across conversations.
 Messages during that user pause are skipped, and resuming processes new messages. In
 Hosted mode, new user messages, relevant earlier text, and existing item text
 can be sent to OpenAI through the Codex subscription. You can select Local
 Ollama through the [conversation inference settings](References.md#environment-variables).
+
+Disabling one Tracker only stops that collection. A paused or disabled
+collection can still contain readable items. Activity shows extraction state
+separately from recorded coverage: skipping a message or resuming the service
+does not remove an earlier coverage gap.
 
 ## Use workspace tools in Pi or Codex
 
@@ -361,8 +381,8 @@ Search has access to the current conversation and authorized conversations in
 the same managed TeamInstance and workspace.
 
 Set `LTCOOK_SESSION_MEMORY_DELEGATION=true` in global AppRC and restart LTCook
-to add relevant original evidence to automatic handoffs. This works while
-Tracker is paused and before any clarifications are generated.
+to add relevant original evidence to automatic handoffs, even while Tracker
+is paused.
 
 ### Attach pasted text
 
@@ -771,7 +791,7 @@ supporting tabs when useful. Select the host where you want to run the work.
 See the [Paseo and AppRC glossary](Explanations.md#paseo-and-apprc-terminology)
 for the distinction between a workspace container and its working directory.
 
-Workspace Organizer maintains **Feature** (blue), **Bugfix** (red), **CSC**
+Workspace Organizer’s Tagger maintains **Feature** (blue), **Bugfix** (red), **CSC**
 (amber), and **Research** (violet) on this LTCook host. It selects a category
 from the first conversation content, then reassesses changed conversations or
 observed Git revisions every 12 hours. If work changes during the first
@@ -780,21 +800,21 @@ is idle. Other labels remain available.
 Use Paseo's native label filters to narrow the workspace list. The native default sorts workspaces by
 creation time, newest first; an existing display preference is preserved.
 
-Renamer keeps workspace titles within 20 visible characters and agent-session
-tab titles within 15. It updates a new conversation when content becomes
-available, then at most every 30 minutes when its source changes. Workspace
-names also respond to observed Git changes; agent-tab names follow their own
-conversations. File, diff, terminal, browser, and native provider-subagent titles
-remain native.
-Renamer and category selection use `@tiny` with low reasoning and the configured
-model authentication. They resume later when inference is unavailable; the
-current names and labels remain usable.
+Renamer names each Paseo workspace and agent tab after its first user prompt.
+Workspace names have a 20-visible-character limit and agent-tab names have a
+15-character limit. Renamer uses the configured `@tiny` model with low
+reasoning. If the model is unavailable, it uses a short title from the prompt.
 
-Open **Explorer → + → Workspace Services** or **Activity → Services** to see
-what each service is doing and any operation that needs attention. Workspace
-Organizer also shows why workspaces are protected from automatic archival.
-Update the reported setting or sign-in to allow blocked inference to resume.
-Change service switches through AppRC as described below.
+In the bundled Paseo web app, open the workspace’s three-dot menu and turn off
+**Auto-rename** to pause naming for that workspace and its agent tabs. The switch
+defaults to on. Manually renaming the workspace turns it off. Manually renaming
+an agent tab protects that tab alone. Turn the switch back on for workspaces
+or tabs still waiting for their first prompt. Existing titles are preserved.
+
+Open **Services → Workspace Organizer** in the left sidebar and expand
+**Tagger**, **Renamer**, or **Auto-archive** for status. The same information is
+available in **Explorer → + → Workspace Services** and **Activity → Services**.
+For host-wide settings, use AppRC as described below.
 
 ### Find and restore archived conversations
 
@@ -843,8 +863,8 @@ Set the same values to `true` to enable them again. The respective `enabled`
 setting pauses the whole service. `runtime.services.renamer.tabs` independently
 controls agent-tab renaming. Deliberate shell exports take precedence over saved
 user values; AppRC project overlays do not change the host-wide service policy.
-The `ltcook services` commands manage research containers, while these two
-services follow the LTCook runtime lifecycle.
+The `ltcook services` commands manage research containers. Workspace Organizer
+follows the LTCook runtime lifecycle.
 
 ## Plan work and answer decisions
 

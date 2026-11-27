@@ -16,13 +16,14 @@ if (manifest.name !== '@getpaseo/server' || manifest.version !== '0.16.0-beta.2'
 
 const sources = new Map();
 const gateUrl = new URL('./gate.mjs', import.meta.url).href;
+const namingUrl = new URL('./workspace-naming.mjs', import.meta.url).href;
 for (const [file, { sha256, apply }] of Object.entries(patches)) {
   const url = new URL(file, serverRoot);
   const source = readFileSync(url, 'utf8');
   if (createHash('sha256').update(source).digest('hex') !== sha256) {
     throw new Error(`Unexpected Paseo source for LTCook idle restart: ${file}`);
   }
-  sources.set(url.href, apply(source, { gateUrl, registerUrl: import.meta.url }));
+  sources.set(url.href, apply(source, { gateUrl, namingUrl, registerUrl: import.meta.url }));
 }
 
 registerHooks({

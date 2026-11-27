@@ -18,6 +18,7 @@ REQUIRED_RUNTIME_ENTRIES = (
     "dist/paseo-idle-restart/register.mjs",
     "dist/paseo-idle-restart/patch.mjs",
     "dist/paseo-idle-restart/gate.mjs",
+    "dist/paseo-idle-restart/workspace-naming.mjs",
     "dist/tools/web-mcp.js",
     "dist/tools/pi-web-access.LICENSE",
     "dist/evals/worker.js",
@@ -36,6 +37,11 @@ REQUIRED_MODEL_CONTRACT_ASSETS = (
 REQUIRED_PASEO_WEB_ASSETS = ("index.html", "ltcook-paseo-build.json")
 PACKAGED_WEB_BUILD_ASSETS = ("ltcook-build.json", "ltcook-build-check.js")
 REQUIRED_PASEO_PLUGIN_ASSETS = (
+    "turn-speed/paseo-plugin.json",
+    "turn-speed/index.client.tsx",
+    "turn-speed/index.server.ts",
+    "turn-speed/client/pill.tsx",
+    "turn-speed/LICENSE",
     "paseo-plugin.json",
     "index.server.ts",
     "index.client.tsx",

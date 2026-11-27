@@ -44,11 +44,19 @@ conventions. Consult the relevant [Development](docs/Development.md) guides.
 ## Verification
 - Review the diff for duplicate helpers, naming drift, unnecessary abstractions, and regressions.
 - Use Pi for native end-to-end checks and model-backed Agent Evals. Add targeted provider-specific Traditional Tests when adapter behavior or permissions require them. Live cross-harness comparisons are explicitly opt-in.
-- For Agent Evals that normally use Bonsai, use GPT-6 Luna with high reasoning when the evaluation host has no usable GPU or when Bonsai cannot complete the workload within its safeguard. Use the authorized hosted provider through the supported harness. Run matched arms with the same model and reasoning level and report the fallback. Keep explicitly local or CPU-only candidate workloads on their assigned models.
+- For routine model-backed Agent Evals, use hosted GPT-6 Luna whenever the
+  evaluation host has no usable GPU. Use high reasoning by default and honor a
+  case's specified hosted reasoning level. Apply the same fallback when Bonsai
+  cannot complete the workload within its safeguard. Use an authorized hosted
+  provider through a supported evaluation route. Run every matched arm with the
+  same model and reasoning and report the selection. If no equivalent hosted
+  route is available, leave the evaluation pending. Keep explicitly local or
+  CPU-only candidate workloads on their assigned models.
 - Repository policy: keep pytest-xdist in the development dependency group and run Python tests with six workers by default. Do not remove the dependency or reduce this default without explicit user approval. A complete test-suite measurement includes both Traditional Tests and model-backed Agent Evals; report their times and outcomes separately and together.
 - Repository policy: call the two categories Traditional Tests and Agent Evals. Use the established labels Instruction Audit, Behavior Evaluation, and Bottleneck Attribution in interfaces, documentation, and reports. Routine Agent Evals use full instructions in the selected setup, with one repetition by default. Behavior Evaluation and Bottleneck Attribution share the same executions; do not add reduced-instruction runs or repeated timing runs by default.
 - Agent Evals safeguards use three times the slowest of the five most recent comparable successful attempts, with separate no-reasoning and low-reasoning histories. Preserve diagnostics before fallback, cancellation, or failure; failed attempts must not increase the safeguard. The 120-second safeguard applies only when there is no compatible successful history.
-- Run the project’s relevant lint, type-check, and test commands before considering the task done.
+- Run the project’s relevant lint and type checks and the full local Traditional Test suite before merging.
+  Require model-backed Agent Evals when the changed behavior needs model-backed qualification.
 - Before native installer work, follow the
   [integration and system procedures](docs/Development.md#integration-and-system-procedures).
 - From WSL, never launch native Windows verification executables, directly or

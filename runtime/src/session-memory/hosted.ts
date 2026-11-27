@@ -114,7 +114,7 @@ export function hostedConversationProvider(
       throw new ServiceInferenceError('configuration', hostedCorrection.model);
     return { pi, model, reasoning: configured.reasoning };
   };
-  const provider: ConversationProvider = async (_product, { instructions, input }, signal) => {
+  const provider: ConversationProvider = async ({ instructions, input }, signal) => {
     const bounded = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
     const { pi, model, reasoning } = await prepare();
     const revision = () => {

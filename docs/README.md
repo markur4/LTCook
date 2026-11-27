@@ -60,10 +60,9 @@ one main user-facing session per Paseo workspace.
 | Launch helper | `ltcook.launch.resolve_launch()` | Resolves global settings or optional project overrides from original shell inputs. |
 | `ltcook` CLI | `ltcook.cli.app.app` | Exposes AppRC commands, runtime launch, and native Pi authentication. |
 | Runtime | `runtime/src/main.ts` | Starts the idle Paseo host and opens project Sessions on explicit user request. |
-| Clarify | `runtime/src/session-memory/clarify.ts` | Rewrites a completed reply on demand and saves the result against the original. |
 | Tracker | `runtime/src/session-memory/tracker.ts` | Extracts and maintains user-configured Tracked Items from new user messages. |
-| Workspace Organizer | `runtime/src/services/workspace-organizer.ts` | Maintains standard workspace labels and eligible automatic archival. |
-| Renamer | `runtime/src/services/renamer.ts` | Maintains short workspace and agent-session titles. |
+| Workspace Organizer | `runtime/src/services/workspace-organizer.ts` | Groups tagging, first-prompt naming, and eligible automatic archival. |
+| Renamer | `runtime/src/services/renamer.ts` | Proposes short workspace and agent-tab titles from first user prompts. |
 | Pi authentication | `ltcook auth` and native Pi's SDK | Shares Pi-managed credentials while keeping project settings and histories separate. |
 | Team package | `TeamPackage` in `runtime/src/team-api/index.ts` | Provides versioned member, guidance and work-routing declarations. |
 | Deployment bundle | `src/ltcook_distr/bundle.zip` | Canonical archive of runtime, team, resource, service and lock assets for installation. |

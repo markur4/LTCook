@@ -231,7 +231,7 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
 | `LTCOOK_CONVERSATION_INFERENCE` | Global `runtime.conversation_inference`. Defaults to `hosted` for Codex subscription inference with `@tiny`. Set `local` to use Ollama. |
 | `LTCOOK_CONVERSATION_LOCAL_MODEL` | Global `runtime.conversation_local_model`. An empty value uses `@local-CPU`. Supply an Ollama alias or installed model tag. |
-| `LTCOOK_CONVERSATION_INPUT_TOKENS` | Global `runtime.conversation_input_tokens`. Estimated per-request input budget for Clarify and Tracker. Defaults to 8,000. |
+| `LTCOOK_CONVERSATION_INPUT_TOKENS` | Global `runtime.conversation_input_tokens`. Estimated per-request input budget for Tracker. Defaults to 8,000. |
 | `LTCOOK_SESSION_MEMORY_DELEGATION` | Global `runtime.session_memory_delegation`. Set `true` to add original conversation evidence to Core assignments. Defaults to `false`. |
 | `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |
@@ -289,7 +289,7 @@ apply when the runtime next starts. The typed bundle exposes
 | --- | --- | --- | --- |
 | `LTCOOK_WORKSPACE_ORGANIZER_ENABLED` | `runtime.services.workspace_organizer.enabled` | `true` | Enable standard label maintenance, classification, and eligible automatic archival. |
 | `LTCOOK_WORKSPACE_ORGANIZER_AUTO_ARCHIVE` | `runtime.services.workspace_organizer.auto_archive` | `true` | Enable the 14-day inactivity archive policy while Workspace Organizer is enabled. |
-| `LTCOOK_RENAMER_ENABLED` | `runtime.services.renamer.enabled` | `true` | Enable the Renamer schedule. |
+| `LTCOOK_RENAMER_ENABLED` | `runtime.services.renamer.enabled` | `true` | Enable first-prompt naming. |
 | `LTCOOK_RENAMER_WORKSPACES` | `runtime.services.renamer.workspaces` | `true` | Allow workspace titles of at most 20 Unicode grapheme clusters. |
 | `LTCOOK_RENAMER_TABS` | `runtime.services.renamer.tabs` | `true` | Allow agent-session titles of at most 15 Unicode grapheme clusters. |
 
@@ -297,14 +297,14 @@ Workspace classification uses the first nonempty conversation context and then
 12-hour attempt intervals, with a changed conversation or Git revision required.
 Its first valid proposal may receive one early retry after at least 60 seconds
 if new content made it stale and the workspace is idle; the regular deadline
-stays fixed. Renamer uses the first nonempty context and then at least 30 minutes
-between attempts. Workspace titles follow conversation and observed Git changes;
-agent titles follow their own conversation. The runtime validates `@tiny`
-proposals; model calls do not decide archival or alter service schedules. See the
-[service explanation](Explanations.md#workspace-organizer-and-renamer) and
+stays fixed. Renamer uses the workspace's or agent tab's first accepted user
+prompt. Its workspace preference applies to both titles and respects the
+host-wide AppRC settings. Paseo checks the preference and manual overrides
+before applying a proposal. See the
+[service explanation](Explanations.md#workspace-organizer) and
 [settings guide](How-To-User-Guides.md#change-the-service-settings).
 
-**Activity → Services** exposes read-only service status and archive-protection
+**Services → Workspace Organizer** exposes read-only service status and archive-protection
 diagnostics. Automatic archive requires the connected Paseo daemon's verified
 directory-preserving HTTP operation; an unavailable operation leaves the
 workspace active. It keeps all working-directory files and skips project
@@ -324,7 +324,7 @@ remove an owned checkout.
 | `<state>/runtime/documents/plans/Plan-YYYY_MM_DD-HH_MM-title.md` | Team-authored Plan; stable filename and append-only reporting convention. |
 | `<state>/runtime/coordination.sqlite` | Runtime coordination, document references, decisions and approval metadata. |
 | `<LTCOOK_RUNTIME_STATE_DIR>/workspace-organizer.json` | Workspace observations, classification deadlines, and archive state; separate from AppRC settings. |
-| `<LTCOOK_RUNTIME_STATE_DIR>/renamer.json` | Rename deadlines and successfully processed conversation revisions; separate from AppRC settings. |
+| Managed Paseo workspace and agent records | Auto-rename preference, first-prompt naming state, and manual title overrides. |
 | `<cache>/projects` | Lazily refreshed declarative facts; Git state is refreshed separately. |
 | `<LTCOOK_DEPLOYMENT_DIR>/paseo/config.json` | Paseo configuration written by the Node host; the home also holds mutable Paseo data. |
 | `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` | Workspace-specific Pi home; `write-native-config` writes its private `web-search.json`. |

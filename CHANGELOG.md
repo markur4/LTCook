@@ -47,11 +47,19 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
-- **Clarify** in the bundled Paseo web app rewrites an individual completed
-  reply on demand and saves the result against that exact source.
-- **Tracked Items** in the Explorer sidebar maintains a conversation-specific
-  notebook with configurable Trackers, original evidence, manual editing,
-  and extraction coverage. When a message blocks extraction, the affected
+- Agent chats show live generation speed in the composer, refreshing every two
+  seconds. The bundled Turn Speed component marks estimated token rates and
+  offers a breakdown of the current turn.
+
+- **Tracker** opens a conversation-specific notebook in a full tab beside its
+  agent. Collection navigation, readable items, original evidence, manual
+  editing, and extraction coverage share one view. A compact **Activity →
+  Services** entry shows extraction state separately from recorded coverage;
+  the composer and Command Center open the same conversation-bound tab.
+  Compact spacing keeps more notes visible without reducing text sizes.
+  **Notes** and **Coverage** switch views; **Copy all notes** copies the current
+  conversation's saved notes as grouped plain text, independent of view filters.
+  When a message blocks extraction, the affected
   Tracker resumes in message order after recovery. Coverage gives users retry
   and skip controls and keeps skipped messages visible as incomplete.
 
@@ -63,13 +71,13 @@ All notable changes to `ltcook` will be documented in this file.
   pending work, and incomplete activity. Automatic archival preserves working
   directories and skips project teardown, including for Paseo-owned worktrees.
 
-- Renamer refreshes changed workspace and agent-session titles at most every
-  30 minutes, with limits of 20 and 15 visible characters respectively. Global
-  AppRC switches independently control workspace renaming, agent-tab renaming,
-  and automatic archival. Both services run in the existing runtime and use
-  `@tiny` only for category and title proposals. Read-only cards in
-  **Workspace Services** and **Activity → Services** show operation failures,
-  recovery status, and archive-protection diagnostics.
+- Workspace Organizer now groups **Tagger**, **Renamer**, and **Auto-archive**
+  under **Services** in the Paseo sidebar. Renamer names the workspace and each
+  agent tab from their first user prompts, using a short prompt-based fallback
+  when inference is unavailable. The bundled Paseo workspace menu includes
+  **Auto-rename**, on by default. A manual workspace rename turns it off, and a
+  manual agent-tab rename protects that tab. The first-prompt behavior replaces
+  periodic refresh.
 
 - The glossary and shared agent instructions distinguish Paseo projects,
   workspaces, sessions, tabs, and AppRC workspaces. The documented default is one
@@ -92,7 +100,7 @@ All notable changes to `ltcook` will be documented in this file.
   tools, observed skill loads, model context usage, ColGREP index status, and
   delegation delivery evidence. On desktop, Activity opens on the first agent
   chat in each workspace. The Explorer **+** menu also offers **Workspace
-  Services**, **Tracked Items**, **Team**, and **Tasks**.
+  Services**, **Team**, and **Tasks**.
 
 - Activity links individual tool and skill occurrences to their chat rows in
   LTCook's Paseo web app. The details header opens skill documents in a workspace
@@ -256,7 +264,7 @@ All notable changes to `ltcook` will be documented in this file.
 - **Breaking:** 💥 The shared Spark model alias is now `@local-tiny`. Use that
   spelling in Team and launch selections. The shared list includes `@local-CPU`
   and `@local-evals`. `@tiny` now defaults to low reasoning, including for
-  Hosted Clarify and Tracker.
+  Hosted Tracker.
 
 - Repository Locate groups verified definitions, calls, tests, and references,
   and adds short source excerpts to exact matches where context helps.
@@ -376,10 +384,12 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🔥 Removed
 
-- **Breaking:** 💥 Continuous Session Memory summaries and redo controls
-  are replaced by Clarify and Tracker. Fresh stores hold deterministic
-  conversation evidence and product state. Native Paseo history and pasted
-  attachments remain available. Delegation uses authorized originals.
+- **Breaking:** 💥 Removed the Clarify reply button. Saved rewrites are no
+  longer accessible. The original replies remain available in Paseo.
+- **Breaking:** 💥 Tracked Items replaces continuous Session Memory summaries
+  and redo controls. Fresh stores hold deterministic conversation evidence
+  and Tracker state. Native Paseo history and pasted attachments remain
+  available. Delegation uses authorized originals.
 
 <br>
 

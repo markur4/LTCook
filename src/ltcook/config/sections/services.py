@@ -41,7 +41,7 @@ class RenamerSettings(rc.Config):
         "LTCOOK_RENAMER_ENABLED",
         default=True,
         title="Renamer",
-        explanation_short="Refresh short titles from changed conversations.",
+        explanation_short="Name workspaces and agent tabs from their first user prompts.",
     )
     workspaces: bool = rc.field(
         "LTCOOK_RENAMER_WORKSPACES",

@@ -9,8 +9,6 @@ import type { PaseoHost } from './paseo.js';
 import type { PaseoWorkspaceServices } from './paseo-workspace-services.js';
 import type { ConversationRecords } from '../session-memory/conversation.js';
 import type { ConversationInference } from '../session-memory/inference.js';
-import type { ClarifyService } from '../session-memory/clarify.js';
-import { clarifyReadRpc } from '../paseo-plugin/shared/clarify.js';
 import type { TrackerService } from '../session-memory/tracker.js';
 import { trackerModifyRpc, trackerSelection } from '../paseo-plugin/shared/tracker.js';
 import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
@@ -90,7 +88,6 @@ export class RuntimeApi {
   private server: Server | undefined;
   private memory?: ConversationRecords;
   private conversationInference?: ConversationInference;
-  private clarify?: ClarifyService;
   private tracker?: TrackerService;
   private readonly localTurns = new Map<string, string>();
   private memoryContext?: (
@@ -136,10 +133,6 @@ export class RuntimeApi {
 
   setConversationInference(inference: ConversationInference): void {
     this.conversationInference = inference;
-  }
-
-  setClarify(service: ClarifyService): void {
-    this.clarify = service;
   }
 
   setTracker(service: TrackerService): void {
@@ -326,8 +319,6 @@ export class RuntimeApi {
         '/v1/runtime/stop',
         '/v1/session-memory/observe',
         '/v1/session-memory/paste',
-        '/v1/clarify/read',
-        '/v1/clarify/generate',
         '/v1/tracker/snapshot',
         '/v1/tracker/modify',
         '/v1/mcp/grant',
@@ -456,26 +447,6 @@ export class RuntimeApi {
           : undefined;
       if (!actor) {
         response.writeHead(401).end('{"error":"unauthorized"}');
-        return;
-      }
-      if (request.url === '/v1/clarify/read' || request.url === '/v1/clarify/generate') {
-        if (!isUser) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        if (!this.clarify || !this.conversationInference) {
-          response.writeHead(503).end('{"error":"Clarify is unavailable."}');
-          return;
-        }
-        const { agentId, ...reference } = clarifyReadRpc.input.parse(parsed);
-        const connection = new AbortController();
-        response.once('close', () => connection.abort());
-        const mode = this.conversationInference.selection();
-        const text =
-          request.url === '/v1/clarify/read'
-            ? await this.clarify.get(agentId, reference, connection.signal)
-            : await this.clarify.generate(agentId, reference, connection.signal);
-        if (!connection.signal.aborted) response.writeHead(200).end(JSON.stringify({ text, mode }));
         return;
       }
       if (request.url === '/v1/tracker/snapshot' || request.url === '/v1/tracker/modify') {

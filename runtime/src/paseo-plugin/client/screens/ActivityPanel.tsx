@@ -19,8 +19,10 @@ import { ActivityStatus, ActivityText } from '../components/ActivityCard';
 import { ActivityAgentCard } from '../components/ActivityAgentCard';
 import { ActivityServices } from '../components/ActivityServices';
 import { WorkspaceServices } from '../components/WorkspaceServices';
+import { TrackerService } from '../components/TrackerService';
 import type { Theme } from '../components/PanelChrome';
 import { useFocusedAgent } from '../explorer-panels';
+import { openTracker } from '../tracker-navigation';
 import { openSkillDocument } from './SkillDocument';
 import { openRepositoryQuery } from './RepositoryQuery';
 
@@ -127,6 +129,18 @@ function ObservedActivity(
   const ragWorktree = snapshot?.rag.worktree;
   return (
     <>
+      <TrackerService
+        theme={theme}
+        agentId={selectedAgentId}
+        scopeLabel={snapshot?.agent.name ?? 'Selected conversation'}
+        onOpen={() => {
+          try {
+            openTracker(client, selectedWorkspaceId, selectedAgentId);
+          } catch {
+            toast.error('Could not open Tracker.');
+          }
+        }}
+      />
       {!snapshot ? (
         <ActivityText theme={theme} tone={unavailable ? 'warning' : 'muted'}>
           {unavailable ? 'Activity is unavailable.' : 'Loading activity…'}

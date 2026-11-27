@@ -854,7 +854,6 @@ export class TrackerService {
         let output: string;
         try {
           output = await this.inference.complete(
-            'tracker',
             prompt(eligible),
             AbortSignal.any([signal, controller.signal]),
           );

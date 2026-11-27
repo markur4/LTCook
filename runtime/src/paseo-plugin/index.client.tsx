@@ -1,13 +1,17 @@
-import { ScrollView, SidebarRow } from '@getpaseo/plugin/client/ui';
-import type { PluginClientContext } from '@getpaseo/plugin/client';
+import { useState } from 'react';
+import { useWindowDimensions } from 'react-native';
+import { Action, ScrollView, SidebarRow, useToast } from '@getpaseo/plugin/client/ui';
+import {
+  useAgent,
+  useAgents,
+  useComposer,
+  type PluginClientContext,
+  type PluginComposerItemProps,
+  type PluginSidebarItemProps,
+} from '@getpaseo/plugin/client';
 import { TeamsBrowser } from './client/screens/TeamsBrowser';
 import { TeamStatus } from './client/screens/TeamStatus';
 import { TurnSkills } from './client/components/TurnSkills';
-import {
-  CLARIFY_REPLY_KIND,
-  ClarifyReply,
-  ClarifyReplySchema,
-} from './client/components/ClarifyReply';
 import { TURN_SKILLS_TIMELINE_KIND, TurnSkillsTimelineSchema } from './shared/activity';
 import { ActivityPanel } from './client/screens/ActivityPanel';
 import {
@@ -33,9 +37,38 @@ import { TeamComposerItem } from './client/components/TeamComposerItem';
 import { ModelComposerItem } from './client/components/ModelComposerItem';
 import { PastedTextComposerItem } from './client/components/PastedTextComposerItem';
 import { pastedTextSource } from './shared/pasted-text';
+import { openTracker, TRACKER_PANEL_ID } from './client/tracker-navigation';
 
 const workspaceServicesPanelId = 'workspace-services';
-const trackedItemsPanelId = 'tracked-items';
+
+function TrackerComposerItem({
+  client,
+  host,
+}: PluginComposerItemProps & { client: PluginClientContext }) {
+  const composer = useComposer();
+  const agents = useAgents({ hosts: [host.id] });
+  const agent =
+    composer.context === 'agent'
+      ? agents.find(({ id }) => client.composers({ agentId: id })[0] === composer)
+      : undefined;
+  const workspaceId = useAgent(agent ?? '', (snapshot) => snapshot.workspaceId);
+  const toast = useToast();
+  if (!agent || !workspaceId) return null;
+
+  return (
+    <Action
+      title="Tracker"
+      icon="Notebook"
+      onPress={() => {
+        try {
+          openTracker(client, workspaceId, agent.id);
+        } catch {
+          toast.error('Could not open Tracker for this conversation.');
+        }
+      }}
+    />
+  );
+}
 
 function loadedWebBuild(): string | undefined {
   const { document } = globalThis as {
@@ -43,6 +76,28 @@ function loadedWebBuild(): string | undefined {
   };
   const build = document?.querySelector('meta[name="ltcook-web-build"]')?.content;
   return build && /^[a-f0-9]{64}$/.test(build) ? build.slice(0, 12) : undefined;
+}
+
+function ServicesSidebar({ theme, layout }: PluginSidebarItemProps) {
+  const [open, setOpen] = useState(false);
+  const { height } = useWindowDimensions();
+  return (
+    <>
+      <SidebarRow
+        icon={open ? 'ChevronDown' : 'ChevronRight'}
+        onPress={() => setOpen((value) => !value)}
+      />
+      {open && (
+        <ScrollView
+          testID="ltcook-sidebar-workspace-services"
+          style={layout.compact ? { maxHeight: Math.floor(height * 0.4) } : undefined}
+          nestedScrollEnabled
+        >
+          <WorkspaceServices theme={theme} />
+        </ScrollView>
+      )}
+    </>
+  );
 }
 
 export default function contribute(client: PluginClientContext) {
@@ -59,6 +114,11 @@ export default function contribute(client: PluginClientContext) {
           onPress={() => openScreen({ screenId: 'teams-browser' })}
         />
       ),
+    }),
+    client.addSidebarHeaderItem({
+      id: 'services',
+      title: 'Services',
+      Component: ServicesSidebar,
     }),
     client.addCommandCenterItem({
       id: 'browse-workspace-teams',
@@ -109,12 +169,12 @@ export default function contribute(client: PluginClientContext) {
         );
       },
     }),
-    client.addWorkspacePanel({
-      id: trackedItemsPanelId,
-      title: 'Tracked Items',
+    client.addAgentPanel({
+      id: TRACKER_PANEL_ID,
+      title: 'Tracker',
       icon: 'Notebook',
-      locations: ['explorer'],
-      Component: (props) => <TrackedItems {...props} client={client} />,
+      locations: ['workspace'],
+      Component: TrackedItems,
     }),
     client.addAgentPanel({
       id: REPOSITORY_QUERY_PANEL_ID,
@@ -155,12 +215,13 @@ export default function contribute(client: PluginClientContext) {
       },
     }),
     client.addCommandCenterItem({
-      id: 'open-tracked-items',
-      title: 'Open Tracked Items',
+      id: 'open-tracker',
+      title: 'Open Tracker',
       icon: 'Notebook',
-      context: 'workspace',
+      keywords: ['notebook', 'tracked items', 'decisions'],
+      context: 'agent',
       onSelect({ openPanel }) {
-        openPanel(trackedItemsPanelId, { location: 'explorer' });
+        openPanel(TRACKER_PANEL_ID, { location: 'workspace' });
       },
     }),
     client.addComposerItem({
@@ -169,6 +230,10 @@ export default function contribute(client: PluginClientContext) {
     }),
     client.addComposerItem({ id: 'team-selector', Component: TeamComposerItem }),
     client.addComposerItem({ id: 'model-selector', Component: ModelComposerItem }),
+    client.addComposerItem({
+      id: 'tracker',
+      Component: (props) => <TrackerComposerItem {...props} client={client} />,
+    }),
     client.addAttachmentSource(pastedTextSource),
     client.addComposerItem({ id: 'paste-text', Component: PastedTextComposerItem }),
     client.addCommandCenterItem({
@@ -190,49 +255,6 @@ export default function contribute(client: PluginClientContext) {
       },
     }),
   ];
-  if ('timelineDecorations' in client && client.timelineDecorations === true) {
-    cleanup.push(
-      client.addTimelineTransformer({
-        id: CLARIFY_REPLY_KIND,
-        query: { itemType: 'assistant_message' },
-        transform(source) {
-          if (source.phase !== 'complete' || !source.item.text.trim()) return;
-          const cursor = 'timelineCursor' in source ? source.timelineCursor : undefined;
-          const reply = ClarifyReplySchema.safeParse({
-            ...(cursor && typeof cursor === 'object' ? cursor : {}),
-            messageId: source.item.messageId,
-          });
-          if (!reply.success) return;
-          return {
-            preserveSource: true,
-            items: [
-              {
-                type: 'plugin',
-                kind: CLARIFY_REPLY_KIND,
-                version: 1,
-                data: {
-                  epoch: reply.data.epoch,
-                  seq: reply.data.seq,
-                  ...(reply.data.messageId ? { messageId: reply.data.messageId } : {}),
-                },
-              },
-            ],
-          };
-        },
-      }),
-      client.addTimelineRenderer({
-        kind: CLARIFY_REPLY_KIND,
-        schema: ClarifyReplySchema,
-        version: 1,
-        Component: (props) => (
-          <ClarifyReply
-            key={JSON.stringify([props.host.id, props.agentId, props.item.data])}
-            {...props}
-          />
-        ),
-      }),
-    );
-  }
   return () => {
     clearPendingSkillDocuments();
     clearPendingRepositoryQueries();

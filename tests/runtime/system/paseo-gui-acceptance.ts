@@ -10,9 +10,9 @@ import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
+import { PaseoWorkspaceServices } from '../../../runtime/src/integrations/paseo-workspace-services.js';
 import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
 import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
-import { ClarifyService } from '../../../runtime/src/session-memory/clarify.js';
 import { ConversationInference } from '../../../runtime/src/session-memory/inference.js';
 import { openConversationProductStore } from '../../../runtime/src/session-memory/product-store.js';
 import { TrackerService } from '../../../runtime/src/session-memory/tracker.js';
@@ -81,6 +81,7 @@ async function browser(...args: string[]): Promise<string> {
   );
   return result.stdout;
 }
+const firstReply = Promise.withResolvers<void>();
 let modelCalls = 0;
 let providerError: unknown;
 const provider = createHttpServer(async (request, response) => {
@@ -93,6 +94,7 @@ const provider = createHttpServer(async (request, response) => {
     };
     const lastUser = input.messages?.findLastIndex(({ role }) => role === 'user') ?? -1;
     const prompt = JSON.stringify(input.messages?.[lastUser]?.content ?? '');
+    if (prompt.includes('GUI desktop launch')) await firstReply.promise;
     const exerciseParallel = prompt.includes('Exercise Activity parallel tools');
     const exerciseActivity = exerciseParallel || prompt.includes('Exercise Activity tools');
     const needsTools =
@@ -392,6 +394,7 @@ api.setWorkspaceTools(tools);
 api.setWorkspaceMcp(new WorkspaceMcp(tools, listen));
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
+let services: PaseoWorkspaceServices | undefined;
 let memory: ConversationRecords | undefined;
 let products: ReturnType<typeof openConversationProductStore> | undefined;
 let inference: ConversationInference | undefined;
@@ -410,6 +413,29 @@ try {
     environment,
     piCommand: path.join(root, 'runtime/dist/integrations/pi-rpc.js'),
   });
+
+  assert(host.workspaceNaming, 'The staged daemon exposes first-prompt naming');
+  services = new PaseoWorkspaceServices({
+    api: host.api,
+    mutations: host.workspaceMutations,
+    naming: host.workspaceNaming,
+    stateDirectory: path.join(directory, 'workspace-services'),
+    environment: { ...environment, LTCOOK_WORKSPACE_ORGANIZER_ENABLED: 'false' },
+    generator: {
+      async classify() {
+        return { category: 'Feature' };
+      },
+      async rename(job) {
+        return {
+          ...(job.nameWorkspace ? { workspaceTitle: 'Fixture workspace' } : {}),
+          agents: job.nameTab ? [{ id: job.agentId, title: 'Fixture session' }] : [],
+        };
+      },
+    },
+  });
+  services.start();
+  api.setWorkspaceServices(services);
+
   const reserveIdleRestart = host.reserveIdleRestart;
   assert(reserveIdleRestart, 'The staged supervisor and its worker expose idle restart');
   api.setProviderSubagents(async (agentId) => {
@@ -477,7 +503,14 @@ try {
   await waitForComposer();
   await inspectStage('new-workspace-desktop');
   await selectLtcook();
-  await sendPrompt('GUI desktop launch', 'Create');
+  stage = 'first-prompt-naming';
+  await browser('fill', '[data-ltcook-acceptance-composer=visible]', 'GUI desktop launch');
+  await clickButton('Create');
+  await browser('wait', '--text', 'Fixture session');
+  assert(!(await browser('snapshot')).includes('GUI native Leader response.'));
+  firstReply.resolve();
+  await browser('wait', '--text', 'GUI native Leader response.');
+  await browser('wait', '--text', 'tok/s');
   const initial = runtime.listSessions(workspace, 'default-minimal');
   assert.equal(initial.length, 1, 'Native submission creates exactly one LTCook Session');
   const leaderId = initial[0]!.id;
@@ -507,6 +540,52 @@ try {
   );
   assert(!nativeChat.includes('Team Overview'), 'No intermediary Team Overview replaces the chat');
   await inspectStage('native-leader-chat');
+  stage = 'workspace-auto-rename-menu';
+  const firstWorkspaceId = leader!.agent.workspaceId;
+  assert(firstWorkspaceId);
+  const menuRow = (part: string) =>
+    `[data-testid^="sidebar-workspace-${part}-"][data-testid$=":${firstWorkspaceId}"]`;
+  const openNamingMenu = async () => {
+    await browser('hover', menuRow('row'));
+    await browser('click', menuRow('kebab'));
+  };
+  const autoRename = menuRow('menu-auto-rename');
+  const expectSwitch = async (enabled: boolean) => {
+    await browser(
+      'wait',
+      '--fn',
+      `document.querySelector(${JSON.stringify(autoRename)})?.getAttribute('aria-checked') === '${enabled}'`,
+    );
+  };
+  assert.equal(
+    (await host.api.workspaces.ref(firstWorkspaceId).refresh())?.title,
+    'Fixture workspace',
+  );
+  await openNamingMenu();
+  await expectSwitch(true);
+  await browser('click', autoRename);
+  await expectSwitch(false);
+  await browser('click', autoRename);
+  await expectSwitch(true);
+  await browser('click', menuRow('menu-rename'));
+  await browser('fill', menuRow('rename-input'), 'Manual fixture name');
+  await browser('press', 'Enter');
+  await browser('wait', '--text', 'Manual fixture name');
+  await openNamingMenu();
+  await expectSwitch(false);
+  await browser('press', 'Escape');
+  await clickButton('Services');
+  const group = '[data-testid="ltcook-sidebar-workspace-services"]';
+  await browser('click', `${group} [aria-label^="Workspace Organizer,"]`);
+  await browser('click', `${group} [aria-label^="Renamer,"]`);
+  await browser('wait', '--text', 'On the first prompt');
+  await clickButton('Services');
+
+  stage = 'native-turn-speed-breakdown';
+  await browser('find', 'role', 'button', 'click', '--name', 'Turn speed');
+  await browser('wait', '--text', 'whole turn');
+  await browser('wait', '--text', 'tokens');
+  await browser('press', 'Escape');
 
   stage = 'native-explorer-defaults';
   await browser('wait', '--text', 'Recent conversation activity');
@@ -535,7 +614,7 @@ try {
     'Returning to the same workspace and reloading respects the closed Activity tab',
   );
   await openExplorerPanel('Workspace Services');
-  await browser('wait', '--text', 'Workspace Organizer');
+  await browser('click', `${explorer} [aria-label^="Workspace Organizer,"]`);
   await browser('wait', '--text', 'Renamer');
   await openExplorerPanel('Activity');
   await browser('wait', '--text', 'Recent conversation activity');
@@ -616,6 +695,37 @@ try {
   );
   await inspectStage('native-mobile-leader-chat');
   assert(modelCalls >= 2, 'Submitted native prompts reached the local scripted provider');
+
+  stage = 'workspace-organizer-compact';
+  await clickButton('Open menu');
+  const mobileServices = '[aria-label="Services"]';
+  const clickDrawerControl = async (selector: string) => {
+    await browser('scrollintoview', selector);
+    await browser(
+      'wait',
+      '--fn',
+      `(() => {
+        const button = document.querySelector(${JSON.stringify(selector)});
+        if (!button) return false;
+        const rect = button.getBoundingClientRect();
+        return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+      })()`,
+    );
+    await browser('click', selector);
+  };
+  await clickDrawerControl(mobileServices);
+  await clickDrawerControl(`${group} [aria-label^="Workspace Organizer,"]`);
+  const tagger = `${group} [aria-label^="Tagger,"]`;
+  await clickDrawerControl(tagger);
+  await browser('wait', '--text', 'Feature, Bugfix, CSC, Research');
+  await clickDrawerControl(tagger);
+  const archive = `${group} [aria-label^="Auto-archive,"]`;
+  await clickDrawerControl(archive);
+  await browser('wait', '--text', 'Unarchive or Restore');
+  await clickDrawerControl(archive);
+  await clickDrawerControl(mobileServices);
+  await clickButton('Close sidebar');
+  await browser('wait', '[aria-label="Open menu"]');
 
   await browser('set', 'viewport', '1440', '1000');
   await waitForComposer();
@@ -878,14 +988,9 @@ try {
 
   const evidence = createPaseoMemorySource(host.api, secret);
   products = openConversationProductStore(path.join(directory, 'conversation-products.sqlite'));
-  let clarificationRequests = 0;
   inference = new ConversationInference(
     {
-      hosted: async (product, prompt) => {
-        if (product === 'clarify') {
-          clarificationRequests++;
-          return { text: 'The public cursor hides its storage layout.', complete: true };
-        }
+      hosted: async (prompt) => {
         const decoded = JSON.parse(prompt.input) as {
           current: { seq: number; text: string };
           trackers: { id: string }[];
@@ -915,7 +1020,6 @@ try {
   tracker.observe(mobileSession.id, { baseline: true });
   await tracker.settled();
   api.setConversationInference(inference);
-  api.setClarify(new ClarifyService(products, evidence, inference, 8000));
   api.setTracker(tracker);
   memory = new ConversationRecords({
     databasePath: path.join(directory, 'activity-conversation.sqlite'),
@@ -987,44 +1091,9 @@ try {
   );
   assert.equal(modelCalls, modelCallsBeforeQuery, 'The repository tool runs without a model turn');
   await browser('click', '[aria-label^="RAG Index,"]');
-  stage = 'conversation-products';
+  stage = 'tracked-items';
   await hiddenLeader.send('Use an opaque public cursor.', { clientMessageId: randomUUID() });
   await hiddenLeader.waitForFinish(30_000);
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelectorAll('[data-testid="ltcook-clarify-reply"]').length > 1`,
-  );
-  const original = (await evidence.read(mobileSession.id, undefined, 'tail')).messages.findLast(
-    ({ author }) => author === 'agent',
-  );
-  assert(original);
-  assert.equal(clarificationRequests, 0);
-  const clarifyButton = `[data-testid="ltcook-clarify-source-${original.seq}"] [data-testid="ltcook-clarify-reply"]`;
-  const clickClarify = async () => {
-    await browser('wait', clarifyButton);
-    await browser(
-      'eval',
-      `document.querySelector(${JSON.stringify(clarifyButton)})?.scrollIntoView({ block: 'center' })`,
-    );
-    await browser('click', clarifyButton);
-  };
-  await clickClarify();
-  await browser('wait', '--text', 'Clarify with Hosted inference');
-  assert.equal(clarificationRequests, 0);
-  await clickClarify();
-  await browser('wait', '--text', 'The public cursor hides its storage layout.');
-  assert.equal(clarificationRequests, 1);
-  await clickClarify();
-  await clickClarify();
-  await browser('wait', '--text', 'The public cursor hides its storage layout.');
-  assert.equal(clarificationRequests, 1);
-  assert.deepEqual(
-    (await evidence.read(mobileSession.id, undefined, 'tail')).messages.findLast(
-      ({ author }) => author === 'agent',
-    ),
-    original,
-  );
   await openExplorerPanel('Tracked Items');
   await browser('wait', '--text', 'Design Decisions (1)');
   await clickButton('Design Decisions (1)');
@@ -1105,6 +1174,34 @@ try {
       `Existing telemetry measured ${operation}`,
     );
   }
+  stage = 'workspace-auto-rename-opt-out';
+  const optedOutDirectory = path.join(directory, 'auto-rename-off');
+  await mkdir(optedOutDirectory);
+  const optedOut = await host.api.workspaces.open(optedOutDirectory);
+  await optedOut.setMetadata({ 'ltcook.autoRename': false });
+  const nativePi = { config: { provider: 'pi/fixture/test' }, env: environment };
+  const draftPrompt = 'Draft prompt in the workspace with naming off';
+  const optedOutDraft = await optedOut.agents.create({
+    ...nativePi,
+    prompt: draftPrompt,
+    clientMessageId: randomUUID(),
+  });
+  assert.equal((await optedOutDraft.refresh())?.agent.title, null);
+  const optedOutExisting = await optedOut.agents.create(nativePi);
+  const existingPrompt = 'First prompt to the untitled tab with naming off';
+  await optedOutExisting.send(existingPrompt, { clientMessageId: randomUUID() });
+  assert.equal((await optedOutExisting.refresh())?.agent.title, null);
+  assert.deepEqual(
+    await host.workspaceNaming.pending(optedOut.id, new AbortController().signal),
+    [],
+  );
+  const optOutDeadline = Date.now() + 10_000;
+  while (Date.now() < optOutDeadline) {
+    const agents = await Promise.all([optedOutDraft.refresh(), optedOutExisting.refresh()]);
+    if (agents.every((result) => result?.agent.status === 'idle')) break;
+    await Bun.sleep(50);
+  }
+
   stage = 'native-idle-restart';
   const rejected = await fetch(`http://${host.listen}/api/ltcook/idle-restart`, {
     method: 'POST',
@@ -1164,11 +1261,13 @@ try {
   );
   throw error;
 } finally {
+  firstReply.resolve();
   await browser('close').catch(() => undefined);
   await tracker?.close();
   await inference?.close();
   products?.close();
   await memory?.close();
+  await services?.close();
   await host?.close();
   await runtime?.close();
   await evals.close();
