@@ -603,10 +603,12 @@ An intentionally limited case demonstrates truncation. Edit, rename, and delete
 scenarios reuse each provider's search state. Traditional Tests inject stale
 and malformed evidence to cover failures during index updates.
 
-The first query runs with an empty application index. The next invocation of
-the same question measures warm retrieval. ColGREP also measures its native
-index build on a fresh copy and reports cache bytes. Filesystem caches remain
-in place. Each result records serialized bytes and elapsed time. Save the JSON
+The ColGREP arm measures the initial build separately from its first query
+and warm retrieval. It measures cache bytes before and after each refresh
+and samples the peak while the candidate is being built. A new provider also
+checks that a simulated change to the live device identity reuses the same
+published generation. Filesystem caches remain in place. Each result records
+serialized bytes and elapsed time. Save the JSON
 to compare per-question outcomes across runs using the recorded source revision,
 corpus, labels, implementation hash, and provider versions. Invalid evidence,
 an unavailable or indexing response, or a failed standalone index build
