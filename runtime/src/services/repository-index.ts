@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { clearTimeout, setTimeout } from 'node:timers';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import type { DiagnosticEvent } from '../diagnostics/telemetry.js';

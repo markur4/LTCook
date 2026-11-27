@@ -5,7 +5,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { setTimeout } from 'node:timers';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { riedToolDefinition } from '../tools/ried.js';
 import { RiedService } from '../repository/discovery.js';
@@ -640,7 +640,7 @@ export function activateStandaloneRepoSearch(
           logPath,
           tracePath,
           `pi-extension:${createHash('sha256')
-            .update(readFileSync(new URL(import.meta.url)))
+            .update(readFileSync(fileURLToPath(import.meta.url)))
             .digest('hex')}`,
         )
       : undefined;
