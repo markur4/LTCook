@@ -1,7 +1,12 @@
 import type { ServerResponse } from 'node:http';
+import path from 'node:path';
 import { z } from 'zod';
 import { activityToggleRpc } from '../paseo-plugin/shared/activity.js';
-import { repositoryQuerySubscription } from '../paseo-plugin/shared/repository-query.js';
+import {
+  repositoryAgentQueryInput,
+  repositoryQueryWorkspaceSubscription,
+  repositoryWorkspaceQueryInput,
+} from '../paseo-plugin/shared/repository-query.js';
 import type { createColgrepProvider } from '../repository/providers/colgrep.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from '../repository/workspace.js';
 import type { ConversationRecords } from '../session-memory/conversation.js';
@@ -28,6 +33,7 @@ export interface ActivityServices {
 }
 
 interface ActivityDependencies {
+  shutdownSignal: AbortSignal;
   activity?: ActivityServices;
   catalog?: ToolCatalog;
   workspaceServices?: PaseoWorkspaceServices;
@@ -48,12 +54,22 @@ type ActivityHandler = (
   dependencies: ActivityDependencies,
 ) => void | Promise<void>;
 
-const repositoryQueryRequest = repositoryQuerySubscription.input.extend({
-  sessionId: z.string().min(1).max(1024).optional(),
+const paseoWorkspaceRoot = z.string().refine(path.isAbsolute);
+const repositoryWorkspaceRequest = repositoryQueryWorkspaceSubscription.input.extend({
+  workspaceRoot: paseoWorkspaceRoot,
 });
+const repositoryQueryRequest = z.union([
+  repositoryAgentQueryInput.extend({ sessionId: z.string().min(1).max(1024).optional() }),
+  repositoryWorkspaceQueryInput.extend({ workspaceRoot: paseoWorkspaceRoot }),
+]);
 
 function activityWorkspaceIdentity(workspace: RepositoryWorkspace): string {
   return JSON.stringify([workspace.identity, workspace.cacheIdentity]);
+}
+
+async function openPaseoRepositoryWorkspace(root: string) {
+  const workspace = await openRepositoryWorkspace(root).catch(() => undefined);
+  return workspace && path.relative(workspace.root, root) === '' ? workspace : undefined;
 }
 
 function boundActivitySession(
@@ -120,6 +136,42 @@ const activityRoutes = {
     activity.colgrep.setIndexingEnabled(enabled);
     response.writeHead(200).end(JSON.stringify({ enabled }));
   },
+  async '/v1/activity/repository-query-workspace'(parsed, response, { activity, shutdownSignal }) {
+    const input = repositoryWorkspaceRequest.safeParse(parsed);
+    if (!input.success) {
+      response.writeHead(400).end('{"error":"Invalid repository workspace request."}');
+      return;
+    }
+    const workspace = await openPaseoRepositoryWorkspace(input.data.workspaceRoot);
+    if (response.destroyed) return;
+    if (shutdownSignal.aborted) {
+      response.writeHead(503).end('{"error":"LTCook runtime is stopping."}');
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    if (!workspace) {
+      response.end('null\n');
+      return;
+    }
+
+    // > Keep the existing scheduler authorization only while the Query Repo tab is open.
+    const release = activity?.colgrep.indexService.activate(workspace);
+    const cleanup = () => {
+      response.off('close', cleanup);
+      shutdownSignal.removeEventListener('abort', close);
+      release?.();
+    };
+    const close = () => {
+      cleanup();
+      response.end();
+    };
+    response.once('close', cleanup);
+    shutdownSignal.addEventListener('abort', close, { once: true });
+    response.write(
+      JSON.stringify({ identity: activityWorkspaceIdentity(workspace), path: workspace.root }) +
+        '\n',
+    );
+  },
   async '/v1/activity/repository-query'(parsed, response, dependencies) {
     const input = repositoryQueryRequest.safeParse(parsed);
     if (!input.success) {
@@ -131,17 +183,22 @@ const activityRoutes = {
       response.writeHead(503).end('{"error":"LTCook repository tools are unavailable."}');
       return;
     }
-    const { agentId, sessionId, workspaceIdentity, request } = input.data;
+    const query = input.data;
+    const { workspaceIdentity, request } = query;
+    const readWorkspace =
+      'agentId' in query
+        ? async () =>
+            (await activityRepositoryScope(query.agentId, query.sessionId, dependencies))?.workspace
+        : () => openPaseoRepositoryWorkspace(query.workspaceRoot);
     const connection = new AbortController();
     const cancel = () => connection.abort();
     response.once('close', cancel);
     if (response.destroyed) cancel();
     const deadline = AbortSignal.timeout(REPO_SEARCH_TIMEOUT_MS);
-    const signal = AbortSignal.any([connection.signal, deadline]);
+    const signal = AbortSignal.any([connection.signal, deadline, dependencies.shutdownSignal]);
     try {
-      const scope = await activityRepositoryScope(agentId, sessionId, dependencies);
+      const workspace = await readWorkspace();
       signal.throwIfAborted();
-      const workspace = scope?.workspace;
       if (!workspace) {
         response.writeHead(403).end('{"error":"The repository search scope is unavailable."}');
         return;
@@ -149,13 +206,13 @@ const activityRoutes = {
       if (activityWorkspaceIdentity(workspace) !== workspaceIdentity) {
         response
           .writeHead(409)
-          .end('{"error":"The worktree changed. Reopen Query Repo from Activity."}');
+          .end('{"error":"The worktree changed. Reopen Query Repo for the current worktree."}');
         return;
       }
       const name = request.tool === 'search' ? REPO_SEARCH_TOOL_NAME : REPO_LOCATE_TOOL_NAME;
       const result = await catalog.invoke(name, request.input, {
-        agentId,
-        sessionId,
+        agentId: 'agentId' in query ? query.agentId : query.workspaceId,
+        sessionId: 'agentId' in query ? query.sessionId : undefined,
         workspaceRoot: workspace.root,
         workspaceFileAccess: false,
         repositorySearchAccess: true,
@@ -163,7 +220,7 @@ const activityRoutes = {
         signal,
       });
       await workspace.assertUnchanged();
-      const current = (await activityRepositoryScope(agentId, sessionId, dependencies))?.workspace;
+      const current = await readWorkspace();
       signal.throwIfAborted();
       if (
         !current ||
@@ -176,6 +233,10 @@ const activityRoutes = {
       response.writeHead(200).end(JSON.stringify({ text: repositoryEvidenceText(name, result) }));
     } catch (error) {
       if (connection.signal.aborted) return;
+      if (dependencies.shutdownSignal.aborted) {
+        response.writeHead(503).end('{"error":"LTCook runtime is stopping."}');
+        return;
+      }
       if (deadline.aborted) {
         response.writeHead(504).end('{"error":"The repository tool timed out."}');
         return;

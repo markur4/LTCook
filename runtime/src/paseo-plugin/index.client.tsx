@@ -17,7 +17,9 @@ import { ActivityPanel } from './client/screens/ActivityPanel';
 import {
   clearPendingRepositoryQueries,
   REPOSITORY_QUERY_PANEL_ID,
+  WORKSPACE_QUERY_PANEL_ID,
   RepositoryQuery,
+  WorkspaceRepositoryQuery,
 } from './client/screens/RepositoryQuery';
 import { TrackedItems } from './client/screens/TrackedItems';
 import { WorkspaceServices } from './client/components/WorkspaceServices';
@@ -175,6 +177,13 @@ export default function contribute(client: PluginClientContext) {
       icon: 'Notebook',
       locations: ['workspace'],
       Component: TrackedItems,
+    }),
+    client.addWorkspacePanel({
+      id: WORKSPACE_QUERY_PANEL_ID,
+      title: 'Query Repo',
+      icon: 'Search',
+      locations: ['workspace'],
+      Component: (props) => <WorkspaceRepositoryQuery {...props} key={props.workspaceId} />,
     }),
     client.addAgentPanel({
       id: REPOSITORY_QUERY_PANEL_ID,
