@@ -298,8 +298,8 @@ Evals remain separately invoked.
 Run local model inference on GPU for the full development Agent Evals suite.
 Check actual GPU residency with `ollama ps` while the models are loaded. Run
 explicit CPU benchmarks separately and report their timings independently of
-the GPU suite. The Bonsai fallback below applies when local GPU evaluation is
-unavailable or exceeds its safeguard.
+the GPU suite. Use the hosted fallback below for routine Agent Evals when GPU
+inference is unavailable or Bonsai exceeds its safeguard.
 
 Prettier is pinned as a development-only JavaScript dependency. Its commands cover
 authored runtime, team, and test TypeScript, excluding generated distributions.
@@ -380,12 +380,18 @@ Audit and full summarization qualification.
 When the categories run together, semantic audit uses the prompt already
 captured during Behavior Evaluation rather than launching another agent task.
 
-For Bonsai-backed Agent Evals, use GPT-6 Luna at high reasoning on hosts with
-no usable GPU or when Bonsai exhausts its safeguard. Use the authorized hosted
-provider for the evaluation and report the model and reasoning level. Restart
-matched comparisons with the fallback for every arm so model changes cannot
-be confused with differences in the input. Explicitly local candidate
+Use hosted GPT-6 Luna for routine model-backed Agent Evals whenever the
+evaluation host has no usable GPU or Bonsai exhausts its safeguard. Default
+to high reasoning and use a case's specified hosted reasoning level when
+it has one. Run every arm of a matched comparison with the same model and
+reasoning, and report the selection. Explicitly local and CPU-only candidate
 comparisons keep their assigned models and inference settings.
+
+The built-in native agent cases in `ltcook eval run` require local Bonsai.
+On a host without a usable GPU, use an authorized equivalent hosted route
+when available and leave the case pending otherwise. For the Renamer's
+workspace title instruction, `bun evals/renamer.ts` runs one synthetic case
+through hosted `@tiny` with GPT-6 Luna at low reasoning.
 
 ### Summarization qualification
 
