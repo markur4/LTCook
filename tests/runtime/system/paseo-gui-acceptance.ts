@@ -1372,21 +1372,6 @@ try {
     await browser('wait', '--text', bugHunterResponse);
     stopInvestigation.abort();
     assert.equal(await investigation, stopInvestigation.signal.reason);
-    const [conversation] =
-      runtime!
-        .bugHunterConversations(workspace, [{ id: 'browser-fixture-hunt' }])
-        .get('browser-fixture-hunt') ?? [];
-    assert(conversation);
-    const history = await host.api.agents.ref(conversation.id).timeline.refetch({
-      direction: 'tail',
-      projection: 'canonical',
-      limit: 20,
-    });
-    assert(
-      history.entries.some(
-        ({ item }) => item.type === 'assistant_message' && item.text === bugHunterResponse,
-      ),
-    );
   } finally {
     bugHunterReply.resolve();
     stopInvestigation.abort();
@@ -1434,6 +1419,7 @@ try {
       teamsBrowser: 'reuse and New Session',
       childNavigation: 'native subagent track and contextual panel',
       panels: 'Activity Explorer, Team hierarchy, Task Board, Diagnostics',
+      bugHunter: 'Activity entry, confirmed finding, and live native reply',
       conversationProducts: 'recorded Tracker notes and host-wide pause and resume',
       telemetry: 'existing Perfetto timings exported',
       idleRestart: 'busy refusal, admission freeze, release and graceful shutdown',

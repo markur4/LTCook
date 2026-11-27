@@ -216,7 +216,8 @@ beside its agent conversation.
 - **BugHunter** in **Activity → Services** opens a workspace tab with recent
   hunts, findings, and repair progress. Select a hunt and an agent to follow
   its read-only conversation. **Open native chat** opens the matching Paseo
-  agent tab when the conversation is available.
+  agent tab when the conversation is available. If a chat refresh fails, the
+  tab can still show messages it already received.
 - **Tracker** in **Activity → Services** shows the conversation's extraction
   state and recorded coverage. **Open Tracker** opens its full notebook tab.
   The tab stays bound to that conversation when you switch to another agent.

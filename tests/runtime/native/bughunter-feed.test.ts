@@ -89,11 +89,12 @@ test('BugHunter follows only the selected hunt’s authorized native chat and re
   expect(releaseCount).toBe(1);
 });
 
-test('BugHunter appends native chat updates without repeating the previous message', async () => {
+test('BugHunter appends native chat updates and retains messages after a timeline read fails', async () => {
   const stop = new AbortController();
   const snapshots: BugHunterSnapshot[] = [];
   const entries = [{ seqStart: 1, item: { type: 'user_message', text: 'Check indexing.' } }];
   let updated: (() => void) | undefined;
+  let failTimeline = false;
   const paseo = {
     agents: {
       ref(id: string) {
@@ -104,6 +105,7 @@ test('BugHunter appends native chat updates without repeating the previous messa
               return { ready: Promise.resolve(), async release() {} };
             },
             async refetch() {
+              if (failTimeline) throw new Error('Timeline unavailable.');
               return { agentId: id, epoch: 'fixture', entries: [...entries] };
             },
           },
@@ -111,7 +113,7 @@ test('BugHunter appends native chat updates without repeating the previous messa
       },
     },
   } as unknown as PaseoApi;
-  const deadline = setTimeout(() => stop.abort(), 3_000);
+  const deadline = setTimeout(() => stop.abort(), 4_000);
   try {
     await observeBugHunter(
       paseo,
@@ -125,6 +127,9 @@ test('BugHunter appends native chat updates without repeating the previous messa
             item: { type: 'assistant_message', text: 'Investigating.' },
           });
           updated?.();
+        } else if (snapshots.length === 2) {
+          failTimeline = true;
+          updated?.();
         } else {
           stop.abort();
         }
@@ -134,7 +139,9 @@ test('BugHunter appends native chat updates without repeating the previous messa
     expect(snapshots.map(({ chat }) => chat?.messages.map(({ text }) => text))).toEqual([
       ['Check indexing.'],
       ['Check indexing.', 'Investigating.'],
+      ['Check indexing.', 'Investigating.'],
     ]);
+    expect(snapshots.at(-1)?.chat?.unavailable).toBe(true);
   } finally {
     clearTimeout(deadline);
   }

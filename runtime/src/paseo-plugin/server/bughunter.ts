@@ -114,7 +114,7 @@ function observeConversation(agentId: string, timeline: Timeline, signal: AbortS
         // > A newer live event may have arrived while the tail request was in flight.
         deliveredRevision = capturedRevision;
       } catch {
-        chat = { agentId, unavailable: true, messages: [] };
+        chat = { ...chat, unavailable: true };
       }
       return chat;
     },

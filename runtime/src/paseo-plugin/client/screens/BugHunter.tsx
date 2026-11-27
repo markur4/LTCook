@@ -66,7 +66,7 @@ function HuntChat({
   );
   const stale = stream.status === 'closed' || stream.status === 'error';
 
-  if (!chat || chat.unavailable || !chat.messages.length) {
+  if (!chat?.messages.length) {
     return (
       <ActivityText theme={theme} size={14} tone={stale || chat?.unavailable ? 'warning' : 'muted'}>
         {stale || chat?.unavailable
@@ -80,7 +80,7 @@ function HuntChat({
 
   return (
     <>
-      {stale && (
+      {(stale || chat.unavailable) && (
         <ActivityText theme={theme} size={13} tone="warning">
           Chat updates are disconnected.
         </ActivityText>
