@@ -398,12 +398,13 @@ export async function startBugFix(input: {
           build.sourceRevision === batch.integratedRevision &&
           remedy &&
           observation?.generation &&
-          indexProgressProof(hunt, remedy, observation) &&
-          (await input.readPublishedIndex?.(workspace)) === observation.generation &&
-          indexObservation === observation
+          indexProgressProof(hunt, remedy, observation)
         ) {
           await workspace.assertUnchanged();
+          const generation = await input.readPublishedIndex?.(workspace);
           signal.throwIfAborted();
+          if (generation !== observation.generation || indexObservation !== observation)
+            return blocked('The current usable index generation could not confirm recovery.');
           return {
             status: 'completed',
             evidence: `Managed index reconciliation refreshed the affected workspace before its deadline (operation ${observation.operationId}).`,

@@ -409,8 +409,9 @@ a human merges a reviewed repair, resume BugFix to reconcile its GitHub state.
 For a managed repository indexing stall, recovery requires a fresh published
 index generation in the affected workspace before the original progress limit,
 a readiness check for that same generation, and build provenance matching the
-integrated revision. Other cases remain pending when a corresponding runtime
-probe is unavailable. Read [the qualification plan](bughunter-qualification/PLAN.md)
+integrated revision. This observation verifies the managed progress
+deadline for that workspace. Findings that require a different workload or
+failure condition remain pending until that behavior has its own probe. Read [the qualification plan](bughunter-qualification/PLAN.md)
 for the acceptance cases and fixtures.
 
 ## Local Ollama and Agent Evals
