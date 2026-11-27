@@ -188,8 +188,19 @@ export class RuntimeController implements RuntimeControllerContract {
           );
           activeAgents.set(sessionId, live);
         }
+        // > The native archive call can still be in progress after the runtime ends
+        // > the assignment scope. A timeline request at that point can reload the agent.
+        const observing =
+          stage === 'scan'
+            ? this.bugScanModelScopes.has(nativeAgentId)
+            : this.bugFixExecutions.get(sessionId)?.stopped === false;
         return [
-          { id: nativeAgentId, role: member.name, stage, archived: !live.has(nativeAgentId) },
+          {
+            id: nativeAgentId,
+            role: member.name,
+            stage,
+            archived: !observing || !live.has(nativeAgentId),
+          },
         ];
       });
     const read = (sessionId: string) => {
