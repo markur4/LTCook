@@ -398,9 +398,9 @@ function namingFixture() {
 
 test('Renamer names the first prompt and names a later tab without a workspace cooldown', async () => {
   const f = namingFixture();
-  await f.renamer.visit(f.job.workspaceId, f.signal);
+  await f.renamer.visit(f.job.workspaceId, 'LTCook', f.signal);
   f.jobs.push({ ...f.job, id: 'job-two', agentId: 'agent-two', nameWorkspace: false });
-  await f.renamer.visit(f.job.workspaceId, f.signal);
+  await f.renamer.visit(f.job.workspaceId, 'LTCook', f.signal);
   expect(f.writes).toEqual([
     { workspaceTitle: 'Fix login crash', agentTitle: 'Login crash' },
     { agentTitle: 'Login crash' },
@@ -414,7 +414,7 @@ test('Renamer limits displayed characters without splitting graphemes', async ()
     workspaceTitle: `${emoji.repeat(21)} trailing`,
     agents: [{ id: f.job.agentId, title: '  Investigate\nlogin crash  ' }],
   });
-  await f.renamer.visit(f.job.workspaceId, f.signal);
+  await f.renamer.visit(f.job.workspaceId, 'LTCook', f.signal);
   expect(f.writes).toEqual([
     { workspaceTitle: emoji.repeat(WORKSPACE_TITLE_LIMIT), agentTitle: 'Investigate log' },
   ]);
@@ -429,7 +429,7 @@ test('Renamer falls back to the first prompt when a proposal names an unexpected
     workspaceTitle: 'Unrelated title',
     agents: [{ id: 'someone-elses-agent', title: 'Overwrite' }],
   });
-  await f.renamer.visit(f.job.workspaceId, f.signal);
+  await f.renamer.visit(f.job.workspaceId, 'LTCook', f.signal);
   expect(f.writes).toEqual([
     { workspaceTitle: 'Repair the login cra', agentTitle: 'Repair the logi' },
   ]);
@@ -447,8 +447,8 @@ test('Renamer coalesces repeated notifications and never writes after cancellati
     entered.resolve();
     return release.promise;
   };
-  const first = f.renamer.visit(f.job.workspaceId, abort.signal);
-  expect(f.renamer.visit(f.job.workspaceId, abort.signal)).toBe(first);
+  const first = f.renamer.visit(f.job.workspaceId, 'LTCook', abort.signal);
+  expect(f.renamer.visit(f.job.workspaceId, 'LTCook', abort.signal)).toBe(first);
   await entered.promise;
   expect(calls).toBe(1);
   abort.abort();
@@ -529,7 +529,7 @@ test('Renamer falls back on provider failure and exposes the correction', async 
   f.generator.rename = async () => {
     throw new ServiceInferenceError('authentication', 'Sign in again.');
   };
-  await f.renamer.visit(f.job.workspaceId, f.signal);
+  await f.renamer.visit(f.job.workspaceId, 'LTCook', f.signal);
   expect(f.writes).toHaveLength(1);
   expect(f.renamer.status().diagnostic).toBe('Sign in again.');
 });

@@ -646,10 +646,11 @@ test('A new naming job can apply while Organizer is blocked in classification', 
     started.resolve();
     return finish.promise;
   };
-  f.options.generator!.rename = async () => ({
-    workspaceTitle: 'Repair login',
-    agents: [{ id: f.agent.id, title: 'Login crash' }],
-  });
+  f.workspace.projectDisplayName = 'LTCook Development';
+  f.options.generator!.rename = async (job) => {
+    expect(job.projectName).toBe('LTCook Development');
+    return { workspaceTitle: 'Repair login', agents: [{ id: f.agent.id, title: 'Login crash' }] };
+  };
   const job = {
     id: 'one',
     workspaceId: f.workspace.id,

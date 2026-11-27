@@ -87,7 +87,7 @@ export interface WorkspaceNamingHost {
 export interface WorkspaceMetadataGenerator {
   validate?(signal: AbortSignal): Promise<string>;
   classify(snapshot: WorkspaceMetadataSnapshot, signal: AbortSignal): Promise<unknown>;
-  rename(job: WorkspaceNamingJob, signal: AbortSignal): Promise<unknown>;
+  rename(job: WorkspaceNamingJob & { projectName: string }, signal: AbortSignal): Promise<unknown>;
 }
 
 export const ClassificationSchema = z.strictObject({ category: WorkspaceCategorySchema });

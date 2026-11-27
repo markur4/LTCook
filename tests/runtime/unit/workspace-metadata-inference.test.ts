@@ -29,7 +29,7 @@ function snapshot(count = 1): WorkspaceMetadataSnapshot {
 }
 
 interface RenameInput {
-  workspace?: { title: string; conversation: string };
+  workspace?: { projectName: string; title: string; conversation: string };
   agents: { id: string; title: string; conversation: string }[];
 }
 
@@ -42,6 +42,7 @@ test('Renamer sends only the requested targets and bounded first-prompt text', a
     prompt: long,
     workspaceTitle: long,
     agentTitle: long,
+    projectName: 'LTCook',
     nameWorkspace: false,
     nameTab: true,
   };
@@ -63,6 +64,38 @@ test('Renamer sends only the requested targets and bounded first-prompt text', a
   expect(await generator.rename(job, new AbortController().signal)).toEqual({
     agents: [{ id: job.agentId, title: 'Login crash' }],
   });
+});
+
+test('Renamer supplies the Paseo project as workspace context alongside the task', async () => {
+  const generator = createWorkspaceMetadataGenerator(
+    {},
+    {
+      async complete(_system, user) {
+        expect((JSON.parse(user) as RenameInput).workspace).toEqual({
+          projectName: 'LTCook',
+          title: 'LTCook · Fix login',
+          conversation: 'Fix the login crash in LTCook',
+        });
+        return { workspaceTitle: 'Fix login crash', agents: [] };
+      },
+    },
+  );
+  expect(
+    await generator.rename(
+      {
+        id: 'job-one',
+        workspaceId: 'workspace-one',
+        agentId: 'agent-one',
+        projectName: 'LTCook',
+        workspaceTitle: 'LTCook · Fix login',
+        agentTitle: '',
+        prompt: 'Fix the login crash in LTCook',
+        nameWorkspace: true,
+        nameTab: false,
+      },
+      new AbortController().signal,
+    ),
+  ).toEqual({ workspaceTitle: 'Fix login crash', agents: [] });
 });
 
 test('classification bounds Unicode context independently of conversation size', async () => {
