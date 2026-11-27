@@ -1118,7 +1118,7 @@ try {
   await browser('fill', '[aria-label="Exclude regex"]', '[');
   await clickButton('Run query');
   await browser('wait', '--text', 'filter.excludeRegex[0] must be a valid RE2 regular expression');
-  await browser('fill', '[aria-label="Exclude regex"]', '');
+  await browser('fill', '[aria-label="Exclude regex"]', '^import ');
   await clickButton('Run query');
   await browser('wait', queryResult);
   const literalResult = await browser('get', 'text', queryResult);
