@@ -153,9 +153,8 @@ async function clickButton(name: string): Promise<void> {
   await browser('find', 'role', 'button', 'click', '--name', name, '--exact');
 }
 const explorer = '[data-testid="workspace-explorer-sidebar"]';
-async function openExplorerPanel(name: string): Promise<void> {
-  const addTab = `${explorer} [aria-label="New tab"]`;
-  const target = `explorer-add-${randomUUID()}`;
+async function selectNewTabItem(addTab: string, name: string): Promise<void> {
+  const target = `new-tab-${randomUUID()}`;
   await browser(
     'wait',
     '--fn',
@@ -163,12 +162,15 @@ async function openExplorerPanel(name: string): Promise<void> {
       if (!button.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
       const rect = button.getBoundingClientRect();
       if (!button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))) return false;
-      button.setAttribute('data-ltcook-explorer-add', ${JSON.stringify(target)});
+      button.setAttribute('data-ltcook-new-tab', ${JSON.stringify(target)});
       return true;
     })`,
   );
-  await browser('click', `[data-ltcook-explorer-add="${target}"]`);
+  await browser('click', `[data-ltcook-new-tab="${target}"]`);
   await browser('find', 'role', 'menuitem', 'click', '--name', name, '--exact');
+}
+async function openExplorerPanel(name: string): Promise<void> {
+  await selectNewTabItem(`${explorer} [aria-label="New tab"]`, name);
 }
 async function openActivityPanel(): Promise<void> {
   await browser('press', 'Control+k');
@@ -1110,8 +1112,41 @@ try {
     /query-decoy\.ts/,
     'Literal search preserves query whitespace',
   );
-  assert.equal(modelCalls, modelCallsBeforeQuery, 'The repository tool runs without a model turn');
+  await browser(
+    'wait',
+    '--fn',
+    `(() => {
+      const result = document.querySelector(${JSON.stringify(queryResult)});
+      const tokens = [...(result?.querySelectorAll('span') ?? [])];
+      const key = tokens.find(token => token.textContent === '"status"');
+      const value = tokens.find(token => token.textContent === '"ready"');
+      return Boolean(key && value && getComputedStyle(key).color !== getComputedStyle(value).color);
+    })()`,
+  );
   await browser('click', '[aria-label^="RAG Index,"]');
+  await clickButton(mobileLeader.agent.title);
+  await waitForComposer(mobileLeader.agent.title);
+  stage = 'native-repository-query-launcher';
+  await selectNewTabItem(
+    `[data-testid="workspace-new-tab-button"]:not(${explorer} *)`,
+    'Query Repo',
+  );
+  await browser('find', 'role', 'button', 'click', '--name', 'Edit tool arguments', '--exact');
+  await browser(
+    'find',
+    'placeholder',
+    'Tool arguments (JSON)',
+    'fill',
+    JSON.stringify({ mode: 'literal', query: 'directRepoQueryExtra', paths: ['query-decoy.ts'] }),
+  );
+  await clickButton('Run query');
+  await browser(
+    'wait',
+    '--fn',
+    `[...document.querySelectorAll(${JSON.stringify(queryResult)})].some(result =>
+      result.textContent.includes('1 | export const directRepoQueryExtra = false;'))`,
+  );
+  assert.equal(modelCalls, modelCallsBeforeQuery, 'The repository tool runs without a model turn');
   await clickButton(mobileLeader.agent.title);
   await waitForComposer(mobileLeader.agent.title);
   stage = 'tracked-items';

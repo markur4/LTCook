@@ -20,7 +20,10 @@ import { SessionWorktreesSchema, sessionWorktreesSubscription } from './shared/s
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
 import { workspaceActivityRpc, workspaceServicesRpc } from './shared/workspace-services';
 import { trackerModifyRpc, trackerSubscription } from './shared/tracker';
-import { repositoryQuerySubscription } from './shared/repository-query';
+import {
+  repositoryQuerySubscription,
+  repositoryQueryWorkspaceSubscription,
+} from './shared/repository-query';
 import {
   ModelCatalogRequestSchema,
   ModelCatalogResponseSchema,
@@ -316,6 +319,12 @@ const activityServices = z.object({
     .optional(),
 });
 
+async function repositoryWorkspaceRoot(paseo: PaseoApi, workspaceId: string) {
+  const workspace = await paseo.workspaces.ref(workspaceId).refresh();
+  if (!workspace || workspace.internal || workspace.archivingAt) return undefined;
+  return workspace.workspaceDirectory ?? workspace.projectRootPath;
+}
+
 export default function contribute(server: PluginServerContext) {
   server.handle(workspaceActivityRpc, async (input) =>
     workspaceActivityRpc.output.parse(await runtimeJson('/v1/activity/workspace-touch', input)),
@@ -326,14 +335,85 @@ export default function contribute(server: PluginServerContext) {
   server.handle(activityToggleRpc, async (input) =>
     activityToggleRpc.output.parse(await runtimeJson('/v1/activity/toggle', input)),
   );
+  server.handle(
+    repositoryQueryWorkspaceSubscription,
+    async ({ workspaceId }, { paseo, signal, push }) => {
+      const workspaceRoot = await repositoryWorkspaceRoot(paseo, workspaceId);
+      if (signal.aborted) return;
+      if (!workspaceRoot) {
+        await push(null);
+        return;
+      }
+      const { endpoint, headers } = runtimeConfig();
+      const opening = new AbortController();
+      const timeout = setTimeout(() => opening.abort(), 5_000);
+      let cancelReader: (() => Promise<void>) | undefined;
+      try {
+        const response = await fetch(`${endpoint}/v1/activity/repository-query-workspace`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ workspaceId, workspaceRoot }),
+          signal: AbortSignal.any([signal, opening.signal]) as NonNullable<
+            Parameters<typeof fetch>[1]
+          >['signal'],
+        });
+        if (!response.ok || !response.body)
+          throw new Error('The repository workspace is unavailable.');
+        const reader = response.body.getReader();
+        cancelReader = () => reader.cancel();
+        const decoder = new TextDecoder();
+        let scopeLine = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) throw new Error('The repository workspace did not return its scope.');
+          scopeLine += decoder.decode(value, { stream: true });
+          const end = scopeLine.indexOf('\n');
+          if (scopeLine.length > 65_536)
+            throw new Error('The repository workspace scope is too large.');
+          if (end < 0) continue;
+          clearTimeout(timeout);
+          if (signal.aborted) return;
+          const scope = repositoryQueryWorkspaceSubscription.event.parse(
+            JSON.parse(scopeLine.slice(0, end)),
+          );
+          await push(scope);
+          // > The response stays open solely to own the indexing lease.
+          if (scope) await reader.read();
+          return;
+        }
+      } catch (error) {
+        if (!signal.aborted) throw error;
+      } finally {
+        clearTimeout(timeout);
+        await cancelReader?.().catch(() => undefined);
+      }
+    },
+  );
   server.handle(repositoryQuerySubscription, async (input, { paseo, signal, push }) => {
-    const agent = (await paseo.agents.ref(input.agentId).refresh())?.agent;
-    if (!agent || agent.archivedAt) throw new Error('The conversation is unavailable.');
+    let binding: { workspaceRoot: string } | { sessionId: string | undefined };
+    if ('workspaceId' in input) {
+      const workspaceRoot = await repositoryWorkspaceRoot(paseo, input.workspaceId);
+      if (!workspaceRoot) throw new Error('The repository workspace is unavailable.');
+      binding = { workspaceRoot };
+    } else {
+      const agent = (await paseo.agents.ref(input.agentId).refresh())?.agent;
+      if (!agent || agent.archivedAt) throw new Error('The conversation is unavailable.');
+      binding = {
+        sessionId: agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'],
+      };
+    }
     if (signal.aborted) return;
-    const sessionId = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
     const result = repositoryQuerySubscription.event.parse(
-      await runtimeJson('/v1/activity/repository-query', { ...input, sessionId }, signal, 125_000),
+      await runtimeJson('/v1/activity/repository-query', { ...input, ...binding }, signal, 125_000),
     );
+    if (signal.aborted) return;
+    if (
+      'workspaceId' in input &&
+      'workspaceRoot' in binding &&
+      (await repositoryWorkspaceRoot(paseo, input.workspaceId)) !== binding.workspaceRoot
+    ) {
+      throw new Error('The repository workspace changed. Reopen Query Repo.');
+    }
     if (!signal.aborted) await push(result);
   });
   server.handle(trackerModifyRpc, async (input, { paseo }) => {

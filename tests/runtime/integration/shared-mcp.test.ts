@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -7,7 +7,7 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ElicitRequestSchema, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
-import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { WORKSPACE_MCP_SERVER } from '../../../runtime/src/paseo-plugin/shared/workspace-tools.js';
@@ -203,10 +203,10 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-  const activity = (route: string, body: object) =>
+  const activity = (route: string, body: object, token = secret) =>
     fetch(`${base}/v1/activity/${route}`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
   async function grant(agentId: string, workspaceRoot: string, provider?: 'pi' | 'codex') {
@@ -228,6 +228,67 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
     expect(
       (await fetch(`${base}/mcp`, { headers: { authorization: `Bearer ${secret}` } })).status,
     ).toBe(401);
+    const workspaceId = 'paseo-workspace';
+    const workspaceRoot = path.join(await realpath(root), 'paseo-workspace');
+    await mkdir(workspaceRoot);
+    await writeFile(path.join(workspaceRoot, 'worktree.ts'), 'export const directQuery = true;\n');
+    const menuScope = await activity('repository-query-workspace', { workspaceId, workspaceRoot });
+    expect(menuScope.status).toBe(200);
+    const reader = menuScope.body!.pipeThrough(new TextDecoderStream()).getReader();
+    let scopeLine = '';
+    try {
+      while (!scopeLine.includes('\n')) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error('The repository workspace did not return its scope.');
+        scopeLine += chunk.value;
+      }
+    } finally {
+      await reader.cancel();
+    }
+    const scope = JSON.parse(scopeLine) as { path: string; identity: string };
+    expect(scope.path).toBe(workspaceRoot);
+
+    const menuQuery = {
+      workspaceId,
+      workspaceRoot,
+      workspaceIdentity: scope.identity,
+      request: { tool: 'locate', input: { location: { path: 'worktree.ts', line: 1 } } },
+    };
+    const menuLocate = await activity('repository-query', menuQuery);
+    expect(menuLocate.status).toBe(200);
+    expect(await menuLocate.json()).toMatchObject({
+      text: expect.stringContaining('1 | export const directQuery = true;'),
+    });
+    const menuWrongWorktree = await activity('repository-query', {
+      ...menuQuery,
+      workspaceRoot: await realpath(first),
+    });
+    expect(menuWrongWorktree.status).toBe(409);
+    expect((await activity('repository-query', { ...menuQuery, agentId: 'pi-one' })).status).toBe(
+      400,
+    );
+    const nativeAgentId = 'pi-one';
+    const agentToken = agentBearer(secret, nativeAgentId);
+    expect(
+      (await activity('repository-query', { ...menuQuery, nativeAgentId }, agentToken)).status,
+    ).toBe(403);
+    expect(
+      (
+        await activity(
+          'repository-query-workspace',
+          { workspaceId, workspaceRoot, nativeAgentId },
+          agentToken,
+        )
+      ).status,
+    ).toBe(403);
+
+    await rename(workspaceRoot, path.join(root, 'previous-paseo-workspace'));
+    await mkdir(workspaceRoot);
+    await writeFile(path.join(workspaceRoot, 'worktree.ts'), 'export const replaced = true;\n');
+    const staleMenuScope = await activity('repository-query', menuQuery);
+    expect(staleMenuScope.status).toBe(409);
+    expect(await staleMenuScope.text()).not.toContain('replaced');
+
     const firstToken = await grant('pi-one', first, 'pi');
     expect(await grant('pi-one', first, 'pi')).toBe(firstToken);
     const secondToken = await grant('codex-two', second, 'codex');

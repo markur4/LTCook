@@ -124,6 +124,7 @@ export class RuntimeApi {
   private reserveIdleRestart?: PaseoHost['reserveIdleRestart'];
   private reservingIdleRestart = false;
   private stopping = false;
+  private readonly shutdownController = new AbortController();
   private workspaceMcp: WorkspaceMcp | undefined;
   private workspaceTools: ToolCatalog | undefined;
   setConversationRecords(memory: ConversationRecords, context?: RuntimeApi['memoryContext']): void {
@@ -242,6 +243,7 @@ export class RuntimeApi {
 
   beginShutdown(): void {
     this.stopping = true;
+    this.shutdownController.abort();
   }
   async listen(): Promise<string> {
     const [host, rawPort] = this.listenAddress.startsWith('[')
@@ -510,6 +512,7 @@ export class RuntimeApi {
           return;
         }
         await handleActivityRoute(activityRoute, parsed, response, {
+          shutdownSignal: this.shutdownController.signal,
           activity: this.services.activity,
           catalog: this.workspaceTools,
           workspaceServices: this.workspaceServices,
@@ -806,6 +809,7 @@ export class RuntimeApi {
     return;
   }
   async close(): Promise<void> {
+    this.beginShutdown();
     await this.workspaceMcp?.close();
     if (this.server)
       await new Promise<void>((resolve, reject) =>

@@ -1,17 +1,22 @@
-import { useEffect, useState } from 'react';
+import { Fragment, memo, useEffect, useState, type ReactNode } from 'react';
 import { Text, View } from 'react-native';
 import {
   useSubscription,
   useTabState,
   type PluginAgentPanelProps,
   type PluginClientContext,
+  type PluginWorkspacePanelProps,
 } from '@getpaseo/plugin/client';
 import { ScrollView, SettingsSelect, TextInput } from '@getpaseo/plugin/client/ui';
 import { z } from 'zod';
-import { repositoryQuerySubscription } from '../../shared/repository-query';
+import {
+  repositoryQuerySubscription,
+  repositoryQueryWorkspaceSubscription,
+} from '../../shared/repository-query';
 import { Action, Card, Label, type Theme } from '../components/PanelChrome';
 
 export const REPOSITORY_QUERY_PANEL_ID = 'rag-repository-query';
+export const WORKSPACE_QUERY_PANEL_ID = 'workspace-repository-query';
 
 const repositoryScopeSchema = z.object({ identity: z.string().min(1), path: z.string().min(1) });
 type RepositoryScope = z.infer<typeof repositoryScopeSchema>;
@@ -76,12 +81,65 @@ function RunningQuery({
   return null;
 }
 
+// > Repository evidence emits one JSON object per metadata line. Numbered source stays plain.
+const jsonToken = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/g;
+
+function HighlightedJsonLine({ line, theme }: { line: string; theme: Theme }) {
+  const fragments: ReactNode[] = [];
+  let offset = 0;
+  for (const { 0: token, index } of line.matchAll(jsonToken)) {
+    const end = index + token.length;
+    const color =
+      token[0] === '"'
+        ? line[end] === ':'
+          ? theme.colors.accent
+          : theme.colors.statusSuccess
+        : /^-?\d/.test(token)
+          ? theme.colors.statusWarning
+          : theme.colors.foregroundMuted;
+    fragments.push(
+      <Fragment key={index}>
+        {line.slice(offset, index)}
+        <Text style={{ color }}>{token}</Text>
+      </Fragment>,
+    );
+    offset = end;
+  }
+  return (
+    <>
+      {fragments}
+      {line.slice(offset)}
+    </>
+  );
+}
+
+const QueryResult = memo(function QueryResult({ text, theme }: { text: string; theme: Theme }) {
+  return (
+    <Text
+      selectable
+      testID="ltcook-repository-query-result"
+      style={{ color: theme.colors.foreground, fontFamily: 'monospace', lineHeight: 20 }}
+    >
+      {text.split('\n').map((line, index) => (
+        <Fragment key={index}>
+          {index > 0 && '\n'}
+          {line.startsWith('{') && line.endsWith('}') ? (
+            <HighlightedJsonLine line={line} theme={theme} />
+          ) : (
+            line
+          )}
+        </Fragment>
+      ))}
+    </Text>
+  );
+});
+
 function QueryForm({
-  agentId,
+  target,
   scope,
   theme,
 }: {
-  agentId: string;
+  target: { agentId: string } | { workspaceId: string };
   scope: RepositoryScope;
   theme: Theme;
 }) {
@@ -112,7 +170,7 @@ function QueryForm({
       return;
     }
     setOutput(undefined);
-    setPending({ agentId, workspaceIdentity: scope.identity, request: { tool, input } });
+    setPending({ ...target, workspaceIdentity: scope.identity, request: { tool, input } });
   }
 
   function finish(result: QueryOutput) {
@@ -206,16 +264,48 @@ function QueryForm({
               {output.error}
             </Text>
           ) : (
-            <Text
-              selectable
-              testID="ltcook-repository-query-result"
-              style={{ color: theme.colors.foreground, fontFamily: 'monospace', lineHeight: 20 }}
-            >
-              {output.result}
-            </Text>
+            <QueryResult text={output.result} theme={theme} />
           ))}
       </View>
     </>
+  );
+}
+
+function QueryTab({ theme, children }: { theme: Theme; children: ReactNode }) {
+  return (
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
+      contentContainerStyle={{
+        padding: 16,
+        gap: 12,
+        width: '100%',
+        maxWidth: 1100,
+        alignSelf: 'center',
+      }}
+      testID="ltcook-repository-query"
+    >
+      {children}
+    </ScrollView>
+  );
+}
+
+export function WorkspaceRepositoryQuery({ workspaceId, theme }: PluginWorkspacePanelProps) {
+  const [scope, setScope] = useState<RepositoryScope | null>();
+  const stream = useSubscription(repositoryQueryWorkspaceSubscription, { workspaceId }, setScope);
+  const unavailable = scope === null || stream.status === 'closed' || stream.status === 'error';
+
+  return (
+    <QueryTab theme={theme}>
+      {scope && !unavailable ? (
+        <QueryForm key={scope.identity} theme={theme} target={{ workspaceId }} scope={scope} />
+      ) : (
+        <Label theme={theme} muted>
+          {unavailable
+            ? 'Repository search is unavailable for this workspace.'
+            : 'Opening repository…'}
+        </Label>
+      )}
+    </QueryTab>
   );
 }
 
@@ -239,22 +329,12 @@ export function RepositoryQuery({
   }, [key, revision, setPersisted]);
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
-      contentContainerStyle={{
-        padding: 16,
-        gap: 12,
-        width: '100%',
-        maxWidth: 1100,
-        alignSelf: 'center',
-      }}
-      testID="ltcook-repository-query"
-    >
+    <QueryTab theme={theme}>
       {scope ? (
         <QueryForm
           key={JSON.stringify([key, scope.identity])}
           theme={theme}
-          agentId={params.agentId}
+          target={{ agentId: params.agentId }}
           scope={scope}
         />
       ) : (
@@ -262,6 +342,6 @@ export function RepositoryQuery({
           Open Query Repo from the RAG Index card in Activity.
         </Label>
       )}
-    </ScrollView>
+    </QueryTab>
   );
 }

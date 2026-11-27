@@ -27,7 +27,10 @@ import {
   SessionWorktrees,
 } from '../../../runtime/src/integrations/session-worktrees.js';
 import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
-import type { RepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
+import {
+  openRepositoryWorkspace,
+  type RepositoryWorkspace,
+} from '../../../runtime/src/repository/workspace.js';
 import type { RiedRequest } from '../../../runtime/src/repository/requests.js';
 import { createSessionWorktreeTool } from '../../../runtime/src/tools/session-worktree.js';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
@@ -161,6 +164,48 @@ describe('native runtime boundary', () => {
       });
     } finally {
       await api.close();
+    }
+  });
+
+  test('a Query Repo workspace scope holds an index lease until the Runtime API closes', async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'ltcook-query-workspace-')));
+    directories.push(directory);
+    const workspace = await openRepositoryWorkspace(directory);
+    const secret = 'query-workspace-secret';
+    const colgrep = createColgrepProvider({ deploymentDirectory: '' });
+    const api = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+      {},
+      undefined,
+      {
+        activity: {
+          colgrep,
+          preferences: new ActivityPreferences(join(directory, 'activity-settings.json')),
+        },
+      },
+    );
+    const endpoint = await api.listen();
+    let closing: Promise<void> | undefined;
+    const close = () => (closing ??= api.close());
+    try {
+      expect(colgrep.indexService.status(workspace).activity).toBe('idle');
+      const scope = await fetch(`${endpoint}/v1/activity/repository-query-workspace`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: 'workspace-1', workspaceRoot: directory }),
+        signal: AbortSignal.timeout(2_000),
+      });
+      expect(scope.status).toBe(200);
+      expect(colgrep.indexService.status(workspace).activity).not.toBe('idle');
+      await close();
+      expect(await scope.json()).toMatchObject({ path: directory, identity: expect.any(String) });
+      expect(colgrep.indexService.status(workspace).activity).toBe('idle');
+    } finally {
+      await close();
+      await colgrep.indexService.close();
     }
   });
 

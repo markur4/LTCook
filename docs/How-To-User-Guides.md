@@ -249,10 +249,12 @@ that used the published index, including queries with no matches. Select either
 timestamp for its definition. The panel also shows the last time an index was
 published, the next scheduled retry, and any repair needed.
 
-Select **Query Repo** to open a Paseo tab for that worktree. Run
-`ltcook_repo_search` or `ltcook_repo_locate` directly from the tab. Use
-**Edit tool arguments** for options such as paths, source locations, and trace
-leads. Results appear in the tab without starting an agent turn.
+Select **Query Repo** from the tab bar’s **+** menu to query the current
+Paseo workspace’s directory. You can also open it from **RAG Index** to query the
+worktree shown in Activity. Run `ltcook_repo_search` or `ltcook_repo_locate`
+directly from the tab using simple input or **Edit tool arguments** for options
+such as paths, source locations, and trace leads. Results show syntax-highlighted
+JSON alongside numbered source excerpts without starting an agent turn.
 
 Turn off **Index updates** to pause ColGREP indexing in the LTCook runtime
 serving this Paseo host. Ranked queries can keep using the published index,
