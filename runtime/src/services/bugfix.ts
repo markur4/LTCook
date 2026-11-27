@@ -127,6 +127,7 @@ export interface BugFixOptions {
   settle?(batch: BugFixBatch): Promise<void>;
   now?: () => number;
   budgetMs?: number;
+  canStart?: () => boolean;
   corrections?: number;
 }
 
@@ -250,7 +251,7 @@ export class BugFixService {
   }
 
   dispatch(): void {
-    if (this.closed) return;
+    if (this.closed || this.options.canStart?.() === false) return;
     for (const batch of this.state.batches) {
       if (batch.status !== 'queued' || this.active.has(batch.scope)) continue;
       const controller = new AbortController();

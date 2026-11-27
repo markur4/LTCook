@@ -33,6 +33,11 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- When enabled, BugHunter automatically queues read-only investigations for
+  critical failures, repeated errors, and a single repository indexing stall.
+  Recovery for managed indexing requires a fresh, usable generation on the
+  repaired running build.
+
 - BugHunter Dev mode can run eligible repairs under a revocable standing
   grant. Services reports delivery and recovery separately and offers pause
   and resume controls. Unattended merging remains gated on qualification.

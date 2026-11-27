@@ -47,6 +47,7 @@ export type BugScanEvidence = Pick<
 > & {
   receivedAt: number;
   operationId: string;
+  workspaceId?: string;
   message?: string;
   cause?: string;
 };
@@ -441,6 +442,7 @@ export class BugScanService {
       outcome: event.outcome,
       buildIdentity: event.buildIdentity,
       sourceRevision: event.sourceRevision,
+      workspaceId: event.context?.workspaceId,
       operationId,
       receivedAt,
       message: event.message === undefined ? undefined : sanitize(event.message),

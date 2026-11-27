@@ -6,7 +6,13 @@ import type {
   BugFixAuthorization,
   BugFixRepository,
 } from '../core/bugfix-authorization.js';
-import type { BugScanService } from './bugscan.js';
+import { openRepositoryWorkspace, type RepositoryWorkspace } from '../repository/workspace.js';
+import type { BugScanHunt, BugScanService } from './bugscan.js';
+import {
+  REPOSITORY_INDEX_TIMEOUT_MS,
+  repositoryIndexWorkspaceId,
+  type RepositoryIndexDiagnostic,
+} from './repository-index.js';
 import { createBugFixDelivery } from './bugfix-delivery.js';
 import { createBugHunterIssueReporter, type BugHunterIssueEntry } from './bughunter-issues.js';
 import {
@@ -39,6 +45,35 @@ function blocked(evidence: string): BugFixActionResult {
   return { status: 'blocked', evidence };
 }
 
+export function indexProgressProof(
+  hunt: BugScanHunt | undefined,
+  remedy: BugFixRemedy,
+  diagnostic: RepositoryIndexDiagnostic,
+): boolean {
+  if (
+    diagnostic.code !== 'repository-index.completed' ||
+    diagnostic.outcome !== 'success' ||
+    !diagnostic.generation ||
+    diagnostic.elapsedMs >= REPOSITORY_INDEX_TIMEOUT_MS
+  )
+    return false;
+  return (
+    remedy.finding.groupIds.every((id) => {
+      const group = hunt?.groups.find((candidate) => candidate.id === id);
+      return (
+        group?.component === 'repository-index' &&
+        group.evidence.length > 0 &&
+        group.evidence.every(
+          ({ code, workspaceId, operationId }) =>
+            code === 'repository-index.stalled' &&
+            workspaceId === diagnostic.workspaceId &&
+            operationId !== diagnostic.operationId,
+        )
+      );
+    }) && remedy.finding.groupIds.length > 0
+  );
+}
+
 /** Compose the authorized repair service without exposing authority to the native Team. */
 export async function startBugFix(input: {
   runtime: RuntimeController;
@@ -47,6 +82,8 @@ export async function startBugFix(input: {
   stateDirectory: string;
   budgetMs: number;
   qualified: () => boolean;
+  canStart?: () => boolean;
+  readPublishedIndex?: (workspace: RepositoryWorkspace) => Promise<string | undefined>;
   runningBuild?: { identity: string; sourceRevision: string };
 }) {
   const { runtime, bugScan, workspaceRoot, stateDirectory, qualified, budgetMs } = input;
@@ -127,6 +164,10 @@ export async function startBugFix(input: {
   const approved = runtime.bugFixAuthorization(repository);
   authorization = approved;
   const configuredRepository = repository;
+  const workspace = await openRepositoryWorkspace(repository.root);
+  const indexWorkspaceId = repositoryIndexWorkspaceId(workspace);
+  let indexObservation: RepositoryIndexDiagnostic | undefined;
+  const recoveryAttempts = new Map<string, string>();
   const issueRecords = runtime.bugHunterRecords<BugHunterIssueEntry[]>(
     repository.root,
     'issue-publication',
@@ -211,6 +252,7 @@ export async function startBugFix(input: {
   const service = new BugFixService({
     ...records,
     budgetMs,
+    canStart: input.canStart,
     authorize: allowsStage,
     targetRevision: delivery.targetRevision,
     revalidate: delivery.revalidate,
@@ -345,10 +387,38 @@ export async function startBugFix(input: {
             }
           : blocked('A running build bound to the integrated revision has not been observed.');
       }
-      if (stage.kind === 'recovery')
+      if (stage.kind === 'recovery') {
+        const build = input.runningBuild;
+        const remedy = batch.remedies.find(({ id }) => id === stage.remedyId);
+        const hunt = bugScan.list().find(({ id }) => id === batch.huntId);
+        const observation = indexObservation;
+        if (
+          build &&
+          build.identity === batch.installedBuild &&
+          build.sourceRevision === batch.integratedRevision &&
+          remedy &&
+          observation?.generation &&
+          indexProgressProof(hunt, remedy, observation) &&
+          (await input.readPublishedIndex?.(workspace)) === observation.generation &&
+          indexObservation === observation
+        ) {
+          await workspace.assertUnchanged();
+          signal.throwIfAborted();
+          return {
+            status: 'completed',
+            evidence: `Managed index reconciliation refreshed the affected workspace before its deadline (operation ${observation.operationId}).`,
+            recovery: {
+              behaviorId: remedy.id,
+              runningBuild: build.identity,
+              runningRevision: build.sourceRevision,
+              passed: true,
+            },
+          };
+        }
         return blocked(
           'There is no verified observation of the formerly failing behavior on a repaired running build.',
         );
+      }
       const result = await delivery.perform(batch, stage, signal);
       return stage.kind === 'integrate' ? finishIntegration(batch, result) : result;
     },
@@ -381,20 +451,51 @@ export async function startBugFix(input: {
     service,
     authorization: approved,
     issueReporter,
+    observeIndexDiagnostic(diagnostic: RepositoryIndexDiagnostic) {
+      if (diagnostic.workspaceId !== indexWorkspaceId) return;
+      if (diagnostic.code === 'repository-index.completed' && diagnostic.generation)
+        indexObservation = diagnostic;
+      else if (
+        diagnostic.outcome === 'failure' ||
+        diagnostic.outcome === 'blocked' ||
+        diagnostic.code === 'repository-index.stalled'
+      )
+        indexObservation = undefined;
+    },
     poll() {
-      if (bugScan.list().some(({ status }) => status === 'running')) return;
+      const hunts = bugScan.list();
+      if (hunts.some(({ status }) => status === 'running')) return;
       const grant = approved.current();
       if (!grant) return;
-      for (const hunt of bugScan.list())
+      for (const hunt of hunts)
         service.enqueue(hunt, { targetBranch: grant.targetBranch, grantRevision: grant.revision });
+      const observation = indexObservation;
       for (const batch of service.list()) {
         if (
-          batch.status === 'blocked' &&
-          batch.integratedRevision &&
-          !batch.installedBuild &&
-          batch.integratedRevision === input.runningBuild?.sourceRevision
+          batch.status !== 'blocked' ||
+          !batch.integratedRevision ||
+          batch.integratedRevision !== input.runningBuild?.sourceRevision
         )
+          continue;
+        if (!batch.installedBuild) {
           service.resume(batch.id);
+        } else if (
+          observation &&
+          recoveryAttempts.get(batch.id) !== observation.operationId &&
+          batch.remedies.some(
+            (remedy) =>
+              remedy.status === 'ready' &&
+              !batch.recoveredRemedies.includes(remedy.id) &&
+              indexProgressProof(
+                hunts.find(({ id }) => id === batch.huntId),
+                remedy,
+                observation,
+              ),
+          )
+        ) {
+          recoveryAttempts.set(batch.id, observation.operationId);
+          service.resume(batch.id);
+        }
       }
       service.dispatch();
     },

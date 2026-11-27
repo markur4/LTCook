@@ -735,16 +735,25 @@ export function createBugFixDelivery(options: DeliveryOptions) {
         });
       }
       case 'integrate': {
-        if (!options.qualified())
-          return {
-            status: 'blocked',
-            evidence: 'Unattended merge qualification is not established.',
-          };
         if (!batch.reviewedRevision || batch.reviewedRevision !== batch.verifiedTree)
           return {
             status: 'blocked',
             evidence: 'The exact verified candidate needs independent combined review.',
           };
+        if (!options.qualified()) {
+          if (origin && batch.pullRequest) {
+            try {
+              return await observeRemoteIntegration(batch, origin, signal);
+            } catch {
+              // > A human-reviewed merge may be observed without initiating one.
+            }
+          }
+          return {
+            status: 'blocked',
+            evidence:
+              'Unattended merging is disabled. A matching reviewed merge has not been observed.',
+          };
+        }
         const base = await expectedTarget(batch, signal);
         await committed(batch, signal);
         await requireNoGitHooks(batch.scope, ['post-index-change'], signal);

@@ -8,6 +8,9 @@ import type { BugFixBatch } from '../../../runtime/src/services/bugfix.js';
 const base = 'a'.repeat(40);
 const tree = 'b'.repeat(40);
 const tip = 'c'.repeat(40);
+const mergedRevision = 'd'.repeat(40);
+const remote = 'https://github.com/fixture/repository';
+const pullRequest = `${remote}/pull/1`;
 const id = '00000000-0000-0000-0000-000000000000';
 const signal = new AbortController().signal;
 
@@ -53,12 +56,14 @@ async function createFixture(root: string) {
     hooks: path.join(root, 'hooks'),
     sandboxAvailable: true,
     remote: undefined as string | undefined,
+    merged: false,
+    mergedTree: tree,
   };
   const delivery = createBugFixDelivery({
     worktreeDirectory: directory,
     authorize: () => {},
     allowedPath: (_batch, file) => file === 'code.ts',
-    expectedRemote: () => undefined,
+    expectedRemote: () => state.remote,
     qualified: () => state.qualified,
     async verificationCommand() {
       if (!state.sandboxAvailable) throw new Error('A local prerequisite is missing.');
@@ -73,7 +78,36 @@ async function createFixture(root: string) {
         if (args.at(-1) === 'core.hooksPath') return output(`${state.hooks}\n`);
         return { code: 1, stdout: '', stderr: '' };
       }
-      if (args[0] === 'remote') return output(state.remote ? 'origin\n' : '');
+      if (command === 'gh') {
+        if (args[0] === 'pr' && args[1] === 'list')
+          return output(
+            JSON.stringify([
+              {
+                state: state.merged ? 'MERGED' : 'OPEN',
+                isDraft: !state.merged,
+                isCrossRepository: false,
+                number: 1,
+                url: pullRequest,
+                headRefOid: tip,
+                headRefName: `bughunter/${id}`,
+                baseRefName: 'main',
+                mergeCommit: state.merged ? { oid: mergedRevision } : null,
+              },
+            ]),
+          );
+        if (args[0] === 'api')
+          return output(
+            JSON.stringify({
+              sha: mergedRevision,
+              parents: [{ sha: base }, { sha: tip }],
+              commit: { tree: { sha: state.mergedTree } },
+            }),
+          );
+        throw new Error('Unexpected external mutation in disposable delivery test');
+      }
+      if (args[0] === 'remote')
+        return output(args[1] === 'get-url' ? `${state.remote}\n` : state.remote ? 'origin\n' : '');
+      if (args[0] === 'ls-remote') return output(`${mergedRevision}\trefs/heads/main\n`);
       if (args[0] === 'show-ref')
         return { code: state.registeredRepair ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'worktree')
@@ -121,7 +155,17 @@ test('verifies and commits the exact scoped tree before review can gate integrat
     const committed = { ...verified, commitRevision: commit.commitRevision };
     expect(await delivery.perform(committed, { kind: 'integrate' }, signal)).toMatchObject({
       status: 'blocked',
-      evidence: expect.stringContaining('qualification'),
+      evidence: expect.stringContaining('independent combined review'),
+    });
+    expect(
+      await delivery.perform(
+        { ...committed, reviewedRevision: tree },
+        { kind: 'integrate' },
+        signal,
+      ),
+    ).toMatchObject({
+      status: 'blocked',
+      evidence: expect.stringContaining('Unattended merging is disabled'),
     });
     state.qualified = true;
     expect(await delivery.perform(committed, { kind: 'integrate' }, signal)).toMatchObject({
@@ -208,5 +252,28 @@ test('reconciles unstarted preparation while preserving a partial linked worktre
     });
     state.registeredRepair = true;
     expect(await delivery.reconcile(proposed, stage, signal)).toMatchObject({ state: 'uncertain' });
+  });
+});
+
+test('observes a human merge with exact parents and reviewed tree while unattended delivery is off', async () => {
+  await fixture(async ({ batch, delivery, calls, state }) => {
+    state.remote = remote;
+    const integrated = {
+      ...batch,
+      reviewedRevision: tree,
+      verifiedTree: tree,
+      pullRequest,
+      commitRevision: tip,
+    };
+    const stage = { kind: 'integrate' as const };
+    expect(await delivery.perform(integrated, stage, signal)).toMatchObject({ status: 'blocked' });
+    state.merged = true;
+    expect(await delivery.perform(integrated, stage, signal)).toMatchObject({
+      status: 'completed',
+      integratedRevision: mergedRevision,
+    });
+    state.mergedTree = base;
+    expect(await delivery.perform(integrated, stage, signal)).toMatchObject({ status: 'blocked' });
+    expect(calls.some((call) => /^gh pr (?:ready|merge) /.test(call))).toBe(false);
   });
 });
