@@ -2,9 +2,11 @@
 
 [Documentation](README.md) · [Explanations](Explanations.md) · [How-to user guides](How-To-User-Guides.md) · [References](References.md) · [Examples](EXAMPLES.md)
 
-Read [Contributing](../CONTRIBUTING.md) for shared conventions, the normal setup,
-quick checks, and submission expectations. This page covers the deeper project
-layout, packaging boundary, verification limits, and current release workflow.
+Use [Contributing](../CONTRIBUTING.md) for shared repository rules, issue
+reporting and backlog order, TODO's purpose, changelog writing, and the short
+contribution quick start. Follow its links to the technical procedure relevant to
+your task. This page owns detailed environment setup, project navigation,
+packaging internals, verification limits, troubleshooting, and release procedures.
 
 - [Work in the project](#work-in-the-project)
   - [Prototype workflow](#prototype-workflow)
@@ -800,12 +802,9 @@ test jobs with this setting. Set it to `true` to run the source checks on beta
 tags and require successful hosted CI on the exact release tag and commit.
 `RELEASE_PYPI` is independently set to `false`, so publication goes to GitHub.
 
-Keep one cumulative changelog section per target version. For a stable release,
-use a heading such as `## [0.2.0] - YYYY-MM-DD`. For an optional preview, append
-`(b1)` or `(rc1)` to that heading and update the same section for later previews
-or stable. Use `b2` or `rc2` when a fix needs another preview. Move the entries
-out of `[Unreleased]` before preparing the release. Each tag preserves its
-changelog snapshot.
+Follow the [changelog-writing rules](../CONTRIBUTING.md#changelog) when preparing
+release notes. This section covers the repository's release checks, preparation,
+and publication procedures.
 
 ```shell
 just release-check

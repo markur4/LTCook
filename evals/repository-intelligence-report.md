@@ -10,11 +10,11 @@
 | Relevance, evidence recall, and post-edit index behavior | Opt-in benchmark with real ripgrep and ColGREP | Labeled miniature corpus and selected committed LTCook files. |
 | Guided and autonomous tool behavior | Opt-in paired Agent Behavior Evaluation | Isolated fixture authority and limited case and model counts. |
 
-The current Paseo hook provides no effective Codex read scope. LTCook now
-withholds Search and Locate from ordinary Codex sessions using that hook and
-keeps the Pi grant. The isolated Codex evaluator grants its own disposable
-fixture. A supported host read grant is needed to restore the ordinary Codex
-path. See [the follow-up](../BACKLOG.md#2026-11-24).
+At the time of this evaluation, the Paseo hook provided no effective Codex read
+scope. LTCook withheld Search and Locate from ordinary Codex sessions using
+that hook and kept the Pi grant. The isolated Codex evaluator granted its own
+disposable fixture. The [workspace tools follow-up](https://github.com/markur4/LTCook/commit/f3bd72c66bf58edf286569f963dfa8696edaeeef)
+restored repository tool access through the host grant.
 
 The retrieval runner now exits unsuccessfully on invalid evidence even if
 the provider reports ready. The autonomous grader evaluates structured facts,
