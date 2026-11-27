@@ -241,6 +241,7 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_DEPLOYMENT_DIR` | LTCook-owned deployment location, normally beneath AppRC appdata. |
 | `LTCOOK_MODEL_SMART` | `runtime.smart_model` sets `@smart` and `@plan`. Defaults to `openai-codex/gpt-6.2-sol`. |
 | `LTCOOK_MODEL_SMOL` | `runtime.smol_model` sets `@smol` and `@tiny`. Defaults to `openai-codex/gpt-6-luna`. The `@tiny` preset uses low reasoning. |
+| `LTCOOK_MODEL_MEDIUM` | `runtime.medium_model` sets `@medium`. Defaults to `openai-codex/gpt-6.1-terra` with high reasoning. |
 | `LTCOOK_MODEL_EXPENSIVE` | `runtime.expensive_model` sets `@expensive` and `@review-art`. Defaults to `openai-codex/gpt-6-astra`. |
 | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Optional provider credentials declared as secrets. |
 | `OPENAI_API_KEY` | Optional AppRC secret for custom child tooling. Managed LTCook OpenAI models use the Codex sign-in. |
@@ -288,6 +289,8 @@ apply when the runtime next starts. The typed bundle exposes
 | Environment name | AppRC setting | Default | Effect |
 | --- | --- | --- | --- |
 | `LTCOOK_WORKSPACE_ORGANIZER_ENABLED` | `runtime.services.workspace_organizer.enabled` | `true` | Enable standard label maintenance, classification, and eligible automatic archival. |
+| `LTCOOK_BUGHUNTER_ENABLED` | `runtime.services.bughunter.enabled` | `false` | Enable diagnostic intake and manual read-only BugScan for the runtime. |
+| `LTCOOK_BUGHUNTER_WORKSPACE` | `runtime.services.bughunter.workspace` | Empty | Absolute checkout authorized for BugScan. Empty limits BugScan to installation-level evidence. |
 | `LTCOOK_WORKSPACE_ORGANIZER_AUTO_ARCHIVE` | `runtime.services.workspace_organizer.auto_archive` | `true` | Enable the 14-day inactivity archive policy while Workspace Organizer is enabled. |
 | `LTCOOK_RENAMER_ENABLED` | `runtime.services.renamer.enabled` | `true` | Enable first-prompt naming. |
 | `LTCOOK_RENAMER_WORKSPACES` | `runtime.services.renamer.workspaces` | `true` | Allow workspace titles of at most 20 Unicode grapheme clusters. |

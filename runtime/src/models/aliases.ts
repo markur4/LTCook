@@ -27,6 +27,7 @@ const aliases: Readonly<
   'local-CPU': { setting: 'LTCOOK_MODEL_LOCAL_CPU', preset: 'none', provider: 'ollama' },
   'local-tiny': { setting: 'LTCOOK_MODEL_TINY_LOCAL', preset: 'none', provider: 'ollama' },
   'local-evals': { setting: 'LTCOOK_MODEL_LOCAL_EVALS', provider: 'ollama' },
+  medium: { setting: 'LTCOOK_MODEL_MEDIUM', preset: 'high' },
   smart: { setting: 'LTCOOK_MODEL_SMART' },
   plan: { setting: 'LTCOOK_MODEL_SMART', preset: 'xhigh' },
   expensive: { setting: 'LTCOOK_MODEL_EXPENSIVE' },
@@ -43,6 +44,7 @@ export function reasoningOptions({
   model,
 }: Pick<ResolvedModel, 'alias' | 'provider' | 'model'>): readonly ReasoningEffort[] {
   if (provider === 'ollama') return ollamaReasoning;
+  if (provider === 'openai-codex' && model === 'gpt-6.1-terra') return ['high'];
   if (provider === 'openai' || provider === 'openai-codex') {
     if (model === 'gpt-6-luna') return lunaReasoning;
     if (['gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6-astra'].includes(model)) return hostedReasoning;

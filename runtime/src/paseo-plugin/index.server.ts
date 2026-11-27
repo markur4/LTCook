@@ -9,6 +9,8 @@ import {
   activitySkillDocumentRpc,
   activitySubscription,
   activityToggleRpc,
+  bugScanActivity,
+  bugScanRunRpc,
   TURN_SKILLS_TIMELINE_KIND,
   TurnSkillsTimelineSchema,
 } from './shared/activity';
@@ -283,6 +285,7 @@ async function listSessions(input: z.infer<typeof SessionListRequestSchema>, pas
 }
 
 const activityServices = z.object({
+  bugScan: bugScanActivity.optional(),
   rag: z.object({
     indexingEnabled: z.boolean().nullable(),
     availability: z.enum(['ready', 'not-ready', 'unavailable', 'unknown']),
@@ -335,6 +338,18 @@ export default function contribute(server: PluginServerContext) {
   server.handle(activityToggleRpc, async (input) =>
     activityToggleRpc.output.parse(await runtimeJson('/v1/activity/toggle', input)),
   );
+  server.handle(bugScanRunRpc, async ({ agentId }, { paseo }) => {
+    const current = await paseo.agents.ref(agentId).refresh();
+    if (!current) throw new Error('The selected agent is unavailable.');
+    const agent = current.agent;
+    const sessionId = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
+    return bugScanRunRpc.output.parse(
+      await runtimeJson('/v1/activity/bugscan', {
+        nativeAgentId: agent.id,
+        sessionId,
+      }),
+    );
+  });
   server.handle(
     repositoryQueryWorkspaceSubscription,
     async ({ workspaceId }, { paseo, signal, push }) => {
@@ -549,6 +564,7 @@ export default function contribute(server: PluginServerContext) {
                 aab: delivery.aab,
               }
             : null,
+          bugScan: services?.bugScan,
         };
       },
       registeredSkills,

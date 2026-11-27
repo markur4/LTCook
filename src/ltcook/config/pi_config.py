@@ -174,7 +174,24 @@ def pi_documents(
                         **sol,
                         "api": "openai-codex-responses",
                         "baseUrl": "https://chatgpt.com/backend-api",
-                    }
+                    },
+                    {
+                        "id": "gpt-6.1-terra",
+                        "name": "GPT-6.1 Terra",
+                        "api": "openai-codex-responses",
+                        "baseUrl": "https://chatgpt.com/backend-api",
+                        "reasoning": True,
+                        "input": ["text"],
+                        "thinkingLevelMap": {
+                            "off": None,
+                            "minimal": None,
+                            "low": None,
+                            "medium": None,
+                            "high": "high",
+                            "xhigh": None,
+                            "max": None,
+                        },
+                    },
                 ],
             },
             "openai": {

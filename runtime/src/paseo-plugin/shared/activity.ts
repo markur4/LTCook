@@ -88,6 +88,33 @@ const handoff = z.object({
   sourceName: z.string().nullable(),
   aab: count,
 });
+export const bugScanActivity = z.object({
+  status: z.enum([
+    'idle',
+    'queued',
+    'running',
+    'completed',
+    'blocked',
+    'failed',
+    'paused',
+    'budget-exhausted',
+  ]),
+  failure: z.string().optional(),
+  findings: z.array(
+    z.object({
+      confidence: z.enum(['demonstrated', 'hypothesis']),
+      cause: z.string(),
+      remedy: z.string().optional(),
+      technicalDebt: z.array(
+        z.object({
+          problem: z.string(),
+          decision: z.enum(['immediate', 'deferred']),
+          rationale: z.string(),
+        }),
+      ),
+    }),
+  ),
+});
 
 export const ActivitySnapshotSchema = z.object({
   selectedAgentId: id,
@@ -96,6 +123,7 @@ export const ActivitySnapshotSchema = z.object({
   agent: agentActivity,
   subagents: z.array(agentActivity).nullable(),
   rag: ragStatus,
+  bugScan: bugScanActivity.optional(),
   lastHandoff: handoff.nullable(),
   activityScopeLabel: z.string(),
 });
@@ -110,6 +138,12 @@ export const activityToggleRpc = defineRpc({
   name: 'ltcook.activity.toggle',
   input: z.strictObject({ feature: z.literal('rag-index'), enabled: z.boolean() }),
   output: z.object({ enabled: z.boolean() }),
+});
+
+export const bugScanRunRpc = defineRpc({
+  name: 'ltcook.activity.bugscan',
+  input: z.strictObject({ agentId: id }),
+  output: z.object({ accepted: z.literal(true) }),
 });
 
 export const TURN_SKILLS_TIMELINE_KIND = 'turn-skills';

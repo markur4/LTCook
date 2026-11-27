@@ -33,6 +33,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- BugHunter can collect diagnostics and run an opt-in, read-only BugScan.
+  Activity → Services shows findings, proposed remedies, and deferred work.
+
 - **Breaking:** 💥 Search, Locate, traces, and applicable RIED discovery share
   query-time repository filters. Tool callers can replace `paths` with
   `filter.includePaths` globs and ranked Search's `pattern` with

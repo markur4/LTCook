@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Switch, Text, View } from 'react-native';
 import { useRpc } from '@getpaseo/plugin/client';
 import { Icon } from '@getpaseo/plugin/client/ui';
-import { activityToggleRpc, type ActivitySnapshot } from '../../shared/activity';
+import { activityToggleRpc, bugScanRunRpc, type ActivitySnapshot } from '../../shared/activity';
 import {
   ActivityButton,
   ActivityCard,
@@ -130,14 +130,94 @@ function ActivityTimestamp({
   );
 }
 
+function BugScanCard({
+  theme,
+  agentId,
+  scan,
+}: {
+  theme: Theme;
+  agentId: string;
+  scan: NonNullable<ActivitySnapshot['bugScan']>;
+}) {
+  const run = useRpc(bugScanRunRpc);
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const canRun = !pending && scan.status !== 'running' && scan.status !== 'queued';
+  async function trigger() {
+    setPending(true);
+    setError(null);
+    try {
+      await run({ agentId });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not start BugScan.');
+    } finally {
+      setPending(false);
+    }
+  }
+  return (
+    <ActivityCard
+      theme={theme}
+      title="BugHunter"
+      icon="Search"
+      status={statusLabel(scan.status)}
+      statusTone={scan.status === 'failed' || scan.status === 'blocked' ? 'warning' : 'muted'}
+      open={open}
+      onToggle={() => setOpen(!open)}
+      summaryLabel={`${scan.findings.length} findings`}
+      summary={<ActivityText theme={theme}>{scan.findings.length} findings</ActivityText>}
+    >
+      {canRun && (
+        <ActivityButton theme={theme} label="Run BugScan" onPress={() => void trigger()}>
+          <ActivityText theme={theme} strong>
+            Run BugScan
+          </ActivityText>
+        </ActivityButton>
+      )}
+      {(error || scan.failure) && (
+        <ActivityText theme={theme} tone="warning">
+          {error || scan.failure}
+        </ActivityText>
+      )}
+      {scan.findings.map((finding, index) => (
+        <View key={`${index}-${finding.cause}`} style={{ gap: 4 }}>
+          <ActivityField
+            theme={theme}
+            label={finding.confidence === 'demonstrated' ? 'Cause' : 'Hypothesis'}
+          >
+            {finding.cause}
+          </ActivityField>
+          {finding.remedy && (
+            <ActivityField theme={theme} label="Remedy">
+              {finding.remedy}
+            </ActivityField>
+          )}
+          {finding.technicalDebt.map((item, debtIndex) => (
+            <ActivityField
+              theme={theme}
+              key={`${debtIndex}-${item.problem}`}
+              label={item.decision === 'immediate' ? 'Address now' : 'Deferred'}
+            >
+              {`${item.problem} · ${item.rationale}`}
+            </ActivityField>
+          ))}
+        </View>
+      ))}
+    </ActivityCard>
+  );
+}
+
 export function ActivityServices({
   theme,
   rag,
+  bugScan,
+  agentId,
   lastHandoff,
   agentWorktree,
   onQueryRepo,
-}: Pick<ActivitySnapshot, 'rag' | 'lastHandoff'> & {
+}: Pick<ActivitySnapshot, 'rag' | 'lastHandoff' | 'bugScan'> & {
   theme: Theme;
+  agentId: string;
   agentWorktree?: string;
   onQueryRepo?: () => void;
 }) {
@@ -226,6 +306,7 @@ export function ActivityServices({
           </ActivityText>
         )}
       </ActivityCard>
+      {bugScan && <BugScanCard theme={theme} agentId={agentId} scan={bugScan} />}
       {lastHandoff && (
         <ActivityCard
           theme={theme}

@@ -106,11 +106,39 @@ export async function prepareLunaPiEvaluation(
     createPiEvaluationSession(input, modelRuntime, model, reasoning);
 }
 
+/** Use the managed Codex sign-in and exact AppRC model registration for a disposable case. */
+export async function createHostedPiEvaluationSession(
+  input: PiEvaluationSessionOptions & {
+    modelsPath: string;
+    provider: 'openai-codex';
+    modelId: string;
+    thinking: 'high' | 'xhigh';
+  },
+) {
+  const modelRuntime = useCodexOpenAiAuth(
+    await ModelRuntime.create({
+      authPath: path.join(input.directory, 'auth.json'),
+      modelsPath: input.modelsPath,
+      modelsStorePath: path.join(input.directory, 'model-store.json'),
+      refreshOnCreate: false,
+    }),
+  );
+  const model = modelRuntime.getModel(input.provider, input.modelId);
+  if (!model?.reasoning || model.thinkingLevelMap?.[input.thinking] === null)
+    throw new Error('Pi cannot resolve the requested hosted evaluation model and reasoning.');
+  const result = await createPiEvaluationSession(input, modelRuntime, model, input.thinking);
+  if (result.session.thinkingLevel !== input.thinking) {
+    result.session.dispose();
+    throw new Error('Pi did not retain the requested evaluation reasoning level.');
+  }
+  return result;
+}
+
 async function createPiEvaluationSession(
   { directory, cwd = directory, instructions, tools, customTools }: PiEvaluationSessionOptions,
   modelRuntime: ModelRuntime,
   model: NonNullable<CreateAgentSessionOptions['model']>,
-  thinkingLevel: 'off' | 'low' | 'high',
+  thinkingLevel: 'off' | 'low' | 'high' | 'xhigh',
 ) {
   await mkdir(directory, { recursive: true });
   const settings = SettingsManager.inMemory({ retry: { enabled: false } });
