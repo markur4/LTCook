@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Value } from 'typebox/value';
 import {
   gradeRepositoryBehavior,
@@ -15,6 +16,8 @@ import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { ollamaEndpoint } from '../../../runtime/src/integrations/ollama.js';
 import { createTools, ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { RiedService } from '../../../runtime/src/repository/discovery.js';
+import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
+import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 import { RepositoryLocateOutputSchema } from '../../../runtime/src/tools/repo-locate.js';
 import { RepositorySearchOutputSchema } from '../../../runtime/src/tools/repo-search.js';
 
@@ -366,12 +369,14 @@ await new Promise<void>((resolve) => listenProbe.close(() => resolve()));
 const authority = `127.0.0.1:${apiAddress.port}`;
 const secret = 'offline-mcp-runtime';
 let api: RuntimeApi | undefined;
+let colgrep: ReturnType<typeof createColgrepProvider> | undefined;
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 type LiveSearch = Parameters<typeof gradeRepositoryBehavior>[0]['searches'][number];
 type LiveCall = { tool: string; searches: LiveSearch[] };
 const liveCalls = new Map<string, LiveCall[]>();
 const absentSymbol = 'releaseBackoffWindow';
 async function start() {
+  colgrep = createColgrepProvider({ background: true });
   api = new RuntimeApi(undefined, secret, authority, new SessionActivation());
   let tools = createTools(
     new RiedService(path.join(fixture, 'cache'), undefined, () => ({ PATH: '' })),
@@ -380,6 +385,9 @@ async function start() {
       model: summaryModel,
       keepAlive: -1,
     },
+    undefined,
+    undefined,
+    colgrep,
   );
   if (liveModel) {
     tools = new ToolCatalog(
@@ -409,7 +417,9 @@ async function start() {
       })),
     );
   }
-  api.setWorkspaceMcp(new WorkspaceMcp(tools, authority));
+  api.setWorkspaceMcp(
+    new WorkspaceMcp(tools, authority, undefined, undefined, colgrep.indexService),
+  );
   await api.listen();
   host = await startPaseoHost({
     node: process.env.LTCOOK_TEST_NODE ?? 'node',
@@ -504,6 +514,7 @@ async function exerciseLive(
   }
 }
 async function stop() {
+  await colgrep?.indexService.close();
   await host?.close();
   host = undefined;
   await api?.close();
@@ -591,7 +602,16 @@ try {
       },
     );
   }
-  if (verifyColgrep)
+  let originalGeneration: string | undefined;
+  if (verifyColgrep) {
+    const bound = await openRepositoryWorkspace(workspace);
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      originalGeneration = (await colgrep?.readStatus(bound))?.generation;
+      if (originalGeneration) break;
+      await delay(20);
+    }
+    assert(originalGeneration, 'Granting repository search should publish a native index.');
     await exercise(
       ordinaryPi,
       'pi_searches_repository',
@@ -602,6 +622,7 @@ try {
         assert.match(content, /^1 \| export function computeReleaseChecksum.*% 65521;.*$/m);
       },
     );
+  }
   await exerciseLive(active, 'adjacent-lines');
   await exerciseLive(active, 'empty');
   const ordinaryCodex = await active.api.agents.create({
@@ -626,6 +647,17 @@ try {
     );
   }
   await stop();
+  if (originalGeneration) {
+    active = await start();
+    const status = await colgrep?.readStatus(await openRepositoryWorkspace(workspace));
+    assert.equal(status?.availability, 'ready');
+    assert.equal(
+      status.generation,
+      originalGeneration,
+      'A compatible runtime restart reuses the index.',
+    );
+    await stop();
+  }
   process.env.LTCOOK_COLGREP_DEPLOYMENT = path.join(fixture, 'missing-colgrep-assets');
   active = await start();
   const resumedPi = active.api.agents.ref(ordinaryPi.id);
