@@ -6,6 +6,6 @@
 - [x] Add decision recognition, fidelity, and lifecycle fixtures.
 - [x] Verify interruption, recovery, replay, coverage, and the native timeline.
 - [x] Add Instruction Audit, semantic grading, metrics, and attribution.
-- [ ] Run the bounded Hosted baseline and record its observations.
-- [ ] Complete independent review and pass local checks.
-- [ ] Preserve results in the PR, integrate into main, and clean up.
+- [x] Run the bounded Hosted baseline and record its observations.
+- [x] Complete independent review and pass local checks.
+Integration and cleanup evidence belongs to [PR #114](https://github.com/markur4/LTCook/pull/114).
