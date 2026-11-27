@@ -611,7 +611,7 @@ try {
     'Returning to the same workspace and reloading respects the closed Activity tab',
   );
   await openExplorerPanel('Workspace Services');
-  await browser('wait', '--text', 'Workspace Organizer');
+  await browser('click', `${explorer} [aria-label^="Workspace Organizer,"]`);
   await browser('wait', '--text', 'Renamer');
   await openExplorerPanel('Activity');
   await browser('wait', '--text', 'Recent conversation activity');
@@ -665,6 +665,15 @@ try {
     'Native mobile shell fits its viewport',
   );
   await inspectStage('native-mobile-entry');
+  await clickButton('Open menu');
+  await clickButton('Services');
+  await browser('click', `${group} [aria-label^="Workspace Organizer,"]`);
+  await browser('click', `${group} [aria-label^="Tagger,"]`);
+  await browser('wait', '--text', 'Feature, Bugfix, CSC, Research');
+  await browser('click', `${group} [aria-label^="Auto-archive,"]`);
+  await browser('wait', '--text', 'Unarchive or Restore');
+  await clickButton('Services');
+  await clickButton('Close menu');
   await browser('find', 'role', 'button', 'click', '--name', 'Switch tabs');
   await inspectStage('native-mobile-tab-switcher');
   await clickButton('New agent');

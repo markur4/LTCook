@@ -19,7 +19,7 @@ diff --git a/packages/app/src/components/sidebar/sidebar-workspace-menu.tsx b/pa
 @@ -48,6 +50,10 @@
    type WorkspaceLabelTarget,
  } from "@/workspace-labels/picker";
- 
+
 +import { useToast } from "@/contexts/toast-context";
 +import { useHostRuntimeClient } from "@/runtime/host-runtime";
 +import { useWorkspaceFields } from "@/stores/session-store-hooks";
@@ -33,13 +33,13 @@ diff --git a/packages/app/src/components/sidebar/sidebar-workspace-menu.tsx b/pa
  const ThemedTag = withUnistyles(Tag);
 +const ThemedToggleLeft = withUnistyles(ToggleLeft);
 +const ThemedToggleRight = withUnistyles(ToggleRight);
- 
+
  const copyLeadingIcon = <ThemedCopy size={14} uniProps={foregroundMutedColorMapping} />;
  const renameLeadingIcon = <ThemedPencil size={14} uniProps={foregroundMutedColorMapping} />;
 @@ -162,6 +170,49 @@
    return <DropdownMenuItem {...props}>{children}</DropdownMenuItem>;
  }
- 
+
 +function WorkspaceAutoRename({
 +  surface,
 +  serverId,
