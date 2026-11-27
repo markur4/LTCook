@@ -33,6 +33,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- Hosted Decision Tracker Agent Evals verify persisted decisions, budgeting,
+  evidence, and recovery. The opt-in baseline runs both setups under one deadline.
+
 - **Breaking:** 💥 Search, Locate, traces, and applicable RIED discovery share
   query-time repository filters. Tool callers can replace `paths` with
   `filter.includePaths` globs and ranked Search's `pattern` with

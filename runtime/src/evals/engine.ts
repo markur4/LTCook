@@ -6,6 +6,8 @@ import { loadTeam } from '../integrations/team-loader.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import type { EvalBudget, EvalEngine, EvalOutput } from './service.js';
 import { evaluationCaseCount, summarizationScope } from './contracts.js';
+import { evaluateDecisionTracker } from './decision-tracker.js';
+import { resolveModel, type ResolvedModel } from '../models/aliases.js';
 import { captureSummarizationCode, evaluateSummarization } from './summarization.js';
 import type { OllamaSettings } from '../integrations/ollama.js';
 import { staticAudit } from './instruction-audit.js';
@@ -44,7 +46,40 @@ type EngineOptions = {
   endpoint?: string;
   summarization?: OllamaSettings;
   codexExecutable?: string;
+  hostedTracker?: {
+    mode: 'hosted' | 'local' | undefined;
+    inputTokens: number | undefined;
+    selectModel: () => ResolvedModel;
+  };
 };
+
+function decisionTrackerConfiguration(
+  setup: 'current' | 'synthetic',
+  hosted: EngineOptions['hostedTracker'],
+) {
+  if (setup === 'synthetic')
+    return {
+      inputTokens: 8000,
+      model: resolveModel('tiny', { LTCOOK_MODEL_SMOL: 'openai-codex/gpt-6-luna' }),
+    };
+  const inputTokens = hosted?.inputTokens;
+  if (hosted?.mode !== 'hosted' || inputTokens === undefined)
+    return { inputTokens, blocked: 'Current Setup requires valid Hosted Tracker settings.' };
+  try {
+    const model = hosted.selectModel();
+    return model.provider === 'openai-codex' && model.reasoning === 'low'
+      ? { inputTokens, model }
+      : {
+          inputTokens,
+          blocked: 'Current Setup requires a Codex subscription model at low reasoning.',
+        };
+  } catch {
+    return {
+      inputTokens,
+      blocked: 'Current Setup could not resolve the configured Hosted @tiny model.',
+    };
+  }
+}
 
 type EvaluationAttempt = Omit<EvaluationResult, 'trace'> & {
   failureCategory?: string;
@@ -69,6 +104,7 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
     repetitions = 1,
     scenario: selectedScenario,
     summarizationGrader,
+    deterministicOnly = false,
     checkpoint,
     budget,
     learned,
@@ -98,6 +134,45 @@ export function createEvalEngine(options: EngineOptions): EvalEngine {
         metadata,
       });
     try {
+      if (selectedScenario === 'decision-tracker') {
+        const suite = 'decision-tracker';
+        progress({ event: 'suite.started', suite, completed, total });
+        const report = await evaluateDecisionTracker({
+          directory: temporary,
+          configuration: decisionTrackerConfiguration(setup, options.hostedTracker),
+          setup,
+          deterministicOnly,
+          appRoot: options.appRoot,
+          nodeExecutable: options.nodeExecutable,
+          python: options.python,
+          budget,
+          learned,
+          signal,
+          async onProgress(candidate, caseId) {
+            results[suite] = candidate;
+            metadata.decisionTrackerQualification = candidate.verdict;
+            if (caseId) progress({ event: 'case.started', suite, case: caseId, completed, total });
+            await flush();
+          },
+        });
+        results[suite] = report;
+        metadata.decisionTrackerQualification = report.verdict;
+        completed = 1;
+        progress({
+          event: report.verdict === 'failed' ? 'case.failed' : 'case.completed',
+          suite,
+          case: report.verdict,
+          completed,
+          total,
+          metadata,
+        });
+        await flush();
+        return {
+          result: { preset, setup, repetitions, results },
+          trace: { traceEvents },
+          metadata,
+        };
+      }
       signal.throwIfAborted();
       const suite = 'summarization';
       const scope = summarizationScope({ preset, scenario: selectedScenario });

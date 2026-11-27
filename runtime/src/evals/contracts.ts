@@ -5,12 +5,19 @@ export type EvalSetup = z.infer<typeof EvalSetupSchema>;
 
 export const EvalPresetSchema = z.enum(['quick', 'audit', 'behavior', 'bottlenecks', 'full']);
 export type EvalPreset = z.infer<typeof EvalPresetSchema>;
-export const EvalScenarioSchema = z.enum(['read-only', 'no-op', 'targeted-fix', 'summarization']);
+export const EvalScenarioSchema = z.enum([
+  'read-only',
+  'no-op',
+  'targeted-fix',
+  'summarization',
+  'decision-tracker',
+]);
 export type EvalScenario = z.infer<typeof EvalScenarioSchema>;
 export const SummarizationGraderSchema = z.literal('gpt-6-luna');
 export type SummarizationGrader = z.infer<typeof SummarizationGraderSchema>;
-export const SummarizationQualificationSchema = z.enum(['passed', 'failed', 'blocked']);
-export type SummarizationQualification = z.infer<typeof SummarizationQualificationSchema>;
+const EvalQualificationSchema = z.enum(['passed', 'failed', 'blocked']);
+export type SummarizationQualification = z.infer<typeof EvalQualificationSchema>;
+export const decisionTrackerSessionLimitMs = 20 * 60 * 1000;
 
 // > Only settings consumed by Current Setup cross the authenticated API boundary.
 export const EvalEnvironmentOverridesSchema = z
@@ -44,6 +51,8 @@ export const EvalStartRequestSchema = z
     scenario: EvalScenarioSchema.optional(),
     summarizationGrader: SummarizationGraderSchema.optional(),
     environmentOverrides: EvalEnvironmentOverridesSchema.optional(),
+    deterministicOnly: z.boolean().optional(),
+    deadlineAt: z.number().int().positive().safe().optional(),
   })
   .refine((input) => !input.staticOnly || input.preset === 'audit', {
     message: 'staticOnly requires the audit preset',
@@ -65,6 +74,14 @@ export const EvalStartRequestSchema = z
   })
   .refine((input) => !input.summarizationGrader || input.scenario === 'summarization', {
     message: 'Selecting a summarization grader requires the summarization case',
+  })
+  .refine(
+    ({ scenario, deterministicOnly, deadlineAt }) =>
+      scenario === 'decision-tracker' || (!deterministicOnly && deadlineAt === undefined),
+    { message: 'Deterministic execution and a session deadline require the decision-tracker case' },
+  )
+  .refine(({ scenario, repetitions }) => scenario !== 'decision-tracker' || repetitions === 1, {
+    message: 'Decision Tracker cases run once per setup',
   });
 export type EvalStartRequest = z.input<typeof EvalStartRequestSchema>;
 
@@ -80,7 +97,7 @@ export function evaluationCaseCount(input: EvalStartRequest): number {
   if (input.staticOnly) return 1;
   if (input.preset === 'audit') return 2;
   if (input.preset === 'quick') return 1 + (input.repetitions ?? 1);
-  if (input.scenario === 'summarization') return 1;
+  if (input.scenario === 'summarization' || input.scenario === 'decision-tracker') return 1;
   const cases = (input.scenario ? 1 : 3) * (input.repetitions ?? 1);
   return cases + (summarizationScope(input) ? 1 : 0) + (input.preset === 'full' ? 2 : 0);
 }
@@ -126,7 +143,8 @@ export const EvalSummarySchema = z.object({
   teamSelection: z.string().optional(),
   model: z.string().optional(),
   fixtureRevision: z.string().optional(),
-  summarizationQualification: SummarizationQualificationSchema.optional(),
+  summarizationQualification: EvalQualificationSchema.optional(),
+  decisionTrackerQualification: EvalQualificationSchema.optional(),
   provenance: z.unknown().optional(),
   limitations: z.array(z.string()).default([]),
   status: EvalStatusSchema,

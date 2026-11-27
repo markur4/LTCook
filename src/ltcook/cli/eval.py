@@ -41,6 +41,7 @@ EVAL_LABELS = {
     "behavior": "Behavior Evaluation",
     "bottlenecks": "Bottleneck Attribution",
     "summarization": "Summarization evaluations",
+    "decision-tracker": "Hosted Decision Tracker",
 }
 EVAL_LABELS.update(
     {
@@ -65,6 +66,7 @@ class EvalCase(StrEnum):
     no_op = "no-op"
     targeted_fix = "targeted-fix"
     summarization = "summarization"
+    decision_tracker = "decision-tracker"
 
 
 class EvalSetup(StrEnum):
@@ -113,7 +115,7 @@ def _call(environment, route: str, payload: object = None):
         ) from None
 
 
-def _follow(environment, run_id: str) -> None:
+def _follow(environment, run_id: str, *, defer_verdict: bool = False) -> dict:
     cursor = 0
     with Progress(
         SpinnerColumn(),
@@ -141,12 +143,22 @@ def _follow(environment, run_id: str) -> None:
             time.sleep(1)
     report = _call(environment, "/v1/evals/report", {"runId": run_id})
     _print_report(report)
-    if report["summary"]["status"] in {
-        "failed",
-        "cancelled",
-        "interrupted",
-    } or report["summary"].get("summarizationQualification") in {"failed", "blocked"}:
+    if not defer_verdict and _run_verdict(report) != "passed":
         raise typer.Exit(1)
+    return report
+
+
+def _run_verdict(report: dict) -> str:
+    summary = report["summary"]
+    qualifications = {
+        summary.get("summarizationQualification"),
+        summary.get("decisionTrackerQualification"),
+    }
+    if "failed" in qualifications:
+        return "failed"
+    if summary["status"] in {"cancelled", "interrupted"} or "blocked" in qualifications:
+        return "blocked"
+    return "passed" if summary["status"] == "completed" else "failed"
 
 
 def _print_report(report: dict) -> None:
@@ -167,6 +179,11 @@ def _print_report(report: dict) -> None:
     for name, raw_value in result.get("results", {}).items():
         value = raw_value if isinstance(raw_value, dict) else {}
         tasks = raw_value if isinstance(raw_value, list) else value.get("tasks", [])
+        if name == "decision-tracker":
+            table.add_row(
+                labels[name], str(value.get("verdict", "blocked")).upper(), ""
+            )
+            continue
         if name == "summarization":
             attempts = value.get("attempts", [])
             passed = sum(attempt.get("verdict") == "passed" for attempt in attempts)
@@ -206,6 +223,31 @@ def _print_report(report: dict) -> None:
             table.add_row(labels.get(name, name.replace("-", " ")), "Completed", "")
     if table.row_count:
         console.print(table)
+    tracker = result.get("results", {}).get("decision-tracker", {})
+    for label, key in (
+        ("Deterministic checks", "deterministicResults"),
+        ("Semantic grading", "semanticResults"),
+    ):
+        if metrics := tracker.get(key):
+            verdict = str(
+                metrics.get("verdict") or metrics.get("status") or "blocked"
+            ).upper()
+            console.print(f"{label} · {verdict}", markup=False)
+            for name, counts in metrics.items():
+                if isinstance(counts, dict) and {"passed", "total"} <= counts.keys():
+                    console.print(f"  {name} · {counts['passed']}/{counts['total']}")
+            for name, counts in metrics.get("metrics", {}).items():
+                console.print(
+                    f"  {name} · {counts['numerator']}/{counts['denominator']}"
+                )
+    for case in tracker.get("cases", []):
+        if case.get("verdict") in {"failed", "blocked"}:
+            stage = f" · {case['failureStage']}" if case.get("failureStage") else ""
+            console.print(
+                f"  {case['id']} · {case['verdict'].upper()}{stage}", markup=False
+            )
+            if message := case.get("budgetMessage") or case.get("blocker"):
+                console.print(f"    {message}", markup=False)
     qualification = result.get("results", {}).get("summarization", {})
     for blocker in qualification.get("blockers", []):
         console.print(blocker, markup=False)
@@ -291,16 +333,19 @@ def _start_and_follow(
     repetitions: int = 1,
     scenario: EvalCase | None = None,
     summarization_grader: SummarizationGrader | None = None,
-) -> None:
+    deterministic_only: bool = False,
+    deadline_at: int | None = None,
+    defer_verdict: bool = False,
+) -> dict | None:
     try:
         environment, _ = _runtime()
         shell = _shell_environment(os.environ)
         workspace = (
             APP_RC.manage(environment=shell).inspect().resolved.workspace
-            if setup == EvalSetup.current
+            if setup == EvalSetup.current and scenario != EvalCase.decision_tracker
             else None
         )
-        request = {
+        request: dict[str, object] = {
             "preset": preset,
             "setup": setup.value,
             "staticOnly": static_only,
@@ -312,7 +357,11 @@ def _start_and_follow(
             request["summarizationGrader"] = summarization_grader.value
         if workspace is not None:
             request["workspaceRoot"] = str(workspace.root)
-        if setup == EvalSetup.current:
+        if deterministic_only:
+            request["deterministicOnly"] = True
+        if deadline_at is not None:
+            request["deadlineAt"] = deadline_at
+        if setup == EvalSetup.current and scenario != EvalCase.decision_tracker:
             overrides = {
                 key: shell[key] for key in _EVALUATION_ENVIRONMENT_KEYS if key in shell
             }
@@ -324,13 +373,65 @@ def _start_and_follow(
             request,
         )["runId"]
         console.print(f"Agent Evals run [bold]{run_id}[/bold] · {preset}")
-        _follow(environment, run_id)
+        if defer_verdict:
+            return _follow(environment, run_id, defer_verdict=True)
+        return _follow(environment, run_id)
     except KeyboardInterrupt:
         console.print(
             "Detached from run. It continues in the LTCook runtime; use `ltcook eval cancel RUN_ID` to stop it."
         )
     except RuntimeClientError as error:
         raise typer.BadParameter(str(error)) from error
+    return None
+
+
+def _decision_tracker_baseline(*, retry_blocked: bool) -> None:
+    """Run the two Tracker setups with one server-enforced session deadline."""
+    deadline = time.time_ns() // 1_000_000 + 20 * 60 * 1000
+    setups = [EvalSetup.synthetic, EvalSetup.current]
+    verdicts: list[str] = []
+    retry_setup = None
+    for setup in setups:
+        if time.time_ns() // 1_000_000 >= deadline:
+            console.print(f"{setup.value} · BLOCKED · baseline deadline expired")
+            verdicts.append("blocked")
+            continue
+        report = _start_and_follow(
+            "full",
+            setup=setup,
+            scenario=EvalCase.decision_tracker,
+            deadline_at=deadline,
+            defer_verdict=True,
+        )
+        if report is None:
+            raise typer.Exit(1)
+        verdict = _run_verdict(report)
+        verdicts.append(verdict)
+        if retry_blocked and verdict == "blocked" and retry_setup is None:
+            retry_setup = setup
+
+    if retry_setup and time.time_ns() // 1_000_000 < deadline:
+        report = _start_and_follow(
+            "full",
+            setup=retry_setup,
+            scenario=EvalCase.decision_tracker,
+            deadline_at=deadline,
+            defer_verdict=True,
+        )
+        if report is None:
+            raise typer.Exit(1)
+        verdicts[setups.index(retry_setup)] = _run_verdict(report)
+
+    verdict = (
+        "failed"
+        if "failed" in verdicts
+        else "blocked"
+        if "blocked" in verdicts
+        else "passed"
+    )
+    console.print(f"Hosted Decision Tracker baseline · {verdict.upper()}")
+    if verdict != "passed":
+        raise typer.Exit(1)
 
 
 @eval_cli.command("run")
@@ -341,7 +442,7 @@ def run(
     all_categories: bool = typer.Option(
         False,
         "--all",
-        help="Run all categories, or full qualification with --case summarization.",
+        help="Run all evaluation categories or full qualification for a selected suite.",
     ),
     behavior_only: bool = typer.Option(
         False, "--behavior-only", help="Run only Behavior Evaluation."
@@ -362,6 +463,25 @@ def run(
             help="Use hosted GPT-6 Luna with high reasoning for fixed summarization fixtures.",
         ),
     ] = None,
+    deterministic_only: Annotated[
+        bool,
+        typer.Option(
+            "--deterministic-only", help="Run Decision Tracker checks offline."
+        ),
+    ] = False,
+    baseline: Annotated[
+        bool,
+        typer.Option(
+            "--baseline", help="Run both Decision Tracker setups within 20 minutes."
+        ),
+    ] = False,
+    retry_blocked: Annotated[
+        bool,
+        typer.Option(
+            "--retry-blocked",
+            help="Retry one blocked setup within the baseline deadline.",
+        ),
+    ] = False,
 ):
     """Run Behavior Evaluation with full instructions and report Bottleneck Attribution."""
     if all_categories and (quick or behavior_only):
@@ -376,12 +496,26 @@ def run(
         raise typer.BadParameter(
             "--summarization-grader requires --case summarization."
         )
+    if (deterministic_only or baseline) and case != EvalCase.decision_tracker:
+        raise typer.BadParameter(
+            "--deterministic-only and --baseline require --case decision-tracker."
+        )
+    if case == EvalCase.decision_tracker and repetitions != 1:
+        raise typer.BadParameter("Decision Tracker cases run once per setup.")
+    if retry_blocked and not baseline:
+        raise typer.BadParameter("--retry-blocked requires --baseline.")
+    if baseline:
+        if deterministic_only or behavior_only:
+            raise typer.BadParameter("--baseline runs all Decision Tracker categories.")
+        _decision_tracker_baseline(retry_blocked=retry_blocked)
+        return
     _start_and_follow(
         "full" if all_categories else "quick" if quick else "behavior",
         setup=setup,
         repetitions=repetitions,
         scenario=case,
         summarization_grader=summarization_grader,
+        deterministic_only=deterministic_only,
     )
 
 

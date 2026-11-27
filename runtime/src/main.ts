@@ -298,6 +298,26 @@ async function run(): Promise<void> {
       keepAlive: Number(process.env.LTCOOK_SUMMARIZER_KEEP_ALIVE ?? '-1'),
       generation: process.env.LTCOOK_SUMMARIZER_GENERATION,
     };
+    const inferenceMode = z
+      .enum(['hosted', 'local'])
+      .safeParse(process.env.LTCOOK_CONVERSATION_INFERENCE?.trim() || 'hosted');
+    const conversationInputTokens = z.coerce
+      .number()
+      .int()
+      .positive()
+      .safeParse(process.env.LTCOOK_CONVERSATION_INPUT_TOKENS ?? '8000');
+    const conversationConfigurationError = !inferenceMode.success
+      ? new ServiceInferenceError(
+          'configuration',
+          'Set LTCOOK_CONVERSATION_INFERENCE to hosted or local.',
+        )
+      : !conversationInputTokens.success
+        ? new ServiceInferenceError(
+            'configuration',
+            'Set LTCOOK_CONVERSATION_INPUT_TOKENS to a positive integer.',
+          )
+        : undefined;
+    const selectHostedTrackerModel = () => resolveModel('tiny', process.env);
     evals = new EvalRunService(
       stateDirectory,
       createEvalEngine({
@@ -307,6 +327,11 @@ async function run(): Promise<void> {
         python,
         teamSelection,
         summarization,
+        hostedTracker: {
+          mode: inferenceMode.data,
+          inputTokens: conversationInputTokens.data,
+          selectModel: selectHostedTrackerModel,
+        },
       }),
     );
     await evals.initialize();
@@ -431,28 +456,9 @@ async function run(): Promise<void> {
     api.setConversationRecords(memory, (id) => runtime?.memoryContext(id));
 
     const configuredLocal = process.env.LTCOOK_CONVERSATION_LOCAL_MODEL?.trim() || '@local-CPU';
-    const inferenceMode = z
-      .enum(['hosted', 'local'])
-      .safeParse(process.env.LTCOOK_CONVERSATION_INFERENCE?.trim() || 'hosted');
-    const conversationInputTokens = z.coerce
-      .number()
-      .int()
-      .positive()
-      .safeParse(process.env.LTCOOK_CONVERSATION_INPUT_TOKENS ?? '8000');
-    const conversationConfigurationError = !inferenceMode.success
-      ? new ServiceInferenceError(
-          'configuration',
-          'Set LTCOOK_CONVERSATION_INFERENCE to hosted or local.',
-        )
-      : !conversationInputTokens.success
-        ? new ServiceInferenceError(
-            'configuration',
-            'Set LTCOOK_CONVERSATION_INPUT_TOKENS to a positive integer.',
-          )
-        : undefined;
     conversationInference = new ConversationInference(
       {
-        hosted: hostedConversationProvider(() => resolveModel('tiny', process.env)),
+        hosted: hostedConversationProvider(selectHostedTrackerModel),
         local: localConversationProvider(() => {
           const local = configuredLocal.startsWith('@')
             ? resolveModel(configuredLocal, process.env)

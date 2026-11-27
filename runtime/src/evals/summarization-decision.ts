@@ -87,9 +87,19 @@ export async function prepareLunaPiEvaluation(
   reasoning: 'low' | 'high' = LUNA_EVALUATION.reasoning,
   options?: { subscriptionOnly: boolean },
 ) {
+  return prepareHostedPiEvaluation(directory, signal, LUNA_EVALUATION.model, reasoning, options);
+}
+
+export async function prepareHostedPiEvaluation(
+  directory: string,
+  signal: AbortSignal,
+  modelId: string,
+  reasoning: 'low' | 'high',
+  options?: { subscriptionOnly: boolean },
+) {
   const { authMethod } = await codexAuthorization(signal);
   if (options?.subscriptionOnly && authMethod === 'apikey')
-    throw new Error('This Luna evaluation requires the Codex subscription sign-in.');
+    throw new Error('This hosted Pi evaluation requires the Codex subscription sign-in.');
 
   const provider = authMethod === 'apikey' ? 'openai' : 'openai-codex';
   const modelRuntime = useCodexOpenAiAuth(
@@ -100,10 +110,13 @@ export async function prepareLunaPiEvaluation(
       refreshOnCreate: false,
     }),
   );
-  const model = modelRuntime.getModel(provider, LUNA_EVALUATION.model);
-  if (!model) throw new Error('The Codex-authenticated Pi catalog cannot resolve GPT-6 Luna.');
-  return (input: PiEvaluationSessionOptions) =>
-    createPiEvaluationSession(input, modelRuntime, model, reasoning);
+  const model = modelRuntime.getModel(provider, modelId);
+  if (!model) throw new Error(`The Codex-authenticated Pi catalog cannot resolve ${modelId}.`);
+  return Object.assign(
+    (input: PiEvaluationSessionOptions) =>
+      createPiEvaluationSession(input, modelRuntime, model, reasoning),
+    { provider, model: model.id },
+  );
 }
 
 async function createPiEvaluationSession(

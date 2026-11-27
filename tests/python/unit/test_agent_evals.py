@@ -414,3 +414,94 @@ def test_cli_exits_unsuccessfully_when_summarization_not_qualified(
     assert params["preset"] == "full"
     assert params["scenario"] == "summarization"
     assert params["summarizationGrader"] == "gpt-6-luna"
+
+
+def test_tracker_baseline_keeps_confirmed_failure_and_retries_one_blocked_setup(
+    monkeypatch,
+):
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    calls = []
+    verdicts = iter(["failed", "blocked", "passed"])
+
+    def start(preset, **options):
+        calls.append((preset, options))
+        return {
+            "summary": {
+                "status": "completed",
+                "decisionTrackerQualification": next(verdicts),
+            },
+        }
+
+    monkeypatch.setattr(cli, "_start_and_follow", start)
+    result = CliRunner().invoke(
+        cli.eval_cli,
+        ["run", "--all", "--case", "decision-tracker", "--baseline", "--retry-blocked"],
+    )
+    assert result.exit_code == 1
+    assert "baseline · FAILED" in result.output
+    assert [options["setup"].value for _, options in calls] == [
+        "synthetic",
+        "current",
+        "current",
+    ]
+    assert len({options["deadline_at"] for _, options in calls}) == 1
+    assert all(
+        preset == "full" and options["defer_verdict"] for preset, options in calls
+    )
+
+
+def test_tracker_baseline_does_not_launch_another_setup_after_deadline(monkeypatch):
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    clock = iter([0, 1_000_000, 1_200_000_000_001])
+    example_time = type("Clock", (), {"time_ns": staticmethod(lambda: next(clock))})
+    monkeypatch.setattr(cli, "time", example_time)
+    calls = []
+
+    def start(preset, **options):
+        calls.append((preset, options))
+        return {
+            "summary": {"status": "completed", "decisionTrackerQualification": "passed"}
+        }
+
+    monkeypatch.setattr(cli, "_start_and_follow", start)
+    result = CliRunner().invoke(
+        cli.eval_cli, ["run", "--case", "decision-tracker", "--baseline"]
+    )
+    assert result.exit_code == 1
+    assert "current · BLOCKED" in result.output
+    assert len(calls) == 1
+
+
+def test_tracker_deterministic_run_marks_request_offline(monkeypatch):
+    from typer.testing import CliRunner
+
+    import ltcook.cli.eval as cli
+
+    requests = []
+    monkeypatch.setattr(cli, "_runtime", lambda: ({}, None))
+    monkeypatch.setattr(
+        cli,
+        "_call",
+        lambda _environment, _route, body: requests.append(body) or {"runId": "test"},
+    )
+    monkeypatch.setattr(cli, "_follow", lambda _environment, _run_id: None)
+    result = CliRunner().invoke(
+        cli.eval_cli,
+        [
+            "run",
+            "--case",
+            "decision-tracker",
+            "--setup",
+            "synthetic",
+            "--deterministic-only",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert requests[0]["scenario"] == "decision-tracker"
+    assert requests[0]["deterministicOnly"] is True
