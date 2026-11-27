@@ -93,6 +93,11 @@ def _asset_source(root: Path) -> Path:
         "client/components/TeamComposerItem.tsx",
         "client/screens/TaskBoard.tsx",
         "client/screens/AgentFocus.tsx",
+        "turn-speed/paseo-plugin.json",
+        "turn-speed/index.client.tsx",
+        "turn-speed/index.server.ts",
+        "turn-speed/client/pill.tsx",
+        "turn-speed/LICENSE",
     ):
         path = plugin / name
         path.parent.mkdir(parents=True, exist_ok=True)

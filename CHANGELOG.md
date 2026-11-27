@@ -47,6 +47,10 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- Agent chats show live generation speed in the composer, refreshing every two
+  seconds. The bundled Turn Speed component marks estimated token rates and
+  offers a breakdown of the current turn.
+
 - **Clarify** in the bundled Paseo web app rewrites an individual completed
   reply on demand and saves the result against that exact source.
 - **Tracked Items** in the Explorer sidebar maintains a conversation-specific

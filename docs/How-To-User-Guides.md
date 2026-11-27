@@ -190,6 +190,11 @@ On narrow screens, open the composer controls and select a Team from the native
 sheet before sending. Use the Model control to [choose an alias](#choose-a-model-alias)
 for the Leader. For hosted models, [authenticate with Pi](#authenticate-with-pi).
 
+The chat composer shows live generation speed in tokens per second, refreshed
+every two seconds while the agent runs. A rate marked `≈` is estimated from
+streamed text when token counts are unavailable. Select the speed to see the
+turn breakdown; settings are under **Settings → Plugins → Turn speed**.
+
 On desktop, **Activity** opens in the right Explorer the first time you open
 an agent conversation in a workspace. Paseo remembers your layout after that.
 Use the Explorer **+** menu to open **Activity**, **Workspace Services**,

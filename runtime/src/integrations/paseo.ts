@@ -251,7 +251,14 @@ export async function startPaseoHost(input: {
       webUi: { enabled: true },
     },
     pluginsEnabled: true,
-    plugins: { ltcook: { source: 'directory', path: input.pluginDirectory, enabled: true } },
+    plugins: {
+      ltcook: { source: 'directory', path: input.pluginDirectory, enabled: true },
+      'turn-speed': {
+        source: 'directory',
+        path: path.join(input.pluginDirectory, 'turn-speed'),
+        enabled: true,
+      },
+    },
   };
   await mkdir(home, { recursive: true, mode: 0o700 });
   const configFile = path.join(home, 'config.json');
