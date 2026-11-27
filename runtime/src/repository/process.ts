@@ -63,7 +63,7 @@ export async function runRepositoryCommand(
     maxBytes: number;
     env?: Record<string, string>;
     signal?: AbortSignal;
-    stopAfterLine?: (line: string) => boolean;
+    stopAfterLine?: (line: string) => boolean | Promise<boolean>;
   },
 ): Promise<{ stdout: string; code: number; stopped: boolean }> {
   signal?.throwIfAborted();
@@ -103,6 +103,7 @@ export async function runRepositoryCommand(
       child.stdout.destroy();
       child.stderr.destroy();
     }
+    let pending: Promise<void> | undefined;
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
       if (stopped) return;
       bytes += Buffer.byteLength(chunk);
@@ -116,21 +117,27 @@ export async function runRepositoryCommand(
       }
       const lines = (pendingLine + chunk).split('\n');
       pendingLine = lines.pop() ?? '';
-      for (const line of lines) {
-        try {
-          if (!stopAfterLine(line)) continue;
-          stop();
-        } catch (error) {
-          stop(error);
+      child.stdout.pause();
+      pending = (async () => {
+        for (const line of lines) {
+          if (stopped) break;
+          if (await stopAfterLine(line)) {
+            stop();
+            break;
+          }
         }
-        break;
-      }
+      })()
+        .catch((error: unknown) => stop(error))
+        .finally(() => {
+          if (!stopped) child.stdout.resume();
+        });
     });
     child.stderr.resume();
     child.once('error', (error) => {
       failure ??= error;
     });
-    child.once('close', (code) => {
+    child.once('close', async (code) => {
+      await pending;
       clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);
       if (failure !== undefined) reject(failure);

@@ -158,6 +158,58 @@ printf '%s\\n' '{"recipes":{"build":{}},"modules":{"runtime":{"recipes":{"check"
     diagnosticDetails: [],
   });
   expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(4);
+  expect(
+    await service.get(session, {
+      operation: 'section',
+      section: 'repository',
+      filter: { includePaths: ['package.json'] },
+    }),
+  ).toMatchObject({
+    section: 'repository',
+    filter: {
+      effective: { includePaths: ['package.json'] },
+      budgetExhausted: false,
+    },
+  });
+  expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(5);
+  expect(await service.get(session, { operation: 'section', section: 'repository' })).toMatchObject(
+    { freshness: 'cached' },
+  );
+  expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(5);
+});
+
+test('RIED rejects filters on unsupported inventory operations and direct file outlines', async () => {
+  const home = mkdtempSync(join(os.tmpdir(), 'ltcook-ried-filter-validation-'));
+  directories.push(home);
+  const workspaceRoot = join(home, 'workspace');
+  mkdirSync(join(workspaceRoot, 'src'), { recursive: true });
+  writeFileSync(join(workspaceRoot, 'src', 'source.ts'), 'export const value = 1;');
+  const service = new RiedService(join(home, 'cache'), undefined, () => ({ PATH: '' }));
+  const context = { id: 'filter-validation', workspaceRoot };
+
+  await expect(service.get(context, { operation: 'summary', filter: {} })).rejects.toThrow(
+    'summary does not support filter',
+  );
+  await expect(
+    service.get(context, {
+      operation: 'map',
+      filter: { includeText: ['value'] },
+    }),
+  ).rejects.toThrow('RIED supports filter.includePaths and filter.excludePaths only');
+  await expect(
+    service.get(context, {
+      operation: 'outline',
+      target: 'src/source.ts',
+      filter: { includePaths: ['src/**'] },
+    }),
+  ).rejects.toThrow('RIED outline filters require a directory target');
+  await expect(
+    service.get(context, {
+      operation: 'section',
+      section: 'host',
+      filter: {},
+    }),
+  ).rejects.toThrow('section host does not support filter');
 });
 
 test('RIED reports missing discovery tools without running project commands', async () => {
@@ -354,6 +406,26 @@ test.skipIf(!Bun.which('just'))(
           { name: 'check', module: 'checks' },
         ]),
       },
+    });
+    expect(
+      await service.get(
+        { id: 'native-just', workspaceRoot },
+        {
+          operation: 'section',
+          section: 'recipes',
+          filter: { excludePaths: ['included.just'] },
+        },
+      ),
+    ).toMatchObject({
+      partial: true,
+      diagnosticDetails: [
+        {
+          source: 'just',
+          code: 'filtered-source-dependency',
+          message: expect.stringContaining('included.just'),
+        },
+      ],
+      value: { items: [] },
     });
     expect(existsSync(sentinel)).toBe(false);
   },

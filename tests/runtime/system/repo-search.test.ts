@@ -21,6 +21,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {
+  RepositoryFilter,
+  type RepositoryFilterInput,
+} from '../../../runtime/src/repository/filter.js';
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
@@ -55,8 +59,7 @@ function search(
   args: {
     query: string;
     mode?: 'hybrid' | 'semantic';
-    pattern?: string;
-    paths?: string[];
+    filter?: RepositoryFilterInput;
     limit?: number;
   },
 ) {
@@ -267,8 +270,11 @@ test.skipIf(!deploymentDirectory)(
       });
       await expect(stat(cacheDirectory)).rejects.toHaveProperty('code', 'ENOENT');
       const tool = searchTool(cacheDirectory);
-      const byName = (directory: string, pattern: string, paths?: string[]) =>
-        search(tool, directory, { query: 'calculate checksum using bytes', pattern, paths });
+      const byName = (directory: string, pattern: string, includePaths?: string[]) =>
+        search(tool, directory, {
+          query: 'calculate checksum using bytes',
+          filter: { includeRegex: [pattern], includePaths },
+        });
       try {
         if (process.platform !== 'win32') await chmod(ignoredOutput, 0o000);
         await observer.buildIndex(parentWorkspace, new AbortController().signal);
@@ -290,6 +296,19 @@ test.skipIf(!deploymentDirectory)(
         status: 'ready',
         results: cold.results,
       });
+      const generation = (await observer.readStatus(parentWorkspace)).generation;
+      expect(generation).toBeDefined();
+      const broad = await search(tool, workspace, { query: 'calculate checksum using bytes' });
+      const first = (broad.results as { path: string }[])[0]!;
+      const next = (broad.results as { path: string }[]).find(({ path }) => path !== first.path);
+      expect(next).toBeDefined();
+      const filtered = await search(tool, workspace, {
+        query: 'calculate checksum using bytes',
+        limit: 1,
+        filter: { excludePaths: [first.path] },
+      });
+      expect(filtered).toMatchObject({ status: 'ready', results: [{ path: next!.path }] });
+      expect((await observer.readStatus(parentWorkspace)).generation).toBe(generation);
       expect(await observer.readStatus(parentWorkspace)).toMatchObject({
         availability: 'ready',
         activity: 'idle',
@@ -299,7 +318,7 @@ test.skipIf(!deploymentDirectory)(
         activity: 'idle',
       });
       await observer.buildIndex(siblingWorkspace, new AbortController().signal);
-      expect(await byName(workspace, 'Checksum', ['nested'])).toMatchObject({
+      expect(await byName(workspace, 'Checksum', ['nested/**'])).toMatchObject({
         status: 'ready',
         results: [{ path: 'nested/nested.ts' }],
       });
@@ -319,12 +338,10 @@ test.skipIf(!deploymentDirectory)(
         status: 'ready',
         results: [],
       });
-      await expect(byName(nested, 'outsideOnlyChecksum', ['escape.ts'])).rejects.toThrow(
-        /workspace|outside|symbolic link/i,
-      );
-      await expect(
-        search(tool, nested, { query: outside, pattern: 'outsideOnlyChecksum' }),
-      ).rejects.toThrow(/query|path/i);
+      expect(await byName(nested, 'outsideOnlyChecksum', ['escape.ts'])).toMatchObject({
+        status: 'ready',
+        results: [],
+      });
       expect(await byName(sibling, 'siblingOnlyChecksum')).toMatchObject({
         status: 'ready',
         results: [{ path: 'main.ts' }],
@@ -376,13 +393,16 @@ test.skipIf(!deploymentDirectory)(
       await builder.buildIndex(priorWorkspace, new AbortController().signal);
       const priorGeneration = (await builder.readStatus(priorWorkspace)).generation;
       expect(
-        await search(tool, workspace, { query: 'checksum', pattern: 'priorChecksum' }),
+        await search(tool, workspace, {
+          query: 'checksum',
+          filter: { includeRegex: ['priorChecksum'] },
+        }),
       ).toMatchObject({ status: 'ready', results: [{ path: 'checksum.ts' }] });
 
       await rename(workspace, prior);
       await symlink(prior, workspace, 'junction');
       await expect(
-        search(tool, workspace, { query: 'checksum', pattern: 'priorChecksum' }),
+        search(tool, workspace, { query: 'checksum', filter: { includeRegex: ['priorChecksum'] } }),
       ).rejects.toThrow('The authorized workspace is unavailable.');
       await rm(workspace);
 
@@ -393,12 +413,15 @@ test.skipIf(!deploymentDirectory)(
         await search(tool, workspace, {
           query: 'checksum',
           mode: 'semantic',
-          pattern: 'replacementChecksum',
+          filter: { includeRegex: ['replacementChecksum'] },
         }),
       ).toMatchObject({ status: 'unavailable' });
       await builder.buildIndex(replacementWorkspace, new AbortController().signal);
       expect(
-        await search(tool, workspace, { query: 'checksum', pattern: 'replacementChecksum' }),
+        await search(tool, workspace, {
+          query: 'checksum',
+          filter: { includeRegex: ['replacementChecksum'] },
+        }),
       ).toMatchObject({ status: 'ready', results: [{ path: 'checksum.ts' }] });
       const replacementGeneration = (await builder.readStatus(replacementWorkspace)).generation;
       expect(replacementGeneration).not.toBe(priorGeneration);
@@ -456,7 +479,10 @@ test.skipIf(!deploymentDirectory || process.platform !== 'linux')(
       expect(await provider.readStatus(workspace)).toMatchObject({ availability: 'ready' });
       const updated = await provider.search(
         workspace,
-        { query: 'checkpointed new token', pattern: 'checkpointedNewToken' },
+        {
+          query: 'checkpointed new token',
+          filter: new RepositoryFilter({ includeRegex: ['checkpointedNewToken'] }),
+        },
         new AbortController().signal,
       );
       expect(updated.value).toMatchObject({
@@ -465,7 +491,10 @@ test.skipIf(!deploymentDirectory || process.platform !== 'linux')(
       });
       const outdated = await provider.search(
         workspace,
-        { query: 'checkpointed old token', pattern: 'checkpointedOldToken' },
+        {
+          query: 'checkpointed old token',
+          filter: new RepositoryFilter({ includeRegex: ['checkpointedOldToken'] }),
+        },
         new AbortController().signal,
       );
       expect(outdated.value).toMatchObject({ status: 'ready', hits: [] });

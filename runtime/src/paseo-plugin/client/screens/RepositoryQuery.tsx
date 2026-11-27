@@ -58,6 +58,16 @@ const searchModes = [
   { value: 'literal', label: 'Literal' },
   { value: 'regex', label: 'Regular expression' },
 ] as const;
+const filterFields = [
+  { key: 'includePaths', label: 'Include paths', placeholder: 'src/**' },
+  { key: 'excludePaths', label: 'Exclude paths', placeholder: '**/generated/**' },
+  { key: 'includeText', label: 'Include literal text', placeholder: 'restoreSession' },
+  { key: 'excludeText', label: 'Exclude literal text', placeholder: '__main__' },
+  { key: 'includeRegex', label: 'Include regex', placeholder: '\\bsession\\b' },
+  { key: 'excludeRegex', label: 'Exclude regex', placeholder: '^import ' },
+] as const;
+type FilterField = (typeof filterFields)[number]['key'];
+type FilterDraft = Partial<Record<FilterField, string>>;
 const toolArgumentsSchema = z.record(z.string(), z.json());
 type RepositoryTool = (typeof tools)[number]['value'];
 type SearchMode = (typeof searchModes)[number]['value'];
@@ -147,6 +157,8 @@ function QueryForm({
   const [mode, setMode] = useState<SearchMode>('hybrid');
   const [query, setQuery] = useState('');
   const [advanced, setAdvanced] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterDraft, setFilterDraft] = useState<FilterDraft>({});
   const [argumentsText, setArgumentsText] = useState('');
   const [pending, setPending] = useState<QueryInput>();
   const [output, setOutput] = useState<QueryOutput>();
@@ -156,15 +168,23 @@ function QueryForm({
   const lexical = !advanced && tool === 'search' && mode !== 'hybrid' && mode !== 'semantic';
   const hasInput = (lexical ? value : value.trim()).length > 0;
 
+  function simpleInput() {
+    const filter: Partial<Record<FilterField, string[]>> = {};
+    for (const { key } of filterFields) {
+      const rules = filterDraft[key]?.split(/\r?\n/).filter((rule) => rule.length > 0);
+      if (rules?.length) filter[key] = rules;
+    }
+    return {
+      ...(tool === 'search' ? { query, mode } : { symbol: query.trim() }),
+      ...(Object.keys(filter).length && { filter }),
+    };
+  }
+
   function submit() {
     if (running || !hasInput) return;
     let input;
     try {
-      input = advanced
-        ? toolArgumentsSchema.parse(JSON.parse(argumentsText))
-        : tool === 'search'
-          ? { query, mode }
-          : { symbol: query.trim() };
+      input = advanced ? toolArgumentsSchema.parse(JSON.parse(argumentsText)) : simpleInput();
     } catch {
       setOutput({ error: 'Enter a valid JSON object with the tool arguments.' });
       return;
@@ -202,7 +222,10 @@ function QueryForm({
             label="Search mode"
             value={mode}
             options={searchModes}
-            onValueChange={setMode}
+            onValueChange={(value) => {
+              setMode(value);
+              setArgumentsText('');
+            }}
             disabled={running}
           />
         )}
@@ -216,7 +239,13 @@ function QueryForm({
           editable={!running}
           autoCapitalize="none"
           autoCorrect={false}
-          onChangeText={advanced ? setArgumentsText : setQuery}
+          onChangeText={(value) => {
+            if (advanced) setArgumentsText(value);
+            else {
+              setQuery(value);
+              setArgumentsText('');
+            }
+          }}
           onSubmitEditing={advanced ? undefined : submit}
           style={{
             color: theme.colors.foreground,
@@ -227,6 +256,39 @@ function QueryForm({
             ...(advanced && { minHeight: 100, fontFamily: 'monospace', textAlignVertical: 'top' }),
           }}
         />
+        {!advanced && showFilters && (
+          <>
+            <Label theme={theme} muted>
+              Enter one rule per line.
+            </Label>
+            {filterFields.map(({ key, label, placeholder }) => (
+              <View key={key} style={{ gap: 4 }}>
+                <Label theme={theme}>{label}</Label>
+                <TextInput
+                  accessibilityLabel={label}
+                  placeholder={placeholder}
+                  placeholderTextColor={theme.colors.foregroundMuted}
+                  value={filterDraft[key] ?? ''}
+                  onChangeText={(value) => {
+                    setFilterDraft((draft) => ({ ...draft, [key]: value }));
+                    setArgumentsText('');
+                  }}
+                  editable={!running}
+                  multiline
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  style={{
+                    color: theme.colors.foreground,
+                    borderColor: theme.colors.border,
+                    borderWidth: 1,
+                    borderRadius: 6,
+                    padding: 8,
+                  }}
+                />
+              </View>
+            ))}
+          </>
+        )}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {pending ? (
             <Action
@@ -237,15 +299,21 @@ function QueryForm({
           ) : (
             <Action theme={theme} title="Run query" disabled={!hasInput} onPress={submit} />
           )}
+          {!advanced && (
+            <Action
+              theme={theme}
+              title={showFilters ? 'Hide filters' : 'Filters'}
+              disabled={running}
+              onPress={() => setShowFilters((visible) => !visible)}
+            />
+          )}
           <Action
             theme={theme}
             title={advanced ? 'Use simple input' : 'Edit tool arguments'}
             disabled={running}
             onPress={() => {
               if (!advanced && !argumentsText)
-                setArgumentsText(
-                  JSON.stringify(tool === 'search' ? { query, mode } : { symbol: query }, null, 2),
-                );
+                setArgumentsText(JSON.stringify(simpleInput(), null, 2));
               setAdvanced(!advanced);
             }}
           />

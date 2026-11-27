@@ -1,8 +1,10 @@
 import path from 'node:path';
-import { Type, type Static } from 'typebox';
+import { Type } from 'typebox';
 import { Value } from 'typebox/value';
 import { isWithin } from '../../path-containment.js';
 import { RepositorySourceReader } from '../evidence.js';
+import { isRepositoryPathVisible } from '../filesystem.js';
+import type { RepositoryFilter } from '../filter.js';
 import {
   findRepositoryExecutable,
   RepositoryCommandError,
@@ -24,7 +26,7 @@ const MATCH = Type.Object({
 interface RipgrepRequest {
   query: string;
   mode?: 'exact' | 'literal' | 'regex';
-  paths?: string[];
+  filter?: RepositoryFilter;
   limit?: number;
 }
 
@@ -42,7 +44,7 @@ export function createRipgrepProvider({
   return {
     async search(
       workspace: RepositoryWorkspace,
-      { query, mode = 'literal', paths = ['.'], limit = 20 }: RipgrepRequest,
+      { query, mode = 'literal', filter, limit = 20 }: RipgrepRequest,
       signal: AbortSignal,
       source = new RepositorySourceReader(workspace),
       collection?: RipgrepCollection,
@@ -52,28 +54,8 @@ export function createRipgrepProvider({
         throw new Error('ripgrep requires a nonempty single-line query of up to 1024 characters.');
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RESULTS)
         throw new Error('ripgrep result limit is outside the supported range.');
-      if (paths.length > 12) throw new Error('ripgrep supports up to 12 search paths.');
 
       await workspace.assertUnchanged();
-      const targets = await Promise.all(
-        (paths.length ? paths : ['.']).map((target) =>
-          workspace.resolvePath(target, { allowRoot: true }),
-        ),
-      );
-      const unique = [...new Map(targets.map((target) => [target.absolute, target])).values()];
-      const scopes = unique
-        .filter(
-          (target) =>
-            !unique.some(
-              (other) =>
-                other !== target &&
-                other.kind === 'directory' &&
-                isWithin(other.absolute, target.absolute),
-            ),
-        )
-        .sort((left, right) =>
-          left.relative < right.relative ? -1 : Number(left.relative !== right.relative),
-        );
       const result: RepositoryRetrieval = {
         provider: 'ripgrep',
         value: { kind: 'exhaustive', status: 'ready', hits: [] },
@@ -97,7 +79,28 @@ export function createRipgrepProvider({
         return result;
       }
 
-      const candidates: Static<typeof MATCH>[] = [];
+      // > Anchored literal subtree globs can prune without overriding ignore rules.
+      const excludedSubtrees = (filter?.effective.excludePaths ?? []).filter((glob) =>
+        /^[\w./-]+\/\*\*$/.test(glob),
+      );
+      const fixedRoots = filter?.includeRoots;
+      const roots = new Map<string, boolean>();
+      for (const scope of fixedRoots ?? []) {
+        if (
+          !isRepositoryPathVisible(scope.path) ||
+          !(scope.subtree ? filter?.allowsDirectory(scope.path) : filter?.allowsPath(scope.path))
+        )
+          continue;
+        const target = await workspace.resolvePath(scope.path).catch(() => undefined);
+        if (target && (scope.subtree || target.kind === 'file'))
+          roots.set(target.relative, target.kind === 'directory');
+      }
+      if (excludedSubtrees.length || fixedRoots) filter?.noteProviderPruning();
+      if (fixedRoots && !roots.size) return result;
+      const targets = [...roots.keys()].filter(
+        (target) =>
+          ![...roots].some(([root, directory]) => directory && target.startsWith(root + '/')),
+      );
       const buckets = new Map<string, number>();
       let matchedLines = 0;
       try {
@@ -112,12 +115,13 @@ export function createRipgrepProvider({
             '--no-ignore-parent',
             '--no-require-git',
             '--case-sensitive',
+            ...excludedSubtrees.flatMap((glob) => ['--glob', `!/${glob}`]),
             ...(mode === 'regex' ? [] : ['--fixed-strings']),
             ...(mode === 'exact' ? ['--word-regexp'] : []),
             '-e',
             query,
             '--',
-            ...scopes.map(({ relative }) => (relative === '.' ? '.' : `./${relative}`)),
+            ...(fixedRoots ? targets.map((target) => `./${target}`) : ['.']),
           ],
           workspace,
           pathValue,
@@ -125,17 +129,16 @@ export function createRipgrepProvider({
             maxBytes: 4 * 1024 * 1024,
             timeoutMs,
             signal,
-            stopAfterLine(line) {
+            async stopAfterLine(line) {
               const event: unknown = JSON.parse(line);
               if (
-                typeof event !== 'object' ||
                 !event ||
+                typeof event !== 'object' ||
                 !('type' in event) ||
                 event.type !== 'match'
               )
                 return false;
               matchedLines++;
-              if (!collection && matchedLines > limit) return true;
               if (!Value.Check(MATCH, event)) {
                 report(
                   'unsupported-match',
@@ -143,17 +146,42 @@ export function createRipgrepProvider({
                 );
                 return false;
               }
-              if (collection) {
-                const relative = path.relative(
-                  workspace.root,
-                  path.resolve(workspace.root, event.data.path.text),
+              const { data } = event;
+              const file = path.resolve(workspace.root, data.path.text);
+              if (!isWithin(workspace.root, file)) {
+                report(
+                  'outside-scope',
+                  'ripgrep returned a path outside the authorized search scope.',
                 );
-                const normalized = relative.split(path.sep).join('/');
-                const group = collection.group?.({
-                  path: normalized,
-                  excerpt: event.data.lines.text,
-                });
-                const bucket = JSON.stringify([group, collection.prioritize?.(normalized)]);
+                return false;
+              }
+              const relative = path.relative(workspace.root, file).split(path.sep).join('/');
+              if (!isRepositoryPathVisible(relative) || (filter && !filter.allowsPath(relative)))
+                return false;
+              const text = data.lines.text.replaceAll('\r\n', '\n');
+              const lastLine = data.line_number + text.replace(/\n$/, '').split('\n').length - 1;
+              const hit = await source.verify(
+                {
+                  path: relative,
+                  excerpt: text,
+                  ranges: [{ startLine: data.line_number, endLine: lastLine }],
+                  allowsText: filter && ((unit) => filter.allowsText(unit)),
+                },
+                signal,
+              );
+              if (hit === 'filtered') return filter?.exhaustedContentBudget ?? false;
+              if (typeof hit === 'string') {
+                if (hit !== 'source-unavailable') result.freshness = 'stale';
+                report(
+                  hit,
+                  'ripgrep evidence could not be checked against the current source at the reported line.',
+                );
+                return false;
+              }
+              if (!collection && result.value.hits.length >= limit) return true;
+              if (collection) {
+                const group = collection.group?.(hit);
+                const bucket = JSON.stringify([group, collection.prioritize?.(relative)]);
                 const used = buckets.get(bucket) ?? 0;
                 if (used >= (collection.perGroup ?? limit)) {
                   result.truncated = true;
@@ -161,7 +189,8 @@ export function createRipgrepProvider({
                 }
                 buckets.set(bucket, used + 1);
               }
-              candidates.push(event);
+              result.value.hits.push(hit);
+              result.truncated ||= hit.excerptTruncated === true;
               return false;
             },
           },
@@ -187,36 +216,15 @@ export function createRipgrepProvider({
         );
       }
       await workspace.assertUnchanged();
-      for (const { data } of candidates) {
-        const file = path.resolve(workspace.root, data.path.text);
-        if (
-          !scopes.some(
-            (target) =>
-              target.absolute === file ||
-              (target.kind === 'directory' && isWithin(target.absolute, file)),
-          )
-        ) {
-          report('outside-scope', 'ripgrep returned a path outside the authorized search scope.');
-          continue;
-        }
-        const hit = await source.verify(
-          {
-            path: path.relative(workspace.root, file),
-            excerpt: data.lines.text,
-            ranges: [{ startLine: data.line_number, endLine: data.line_number }],
-          },
-          signal,
+      if (
+        filter &&
+        (filter.exhaustedContentBudget ||
+          result.diagnostics.some(({ code }) => code === 'timeout' || code === 'output-limit'))
+      ) {
+        report(
+          'filter-budget-exhausted',
+          'The scan budget ended before all filtered candidates could be checked.',
         );
-        if (typeof hit === 'string') {
-          if (hit !== 'source-unavailable') result.freshness = 'stale';
-          report(
-            hit,
-            'ripgrep evidence could not be checked against the current source at the reported line.',
-          );
-          continue;
-        }
-        result.value.hits.push(hit);
-        result.truncated ||= hit.excerptTruncated === true;
       }
       if (result.partial && !matchedLines) {
         result.value.status = 'unavailable';

@@ -10,6 +10,7 @@ import {
 } from '../process.js';
 import type { RepositoryDiagnostic, RepositoryResult } from '../results.js';
 import type { RepositoryWorkspace } from '../workspace.js';
+import type { RepositoryFilter } from '../filter.js';
 
 const BRIEF_VERSION = '0.16.0';
 const SCAN_DEPTH = 8;
@@ -384,6 +385,7 @@ export async function readBrief(
   workspace: RepositoryWorkspace,
   pathValue: string,
   configuredExecutable?: string,
+  filter?: RepositoryFilter,
 ): Promise<RepositoryResult<RepositoryInventory>> {
   const capturedAt = new Date().toISOString();
   try {
@@ -395,6 +397,7 @@ export async function readBrief(
       maxFiles: SCAN_ENTRIES,
       maxFileBytes: 4 * 1024 * 1024,
       maxBytes: 24 * 1024 * 1024,
+      filter,
     });
     try {
       // > Use a local argument and an empty PATH so brief cannot start Git, scc or tokei.
@@ -425,6 +428,7 @@ export async function readBrief(
       }
       const parsed: unknown = JSON.parse(result.stdout);
       const report = parseBriefInventory(parsed, capturedAt);
+      if (filter) filterInventoryPaths(report.value, filter);
       if (stage.truncated)
         report.diagnostics.push(
           diagnostic('workspace-limit', 'brief workspace capture reached its limits'),
@@ -457,5 +461,59 @@ export async function readBrief(
     return observation(blankInventory(), capturedAt, [
       diagnostic('scan-failed', 'brief discovery was unavailable'),
     ]);
+  }
+}
+
+function filterInventoryPaths(inventory: RepositoryInventory, filter: RepositoryFilter): void {
+  inventory.manifests = inventory.manifests.filter(({ path }) => filter.allowsPath(path));
+  inventory.layout.sourceDirs = inventory.layout.sourceDirs.filter((path) =>
+    filter.allowsDirectory(path),
+  );
+  inventory.layout.testDirs = inventory.layout.testDirs.filter((path) =>
+    filter.allowsDirectory(path),
+  );
+  function filterTools(tools: BriefTool[]) {
+    return tools.map((tool) => ({
+      ...tool,
+      configFiles: tool.configFiles.filter((path) => filter.allowsPath(path)),
+    }));
+  }
+  inventory.packageManagers = filterTools(inventory.packageManagers);
+  for (const category of TOOL_CATEGORIES) {
+    const tools = inventory.tools[category];
+    if (tools) inventory.tools[category] = filterTools(tools);
+  }
+  inventory.scripts = inventory.scripts.filter(
+    ({ source }) => !source || filter.allowsPath(source),
+  );
+  inventory.skills = inventory.skills.filter(({ path }) => filter.allowsPath(path));
+  inventory.platforms.runtimeVersionFiles = Object.fromEntries(
+    Object.entries(inventory.platforms.runtimeVersionFiles).filter(([path]) =>
+      filter.allowsPath(path),
+    ),
+  );
+  const resources = inventory.resources;
+  for (const key of RESOURCE_PATHS) {
+    const value = resources[key];
+    if (value && !filter.allowsPath(value)) delete resources[key];
+  }
+  for (const group of RESOURCE_GROUPS) {
+    const entries = resources[group];
+    if (!entries) continue;
+    const included = Object.fromEntries(
+      Object.entries(entries).filter(([, path]) => filter.allowsPath(path)),
+    );
+    if (Object.keys(included).length) resources[group] = included;
+    else delete resources[group];
+  }
+  if (resources.templates) {
+    resources.templates.issues = resources.templates.issues.filter((path) =>
+      filter.allowsPath(path),
+    );
+    resources.templates.pullRequests = resources.templates.pullRequests.filter((path) =>
+      filter.allowsPath(path),
+    );
+    if (resources.templates.config && !filter.allowsPath(resources.templates.config))
+      delete resources.templates.config;
   }
 }

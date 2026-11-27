@@ -1,5 +1,6 @@
 import { resolveBrief } from './providers/brief.js';
 import { stageRepositoryFiles } from './filesystem.js';
+import type { RepositoryFilter } from './filter.js';
 import { RepositoryCommandError, runRepositoryCommand } from './process.js';
 import type { RepositoryDiagnostic, RepositoryResult } from './results.js';
 import type { RepositoryWorkspace } from './workspace.js';
@@ -35,6 +36,7 @@ export async function readRepositoryOutline(
   target: string,
   pathValue: string,
   configuredBrief?: string,
+  filter?: RepositoryFilter,
 ): Promise<RepositoryResult<{ target: string; outline: string }>> {
   const selected = await workspace.resolvePath(target, { allowRoot: true });
   const capturedAt = new Date().toISOString();
@@ -52,6 +54,7 @@ export async function readRepositoryOutline(
       maxFileBytes: 32 * 1024,
       maxBytes: 384 * 1024,
       extensions,
+      filter,
     });
     try {
       truncated = staged.truncated;
@@ -109,6 +112,7 @@ export async function readRepositoryOutline(
     freshness: 'current',
     partial: diagnostics.some(({ code }) => code !== 'outline-limit'),
     truncated,
+    ...(filter && { filter: filter.report(truncated) }),
     diagnostics,
   };
 }

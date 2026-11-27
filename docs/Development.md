@@ -223,6 +223,13 @@ literal checks. If ranked retrieval is unavailable or still indexing, report
 the gap and use native search or direct file reads when they fit the requested
 evidence.
 
+Repository discovery filters belong to the runtime's shared repository
+contract. Providers can push down equivalent path rules, and the runtime
+checks canonical paths and verified source units before result selection.
+Keep filters out of the published index identity and shared inventory cache.
+Use the existing repository Traditional Tests and native workspace tool
+fixtures to verify transports and provider behavior.
+
 Check that a normal launch exposes the tool and delivers its guidance. Use the
 existing [Repository Agent Behavior Evaluation](#repository-agent-behavior-evaluation)
 when comparing tool selection and evidence quality. Compare time to verified

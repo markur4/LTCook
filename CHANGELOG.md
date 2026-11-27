@@ -33,6 +33,13 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- **Breaking:** 💥 Search, Locate, traces, and applicable RIED discovery share
+  query-time repository filters. Tool callers can replace `paths` with
+  `filter.includePaths` globs and ranked Search's `pattern` with
+  `filter.includeRegex`. Query Repo exposes path, literal, and regex rules.
+  Search still supports independent `mode: "regex"`.
+  [#110](https://github.com/markur4/LTCook/issues/110)
+
 - Repository indexing reports correlated failures, retries, and a stalled refresh
   in the runtime diagnostics. Startup failures before the owner process launches
   are recorded in the private backend log.

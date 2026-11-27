@@ -16,6 +16,7 @@ import {
   type RepositoryResult,
 } from './results.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from './workspace.js';
+import { compileRepositoryFilter } from './filter.js';
 
 interface RiedContext {
   id: string;
@@ -237,28 +238,67 @@ export class RiedService {
 
     const workspace = await this.openWorkspace(context);
     const pathValue = this.toolPath(context);
+    const filter = compileRepositoryFilter(request.filter, `RIED ${request.operation}`, 'paths');
     if (request.operation === 'map') {
       const map = await readRepositoryMap(workspace, request.target ?? '.', {
         maxDepth: request.maxDepth ?? 3,
         maxEntries: request.maxEntries ?? 100,
+        filter,
       });
-      return this.detail(workspace, 'map', map);
+      return {
+        ...this.detail(workspace, 'map', map),
+        ...(filter && { filter: filter.report(map.truncated) }),
+      };
     }
     if (request.operation === 'outline' && request.target) {
+      if (filter) {
+        const selected = await workspace.resolvePath(request.target, { allowRoot: true });
+        if (selected.kind !== 'directory')
+          throw new Error('RIED outline filters require a directory target.');
+      }
       const outline = await readRepositoryOutline(
         workspace,
         request.target,
         pathValue,
         this.briefExecutable,
+        filter,
       );
-      return this.detail(workspace, 'outline', outline);
+      return {
+        ...this.detail(workspace, 'outline', outline),
+        ...(filter && { filter: filter.report(outline.truncated) }),
+      };
     }
     if (request.operation === 'section' && request.section === 'git') {
       const git = await readGit(workspace, pathValue, {
         detailed: true,
         ...(request.base ? { base: request.base } : {}),
+        ...(filter && { filter }),
       });
-      return { ...this.detail(workspace, 'section', git), section: 'git' };
+      return {
+        ...this.detail(workspace, 'section', git),
+        section: 'git',
+        ...(filter && { filter: filter.report(git.truncated) }),
+      };
+    }
+    if (
+      filter &&
+      request.operation === 'section' &&
+      (request.section === 'repository' || request.section === 'recipes')
+    ) {
+      if (request.section === 'repository') {
+        const result = await readBrief(workspace, pathValue, this.briefExecutable, filter);
+        return {
+          ...this.detail(workspace, 'section', result),
+          section: request.section,
+          filter: filter.report(result.truncated),
+        };
+      }
+      const result = await readRecipes(workspace, pathValue, filter);
+      return {
+        ...this.detail(workspace, 'section', result),
+        section: request.section,
+        filter: filter.report(result.truncated),
+      };
     }
 
     const metadata = this.metadata(workspace, pathValue, request.operation === 'refresh');

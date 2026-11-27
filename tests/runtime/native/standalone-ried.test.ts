@@ -52,6 +52,9 @@ test('standalone native Pi exposes RIED with the shared cache and rebinds invent
   const f = fixture();
   const service = new RiedService(f.cache, f.brief, () => ({ PATH: process.env.PATH ?? '' }));
   await service.get({ id: 'managed', workspaceRoot: f.workspace }, { operation: 'summary' });
+  mkdirSync(join(f.workspace, 'src'));
+  writeFileSync(join(f.workspace, 'src', 'included.ts'), 'export const included = true;');
+  writeFileSync(join(f.workspace, 'excluded.ts'), 'export const excluded = true;');
   const runtime = await createPiRpcRuntime(['--offline']);
   try {
     const read = async () => {
@@ -79,6 +82,29 @@ test('standalone native Pi exposes RIED with the shared cache and rebinds invent
       languages: ['TypeScript'],
     });
     expect(readFileSync(f.count, 'utf8').trim().split('\n')).toHaveLength(1);
+    const tool = runtime.session.getToolDefinition('ltcook_ried');
+    if (!tool) throw new Error('RIED was not registered in native Pi');
+    const map = await tool.execute(
+      'read-filtered-map',
+      {
+        operation: 'map',
+        filter: { includePaths: ['src/**'] },
+      },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(map.details).toMatchObject({
+      value: {
+        filter: {
+          effective: { includePaths: ['src/**'] },
+          budgetExhausted: false,
+        },
+        value: {
+          entries: [{ path: 'src' }, { path: 'src/included.ts' }],
+        },
+      },
+    });
     await runtime.newSession();
     expect((await read()).value.workspaceRoot).toBe(f.workspace);
     const messageId = runtime.session.sessionManager.appendMessage({
