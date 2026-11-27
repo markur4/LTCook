@@ -51,9 +51,15 @@ All notable changes to `ltcook` will be documented in this file.
   seconds. The bundled Turn Speed component marks estimated token rates and
   offers a breakdown of the current turn.
 
-- **Tracked Items** in the Explorer sidebar maintains a conversation-specific
-  notebook with configurable Trackers, original evidence, manual editing,
-  and extraction coverage. When a message blocks extraction, the affected
+- **Tracker** opens a conversation-specific notebook in a full tab beside its
+  agent. Collection navigation, readable items, original evidence, manual
+  editing, and extraction coverage share one view. A compact **Activity →
+  Services** entry shows extraction state separately from recorded coverage;
+  the composer and Command Center open the same conversation-bound tab.
+  Compact spacing keeps more notes visible without reducing text sizes.
+  **Notes** and **Coverage** switch views; **Copy all notes** copies the current
+  conversation's saved notes as grouped plain text, independent of view filters.
+  When a message blocks extraction, the affected
   Tracker resumes in message order after recovery. Coverage gives users retry
   and skip controls and keeps skipped messages visible as incomplete.
 
@@ -94,7 +100,7 @@ All notable changes to `ltcook` will be documented in this file.
   tools, observed skill loads, model context usage, ColGREP index status, and
   delegation delivery evidence. On desktop, Activity opens on the first agent
   chat in each workspace. The Explorer **+** menu also offers **Workspace
-  Services**, **Tracked Items**, **Team**, and **Tasks**.
+  Services**, **Team**, and **Tasks**.
 
 - Activity links individual tool and skill occurrences to their chat rows in
   LTCook's Paseo web app. The details header opens skill documents in a workspace

@@ -553,9 +553,13 @@ requests.
 
 Tracker revisions let LTCook reverse conversation-derived changes on rewind.
 Manual deletions survive replay. A manually edited item's text survives as a
-manual item if its original evidence disappears. The sidebar shows current
-items and processing coverage, including pending, incomplete, failed, and
-paused events.
+manual item if its original evidence disappears. **Tracker** has a full tab
+bound to its agent conversation, with collection navigation, current items,
+sources, editing, and processing coverage. Switching agents does not change
+the conversation represented by an open Tracker tab. **Activity → Services**
+provides a compact Tracker entry and opens that tab. Extraction state and
+recorded coverage are separate: waiting, pausing, or processing a later message
+does not make an earlier incomplete, failed, paused, or skipped event disappear.
 
 Tracker's Hosted inference uses the Codex subscription and `@tiny`, which
 defaults to GPT-6 Luna with low reasoning. Hosted requests can run during an
