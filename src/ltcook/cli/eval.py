@@ -224,8 +224,10 @@ def _print_report(report: dict) -> None:
     if table.row_count:
         console.print(table)
     tracker = result.get("results", {}).get("decision-tracker", {})
+    if audit := tracker.get("instructionAudit"):
+        console.print(f"Instruction Audit · {audit['status'].upper()}", markup=False)
     for label, key in (
-        ("Deterministic checks", "deterministicResults"),
+        ("Behavior Evaluation · deterministic checks", "deterministicResults"),
         ("Semantic grading", "semanticResults"),
     ):
         if metrics := tracker.get(key):
@@ -240,6 +242,8 @@ def _print_report(report: dict) -> None:
                 console.print(
                     f"  {name} · {counts['numerator']}/{counts['denominator']}"
                 )
+    if tracker.get("cases"):
+        console.print("Bottleneck Attribution", markup=False)
     for case in tracker.get("cases", []):
         if case.get("verdict") in {"failed", "blocked"}:
             stage = f" · {case['failureStage']}" if case.get("failureStage") else ""

@@ -506,6 +506,17 @@ export async function runDecisionTrackerCase(
           step.action === 'observe' ? 'idempotency' : undefined,
         );
       }
+      if (expected.invalidatedRevisions !== undefined) {
+        const invalidatedCount = actual.revisions.filter(({ invalidated }) => invalidated).length;
+        check(
+          'Persisted invalidated revision count',
+          'recovery',
+          invalidatedCount === expected.invalidatedRevisions,
+          expected.invalidatedRevisions,
+          invalidatedCount,
+          'recoveryCorrectness',
+        );
+      }
       if (expected.items) {
         check(
           'Active Notebook item count',

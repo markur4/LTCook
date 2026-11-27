@@ -19,6 +19,7 @@ export type DecisionTrackerFixture = {
       coverage?: Record<number, TrackerStatus>;
       items?: { alias: string; sources: number[]; textIncludes?: string }[];
       revisions?: number;
+      invalidatedRevisions?: number;
       requests?: number;
     };
   }[];
@@ -827,7 +828,8 @@ export const decisionTrackerFixtures: DecisionTrackerFixture[] = [
             { alias: 'queue-retry', sources: [2], textIncludes: '30 seconds' },
             { alias: 'queue-retention-replayed', sources: [3], textIncludes: '14 days' },
           ],
-          revisions: 4,
+          revisions: 3,
+          invalidatedRevisions: 1,
         },
       },
     ],
@@ -835,7 +837,7 @@ export const decisionTrackerFixtures: DecisionTrackerFixture[] = [
       1: { type: 'add', text: 'Keep the search cursor opaque.', sources: [1] },
       2: {
         attempts: [
-          'context-rejection',
+          'invalid-output',
           { type: 'add', text: 'Set the retry interval to 30 seconds.', sources: [2] },
         ],
       },

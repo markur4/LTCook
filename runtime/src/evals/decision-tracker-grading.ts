@@ -163,7 +163,7 @@ const instructionChecks = [
     matches: (text: string) =>
       /\bexactly one\b/i.test(text) &&
       /\bdecision\b/i.test(text) &&
-      /\bindependently revisable\b/i.test(text),
+      /\b(?:independently revisable|revised independently)\b/i.test(text),
   },
   {
     id: 'conditions-rationale-and-fidelity',
