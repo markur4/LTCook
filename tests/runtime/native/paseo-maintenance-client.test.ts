@@ -1,10 +1,24 @@
 import { afterEach, expect, test } from 'bun:test';
-import { connectPaseoMaintenance } from '../../../runtime/src/integrations/paseo-idle-restart.js';
+import {
+  connectPaseoMaintenance,
+  connectPaseoWorkspaceNaming,
+} from '../../../runtime/src/integrations/paseo-idle-restart.js';
 
 const servers: Bun.Server<undefined>[] = [];
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.stop(true)));
 });
+
+const namingJob = {
+  id: 'job-one',
+  workspaceId: 'workspace-one',
+  agentId: 'agent-one',
+  nameWorkspace: true,
+  nameTab: true,
+  prompt: 'Repair the login form',
+  workspaceTitle: 'Workspace',
+  agentTitle: 'Agent',
+};
 
 function daemon(capability = true) {
   const requests: Array<{
@@ -46,6 +60,11 @@ function daemon(capability = true) {
         });
       }
       if (path === '/api/ltcook/workspace-archive') return state.archiveReply();
+      if (path === '/api/ltcook/workspace-naming' && state.capability) {
+        if (body.operation === 'status') return Response.json({ workspaceNaming: true });
+        if (body.operation === 'pending') return Response.json({ jobs: [namingJob] });
+        if (body.operation === 'apply') return Response.json({ applied: false });
+      }
       // A hypothetical fallback would look successful. The assertions require
       // that no legacy HTTP or WebSocket request ever reaches this branch.
       return Response.json({ archived: true, workspaceId: 'workspace-one' });
@@ -177,4 +196,27 @@ test('Only bare loopback authorities are negotiated and wildcard IPv4 binds reso
   const maintenance = await connectPaseoMaintenance(`0.0.0.0:${f.port}`, 'user-secret');
   expect(maintenance?.archiveWorkspacePreservingFiles).toBeFunction();
   expect(f.requests).toHaveLength(1);
+});
+
+test('Naming uses the negotiated local route and forwards an obsolete write rejection', async () => {
+  const f = daemon();
+  const naming = await connectPaseoWorkspaceNaming(f.listen, 'user-secret');
+  if (!naming) throw new Error('Expected naming capability');
+  const signal = new AbortController().signal;
+  expect(await naming.pending('workspace-one', signal)).toEqual([namingJob]);
+  await expect(naming.pending('another-workspace', signal)).rejects.toThrow('different workspace');
+  expect(await naming.apply(namingJob, { agentTitle: 'Login' }, signal)).toBe(false);
+  expect(
+    f.requests.every(
+      ({ authorization, path }) =>
+        authorization === 'Bearer user-secret' && path === '/api/ltcook/workspace-naming',
+    ),
+  ).toBe(true);
+  expect(f.requests.at(-1)?.body).toEqual({
+    operation: 'apply',
+    id: 'job-one',
+    workspaceId: 'workspace-one',
+    agentId: 'agent-one',
+    agentTitle: 'Login',
+  });
 });

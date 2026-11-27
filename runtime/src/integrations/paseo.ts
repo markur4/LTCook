@@ -29,7 +29,11 @@ import { configurePiExtensions } from './pi-settings.js';
 import { isWithin } from '../path-containment.js';
 import { memoryDispatchId } from './paseo-memory.js';
 import { WorkspacePreparationCache, type WorkspacePreparation } from './workspace-preparation.js';
-import { connectPaseoMaintenance, type IdleRestartReservation } from './paseo-idle-restart.js';
+import {
+  connectPaseoMaintenance,
+  connectPaseoWorkspaceNaming,
+  type IdleRestartReservation,
+} from './paseo-idle-restart.js';
 import { seedWorkspaceLabels, type WorkspaceNativeMutations } from './paseo-workspace-services.js';
 
 const exec = promisify(execFile);
@@ -92,6 +96,7 @@ function readWorkspacePreparation(response: unknown, workspaceRoot: string): Wor
 export interface PaseoHost {
   api: PaseoApi;
   workspaceMutations: WorkspaceNativeMutations;
+  workspaceNaming?: Awaited<ReturnType<typeof connectPaseoWorkspaceNaming>>;
   archiveWorkspacePreservingFiles?: (workspaceId: string, signal?: AbortSignal) => Promise<boolean>;
   listen: string;
   logPath: string;
@@ -293,9 +298,12 @@ export async function startPaseoHost(input: {
     await client.connect();
     const connectedClient = client;
     const api = createPaseoApi(connectedClient);
-    const maintenance = hasMaintenanceLoader
-      ? await connectPaseoMaintenance(instance.listen, input.userToken)
-      : undefined;
+    const [maintenance, workspaceNaming] = hasMaintenanceLoader
+      ? await Promise.all([
+          connectPaseoMaintenance(instance.listen, input.userToken),
+          connectPaseoWorkspaceNaming(instance.listen, input.userToken),
+        ])
+      : [];
     const reserveIdleRestart =
       process.platform === 'linux' && started.spawned ? maintenance?.reserveIdleRestart : undefined;
     return {
@@ -304,8 +312,8 @@ export async function startPaseoHost(input: {
         listWorkspaceLabels: connectedClient.listWorkspaceLabels.bind(connectedClient),
         setWorkspaceLabel: connectedClient.setWorkspaceLabel.bind(connectedClient),
         updateWorkspaceLabel: connectedClient.updateWorkspaceLabel.bind(connectedClient),
-        updateAgent: connectedClient.updateAgent.bind(connectedClient),
       },
+      workspaceNaming,
       reserveIdleRestart,
       archiveWorkspacePreservingFiles: maintenance?.archiveWorkspacePreservingFiles,
       listen: instance.listen,

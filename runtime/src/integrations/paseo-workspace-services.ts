@@ -18,6 +18,7 @@ import {
   type WorkspaceMetadataGenerator,
   type WorkspaceMetadataHost,
   type WorkspaceMetadataSnapshot,
+  type WorkspaceNamingHost,
 } from '../services/workspace-metadata.js';
 
 const exec = promisify(execFile);
@@ -29,7 +30,7 @@ const at = (value: string | null | undefined) => (value ? Date.parse(value) || 0
 
 export type WorkspaceNativeMutations = Pick<
   ReturnType<typeof createHostClient>,
-  'listWorkspaceLabels' | 'setWorkspaceLabel' | 'updateWorkspaceLabel' | 'updateAgent'
+  'listWorkspaceLabels' | 'setWorkspaceLabel' | 'updateWorkspaceLabel'
 >;
 type WorkspaceSubscription = NonNullable<
   Awaited<ReturnType<PaseoApi['workspaces']['list']>>['subscription']
@@ -101,6 +102,7 @@ async function workingRevision(workspace: PaseoWorkspace, signal: AbortSignal): 
 export interface PaseoWorkspaceServicesOptions {
   api: PaseoApi;
   mutations: WorkspaceNativeMutations;
+  naming?: WorkspaceNamingHost;
   stateDirectory: string;
   environment?: NodeJS.ProcessEnv;
   generator?: WorkspaceMetadataGenerator;
@@ -178,11 +180,9 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
       onError: (error, id) => options.onError?.('Workspace Organizer', error, id),
     });
     this.renamer = new Renamer({
-      ...common,
-      stateFile: path.join(options.stateDirectory, 'renamer.json'),
-      enabled: () => this.settings.renamer,
-      renameWorkspaces: () => this.settings.workspaces,
-      renameTabs: () => this.settings.tabs,
+      host: options.naming,
+      generator: common.generator,
+      enabled: this.settings.renamer && (this.settings.workspaces || this.settings.tabs),
       settingsDiagnostic: settingsDiagnostic(invalidRenamer),
       onError: (error, id) => options.onError?.('Renamer', error, id),
     });
@@ -206,7 +206,10 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
   start(): void {
     if (this.started || this.abort.signal.aborted) return;
     this.started = true;
-    this.unsubscribe = this.options.api.workspaces.subscribe(() => this.schedule(1000));
+    this.unsubscribe = this.options.api.workspaces.subscribe((event) => {
+      if (event?.kind === 'upsert') this.observeNaming(event.workspace);
+      this.schedule(1000);
+    });
     this.schedule(0);
   }
 
@@ -240,6 +243,7 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
     this.closing = (async () => {
       // A subscription request already in flight must finish before its owned handle is released.
       await this.pending;
+      await this.renamer.wait();
       const subscription = this.workspaceSubscription;
       this.workspaceSubscription = undefined;
       await subscription?.release();
@@ -278,7 +282,7 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
   }
 
   private async pollOnce(): Promise<void> {
-    if (!this.settings.organizer && !this.settings.renamer) return;
+    if (!this.settings.organizer && !this.options.naming) return;
     const signal = this.abort.signal;
     if (this.started && !this.workspaceSubscription) {
       const observed = await this.options.api.workspaces.list({
@@ -291,7 +295,10 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
       this.workspaceSubscription = observed.subscription;
     }
     signal.throwIfAborted();
-    const [workspaces, agents] = await Promise.all([this.workspaces(signal), this.agents(signal)]);
+    const workspaces = await this.workspaces(signal);
+    for (const workspace of workspaces) this.observeNaming(workspace);
+    if (!this.settings.organizer) return;
+    const agents = await this.agents(signal);
     const snapshots: WorkspaceMetadataSnapshot[] = [];
     this.archiveBlocked.clear();
     for (const workspace of workspaces) {
@@ -301,7 +308,6 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
     }
     this.diagnostic = undefined;
     await this.organizer.tick(snapshots, signal);
-    await this.renamer.tick(snapshots, signal);
     const ids = new Set(agents.map(({ id }) => id));
     for (const id of this.timelineCache.keys()) if (!ids.has(id)) this.timelineCache.delete(id);
   }
@@ -576,37 +582,8 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
     return this.options.archiveWorkspacePreservingFiles(expected.id, signal);
   }
 
-  async renameWorkspace(
-    expected: WorkspaceMetadataSnapshot,
-    title: string,
-    signal: AbortSignal,
-  ): Promise<boolean> {
-    const current = await this.read(expected.id, signal);
-    if (!sameWorkspaceContent(expected, current) || current.title !== expected.title) return false;
-    signal.throwIfAborted();
-    await this.options.api.workspaces.ref(expected.id).setTitle(title);
-    return true;
-  }
-
-  async renameAgent(
-    expected: WorkspaceMetadataSnapshot,
-    id: string,
-    title: string,
-    signal: AbortSignal,
-  ): Promise<boolean> {
-    const current = await this.read(expected.id, signal);
-    if (!sameWorkspaceContent(expected, current)) return false;
-    const before = expected.agents.find((agent) => agent.id === id);
-    const after = current.agents.find((agent) => agent.id === id);
-    if (
-      !before ||
-      !after ||
-      before.contentVersion !== after.contentVersion ||
-      before.title !== after.title
-    )
-      return false;
-    signal.throwIfAborted();
-    await this.options.mutations.updateAgent(id, { name: title });
-    return true;
+  private observeNaming(workspace: PaseoWorkspace): void {
+    if (!workspace.internal && workspace.metadata?.['ltcook.namingPending'] === true)
+      void this.renamer.visit(workspace.id, this.abort.signal);
   }
 }

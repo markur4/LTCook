@@ -23,7 +23,7 @@ def _asset_source(root: Path) -> Path:
     (root / "runtime/dist/main.js").write_text("runtime", encoding="utf-8")
     idle_restart = root / "runtime/dist/paseo-idle-restart"
     idle_restart.mkdir()
-    for name in ("register.mjs", "patch.mjs", "gate.mjs"):
+    for name in ("register.mjs", "patch.mjs", "gate.mjs", "workspace-naming.mjs"):
         (idle_restart / name).write_text("export {};", encoding="utf-8")
     (root / "runtime/dist/integrations/pi-rpc.js").write_text("rpc", encoding="utf-8")
     (root / "runtime/dist/tools").mkdir()

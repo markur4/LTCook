@@ -10,6 +10,7 @@ import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
+import { PaseoWorkspaceServices } from '../../../runtime/src/integrations/paseo-workspace-services.js';
 import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
 import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
 import { ConversationInference } from '../../../runtime/src/session-memory/inference.js';
@@ -78,6 +79,7 @@ async function browser(...args: string[]): Promise<string> {
   );
   return result.stdout;
 }
+const firstReply = Promise.withResolvers<void>();
 let modelCalls = 0;
 let providerError: unknown;
 const provider = createHttpServer(async (request, response) => {
@@ -90,6 +92,7 @@ const provider = createHttpServer(async (request, response) => {
     };
     const lastUser = input.messages?.findLastIndex(({ role }) => role === 'user') ?? -1;
     const prompt = JSON.stringify(input.messages?.[lastUser]?.content ?? '');
+    if (prompt.includes('GUI desktop launch')) await firstReply.promise;
     const exerciseParallel = prompt.includes('Exercise Activity parallel tools');
     const exerciseActivity = exerciseParallel || prompt.includes('Exercise Activity tools');
     const needsTools =
@@ -388,6 +391,7 @@ api.setWorkspaceTools(tools);
 api.setWorkspaceMcp(new WorkspaceMcp(tools, listen));
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
+let services: PaseoWorkspaceServices | undefined;
 let memory: ConversationRecords | undefined;
 let products: ReturnType<typeof openConversationProductStore> | undefined;
 let inference: ConversationInference | undefined;
@@ -406,6 +410,29 @@ try {
     environment,
     piCommand: path.join(root, 'runtime/dist/integrations/pi-rpc.js'),
   });
+
+  assert(host.workspaceNaming, 'The staged daemon exposes first-prompt naming');
+  services = new PaseoWorkspaceServices({
+    api: host.api,
+    mutations: host.workspaceMutations,
+    naming: host.workspaceNaming,
+    stateDirectory: path.join(directory, 'workspace-services'),
+    environment: { ...environment, LTCOOK_WORKSPACE_ORGANIZER_ENABLED: 'false' },
+    generator: {
+      async classify() {
+        return { category: 'Feature' };
+      },
+      async rename(job) {
+        return {
+          ...(job.nameWorkspace ? { workspaceTitle: 'Fixture workspace' } : {}),
+          agents: job.nameTab ? [{ id: job.agentId, title: 'Fixture session' }] : [],
+        };
+      },
+    },
+  });
+  services.start();
+  api.setWorkspaceServices(services);
+
   const reserveIdleRestart = host.reserveIdleRestart;
   assert(reserveIdleRestart, 'The staged supervisor and its worker expose idle restart');
   api.setProviderSubagents(async (agentId) => {
@@ -473,7 +500,13 @@ try {
   await waitForComposer();
   await inspectStage('new-workspace-desktop');
   await selectLtcook();
-  await sendPrompt('GUI desktop launch', 'Create');
+  stage = 'first-prompt-naming';
+  await browser('fill', '[data-ltcook-acceptance-composer=visible]', 'GUI desktop launch');
+  await clickButton('Create');
+  await browser('wait', '--text', 'Fixture session');
+  assert(!(await browser('snapshot')).includes('GUI native Leader response.'));
+  firstReply.resolve();
+  await browser('wait', '--text', 'GUI native Leader response.');
   await browser('wait', '--text', 'tok/s');
   const initial = runtime.listSessions(workspace, 'default-minimal');
   assert.equal(initial.length, 1, 'Native submission creates exactly one LTCook Session');
@@ -504,6 +537,46 @@ try {
   );
   assert(!nativeChat.includes('Team Overview'), 'No intermediary Team Overview replaces the chat');
   await inspectStage('native-leader-chat');
+  stage = 'workspace-auto-rename-menu';
+  const firstWorkspaceId = leader!.agent.workspaceId;
+  assert(firstWorkspaceId);
+  const menuRow = (part: string) =>
+    `[data-testid^="sidebar-workspace-${part}-"][data-testid$=":${firstWorkspaceId}"]`;
+  const openNamingMenu = async () => {
+    await browser('hover', menuRow('row'));
+    await browser('click', menuRow('kebab'));
+  };
+  const autoRename = menuRow('menu-auto-rename');
+  const expectSwitch = async (enabled: boolean) => {
+    await browser(
+      'wait',
+      '--fn',
+      `document.querySelector(${JSON.stringify(autoRename)})?.getAttribute('aria-checked') === '${enabled}'`,
+    );
+  };
+  assert.equal(
+    (await host.api.workspaces.ref(firstWorkspaceId).refresh())?.title,
+    'Fixture workspace',
+  );
+  await openNamingMenu();
+  await expectSwitch(true);
+  await browser('click', autoRename);
+  await expectSwitch(false);
+  await browser('click', autoRename);
+  await expectSwitch(true);
+  await browser('click', menuRow('menu-rename'));
+  await browser('fill', menuRow('rename-input'), 'Manual fixture name');
+  await browser('press', 'Enter');
+  await browser('wait', '--text', 'Manual fixture name');
+  await openNamingMenu();
+  await expectSwitch(false);
+  await browser('press', 'Escape');
+  await clickButton('Services');
+  const group = '[data-testid="ltcook-sidebar-workspace-services"]';
+  await browser('click', `${group} [aria-label^="Workspace Organizer,"]`);
+  await browser('click', `${group} [aria-label^="Renamer,"]`);
+  await browser('wait', '--text', 'On the first prompt');
+  await clickButton('Services');
 
   stage = 'native-turn-speed-breakdown';
   await browser('find', 'role', 'button', 'click', '--name', 'Turn speed');
@@ -1100,11 +1173,13 @@ try {
   );
   throw error;
 } finally {
+  firstReply.resolve();
   await browser('close').catch(() => undefined);
   await tracker?.close();
   await inference?.close();
   products?.close();
   await memory?.close();
+  await services?.close();
   await host?.close();
   await runtime?.close();
   await evals.close();

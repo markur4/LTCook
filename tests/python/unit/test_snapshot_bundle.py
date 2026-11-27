@@ -165,6 +165,7 @@ def test_finished_snapshot_wheel_initializes_compiled_assets(tmp_path: Path) -> 
         "runtime/dist/paseo-idle-restart/register.mjs": "export {};\n",
         "runtime/dist/paseo-idle-restart/patch.mjs": "export {};\n",
         "runtime/dist/paseo-idle-restart/gate.mjs": "export {};\n",
+        "runtime/dist/paseo-idle-restart/workspace-naming.mjs": "export {};\n",
         "runtime/dist/tools/web-mcp.js": "// snapshot web MCP bridge\n",
         "runtime/dist/tools/pi-web-access.LICENSE": "MIT fixture\n",
         "runtime/dist/team-api/index.js": "export const teamApiVersion = 2;\n",

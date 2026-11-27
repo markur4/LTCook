@@ -39,7 +39,16 @@ function importGate(source, gateUrl) {
   return `import { idleRestart } from ${JSON.stringify(gateUrl)};\n${source}`;
 }
 
-function patchAgentManager(source, { gateUrl }) {
+function importNaming(
+  source,
+  { gateUrl, namingUrl = new URL('./workspace-naming.mjs', gateUrl).href },
+) {
+  return `import { workspaceNaming, configureWorkspaceNaming, workspaceNamingPath, workspaceNamingMetadata, workspacePreference, manualWorkspaceTitle, agentTitleMetadata } from ${JSON.stringify(namingUrl)};
+${source}`;
+}
+
+function patchAgentManager(source, options) {
+  const { gateUrl } = options;
   for (const declaration of [
     '    async createAgent(config, agentId, options)',
     '    createAgentFromRecord(agentId)',
@@ -96,7 +105,62 @@ function patchAgentManager(source, { gateUrl }) {
     }
 ${anchor}`,
   );
-  return importGate(source, gateUrl);
+  source = addAtOpening(
+    source,
+    '    async updateAgentMetadataUnlocked(agentId, updates)',
+    '        updates = { ...updates, metadata: agentTitleMetadata(updates) };',
+  );
+  source = replaceOnce(
+    source,
+    '                await this.setTitle(agentId, updates.title);',
+    '                await this.setTitle(agentId, updates.title, updates.metadata);',
+  );
+  source = replaceOnce(
+    source,
+    '    async setTitle(agentId, title) {',
+    '    async setTitle(agentId, title, metadata) {',
+  );
+  const titleWrite = '        await this.persistSnapshot(agent, { title: normalizedTitle });';
+  source = replaceOnce(
+    source,
+    titleWrite,
+    `        if (metadata) agent.metadata = applyRecordPatch(agent.metadata, metadata);
+${titleWrite}`,
+  );
+  const accepted =
+    '            if (options?.clientMessageId) {\n                this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "accepted", {';
+  source = replaceOnce(
+    source,
+    accepted,
+    `            this.recordNamingPrompt(agent, prompt, options?.clientMessageId);\n${accepted}`,
+  );
+  const steer = '        this.recordSubmittedPrompt(agent, prompt, clientMessageId, "accepted", {';
+  source = replaceOnce(
+    source,
+    steer,
+    `        this.recordNamingPrompt(agent, prompt, clientMessageId);\n${steer}`,
+  );
+  const outOfBand =
+    '        if (options?.clientMessageId) {\n            this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "accepted");';
+  source = replaceOnce(
+    source,
+    outOfBand,
+    `        this.recordNamingPrompt(agent, prompt, options?.clientMessageId);\n${outOfBand}`,
+  );
+  const record = '    recordSubmittedPrompt(agent, prompt, clientMessageId, outcome, options) {';
+  source = replaceOnce(
+    source,
+    record,
+    `    recordNamingPrompt(agent, prompt, clientMessageId) {
+        workspaceNaming?.recordPrompt(agent, projectAgentMessages({
+            type: "user_message",
+            text: submittedPromptText(prompt),
+            clientMessageId,
+        }), clientMessageId);
+    }
+${record}`,
+  );
+  return importNaming(importGate(source, gateUrl), options);
 }
 
 function patchAgentPrompt(source, { gateUrl }) {
@@ -175,7 +239,8 @@ export const patches = {
   },
   'dist/server/server/bootstrap.js': {
     sha256: '5e3418aef47924bdcb1644e51e850ee52e86e29d71b0fdf25932c31ca7139713',
-    apply(source, { gateUrl }) {
+    apply(source, options) {
+      const { gateUrl } = options;
       const terminalAnchor =
         '    applyTerminalAgentHookSetting({ store: daemonConfigStore, logger });';
       source = replaceOnce(
@@ -196,12 +261,31 @@ ${terminalAnchor}`,
         return ltcookStartWorkspaceSetup(...args);
     };`,
       );
+      const workspaceNamingAnchor = '    const workspaceAutoName = new WorkspaceAutoName({';
+      source = replaceOnce(
+        source,
+        workspaceNamingAnchor,
+        `    configureWorkspaceNaming({
+        registry: workspaceRegistry,
+        agentManager,
+        agentStorage,
+        notify: emitWorkspaceUpdatesExternal,
+        logger,
+    });
+${workspaceNamingAnchor}`,
+      );
       const anchor =
         '    app.post("/api/terminal-activity", express.json(), createTerminalActivityRouteHandler(terminalManager));';
       source = replaceOnce(
         source,
         anchor,
         `${anchor}
+    app.post(
+        workspaceNamingPath,
+        authorizeIdleRestart(isLoopbackRemoteAddress, process.env.LTCOOK_RUNTIME_USER_TOKEN),
+        express.json({ limit: "4kb" }),
+        (request, response, next) => workspaceNaming.handle(request, response, next),
+    );
     app.post(
         idleRestartPath,
         authorizeIdleRestart(isLoopbackRemoteAddress, process.env.LTCOOK_RUNTIME_USER_TOKEN),
@@ -238,7 +322,10 @@ ${terminalAnchor}`,
         }),
     );`,
       );
-      return `import { authorizeIdleRestart, idleRestart, idleRestartHandler, idleRestartPath, workspaceArchiveHandler, workspaceArchivePath } from ${JSON.stringify(gateUrl)};\n${source}`;
+      return importNaming(
+        `import { authorizeIdleRestart, idleRestart, idleRestartHandler, idleRestartPath, workspaceArchiveHandler, workspaceArchivePath } from ${JSON.stringify(gateUrl)};\n${source}`,
+        options,
+      );
     },
   },
   'dist/server/server/workspace-archive-service.js': {
@@ -318,14 +405,97 @@ ${terminalAnchor}`,
       );
     },
   },
+  'dist/server/server/agent/tools/paseo-tools.js': {
+    sha256: 'b9fdc3f09e998d671803efbb288e6c50ca1306be8d3a5fdf38372d1b3b14e436',
+    apply(source, options) {
+      source = replaceOnce(
+        source,
+        `        const existing = await options.workspaceRegistry.get(workspaceId);
+        if (!existing) {
+            throw new PaseoToolInputError(\`Workspace \${workspaceId} not found\`);
+        }
+        if (existing.archivedAt) {
+            throw new PaseoToolInputError(\`Workspace \${workspaceId} is archived\`);
+        }
+        await options.workspaceRegistry.upsert({
+            ...existing,
+            title,
+            updatedAt: new Date().toISOString(),
+        });`,
+        `        const updated = await workspaceNaming.serialize(workspaceId, () =>
+            options.workspaceRegistry.update(workspaceId, (existing) => {
+                if (existing.archivedAt) throw new PaseoToolInputError(\`Workspace \${workspaceId} is archived\`);
+                return manualWorkspaceTitle(existing, title, new Date().toISOString());
+            }));
+        if (!updated) throw new PaseoToolInputError(\`Workspace \${workspaceId} not found\`);`,
+      );
+      return importNaming(source, options);
+    },
+  },
+  'dist/server/server/workspace-auto-name.js': {
+    sha256: '7e8f1e88ab8becd201b64aea59cdc0055e323f962a2c73b26ddf43816141f7ce',
+    apply(source, options) {
+      source = addAtOpening(
+        source,
+        '    scheduleForDirectory(input, context = {})',
+        '        if (workspaceNaming) return;',
+      );
+      source = replaceOnce(
+        source,
+        '            if (!title || (input.promptTitle && title === input.promptTitle)) {',
+        '            if (!workspaceNaming && (!title || (input.promptTitle && title === input.promptTitle))) {',
+      );
+      return importNaming(source, options);
+    },
+  },
   'dist/server/server/session.js': {
     sha256: '481ddefa51e4e299c5094fb2ff934010cc7ac416fb3238febfbd5fb9912d2885',
-    apply(source, { gateUrl }) {
-      // The unkeyed WebSocket path can provision a worktree before createAgentCommand.
-      return importGate(
-        trackAsyncBody(source, '    async createSessionAgent(msg, agentId, onAgentReady)'),
-        gateUrl,
+    apply(source, options) {
+      const { gateUrl } = options;
+      source = replaceOnce(
+        source,
+        `            const updated = await this.workspaceRegistry.update(workspaceId, (existing) => ({
+                ...existing,
+                title: nextTitle,
+                updatedAt,
+            }));`,
+        `            const updated = await workspaceNaming.serialize(workspaceId, () =>
+                this.workspaceRegistry.update(workspaceId, (existing) =>
+                    manualWorkspaceTitle(existing, nextTitle, updatedAt)));
+        `.trimEnd(),
       );
+      source = replaceOnce(
+        source,
+        `            const updated = await this.workspaceRegistry.update(workspaceId, (existing) => ({
+                ...existing,
+                metadata: applyRecordPatch(existing.metadata, patch),
+                updatedAt,
+            }));`,
+        `            const update = (existing) => {
+                const { ["ltcook.naming"]: reserved, ["ltcook.autoRename"]: preference, ...other } = patch;
+                const metadata = applyRecordPatch(existing.metadata, other);
+                if (preference !== undefined && typeof preference !== "boolean") {
+                    throw new Error("Auto-rename must be on or off.");
+                }
+                return { ...existing, updatedAt, metadata: preference === undefined
+                    ? metadata : workspacePreference(metadata, preference) };
+            };
+            const updated = await workspaceNaming.serialize(workspaceId, () =>
+                this.workspaceRegistry.update(workspaceId, update));`,
+      );
+      source = replaceOnce(
+        source,
+        '            metadata: workspace.metadata,',
+        '            metadata: workspaceNamingMetadata(workspace.metadata),',
+      );
+      source = replaceOnce(
+        source,
+        '                    metadata: updated.metadata,',
+        '                    metadata: workspaceNamingMetadata(updated.metadata),',
+      );
+      // The unkeyed WebSocket path can provision a worktree before createAgentCommand.
+      source = trackAsyncBody(source, '    async createSessionAgent(msg, agentId, onAgentReady)');
+      return importNaming(importGate(source, gateUrl), options);
     },
   },
 };

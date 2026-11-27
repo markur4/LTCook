@@ -761,7 +761,7 @@ supporting tabs when useful. Select the host where you want to run the work.
 See the [Paseo and AppRC glossary](Explanations.md#paseo-and-apprc-terminology)
 for the distinction between a workspace container and its working directory.
 
-Workspace Organizer maintains **Feature** (blue), **Bugfix** (red), **CSC**
+Workspace Organizer’s Tagger maintains **Feature** (blue), **Bugfix** (red), **CSC**
 (amber), and **Research** (violet) on this LTCook host. It selects a category
 from the first conversation content, then reassesses changed conversations or
 observed Git revisions every 12 hours. If work changes during the first
@@ -770,21 +770,21 @@ is idle. Other labels remain available.
 Use Paseo's native label filters to narrow the workspace list. The native default sorts workspaces by
 creation time, newest first; an existing display preference is preserved.
 
-Renamer keeps workspace titles within 20 visible characters and agent-session
-tab titles within 15. It updates a new conversation when content becomes
-available, then at most every 30 minutes when its source changes. Workspace
-names also respond to observed Git changes; agent-tab names follow their own
-conversations. File, diff, terminal, browser, and native provider-subagent titles
-remain native.
-Renamer and category selection use `@tiny` with low reasoning and the configured
-model authentication. They resume later when inference is unavailable; the
-current names and labels remain usable.
+Renamer names each Paseo workspace and agent tab after its first user prompt.
+Workspace names have a 20-visible-character limit and agent-tab names have a
+15-character limit. Renamer uses the configured `@tiny` model with low
+reasoning. If the model is unavailable, it uses a short title from the prompt.
 
-Open **Explorer → + → Workspace Services** or **Activity → Services** to see
-what each service is doing and any operation that needs attention. Workspace
-Organizer also shows why workspaces are protected from automatic archival.
-Update the reported setting or sign-in to allow blocked inference to resume.
-Change service switches through AppRC as described below.
+In the bundled Paseo web app, open the workspace’s three-dot menu and turn off
+**Auto-rename** to pause naming for that workspace and its agent tabs. The switch
+defaults to on. Manually renaming the workspace turns it off. Manually renaming
+an agent tab protects that tab alone. Turn the switch back on for workspaces
+or tabs still waiting for their first prompt. Existing titles are preserved.
+
+Open **Services → Workspace Organizer** in the left sidebar and expand
+**Tagger**, **Renamer**, or **Auto-archive** for status. The same information is
+available in **Explorer → + → Workspace Services** and **Activity → Services**.
+For host-wide settings, use AppRC as described below.
 
 ### Find and restore archived conversations
 
@@ -833,8 +833,8 @@ Set the same values to `true` to enable them again. The respective `enabled`
 setting pauses the whole service. `runtime.services.renamer.tabs` independently
 controls agent-tab renaming. Deliberate shell exports take precedence over saved
 user values; AppRC project overlays do not change the host-wide service policy.
-The `ltcook services` commands manage research containers, while these two
-services follow the LTCook runtime lifecycle.
+The `ltcook services` commands manage research containers. Workspace Organizer
+follows the LTCook runtime lifecycle.
 
 ## Plan work and answer decisions
 

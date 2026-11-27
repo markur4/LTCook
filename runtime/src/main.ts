@@ -658,6 +658,7 @@ async function run(): Promise<void> {
     workspaceServices = new PaseoWorkspaceServices({
       api: host.api,
       mutations: host.workspaceMutations,
+      naming: host.workspaceNaming,
       archiveWorkspacePreservingFiles: host.archiveWorkspacePreservingFiles,
       listProviderSubagents: host.listProviderSubagents,
       stateDirectory,

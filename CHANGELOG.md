@@ -65,13 +65,13 @@ All notable changes to `ltcook` will be documented in this file.
   pending work, and incomplete activity. Automatic archival preserves working
   directories and skips project teardown, including for Paseo-owned worktrees.
 
-- Renamer refreshes changed workspace and agent-session titles at most every
-  30 minutes, with limits of 20 and 15 visible characters respectively. Global
-  AppRC switches independently control workspace renaming, agent-tab renaming,
-  and automatic archival. Both services run in the existing runtime and use
-  `@tiny` only for category and title proposals. Read-only cards in
-  **Workspace Services** and **Activity → Services** show operation failures,
-  recovery status, and archive-protection diagnostics.
+- Workspace Organizer now groups **Tagger**, **Renamer**, and **Auto-archive**
+  under **Services** in the Paseo sidebar. Renamer names the workspace and each
+  agent tab from their first user prompts, using a short prompt-based fallback
+  when inference is unavailable. The bundled Paseo workspace menu includes
+  **Auto-rename**, on by default. A manual workspace rename turns it off, and a
+  manual agent-tab rename protects that tab. The first-prompt behavior replaces
+  periodic refresh.
 
 - The glossary and shared agent instructions distinguish Paseo projects,
   workspaces, sessions, tabs, and AppRC workspaces. The documented default is one
