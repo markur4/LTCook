@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { clearTimeout, setTimeout } from 'node:timers';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import type { DiagnosticEvent } from '../diagnostics/telemetry.js';
@@ -295,19 +294,22 @@ export class RepositoryIndexService {
         elapsedMs: Math.round(performance.now() - started),
       });
     };
-    const deadline = setTimeout(() => {
-      if (signal.aborted || this.active?.job !== job) return;
-      this.active.deadlineExceeded = true;
-      report({
-        code: 'repository-index.stalled',
-        severity: 'error',
-        outcome: 'incomplete',
-        message: STALLED,
-      });
-    }, this.progressDeadlineMs);
-    deadline.unref();
+    const deadline = new AbortController();
+    void delay(this.progressDeadlineMs, undefined, { signal: deadline.signal, ref: false }).then(
+      () => {
+        if (signal.aborted || this.active?.job !== job) return;
+        this.active.deadlineExceeded = true;
+        report({
+          code: 'repository-index.stalled',
+          severity: 'error',
+          outcome: 'incomplete',
+          message: STALLED,
+        });
+      },
+      () => {},
+    );
     const cancelled = () => {
-      clearTimeout(deadline);
+      deadline.abort();
       report({
         code: 'repository-index.cancelled',
         severity: 'info',
@@ -370,7 +372,7 @@ export class RepositoryIndexService {
         retryAt: retryable ? new Date(job.dueAt).toISOString() : undefined,
       });
     } finally {
-      clearTimeout(deadline);
+      deadline.abort();
       signal.removeEventListener('abort', cancelled);
       this.active = undefined;
       this.schedule();

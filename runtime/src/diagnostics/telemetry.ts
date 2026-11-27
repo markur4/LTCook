@@ -5,8 +5,10 @@ import path from 'node:path';
 const SECRET_KEYS =
   /(?:secret|token|password|api.?key|authorization|credential|prompt|transcript|cookie)/i;
 const PRIVATE_ENV_KEYS = /(?:secret|token|password|api.?key|authorization|credential)$/i;
+const PRIVATE_HEADER =
+  /(\b(?:proxy-authorization|authorization|set-cookie|cookie)\b["']?[ \t]*:[ \t]*)[^\r\n]*/gi;
 const SECRET_ASSIGNMENT =
-  /(\b(?:[\w-]*(?:token|password|secret|api[_.-]?key|credential)|authorization|cookie)\b["']?\s*[:=]\s*)(?:["'][^"']*["']|(?:Bearer|Basic)\s+[^\s,;]+|[^\s,;]+)/gi;
+  /(\b(?:[\w-]*(?:token|password|secret|api[_.-]?key|credential)|authorization|cookie)\b["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|(?:Bearer|Basic)\s+[^\s,;&]+|[^\s,;&]+)/gi;
 
 export function redactDiagnosticText(
   text: string,
@@ -18,6 +20,7 @@ export function redactDiagnosticText(
       result = result.replaceAll(value, '<redacted>');
   }
   return result
+    .replace(PRIVATE_HEADER, '$1<redacted>')
     .replace(SECRET_ASSIGNMENT, '$1<redacted>')
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9+/_=.~-]+/gi, '$1 <redacted>')
     .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1<redacted>@')

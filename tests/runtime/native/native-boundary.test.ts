@@ -1705,7 +1705,14 @@ describe('native runtime boundary', () => {
         cause: new Error('password="private spaced value"'),
       }),
     });
-    telemetry.instant('index.trace', { message: 'failed at https://user:private-url@localhost/' });
+    telemetry.instant('index.trace', {
+      message: [
+        'failed at https://user:private-url@localhost/',
+        'Cookie: theme=dark; session=private-session-cookie',
+        'Set-Cookie: session=private-replacement-cookie; Secure',
+        'Proxy-Authorization: Digest username="private-proxy-username", response="private-proxy-proof"',
+      ].join('\n'),
+    });
     span.end();
     await telemetry.exportTrace();
     const logText = readFileSync(logs, 'utf8');
@@ -1718,6 +1725,10 @@ describe('native runtime boundary', () => {
     expect(logText).not.toContain('private-embedded-token');
     expect(logText).not.toContain('private spaced value');
     expect(traceText).not.toContain('private-url');
+    expect(traceText).not.toContain('private-session-cookie');
+    expect(traceText).not.toContain('private-replacement-cookie');
+    expect(traceText).not.toContain('private-proxy-username');
+    expect(traceText).not.toContain('private-proxy-proof');
     const [summary, diagnostic] = logText
       .trimEnd()
       .split('\n')
