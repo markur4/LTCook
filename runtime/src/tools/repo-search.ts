@@ -207,7 +207,7 @@ export function createRepoSearchTool(
     ...defineTool({
       name: REPO_SEARCH_TOOL_NAME,
       description:
-        'Search the authorized local workspace. Use exact for whole identifiers, literal for substrings, regex for patterns, and hybrid or semantic for ranked conceptual matches. Optionally supply base (a local Git ref) to prioritize changed paths and matching test names within the results.' +
+        'Search the authorized local workspace. Use semantic for conceptual queries when common words produce irrelevant keyword matches. Semantic ranks by meaning alone and reports index unavailability directly. Hybrid combines semantic and keyword signals. Use exact for whole identifiers, literal for substrings, and regex for patterns. Optionally supply base (a local Git ref) to prioritize changed paths and matching test names within the results.' +
         repositoryEvidenceGuidance,
       inputSchema: RepositorySearchInputSchema,
       outputSchema: RepositorySearchOutputSchema,

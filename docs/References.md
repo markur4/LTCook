@@ -485,7 +485,7 @@ use Search and Locate through their native LTCook integration.
 | `mode` | Provider | Meaning of `query` |
 | --- | --- | --- |
 | `hybrid` (default) | ColGREP | Rank results using keyword and semantic signals. |
-| `semantic` | ColGREP | Rank results using semantic similarity. |
+| `semantic` | ColGREP | Rank by meaning alone. Use it when common words produce irrelevant keyword matches. |
 | `exact` | ripgrep | Find a case-sensitive whole word. |
 | `literal` | ripgrep | Find a case-sensitive substring. |
 | `regex` | ripgrep | Find matching lines using ripgrep's default regex engine. |
@@ -538,7 +538,7 @@ workspace-relative paths as `ltcook_repo_search`. Supply exactly one lookup.
 | --- | --- |
 | `symbol` | One exact ripgrep stage. |
 | `symbols` | Up to four distinct, single-line symbols. Results keep input order, with separate limits and diagnostics per symbol. |
-| `query` | One ColGREP hybrid stage and at most one exact ripgrep follow-up. |
+| `query` | One ranked ColGREP stage. Hybrid can add one exact ripgrep follow-up. Set `mode: "semantic"` for a single semantic stage. |
 | `location` | Open `{path, line, maxLines?}` from a previous hit. Defaults to 24 lines, with a maximum of 60. |
 | `trace` | Follow several leads for one question and return their shared evidence, connections, and gaps. |
 
@@ -553,30 +553,35 @@ search reserves separate slots for definitions, callers, tests, and references
 during the scan. The stages share checked source snapshots within the request.
 The hybrid follow-up uses the first ranked hit with a simple identifier that
 occurs as a whole identifier in its verified, unclipped excerpt. Hybrid Locate
-uses eight candidates by default. Roles reflect recognizable JavaScript,
-TypeScript, and Python syntax and test paths. Exact definitions, callers, and
-tests can include up to two following lines.
+uses eight candidates by default. The top-level `mode` applies only to
+`query`. Semantic mode uses the published index and reports an unavailable
+index directly. Roles reflect recognizable JavaScript, TypeScript, and Python
+syntax and test paths. Exact definitions, callers, and tests can include up to
+two following lines.
 
-Supply `follow: true` on a lookup to request one verified JavaScript or
-TypeScript connection per exact stage. A `connections` entry gives numbered
+Supply `follow: true` on a symbol or hybrid lookup to request one verified
+JavaScript or TypeScript connection per exact stage. A `connections` entry gives numbered
 source locations for both ends of a relative import, a re-export, or a simple
 delegating wrapper. An imported wrapper target stops at the import statement.
 Dynamic or ambiguous links can be omitted. Optional `paths` constrain hits,
 location lookups, and both ends of a connection.
 
-Use `trace: {question, leads?}` when an answer needs evidence from several files.
-Supply up to four independent `{mode, query}` leads. Use `hybrid` for a behavior,
-`exact` for an identifier, and `literal` for an exact string such as an RPC route
-or environment variable. Without explicit leads, Locate searches up to four
-question clauses separated by question marks or semicolons. Searches run in
-parallel. Hybrid trace leads use a complete cached index and report an
-unavailable gap if none exists. Run a ranked repository search with index
-updates enabled to build or resume that index. Exact and literal trace leads
-work independently of ColGREP. Ranked results can seed bounded exact lookups
-for verified callable or class names. Trace follows up to three verified
-JavaScript or TypeScript connections per path, including direct calls whose
-bindings can be resolved.
-An explicit `follow` is unnecessary for trace requests.
+Use `trace: {question, mode?, leads?}` when an answer needs evidence from several files.
+Supply up to four independent `{mode, query}` leads. Use `semantic` to rank by
+meaning alone, `hybrid` when keywords aid ranking, `exact` for an identifier,
+and `literal` for a string such as an RPC route or environment variable.
+Without explicit leads, Locate searches up to four question clauses separated
+by question marks or semicolons. Add `mode: "semantic"` inside `trace` to make
+all generated leads semantic. Choose either a trace mode or explicit leads.
+
+Searches run in parallel. Ranked leads use a complete cached index and report
+an unavailable gap if none exists. Run a ranked repository search with index
+updates enabled to build or resume that index. Exact and literal leads work
+independently of ColGREP. Hybrid leads can seed bounded exact lookups for
+verified callable or class names. Semantic leads follow verified connections
+from ranked evidence without adding exact lookup results. Trace follows up to
+three verified JavaScript or TypeScript connections per path, including direct
+calls whose bindings can be resolved. Trace requests follow automatically.
 
 Each `trace.evidence` entry has an ID and a source range. Tools render its
 excerpt with line numbers. Each lead lists its `evidenceIds` and `gaps`.
