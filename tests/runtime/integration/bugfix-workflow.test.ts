@@ -108,8 +108,18 @@ test('uses one Pass for bounded writes, correction and current-tree independent 
         ])
         .get(input.huntId),
     ).toEqual([
-      { id: proper?.nativeAgentId, role: 'BugHunter Proper Fix Worker', stage: 'fix' },
-      { id: workaround?.nativeAgentId, role: 'BugHunter Workaround Worker', stage: 'fix' },
+      {
+        id: proper?.nativeAgentId,
+        role: 'BugHunter Proper Fix Worker',
+        stage: 'fix',
+        archived: false,
+      },
+      {
+        id: workaround?.nativeAgentId,
+        role: 'BugHunter Workaround Worker',
+        stage: 'fix',
+        archived: false,
+      },
     ]);
     expect(proper).toBeDefined();
     expect(workaround).toBeDefined();

@@ -130,20 +130,27 @@ export async function observeBugHunter(
 ): Promise<void> {
   let observation: ReturnType<typeof observeConversation> | undefined;
   let previous: string | undefined;
+  let lastChat: Chat | undefined;
   try {
     while (!signal.aborted) {
       const details = await readDetails().catch(() => ({ available: false, hunts: [] }));
       if (signal.aborted) return;
       const hunt = details.available && details.hunts.find(({ id }) => id === input.huntId);
       const conversation = hunt && hunt.conversations.find(({ id }) => id === input.agentId);
-      if (!conversation) {
+      if (!conversation || conversation.archived) {
         observation?.release();
         observation = undefined;
+        if (!conversation) lastChat = undefined;
       } else if (!observation) {
         const { id } = conversation;
         observation = observeConversation(id, paseo.agents.ref(id).timeline, signal);
       }
-      const chat = await observation?.read();
+      const chat =
+        conversation &&
+        (conversation.archived
+          ? { agentId: conversation.id, archived: true, messages: lastChat?.messages ?? [] }
+          : await observation?.read());
+      if (chat) lastChat = chat;
       if (signal.aborted) return;
       const snapshot = chat ? { ...details, chat } : details;
       const serialized = JSON.stringify(snapshot);

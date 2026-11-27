@@ -169,15 +169,29 @@ export class RuntimeController implements RuntimeControllerContract {
       huntId?: string;
     }>(this.bugScanSessionId(scope), 'bugscan-native-task');
     const assignments = new Map<string, ReturnType<CoordinationStore['listAssignments']>>();
-    function describe(
+    const activeAgents = new Map<string, Set<string>>();
+    const describe = (
       items: ReturnType<CoordinationStore['listAssignments']>,
       stage: 'scan' | 'fix',
-    ) {
-      return items.flatMap(({ nativeAgentId, memberKey }) => {
+    ) =>
+      items.flatMap(({ nativeAgentId, memberKey, sessionId }) => {
         const member = bugHunterTeam.definition.members.find(({ key }) => key === memberKey);
-        return member ? [{ id: nativeAgentId, role: member.name, stage }] : [];
+        if (!member) return [];
+        let live = activeAgents.get(sessionId);
+        if (!live) {
+          live = new Set(
+            this.store
+              .listBindings(sessionId)
+              .flatMap(({ state, nativeAgentId }) =>
+                state === 'bound' && nativeAgentId ? [nativeAgentId] : [],
+              ),
+          );
+          activeAgents.set(sessionId, live);
+        }
+        return [
+          { id: nativeAgentId, role: member.name, stage, archived: !live.has(nativeAgentId) },
+        ];
       });
-    }
     const read = (sessionId: string) => {
       const cached = assignments.get(sessionId);
       if (cached) return cached;

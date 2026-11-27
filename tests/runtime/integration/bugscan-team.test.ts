@@ -73,7 +73,17 @@ test('dispatches a hidden read-only investigation and persists its sanitized res
       runtime.bugHunterConversations(repositoryRoot, [{ id: 'hunt-1' }, { id: 'different-hunt' }]),
     ).toEqual(
       new Map([
-        ['hunt-1', [{ id: actor.nativeAgentId, role: 'BugHunter Coordinator', stage: 'scan' }]],
+        [
+          'hunt-1',
+          [
+            {
+              id: actor.nativeAgentId,
+              role: 'BugHunter Coordinator',
+              stage: 'scan',
+              archived: false,
+            },
+          ],
+        ],
         ['different-hunt', []],
       ]),
     );
@@ -140,7 +150,7 @@ test('dispatches a hidden read-only investigation and persists its sanitized res
     expect(agents.sends).toHaveLength(1);
     expect(
       runtime.bugHunterConversations(repositoryRoot, [{ id: 'hunt-1' }]).get('hunt-1'),
-    ).toMatchObject([{ id: actor.nativeAgentId, stage: 'scan' }]);
+    ).toMatchObject([{ id: actor.nativeAgentId, stage: 'scan', archived: true }]);
   } finally {
     await runtime.close();
     rmSync(directory, { recursive: true, force: true });

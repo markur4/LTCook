@@ -7,6 +7,7 @@ const conversation = z.object({
   id,
   role: z.string(),
   stage: z.enum(['scan', 'fix']),
+  archived: z.boolean().optional(),
 });
 
 export type BugHunterConversation = z.infer<typeof conversation>;
@@ -41,6 +42,7 @@ export const bugHunterSubscription = defineSubscription({
       .object({
         agentId: id,
         unavailable: z.boolean().optional(),
+        archived: z.boolean().optional(),
         messages: z.array(z.object({ id, role: z.enum(['user', 'assistant']), text: z.string() })),
       })
       .optional(),

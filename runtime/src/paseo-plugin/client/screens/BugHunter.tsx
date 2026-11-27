@@ -69,11 +69,13 @@ function HuntChat({
   if (!chat?.messages.length) {
     return (
       <ActivityText theme={theme} size={14} tone={stale || chat?.unavailable ? 'warning' : 'muted'}>
-        {stale || chat?.unavailable
-          ? 'Chat history is unavailable.'
-          : chat
-            ? 'No messages yet.'
-            : 'Loading chat…'}
+        {chat?.archived
+          ? 'Chat ended. Open the native chat to see available history.'
+          : stale || chat?.unavailable
+            ? 'Chat history is unavailable.'
+            : chat
+              ? 'No messages yet.'
+              : 'Loading chat…'}
       </ActivityText>
     );
   }
@@ -83,6 +85,11 @@ function HuntChat({
       {(stale || chat.unavailable) && (
         <ActivityText theme={theme} size={13} tone="warning">
           Chat updates are disconnected.
+        </ActivityText>
+      )}
+      {chat.archived && (
+        <ActivityText theme={theme} size={13} tone="muted">
+          Chat ended
         </ActivityText>
       )}
       <ScrollView

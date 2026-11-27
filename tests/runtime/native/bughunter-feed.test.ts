@@ -146,3 +146,39 @@ test('BugHunter appends native chat updates and retains messages after a timelin
     clearTimeout(deadline);
   }
 });
+
+test('BugHunter does not reopen an archived native agent as a live observation', async () => {
+  const stop = new AbortController();
+  const opened: string[] = [];
+  const paseo = {
+    agents: {
+      ref(id: string) {
+        opened.push(id);
+        throw new Error('Archived agents must stay closed.');
+      },
+    },
+  } as unknown as PaseoApi;
+  const history = {
+    ...details,
+    hunts: details.hunts.map((hunt) => ({
+      ...hunt,
+      conversations: hunt.conversations.map((conversation) => ({
+        ...conversation,
+        archived: true,
+      })),
+    })),
+  };
+  let snapshot: BugHunterSnapshot | undefined;
+  await observeBugHunter(
+    paseo,
+    { workspaceId: 'workspace', huntId: 'selected-hunt', agentId: 'allowed-agent' },
+    stop.signal,
+    async (next) => {
+      snapshot = next;
+      stop.abort();
+    },
+    async () => history,
+  );
+  expect(opened).toEqual([]);
+  expect(snapshot?.chat).toEqual({ agentId: 'allowed-agent', archived: true, messages: [] });
+});

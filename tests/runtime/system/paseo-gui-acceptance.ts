@@ -1372,6 +1372,8 @@ try {
     await browser('wait', '--text', bugHunterResponse);
     stopInvestigation.abort();
     assert.equal(await investigation, stopInvestigation.signal.reason);
+    await browser('wait', '--text', 'Chat ended');
+    assert((await browser('snapshot')).includes(bugHunterResponse));
   } finally {
     bugHunterReply.resolve();
     stopInvestigation.abort();
