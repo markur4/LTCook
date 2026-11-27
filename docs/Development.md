@@ -213,9 +213,12 @@ lookups, use Locate to find the definition, callers, or tests of a known symbol.
 Batch independent symbols with `symbols`.
 Open the surrounding block from a hit with `location`, or use `follow: true`
 to check one local connection. Use ranked `ltcook_repo_search` when the
-question describes behavior but the relevant symbol is unknown. Use native
-search for quick literal checks. If ranked retrieval is unavailable or still indexing, use native
-search or direct file reads for immediate evidence.
+question describes behavior and the relevant symbol is unknown. Choose
+`semantic` in Search, in a conceptual Locate query, or in a trace lead when
+common words produce irrelevant keyword matches. Use native search for quick
+literal checks. If ranked retrieval is unavailable or still indexing, report
+the gap and use native search or direct file reads when they fit the requested
+evidence.
 
 Check that a normal launch exposes the tool and delivers its guidance. Use the
 existing [Repository Agent Behavior Evaluation](#repository-agent-behavior-evaluation)

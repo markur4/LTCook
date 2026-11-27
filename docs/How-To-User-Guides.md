@@ -334,7 +334,9 @@ and shells use their harness permissions for operations in other checkouts.
   source file or directory. See the [RIED operations and limits](References.md#repository-inventory).
 - Use `ltcook_repo_search` for source evidence. Ask for an
   exact identifier to use ripgrep or ask a question by meaning to use ColGREP.
-  Add a relative path to narrow results. While the first index is building,
+  Choose **Semantic** in Query Repo or use `mode: "semantic"` when common words
+  bring in irrelevant keyword matches. Add a relative path to narrow results.
+  While the first index is building,
   hybrid search can offer approximate lexical results labeled with the
   `lexical-fallback` diagnostic. Check **RAG Index** for progress or details
   about a failure. If ColGREP assets are missing or damaged, repeat the
@@ -349,8 +351,11 @@ and shells use their harness permissions for operations in other checkouts.
   investigation, ask the agent to use Locate trace for the behavior, relevant
   settings, and tests in one call. For example, ask “Trace how the launcher
   configures Tracker and how the runtime handles a stale citation. Cite the
-  configuration and the test assertion.” For Search and Locate,
-  name a local Git base to prioritize changed files and related tests. Reopen the
+  configuration and the test assertion.” Use `{query, mode: "semantic"}`
+  for a conceptual Locate query, or `{trace: {question, mode: "semantic"}}`
+  to rank all trace leads by meaning. Trace can also mix independently chosen
+  semantic, hybrid, exact, and literal leads. For Search and Locate, name a
+  local Git base to prioritize changed files and related tests. Reopen the
   chat through Paseo after launching the updated runtime. See the
   [Locate contract](References.md#repository-locate).
 - Ask for a summary using `ltcook_summarize`. Supply text or ask to summarize

@@ -143,6 +143,56 @@ test('Locate uses exact search for a symbol and a verified identifier for concep
     ).rejects.toThrow(/unavailable/);
   }));
 
+test('Semantic Locate reports ranked evidence or index unavailability without an exact search', () =>
+  fixture(async (root) => {
+    const query = 'always merge to main';
+    const policy = 'export function mergeToMain() { return reviewedMerge(); }';
+    await writeFile(path.join(root, 'source.ts'), policy);
+    const calls: Parameters<Search>[1][] = [];
+    const tool = createRepoLocateTool({
+      async search(_workspace, input) {
+        calls.push(input);
+        return input.query === query
+          ? {
+              ...unavailable,
+              status: 'ready',
+              freshness: 'current',
+              partial: false,
+              diagnostics: [],
+              results: [hit('mergeToMain', policy)],
+            }
+          : unavailable;
+      },
+    });
+    await expect(tool.invoke({ query, mode: 'semantic' }, context(root))).resolves.toMatchObject({
+      followUp: 'not-needed',
+      searches: [
+        {
+          mode: 'semantic',
+          provider: 'colgrep',
+          status: 'ready',
+          results: [{ path: 'source.ts', excerpt: policy }],
+        },
+      ],
+    });
+    await expect(
+      tool.invoke({ query: 'find a cold index', mode: 'semantic' }, context(root)),
+    ).resolves.toMatchObject({
+      followUp: 'initial-unavailable',
+      searches: [{ mode: 'semantic', status: 'unavailable' }],
+    });
+    await expect(
+      tool.invoke({ symbol: 'mergeToMain', mode: 'semantic' }, context(root)),
+    ).rejects.toThrow(/Supply a query/);
+    await expect(
+      tool.invoke({ query, mode: 'semantic', follow: true }, context(root)),
+    ).rejects.toThrow(/Use a semantic trace/);
+    expect(calls.map(({ mode, query }) => [mode, query])).toEqual([
+      ['semantic', query],
+      ['semantic', 'find a cold index'],
+    ]);
+  }));
+
 test('Locate distinguishes an unavailable search, absent identifier, and failed follow-up', () =>
   fixture(async (root) => {
     const tool = createRepoLocateTool({
@@ -345,6 +395,76 @@ test('Locate trace keeps evidence when a sibling lead is unavailable, and follow
         context(root),
       ),
     ).rejects.toThrow(/Exact leads/);
+  }));
+
+test('Semantic trace follows verified source links without adding lexical search hits', () =>
+  fixture(async (root) => {
+    const policy = ['export function mergeToMain() {', '  return reviewedMerge();', '}'].join('\n');
+    const keywordOnly = 'if __name__ == "__main__":';
+    await writeFile(
+      path.join(root, 'source.ts'),
+      `import { reviewedMerge } from './merge.js';\n${policy}`,
+    );
+    await writeFile(
+      path.join(root, 'merge.ts'),
+      'export function reviewedMerge() { return true; }',
+    );
+    await writeFile(path.join(root, 'script.py'), `${keywordOnly}\n    pass`);
+    const calls: { mode: string | undefined; query: string; updateIndex?: boolean }[] = [];
+    const tool = createRepoLocateTool({
+      async search(_workspace, { mode, query }, _signal, options) {
+        calls.push({ mode, query, updateIndex: options?.updateIndex });
+        if (query === 'Missing index?') return unavailable;
+        return {
+          ...unavailable,
+          status: 'ready',
+          freshness: 'current',
+          partial: false,
+          diagnostics: [],
+          results:
+            mode === 'semantic'
+              ? [{ ...hit('mergeToMain', policy), startLine: 2, endLine: 4 }]
+              : [{ path: 'script.py', startLine: 1, endLine: 1, excerpt: keywordOnly }],
+        };
+      },
+    });
+    const question = 'Why always merge to main?';
+    const { trace } = await tool.execute(
+      { trace: { question: `${question} Missing index?`, mode: 'semantic' } },
+      context(root),
+    );
+    expect(trace?.leads).toMatchObject([
+      { mode: 'semantic', query: question },
+      { mode: 'semantic', evidenceIds: [], gaps: ['unavailable', 'search-partial'] },
+    ]);
+    expect(trace?.evidence.map(({ path }) => path)).not.toContain('script.py');
+    const importEdge = trace?.connections.find(({ kind }) => kind === 'import');
+    expect(trace?.evidence.find(({ id }) => id === importEdge?.to)).toMatchObject({
+      path: 'merge.ts',
+      excerpt: 'export function reviewedMerge() { return true; }',
+    });
+
+    const leads = [
+      { mode: 'semantic', query: question },
+      { mode: 'literal', query: '__main__' },
+    ];
+    await expect(tool.invoke({ trace: { question, leads } }, context(root))).resolves.toMatchObject(
+      {
+        trace: {
+          leads,
+          evidence: expect.arrayContaining([expect.objectContaining({ path: 'script.py' })]),
+        },
+      },
+    );
+    await expect(
+      tool.invoke({ trace: { question, mode: 'semantic', leads } }, context(root)),
+    ).rejects.toThrow(/either a trace mode/);
+    expect(calls).toEqual([
+      { mode: 'semantic', query: question, updateIndex: false },
+      { mode: 'semantic', query: 'Missing index?', updateIndex: false },
+      { mode: 'semantic', query: question, updateIndex: false },
+      { mode: 'literal', query: '__main__', updateIndex: false },
+    ]);
   }));
 
 test('Locate trace propagates external cancellation even with independent leads', () =>

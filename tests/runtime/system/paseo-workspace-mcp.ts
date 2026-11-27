@@ -155,7 +155,9 @@ const provider = createServer(async (request, response) => {
       `${marker} needs the agent's existing instructions.`,
     );
     assert.match(instructions, /ltcook_repo_locate[^.]*known symbol/);
-    assert.match(instructions, /ltcook_repo_search[^.]*hybrid/);
+    assert.match(instructions, /ltcook_repo_search[^.]*semantic mode[^.]*irrelevant matches/);
+    assert.match(instructions, /Use hybrid when keyword matches are useful/);
+    assert.match(instructions, /conceptual Locate query use mode:.*semantic.*trace\.mode/);
     assert.match(instructions, /Locate location/);
     assert.match(instructions, /prefer ltcook_web_search for web searches/);
     assert.match(instructions, /ltcook_web_fetch to read sources/);
@@ -528,11 +530,12 @@ async function exercise(
     | { text: string }
     | { symbol: string; paths?: string[] }
     | { location: { path: string; line: number } }
+    | { trace: { question: string; mode: 'semantic' } }
     | { query: string; mode?: 'exact' | 'semantic'; pattern?: string; paths?: string[] },
   verifyResult?: (content: string) => void,
 ) {
   tool =
-    toolInput && ('symbol' in toolInput || 'location' in toolInput)
+    toolInput && ('symbol' in toolInput || 'location' in toolInput || 'trace' in toolInput)
       ? 'ltcook_repo_locate'
       : toolInput && 'query' in toolInput
         ? 'ltcook_repo_search'
@@ -619,6 +622,16 @@ try {
       (content) => {
         assert.match(content, /"provider"\s*:\s*"colgrep"/);
         assert.match(content, /checksum\.ts/);
+        assert.match(content, /^1 \| export function computeReleaseChecksum.*% 65521;.*$/m);
+      },
+    );
+    await exercise(
+      ordinaryPi,
+      'pi_locate_semantic_trace',
+      { trace: { question: 'calculate the release checksum', mode: 'semantic' } },
+      (content) => {
+        assert.match(content, /"mode"\s*:\s*"semantic"/);
+        assert.match(content, /"path"\s*:\s*"checksum\.ts"/);
         assert.match(content, /^1 \| export function computeReleaseChecksum.*% 65521;.*$/m);
       },
     );
