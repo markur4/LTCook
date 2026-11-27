@@ -88,3 +88,54 @@ test('BugHunter follows only the selected hunt’s authorized native chat and re
   expect(opened).toEqual(['allowed-agent']);
   expect(releaseCount).toBe(1);
 });
+
+test('BugHunter appends native chat updates without repeating the previous message', async () => {
+  const stop = new AbortController();
+  const snapshots: BugHunterSnapshot[] = [];
+  const entries = [{ seqStart: 1, item: { type: 'user_message', text: 'Check indexing.' } }];
+  let updated: (() => void) | undefined;
+  const paseo = {
+    agents: {
+      ref(id: string) {
+        return {
+          timeline: {
+            subscribe(listener: (input: { event: { type: string; item: unknown } }) => void) {
+              updated = () => listener({ event: { type: 'timeline', item: entries.at(-1)?.item } });
+              return { ready: Promise.resolve(), async release() {} };
+            },
+            async refetch() {
+              return { agentId: id, epoch: 'fixture', entries: [...entries] };
+            },
+          },
+        };
+      },
+    },
+  } as unknown as PaseoApi;
+  const deadline = setTimeout(() => stop.abort(), 3_000);
+  try {
+    await observeBugHunter(
+      paseo,
+      { workspaceId: 'workspace', huntId: 'selected-hunt', agentId: 'allowed-agent' },
+      stop.signal,
+      async (snapshot) => {
+        snapshots.push(snapshot);
+        if (snapshots.length === 1) {
+          entries.push({
+            seqStart: 2,
+            item: { type: 'assistant_message', text: 'Investigating.' },
+          });
+          updated?.();
+        } else {
+          stop.abort();
+        }
+      },
+      async () => details,
+    );
+    expect(snapshots.map(({ chat }) => chat?.messages.map(({ text }) => text))).toEqual([
+      ['Check indexing.'],
+      ['Check indexing.', 'Investigating.'],
+    ]);
+  } finally {
+    clearTimeout(deadline);
+  }
+});

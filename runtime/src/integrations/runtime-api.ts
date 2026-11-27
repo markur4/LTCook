@@ -198,8 +198,13 @@ export class RuntimeApi {
     this.evals = service;
   }
 
-  setBugScan(service: BugScanService, scope: string, requireWorkspace: boolean): void {
-    this.bugScan = { service, scope, requireWorkspace };
+  setBugScan(
+    service: BugScanService,
+    scope: string,
+    requireWorkspace: boolean,
+    conversations?: BugScanActivity['conversations'],
+  ): void {
+    this.bugScan = { service, scope, requireWorkspace, conversations };
   }
 
   setBugHunterModelGate(gate: (sessionId: string, nativeAgentId: string) => boolean): void {
@@ -621,8 +626,6 @@ export class RuntimeApi {
           activity: this.services.activity,
           bugScan: this.bugScan,
           bugFix: this.bugFix?.service,
-          bugHunterConversations: (scope, hunts) =>
-            this.runtime?.bugHunterConversations(scope, hunts) ?? new Map(),
           catalog: this.workspaceTools,
           workspaceServices: this.workspaceServices,
           lastDelivered: (sessionId, agentId) => this.memory?.lastDelivered(sessionId, agentId),

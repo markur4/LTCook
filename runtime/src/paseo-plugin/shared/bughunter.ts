@@ -11,12 +11,19 @@ const conversation = z.object({
 
 export type BugHunterConversation = z.infer<typeof conversation>;
 
-const hunt = bugScanActivity.pick({ findings: true, fix: true, failure: true }).extend({
+const finding = bugScanActivity.shape.findings.element.extend({
+  expectedBehavior: z.string(),
+  mechanism: z.string(),
+  acceptanceCriteria: z.array(z.string()),
+});
+
+const hunt = bugScanActivity.pick({ fix: true, failure: true }).extend({
   id,
   createdAt: z.number().finite().nonnegative(),
   automatic: z.boolean(),
   status: bugScanActivity.shape.status,
   components: z.array(z.string()),
+  findings: z.array(finding),
   conversations: z.array(conversation),
 });
 

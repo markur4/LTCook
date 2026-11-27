@@ -11,7 +11,7 @@ import type { createColgrepProvider } from '../repository/providers/colgrep.js';
 import type { BugScanService } from '../services/bugscan.js';
 import type { BugFixBatch, BugFixService } from '../services/bugfix.js';
 import type { BugHunterConversation } from '../paseo-plugin/shared/bughunter.js';
-import type { BugScanHunt } from '../services/bugscan.js';
+import type { BugScanFinding } from '../services/bugscan.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from '../repository/workspace.js';
 import type { ConversationRecords } from '../session-memory/conversation.js';
 import type { ToolCatalog } from '../tools/catalog.js';
@@ -41,6 +41,10 @@ export interface BugScanActivity {
   service: BugScanService;
   scope: string;
   requireWorkspace: boolean;
+  conversations?(
+    scope: string,
+    hunts: readonly { id: string; fixId?: string }[],
+  ): Map<string, BugHunterConversation[]>;
 }
 
 interface ActivityDependencies {
@@ -48,10 +52,6 @@ interface ActivityDependencies {
   activity?: ActivityServices;
   bugScan?: BugScanActivity;
   bugFix?: BugFixService;
-  bugHunterConversations?(
-    scope: string,
-    hunts: readonly { id: string; fixId?: string }[],
-  ): Map<string, BugHunterConversation[]>;
   catalog?: ToolCatalog;
   workspaceServices?: PaseoWorkspaceServices;
   lastDelivered: ConversationRecords['lastDelivered'];
@@ -120,15 +120,8 @@ async function activityRepositoryScope(
   return { session, workspace };
 }
 
-function describeFindings(hunt?: BugScanHunt) {
-  return (
-    hunt?.findings.map(({ confidence, cause, remedy, technicalDebt }) => ({
-      confidence,
-      cause,
-      remedy: remedy?.description,
-      technicalDebt,
-    })) ?? []
-  );
+function describeFinding({ confidence, cause, remedy, technicalDebt }: BugScanFinding) {
+  return { confidence, cause, remedy: remedy?.description, technicalDebt };
 }
 
 function describeBugFix(fix?: BugFixBatch) {
@@ -368,7 +361,7 @@ const activityRoutes = {
         .filter(({ scope }) => scope === scan.scope)
         .map((fix) => [fix.huntId, fix]),
     );
-    const conversations = dependencies.bugHunterConversations?.(
+    const conversations = scan.conversations?.(
       scan.scope,
       hunts.map(({ id }) => ({ id, fixId: repairs.get(id)?.id })),
     );
@@ -383,7 +376,12 @@ const activityRoutes = {
           status: hunt.status,
           components: [...new Set(hunt.groups.map(({ component }) => component))],
           failure: hunt.failure,
-          findings: describeFindings(hunt),
+          findings: hunt.findings.map((finding) => ({
+            ...describeFinding(finding),
+            expectedBehavior: finding.violatedExpectation,
+            mechanism: finding.mechanism,
+            acceptanceCriteria: finding.remedy?.acceptanceCriteria ?? [],
+          })),
           fix: describeBugFix(repairs.get(hunt.id)),
           conversations: conversations?.get(hunt.id) ?? [],
         })),
@@ -422,7 +420,11 @@ const activityRoutes = {
     const bugScan = dependencies.bugScan;
     const showBugScan = bugScan && (!bugScan.requireWorkspace || workspace?.root === bugScan.scope);
     const hunt = showBugScan ? bugScan.service.list().at(-1) : undefined;
-    const fix = hunt && dependencies.bugFix?.list().findLast(({ huntId }) => huntId === hunt.id);
+    const fixes = showBugScan ? dependencies.bugFix?.list() : undefined;
+    const fix =
+      fixes?.findLast(({ status }) => status === 'queued' || status === 'running') ??
+      fixes?.findLast(({ status }) => status === 'paused' || status === 'blocked') ??
+      fixes?.at(-1);
     response.writeHead(200).end(
       JSON.stringify({
         rag: {
@@ -444,7 +446,7 @@ const activityRoutes = {
                 enabled: dependencies.activity?.preferences.enabled('bughunter') ?? true,
                 failure: hunt?.failure,
                 fix: describeBugFix(fix),
-                findings: describeFindings(hunt),
+                findings: hunt?.findings.map(describeFinding) ?? [],
               },
             }
           : {}),

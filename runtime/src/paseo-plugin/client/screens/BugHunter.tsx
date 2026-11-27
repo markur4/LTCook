@@ -257,11 +257,22 @@ function HuntDetails({
               {finding.confidence === 'demonstrated' ? 'Confirmed cause' : 'Hypothesis'}
             </ActivityText>
             <Label theme={theme}>{finding.cause}</Label>
+            <ActivityText theme={theme} size={14}>
+              Expected behavior · {finding.expectedBehavior}
+            </ActivityText>
+            <ActivityText theme={theme} size={14}>
+              How it failed · {finding.mechanism}
+            </ActivityText>
             {finding.remedy && (
               <ActivityText theme={theme} size={14}>
                 Remedy · {finding.remedy}
               </ActivityText>
             )}
+            {finding.acceptanceCriteria.map((criterion, index) => (
+              <ActivityText key={index} theme={theme} size={13} tone="muted">
+                Verify · {criterion}
+              </ActivityText>
+            ))}
             {finding.technicalDebt.map((debt, debtIndex) => (
               <ActivityText key={debtIndex} theme={theme} size={13} tone="muted">
                 {debt.decision === 'immediate' ? 'Address now' : 'Deferred'} · {debt.problem} ·{' '}

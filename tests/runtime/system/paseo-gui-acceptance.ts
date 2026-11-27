@@ -83,6 +83,9 @@ async function browser(...args: string[]): Promise<string> {
   return result.stdout;
 }
 const firstReply = Promise.withResolvers<void>();
+const bugHunterReply = Promise.withResolvers<void>();
+const bugHunterPrompt = 'Investigate native BugHunter browser fixture.';
+const bugHunterResponse = 'BugHunter is following the indexing investigation.';
 let modelCalls = 0;
 let providerError: unknown;
 const provider = createHttpServer(async (request, response) => {
@@ -96,13 +99,17 @@ const provider = createHttpServer(async (request, response) => {
     const lastUser = input.messages?.findLastIndex(({ role }) => role === 'user') ?? -1;
     const prompt = JSON.stringify(input.messages?.[lastUser]?.content ?? '');
     if (prompt.includes('GUI desktop launch')) await firstReply.promise;
+    const exerciseBugHunter = prompt.includes(bugHunterPrompt);
+    if (exerciseBugHunter) await bugHunterReply.promise;
     const exerciseParallel = prompt.includes('Exercise Activity parallel tools');
     const exerciseActivity = exerciseParallel || prompt.includes('Exercise Activity tools');
     const needsTools =
       exerciseActivity && !input.messages?.slice(lastUser + 1).some(({ role }) => role === 'tool');
-    const reply = JSON.stringify(input.messages ?? []).includes('GUI mobile draft launch')
-      ? 'GUI mobile native Leader response.'
-      : 'GUI native Leader response.';
+    const reply = exerciseBugHunter
+      ? bugHunterResponse
+      : JSON.stringify(input.messages ?? []).includes('GUI mobile draft launch')
+        ? 'GUI mobile native Leader response.'
+        : 'GUI native Leader response.';
     modelCalls++;
     const id = `gui-fixture-${modelCalls}`;
     response.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -330,6 +337,15 @@ await writeFile(
             maxTokens: 1024,
             input: ['text'],
             reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+          {
+            id: 'bughunter',
+            name: 'Offline BugHunter fixture',
+            contextWindow: 32768,
+            maxTokens: 1024,
+            input: ['text'],
+            reasoning: true,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           },
         ],
@@ -1323,14 +1339,60 @@ try {
     }),
     save: () => undefined,
   });
+  const stopInvestigation = new AbortController();
+  environment.LTCOOK_MODEL_MEDIUM = 'fixture/bughunter';
+  api.setBugScan(scan, workspace, false, (scope, hunts) =>
+    runtime!.bugHunterConversations(scope, hunts),
+  );
+  api.setBugHunterModelGate(
+    (sessionId, agentId) =>
+      runtime?.bugHunterModelScope(sessionId, agentId)?.huntId === 'browser-fixture-hunt',
+  );
+  const investigation = runtime!
+    .investigateBugScan({
+      workspaceRoot: workspace,
+      huntId: 'browser-fixture-hunt',
+      requestId: 'browser-fixture-hunt:coordinator',
+      role: 'coordinator',
+      brief: bugHunterPrompt,
+      evidence: { component: 'repository-index' },
+      signal: stopInvestigation.signal,
+    })
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
   try {
-    api.setBugScan(scan, workspace, false);
     await openActivityPanel();
     await clickButton('Open BugHunter');
     await browser('wait', '--text', 'Fixture lease remains held after a refresh error.');
     assert((await browser('snapshot')).includes('repository-index'));
+    await browser('wait', '--text', bugHunterPrompt);
+    bugHunterReply.resolve();
+    await browser('wait', '--text', bugHunterResponse);
+    stopInvestigation.abort();
+    assert.equal(await investigation, stopInvestigation.signal.reason);
+    const [conversation] =
+      runtime!
+        .bugHunterConversations(workspace, [{ id: 'browser-fixture-hunt' }])
+        .get('browser-fixture-hunt') ?? [];
+    assert(conversation);
+    const history = await host.api.agents.ref(conversation.id).timeline.refetch({
+      direction: 'tail',
+      projection: 'canonical',
+      limit: 20,
+    });
+    assert(
+      history.entries.some(
+        ({ item }) => item.type === 'assistant_message' && item.text === bugHunterResponse,
+      ),
+    );
   } finally {
+    bugHunterReply.resolve();
+    stopInvestigation.abort();
+    await investigation;
     await scan.close();
+    environment.LTCOOK_MODEL_MEDIUM = 'fixture/test';
   }
 
   stage = 'native-idle-restart';
