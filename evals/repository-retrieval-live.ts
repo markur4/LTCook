@@ -52,6 +52,39 @@ type Search = (
 ) => Promise<RepositoryRetrieval>;
 type Observation = Awaited<ReturnType<typeof observeQuestion>>;
 type Corpus = ReturnType<typeof retrievalCorpus>;
+type IndexMeasurement =
+  | {
+      status: 'ready';
+      elapsedMs: number;
+      providerElapsedMs: number;
+      cacheBytesBefore: number;
+      cacheBytesAfter: number;
+      sampledPeakCacheBytes: number;
+      sampleIntervalMs: number;
+      samplesDuringBuild: number;
+    }
+  | { status: 'unavailable'; message: string };
+type IndexLifecycle = {
+  build(workspace: RepositoryWorkspace): Promise<IndexMeasurement>;
+  reopen(
+    workspace: RepositoryWorkspace,
+    question: RetrievalQuestion,
+    files: ReadonlyMap<string, string>,
+    k: number,
+  ): Promise<{
+    scenario: 'simulated-reboot-identity-change';
+    liveIdentityChanged: boolean;
+    cacheIdentityPreserved: boolean;
+    generationReused: boolean;
+    status: {
+      availability: string;
+      activity: string;
+      generation?: string;
+      publishedAt?: string;
+    };
+    query: Observation;
+  }>;
+};
 
 function fingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -151,6 +184,47 @@ async function directoryBytes(directory: string): Promise<number> {
   return bytes;
 }
 
+async function measureIndexBuild(
+  build: () => Promise<number>,
+  cache: string,
+): Promise<IndexMeasurement> {
+  const cacheBytesBefore = await directoryBytes(cache);
+  let sampledPeakCacheBytes = cacheBytesBefore;
+  let samplesDuringBuild = 0;
+  let pendingSample: Promise<void> | undefined;
+  const sample = async () => {
+    const bytes = await directoryBytes(cache).catch(() => undefined);
+    if (bytes === undefined) return;
+    sampledPeakCacheBytes = Math.max(sampledPeakCacheBytes, bytes);
+    samplesDuringBuild++;
+  };
+  const started = performance.now();
+  const building = build();
+  const timer = setInterval(() => {
+    pendingSample ??= sample().finally(() => {
+      pendingSample = undefined;
+    });
+  }, 100);
+  let providerElapsedMs: number;
+  try {
+    [providerElapsedMs] = await Promise.all([building, sample()]);
+  } finally {
+    clearInterval(timer);
+  }
+  await pendingSample;
+  const cacheBytesAfter = await directoryBytes(cache);
+  return {
+    status: 'ready',
+    elapsedMs: performance.now() - started,
+    providerElapsedMs,
+    cacheBytesBefore,
+    cacheBytesAfter,
+    sampledPeakCacheBytes: Math.max(sampledPeakCacheBytes, cacheBytesAfter),
+    sampleIntervalMs: 100,
+    samplesDuringBuild,
+  };
+}
+
 async function writeCorpus(root: string, files: ReadonlyMap<string, string>) {
   for (const [relative, contents] of files) {
     const file = path.join(root, relative);
@@ -166,6 +240,7 @@ async function runProvider(
   corpus: Corpus,
   k: number,
   cache?: string,
+  indexLifecycle?: IndexLifecycle,
 ) {
   const files = new Map(corpus.files);
   const workspace = await writeCorpus(root, files);
@@ -173,10 +248,16 @@ async function runProvider(
     observeQuestion(search, workspace, question, files, k);
   const [first] = corpus.questions;
   if (!first) throw new Error('The retrieval benchmark needs at least one question per provider.');
+  const initialIndex = indexLifecycle ? await indexLifecycle.build(workspace) : undefined;
   const cold = await observe(first);
   const indexCacheBytes = cache ? await directoryBytes(cache) : 0;
   const queries: Observation[] = [];
   for (const question of corpus.questions) queries.push(await observe(question));
+
+  const reopened =
+    indexLifecycle && initialIndex?.status === 'ready'
+      ? await indexLifecycle.reopen(workspace, first, files, k)
+      : undefined;
 
   const lifecycle = [];
   for (const mutation of corpus.transitions) {
@@ -193,9 +274,15 @@ async function runProvider(
       }
       files.delete(mutation.path);
     }
+    const refresh = indexLifecycle ? await indexLifecycle.build(workspace) : undefined;
     const observations: Observation[] = [];
     for (const question of mutation.questions) observations.push(await observe(question));
-    lifecycle.push({ mutation: mutation.kind, corpusSha256: fileFingerprint(files), observations });
+    lifecycle.push({
+      mutation: mutation.kind,
+      corpusSha256: fileFingerprint(files),
+      ...(refresh ? { refresh } : {}),
+      observations,
+    });
   }
 
   const comparable = queries.filter(({ category }) => category !== 'limited');
@@ -204,6 +291,8 @@ async function runProvider(
   return {
     kind: cold.kind,
     cold,
+    ...(initialIndex ? { initialIndex } : {}),
+    ...(reopened ? { reopened } : {}),
     warmRepeatMs: queries[0]!.elapsedMs,
     coldQueryCacheBytes: indexCacheBytes,
     queries,
@@ -315,39 +404,75 @@ async function benchmark(k: number, deployment: string | undefined, signal: Abor
             corpus,
             k,
             cacheDirectory,
-          );
-          const buildCache = path.join(temporary, 'build-cache');
-          const buildWorkspace = await writeCorpus(
-            path.join(temporary, 'build-source'),
-            corpus.files,
-          );
-          try {
-            const elapsedMs = await createColgrepProvider({
-              deploymentDirectory: deployment,
-              cacheDirectory: buildCache,
-            }).buildIndex(buildWorkspace, signal);
-            return {
-              ...measured,
-              indexing: {
-                status: 'ready',
-                elapsedMs,
-                cacheBytes: await directoryBytes(buildCache),
+            {
+              async build(workspace) {
+                try {
+                  return await measureIndexBuild(
+                    () => colgrep.buildIndex(workspace, signal),
+                    cacheDirectory,
+                  );
+                } catch (error) {
+                  signal.throwIfAborted();
+                  return {
+                    status: 'unavailable',
+                    message: error instanceof Error ? error.message : 'ColGREP index build failed.',
+                  };
+                }
               },
-            };
-          } catch (error) {
-            signal.throwIfAborted();
-            return {
-              ...measured,
-              indexing: {
-                status: 'unavailable',
-                message: error instanceof Error ? error.message : 'ColGREP index build failed.',
+              async reopen(workspace, question, files, limit) {
+                const originalStatus = await colgrep.readStatus(workspace);
+                const reopenedWorkspace = await openRepositoryWorkspace(workspace.root);
+                const restartedWorkspace: RepositoryWorkspace = {
+                  ...reopenedWorkspace,
+                  identity: `simulated-reboot:${reopenedWorkspace.identity}`,
+                };
+                const reopenedColgrep = createColgrepProvider({
+                  deploymentDirectory: deployment,
+                  cacheDirectory,
+                });
+                const [status, query] = await Promise.all([
+                  reopenedColgrep.readStatus(restartedWorkspace),
+                  observeQuestion(
+                    (activeWorkspace, activeQuestion, activeLimit) =>
+                      reopenedColgrep.search(
+                        activeWorkspace,
+                        {
+                          query: activeQuestion.query,
+                          mode: 'hybrid',
+                          limit: activeLimit,
+                        },
+                        signal,
+                      ),
+                    restartedWorkspace,
+                    question,
+                    files,
+                    limit,
+                  ),
+                ]);
+                return {
+                  scenario: 'simulated-reboot-identity-change',
+                  liveIdentityChanged: restartedWorkspace.identity !== workspace.identity,
+                  cacheIdentityPreserved:
+                    reopenedWorkspace.cacheIdentity === workspace.cacheIdentity,
+                  generationReused:
+                    originalStatus.generation !== undefined &&
+                    status.generation === originalStatus.generation,
+                  status: {
+                    availability: status.availability,
+                    activity: status.activity,
+                    ...(status.generation ? { generation: status.generation } : {}),
+                    ...(status.publishedAt ? { publishedAt: status.publishedAt } : {}),
+                  },
+                  query,
+                };
               },
-            };
-          }
+            },
+          );
+          return measured;
         })()
       : undefined;
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       runId: randomUUID(),
       startedAt,
       environment: { platform: process.platform, architecture: process.arch, bun: Bun.version },
@@ -408,8 +533,22 @@ try {
       ...provider.lifecycle.flatMap(({ observations }) => observations),
     ].some(retrievalObservationFailed),
   );
-  if (failedRun || report.providers.colgrep?.indexing.status === 'unavailable')
-    process.exitCode = 1;
+  const colgrep = report.providers.colgrep;
+  const indexFailure = Boolean(
+    colgrep &&
+    (!colgrep.initialIndex ||
+      colgrep.initialIndex.status !== 'ready' ||
+      !colgrep.reopened ||
+      !colgrep.reopened.liveIdentityChanged ||
+      !colgrep.reopened.cacheIdentityPreserved ||
+      !colgrep.reopened.generationReused ||
+      colgrep.reopened.status.availability !== 'ready' ||
+      colgrep.lifecycle.some(({ refresh }) => refresh?.status !== 'ready')),
+  );
+  const reopenedQueryFailure = Boolean(
+    colgrep && colgrep.reopened && retrievalObservationFailed(colgrep.reopened.query),
+  );
+  if (failedRun || indexFailure || reopenedQueryFailure) process.exitCode = 1;
 } finally {
   process.off('SIGINT', cancel);
   process.off('SIGTERM', cancel);

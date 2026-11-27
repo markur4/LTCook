@@ -948,7 +948,7 @@ try {
   await browser('click', '[aria-label^="RAG Index,"]');
   const indexingSwitch = '[role="switch"][aria-label="Index updates"]';
   await browser('click', indexingSwitch);
-  await browser('wait', '[aria-label^="RAG Index,"][aria-label*="Index updates off"]');
+  await browser('wait', '[aria-label^="RAG Index,"][aria-label*="Paused"]');
   assert.equal(colgrep.isIndexingEnabled(), false);
   await browser('click', indexingSwitch);
   await browser(

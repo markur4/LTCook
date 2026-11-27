@@ -230,13 +230,16 @@ says a branch is already in use by a worktree, select that checkout in the
 **Worktree** picker to view its changes where the branch is checked out.
 
 Expand **RAG Index** to see the worktree that the selected conversation is
-authorized to search. Index availability and indexing activity are independent.
-**Checking index** means a ranked query is active and its indexing phase is
-unconfirmed. Opening the panel does not start a search or build. Turn off
-**Index updates** to pause ColGREP indexing in the LTCook runtime serving this
-Paseo host. Ranked searches can still use a complete existing index, and lexical
-search remains available. Standalone Pi and independently launched ColGREP
-manage their own index updates.
+authorized to search. **Building first index** means ranked search is warming
+up. **Ready · Refreshing** means the previous generation is still searchable.
+The runtime starts indexing when an authorized worktree becomes active.
+Opening the panel shows the last completed index, the next retry when
+scheduled, and any repair needed.
+
+Turn off **Index updates** to pause ColGREP indexing in the LTCook runtime
+serving this Paseo host. Ranked queries can keep using the published index,
+and lexical search remains available. Turn updates back on to resume active
+work. Standalone Pi owns its indexing preference for its process.
 
 **Last delegation handoff** shows the sending agent, receipt time, payload size,
 and number of action batches represented. The agent card shows model context
@@ -301,10 +304,11 @@ and shells use their harness permissions for operations in other checkouts.
   source file or directory. See the [RIED operations and limits](References.md#repository-inventory).
 - Use `ltcook_repo_search` for source evidence. Ask for an
   exact identifier to use ripgrep or ask a question by meaning to use ColGREP.
-  Add a relative path to narrow results. The first ColGREP search builds the
-  workspace index and can take longer than later searches. If another request
-  is populating the index, retry once it finishes. If ColGREP assets are missing
-  or damaged, repeat the [installation procedure](#install-from-a-checkout).
+  Add a relative path to narrow results. While the first index is building,
+  hybrid search can offer approximate lexical results labeled with the
+  `lexical-fallback` diagnostic. Check **RAG Index** for progress or details
+  about a failure. If ColGREP assets are missing or damaged, repeat the
+  [installation procedure](#install-from-a-checkout).
 - Use `ltcook_repo_locate` when you want source locations
   for a definition, caller, or test. For example, ask “Locate the implementation
   and callers of `resolveLaunch`.” For an unfamiliar symbol, describe the behavior

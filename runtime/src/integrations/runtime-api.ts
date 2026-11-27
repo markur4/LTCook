@@ -626,6 +626,7 @@ export class RuntimeApi {
         if (typeof input.nativeAgentId !== 'string' || !input.nativeAgentId)
           throw new Error('A native agent identity is required.');
         if (request.url === '/v1/mcp/revoke') {
+          this.activation.revokeRepositoryIndex(input.nativeAgentId);
           await this.workspaceMcp?.revoke(input.nativeAgentId);
           response.writeHead(200).end('{}');
           return;

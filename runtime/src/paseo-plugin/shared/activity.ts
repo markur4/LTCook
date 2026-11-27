@@ -59,13 +59,26 @@ const agentActivity = z.object({
   skills: z.array(skillLoad).nullable(),
   canOpenConversation: z.boolean(),
 });
+export const RagIndexActivitySchema = z.enum([
+  'idle',
+  'queued',
+  'indexing',
+  'updating',
+  'paused',
+  'retrying',
+  'error',
+  'unknown',
+]);
+
 const ragStatus = z.object({
   indexingEnabled: z.boolean().nullable(),
   worktree: worktree.nullable(),
   provider: z.string(),
   availability: z.enum(['ready', 'not-ready', 'unavailable', 'unknown']),
-  activity: z.enum(['idle', 'checking', 'indexing', 'updating', 'interrupted', 'error', 'unknown']),
+  activity: RagIndexActivitySchema,
   diagnostic: z.string().optional(),
+  publishedAt: z.string().optional(),
+  retryAt: z.string().optional(),
 });
 const handoff = z.object({
   at: timestamp,

@@ -385,9 +385,12 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🐛 Fixed
 
-- Locate traces use complete cached ColGREP indexes, so their short deadline
-  can no longer interrupt a build. A regular ranked search can resume an
-  interrupted index.
+- ColGREP indexing recovers in the background for active worktrees, independently
+  of query deadlines. A compatible completed index survives ordinary updates and
+  WSL remounts, and remains searchable while a refresh builds its replacement.
+  Activity shows progress and retry details. Hybrid search offers labeled
+  lexical results while a first index builds. 💥 The new cache layout rebuilds
+  each worktree once automatically.
 
 - Background inference validates the selected model and credentials through
   the service's own provider. Corrected configuration or authentication makes

@@ -9,14 +9,26 @@ try {
   const tool = runtime.session.getToolDefinition(REPO_SEARCH_TOOL_NAME);
   const query = process.argv[2];
   if (!tool || !query) throw new Error('Standalone Pi repository search is unavailable.');
-  const result = await tool.execute(
-    'standalone-search',
-    { query, limit: 5 },
-    cancellation.signal,
-    undefined,
-    {} as never,
-  );
-  console.log(JSON.stringify(result.details));
+  const deadline = Date.now() + 90_000;
+  let completed = false;
+  while (Date.now() < deadline) {
+    cancellation.signal.throwIfAborted();
+    const result = await tool.execute(
+      'standalone-search',
+      { query, mode: 'semantic', limit: 5 },
+      cancellation.signal,
+      undefined,
+      {} as never,
+    );
+    const details = result.details as { provider?: string; status?: string } | undefined;
+    if (details?.provider === 'colgrep' && details.status === 'ready') {
+      console.log(JSON.stringify(details));
+      completed = true;
+      break;
+    }
+    await Bun.sleep(100);
+  }
+  if (!completed) throw new Error('The standalone ColGREP background build timed out.');
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;

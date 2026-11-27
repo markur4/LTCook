@@ -8,6 +8,8 @@ import { pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { riedToolDefinition } from '../tools/ried.js';
 import { RiedService } from '../repository/discovery.js';
+import { createColgrepProvider } from '../repository/providers/colgrep.js';
+import { openRepositoryWorkspace } from '../repository/workspace.js';
 import type { RiedRequest } from '../repository/requests.js';
 import { createRepoSearchTool } from '../tools/repo-search.js';
 import { createRepoLocateTool } from '../tools/repo-locate.js';
@@ -594,8 +596,8 @@ export default async function activate(
   await activateOptionalBrowser(pi);
 }
 
-function repositoryTools() {
-  const search = createRepoSearchTool();
+function repositoryTools(colgrep?: ReturnType<typeof createColgrepProvider>) {
+  const search = createRepoSearchTool(colgrep);
   return [search, createRepoLocateTool(search)] as const;
 }
 
@@ -633,7 +635,17 @@ export function activateStandaloneRepoSearch(
   } catch {
     return;
   }
-  for (const tool of repositoryTools()) {
+  const colgrep = createColgrepProvider({ background: true });
+  const indexing = openRepositoryWorkspace(root)
+    .then((workspace) => {
+      if (workspace.root === root) return colgrep.indexService.activate(workspace);
+    })
+    .catch(() => undefined);
+  pi.on('session_shutdown', async () => {
+    (await indexing)?.();
+    await colgrep.indexService.close();
+  });
+  for (const tool of repositoryTools(colgrep)) {
     registerRepositoryTool(pi, tool, (input, signal) =>
       tool.invoke(input, {
         agentId: sessionId,

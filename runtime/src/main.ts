@@ -15,6 +15,7 @@ import { verifyDeployedBuild } from './integrations/deployed-build.js';
 import { PaseoWorkspaceServices } from './integrations/paseo-workspace-services.js';
 import { createWorktreeScopeResolver, SessionWorktrees } from './integrations/session-worktrees.js';
 import { createColgrepProvider } from './repository/providers/colgrep.js';
+import type { RepositoryIndexService } from './services/repository-index.js';
 import { createSessionWorktreeTool } from './tools/session-worktree.js';
 import { isWithin } from './path-containment.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
@@ -181,6 +182,7 @@ async function run(): Promise<void> {
   let conversationProducts: ReturnType<typeof openConversationProductStore> | undefined;
   let tracker: TrackerService | undefined;
   let workspaceServices: PaseoWorkspaceServices | undefined;
+  let repositoryIndex: RepositoryIndexService | undefined;
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
   const nativePreparation = new AbortController();
@@ -219,6 +221,7 @@ async function run(): Promise<void> {
         }),
       );
       if (workspaceServices) await attempt(() => workspaceServices!.close());
+      if (repositoryIndex) await attempt(() => repositoryIndex!.close());
       if (tracker) await attempt(() => tracker!.close());
       if (conversationInference) await attempt(() => conversationInference!.close());
       if (conversationProducts) await attempt(() => conversationProducts!.close());
@@ -305,14 +308,15 @@ async function run(): Promise<void> {
       workspaceShellEnvironments.get(id),
     );
     await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
-    const colgrep = createColgrepProvider();
+    const colgrep = createColgrepProvider({ background: true });
+    repositoryIndex = colgrep.indexService;
     const preferences = new ActivityPreferences(
       path.join(stateDirectory, 'activity-settings.json'),
     );
     const worktrees = new SessionWorktrees(process.env.PATH ?? '');
     const resolveScope = createWorktreeScopeResolver((id) => runtime?.snapshot(id));
     const worktreeTool = createSessionWorktreeTool(worktrees, resolveScope);
-    const activation = new SessionActivation(process.env);
+    const activation = new SessionActivation(process.env, repositoryIndex);
     api = new RuntimeApi(undefined, apiToken, apiListen, activation, process.env, telemetry, {
       activity: { colgrep, preferences },
       worktrees: { store: worktrees, resolveScope },
@@ -516,7 +520,7 @@ async function run(): Promise<void> {
       worktreeTool,
       conversationInference,
     );
-    const workspaceMcp = new WorkspaceMcp(tools, apiListen, web, requestRestart);
+    const workspaceMcp = new WorkspaceMcp(tools, apiListen, web, requestRestart, repositoryIndex);
     api.setWorkspaceTools(tools);
     api.setWorkspaceMcp(workspaceMcp);
     const backend = await createPaseoAgentBackend({
@@ -572,7 +576,9 @@ async function run(): Promise<void> {
         throw error;
       }
       if (stopping) return;
-      activation.register(workspaceRoot, initialSnapshot.session.id);
+      activation.register(workspaceRoot, initialSnapshot.session.id, {
+        authorizeRepositoryIndex: true,
+      });
     }
     if (stopping) return;
     activation.setWorkspaceActivator(async (request) => {
