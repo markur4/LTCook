@@ -515,12 +515,13 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
   const cache = options.cacheDirectory ?? process.env.LTCOOK_COLGREP_CACHE_DIR;
   const timeoutMs = options.timeoutMs ?? REPO_SEARCH_TIMEOUT_MS;
   const indexService = new RepositoryIndexService(async (workspace, signal) => {
-    await buildIndex(workspace, signal);
+    await buildIndex(workspace, signal, true);
   });
 
   async function buildIndex(
     workspace: RepositoryWorkspace,
     callerSignal: AbortSignal,
+    scheduled = false,
   ): Promise<number> {
     const signal = AbortSignal.any([
       callerSignal,
@@ -553,8 +554,8 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         published &&
         previous &&
         sameColgrepSource(previous, source) &&
-        (source.complete ||
-          Date.now() - Date.parse(published.publishedAt) < PARTIAL_SCAN_REFRESH_MS)
+        ((source.complete && source.ignoreRulesObserved) ||
+          (scheduled && Date.now() - Date.parse(published.publishedAt) < PARTIAL_SCAN_REFRESH_MS))
       ) {
         return performance.now() - started;
       }
@@ -653,19 +654,28 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         await Promise.all([...assets.files.keys()].map((file) => regularFile(file)));
         failure = 'ColGREP could not read its AppRC index storage.';
         const store = await ColgrepIndexStore.open(cache, workspace, assets.compatibility, false);
-        const published = await store?.readPublished();
-        const usable = published && (await hasIndexLayout(assets, workspace, published.indices));
+        let published = await store?.readPublished();
+        let usable = published && (await hasIndexLayout(assets, workspace, published.indices));
+        if (published && !usable) {
+          // > Publication can retire the observed generation while the status view reads its layout.
+          const replacement = await store?.readPublished();
+          if (replacement?.id !== published.id) {
+            published = replacement;
+            usable = published && (await hasIndexLayout(assets, workspace, published.indices));
+          }
+        }
         failure = 'The authorized worktree is unavailable.';
         await workspace.assertUnchanged();
         const job = indexService.status(workspace);
+        const ready = usable ? published : undefined;
         return {
           ...job,
-          availability: usable ? 'ready' : 'not-ready',
-          activity: usable && job.activity === 'indexing' ? 'updating' : job.activity,
+          availability: ready ? 'ready' : 'not-ready',
+          activity: ready && job.activity === 'indexing' ? 'updating' : job.activity,
           diagnostic:
             job.diagnostic ??
             (published && !usable ? 'ColGREP index files are missing or damaged.' : null),
-          ...(usable && { generation: published.id, publishedAt: published.publishedAt }),
+          ...(ready && { generation: ready.id, publishedAt: ready.publishedAt }),
         };
       } catch {
         return { availability: 'unavailable', activity: 'error', diagnostic: failure };

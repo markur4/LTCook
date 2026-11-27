@@ -332,46 +332,53 @@ if (process.argv[2] === 'init') {
       await expect(failedRefresh).rejects.toThrow();
       expect((await provider.readStatus(workspace)).generation).toBe(beforeFailure);
 
-      const checkpointProvider = createColgrepProvider({
-        deploymentDirectory: root,
-        cacheDirectory: path.join(root, 'checkpoint-cache'),
-      });
-      const checkpoint = path.join(source, 'checkpoint.ts');
-      const mode = path.join(root, 'checkpoint-mode');
-      const original = new Date('2026-01-01T00:00:00Z');
-      const changed = new Date('2026-01-02T00:00:00Z');
-      const updateCheckpoint = async (value: string, modified: Date) => {
-        await writeFile(checkpoint, `export const ${value} = 1;`);
-        await utimes(checkpoint, modified, modified);
-      };
-      await updateCheckpoint('alpha', original);
-      await writeFile(mode, 'pause');
-      const cancel = new AbortController();
-      const paused = checkpointProvider.buildIndex(workspace, cancel.signal);
+      const priorPath = process.env.PATH;
+      process.env.PATH = '';
       try {
-        await waitForFile(path.join(root, 'pause-checkpoint-started'));
-      } finally {
-        cancel.abort();
-        await expect(paused).rejects.toThrow();
-      }
+        const checkpointProvider = createColgrepProvider({
+          deploymentDirectory: root,
+          cacheDirectory: path.join(root, 'checkpoint-cache'),
+        });
+        const checkpoint = path.join(source, 'checkpoint.ts');
+        const mode = path.join(root, 'checkpoint-mode');
+        const original = new Date('2026-01-01T00:00:00Z');
+        const changed = new Date('2026-01-02T00:00:00Z');
+        const updateCheckpoint = async (value: string, modified: Date) => {
+          await writeFile(checkpoint, `export const ${value} = 1;`);
+          await utimes(checkpoint, modified, modified);
+        };
+        await updateCheckpoint('alpha', original);
+        await writeFile(mode, 'pause');
+        const cancel = new AbortController();
+        const paused = checkpointProvider.buildIndex(workspace, cancel.signal);
+        try {
+          await waitForFile(path.join(root, 'pause-checkpoint-started'));
+        } finally {
+          cancel.abort();
+          await expect(paused).rejects.toThrow();
+        }
 
-      await updateCheckpoint('bravo', changed);
-      await writeFile(mode, 'resume');
-      const resumed = checkpointProvider.buildIndex(workspace, signal);
-      try {
-        await waitForFile(path.join(root, 'resume-checkpoint-started'));
-        await updateCheckpoint('delta', original);
+        await updateCheckpoint('bravo', changed);
+        await writeFile(mode, 'resume');
+        const resumed = checkpointProvider.buildIndex(workspace, signal);
+        try {
+          await waitForFile(path.join(root, 'resume-checkpoint-started'));
+          await updateCheckpoint('delta', original);
+        } finally {
+          await writeFile(path.join(root, 'resume-checkpoint-finished'), 'finished');
+          await resumed;
+        }
+        const recovered = await checkpointProvider.search(
+          workspace,
+          { query: 'checkpoint file' },
+          signal,
+        );
+        expect(recovered.value.hits).toMatchObject([
+          { path: 'checkpoint.ts', excerpt: 'export const delta = 1;' },
+        ]);
       } finally {
-        await writeFile(path.join(root, 'resume-checkpoint-finished'), 'finished');
-        await resumed;
+        if (priorPath === undefined) delete process.env.PATH;
+        else process.env.PATH = priorPath;
       }
-      const recovered = await checkpointProvider.search(
-        workspace,
-        { query: 'checkpoint file' },
-        signal,
-      );
-      expect(recovered.value.hits).toMatchObject([
-        { path: 'checkpoint.ts', excerpt: 'export const delta = 1;' },
-      ]);
     }),
 );

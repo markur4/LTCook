@@ -18,13 +18,14 @@ type SourceFile = [
 export interface ColgrepSourceSnapshot {
   files: SourceFile[];
   complete: boolean;
+  ignoreRulesObserved: boolean;
 }
 
 const MAX_SOURCE_FILES = 250_000;
 const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
 const MAX_EVIDENCE_FILE_BYTES = 2 * 1024 * 1024;
 
-type SourcePaths = { paths: string[]; complete: boolean };
+type SourcePaths = Omit<ColgrepSourceSnapshot, 'files'> & { paths: string[] };
 
 async function sourcePaths(
   workspace: RepositoryWorkspace,
@@ -41,34 +42,30 @@ async function sourcePaths(
       executablePath,
       { timeoutMs: 5000, maxBytes: MAX_SNAPSHOT_BYTES, signal },
     ).catch(() => undefined));
-  signal.throwIfAborted();
   if (listed && (listed.code === 0 || listed.code === 1)) {
-    const paths = listed.stdout
-      .split('\0')
-      .filter(Boolean)
-      .map((file) =>
-        path.relative(workspace.root, path.resolve(workspace.root, file)).split(path.sep).join('/'),
-      )
-      .filter(isRepositoryPathVisible)
-      .sort();
-    return { paths: paths.slice(0, MAX_SOURCE_FILES), complete: paths.length <= MAX_SOURCE_FILES };
+    return listedPaths(workspace, listed.stdout);
   }
+  signal.throwIfAborted();
 
   const paths: string[] = [];
   const directories = ['.'];
   let scanned = 0;
+  let complete = true;
   for (const relative of directories) {
     signal.throwIfAborted();
     const directory = await workspace
       .resolvePath(relative, { kind: 'directory', allowRoot: true })
       .then(({ absolute }) => opendir(absolute))
       .catch(() => undefined);
-    if (!directory) continue;
+    if (!directory) {
+      complete = false;
+      continue;
+    }
     try {
       for await (const entry of directory) {
         signal.throwIfAborted();
         if (++scanned > MAX_SOURCE_FILES) {
-          return { paths: paths.sort(), complete: false };
+          return { paths: paths.sort(), complete: false, ignoreRulesObserved: false };
         }
         const child = relative === '.' ? entry.name : relative + '/' + entry.name;
         if (!isRepositoryPathVisible(child)) continue;
@@ -78,9 +75,30 @@ async function sourcePaths(
     } catch {
       signal.throwIfAborted();
       // > The native scanner can still index the files it can open.
+      complete = false;
     }
   }
-  return { paths: paths.sort(), complete: false };
+  return { paths: paths.sort(), complete, ignoreRulesObserved: false };
+}
+
+function listedPaths(workspace: RepositoryWorkspace, stdout: string): SourcePaths {
+  const paths = stdout
+    .split('\0')
+    .filter(Boolean)
+    .map((file) =>
+      path.relative(workspace.root, path.resolve(workspace.root, file)).split(path.sep).join('/'),
+    )
+    .filter(isRepositoryPathVisible)
+    .sort();
+  return {
+    paths: paths.slice(0, MAX_SOURCE_FILES),
+    complete: paths.length <= MAX_SOURCE_FILES,
+    ignoreRulesObserved: true,
+  };
+}
+
+function isMissing(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
 /** Observe current source before a native write, using the repository ignore scopes when available. */
@@ -95,11 +113,13 @@ export async function captureColgrepSource(
   let bytes = 128;
   for (const child of inventory.paths) {
     signal.throwIfAborted();
-    const file = await observeSourceFile(workspace, child, verifyContents).catch(() => undefined);
-    if (!file) {
-      complete = false;
-      continue;
-    }
+    const file = await observeSourceFile(workspace, child, verifyContents).catch(
+      (error: unknown) => {
+        if (!isMissing(error) && !(error instanceof Error && isMissing(error.cause)))
+          complete = false;
+      },
+    );
+    if (!file) continue;
     bytes += Buffer.byteLength(JSON.stringify(file)) + 1;
     if (bytes > MAX_SNAPSHOT_BYTES) {
       complete = false;
@@ -109,7 +129,7 @@ export async function captureColgrepSource(
   }
   signal.throwIfAborted();
   await workspace.assertUnchanged();
-  return { files, complete };
+  return { files, complete, ignoreRulesObserved: inventory.ignoreRulesObserved };
 }
 
 async function observeSourceFile(
@@ -140,6 +160,7 @@ export function sameColgrepSource(
 ): boolean {
   return (
     left.complete === right.complete &&
+    left.ignoreRulesObserved === right.ignoreRulesObserved &&
     left.files.length === right.files.length &&
     left.files.every((file, index) =>
       file.slice(0, 5).every((value, field) => value === right.files[index]?.[field]),
@@ -197,6 +218,8 @@ export async function readColgrepSource(
       typeof input !== 'object' ||
       !('complete' in input) ||
       typeof input.complete !== 'boolean' ||
+      !('ignoreRulesObserved' in input) ||
+      typeof input.ignoreRulesObserved !== 'boolean' ||
       !('files' in input) ||
       !Array.isArray(input.files) ||
       input.files.some(
@@ -207,7 +230,11 @@ export async function readColgrepSource(
       )
     )
       return undefined;
-    return { complete: input.complete, files: input.files as ColgrepSourceSnapshot['files'] };
+    return {
+      complete: input.complete,
+      ignoreRulesObserved: input.ignoreRulesObserved,
+      files: input.files as ColgrepSourceSnapshot['files'],
+    };
   } catch {
     // > Missing observation evidence requires a fresh candidate, even if the published index is readable.
     return undefined;
