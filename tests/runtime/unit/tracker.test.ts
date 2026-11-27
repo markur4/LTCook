@@ -150,7 +150,7 @@ test('batches enabled Trackers, processes genuine user messages once, and retain
 });
 
 test('records incomplete coverage and durably skips paused messages without replay', async () => {
-  const { open, history, database, inputs } = fixture(noChanges, 900);
+  const { open, history, database, inputs } = fixture(noChanges, 1500);
   const first = open();
   try {
     first.configure(conversation, { type: 'add', name: 'Large', instructions: 'A'.repeat(8000) });
@@ -494,7 +494,7 @@ test('disabling one Tracker cancels its queued request while another Tracker con
 });
 
 test('a budget gap stays incomplete after unchanged retry or skip, and can recover after the budget changes', async () => {
-  const { open, history, database, inputs } = fixture(noChanges, 900);
+  const { open, history, database, inputs } = fixture(noChanges, 1500);
   const first = open();
   try {
     history.messages.push(
