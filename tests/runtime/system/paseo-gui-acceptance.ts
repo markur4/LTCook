@@ -725,7 +725,11 @@ try {
   await clickDrawerControl(archive);
   await clickDrawerControl(mobileServices);
   await clickButton('Close sidebar');
-  await browser('wait', '[aria-label="Open menu"]');
+  await browser(
+    'wait',
+    '--fn',
+    `Boolean(document.querySelector('[aria-label="Open menu"][aria-expanded="false"]'))`,
+  );
 
   await browser('set', 'viewport', '1440', '1000');
   await waitForComposer();
