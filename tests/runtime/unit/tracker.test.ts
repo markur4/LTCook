@@ -2,7 +2,9 @@ import { expect, test } from 'bun:test';
 import type { MemorySource } from '../../../runtime/src/session-memory/conversation.js';
 import type { ConversationPrompt } from '../../../runtime/src/session-memory/inference.js';
 import { openConversationProductStore } from '../../../runtime/src/session-memory/product-store.js';
+import { ServiceInferenceError } from '../../../runtime/src/services/inference-recovery.js';
 import { TrackerService } from '../../../runtime/src/session-memory/tracker.js';
+import { TrackerStore } from '../../../runtime/src/session-memory/tracker-store.js';
 import type { MemorySourceMessage } from '../../../runtime/src/session-memory/units.js';
 
 const conversation = 'conversation';
@@ -23,9 +25,11 @@ const messages = {
 };
 
 function timeline(initial: MemorySourceMessage[] = []) {
-  const history = { epoch: 'original', messages: initial };
+  const history = { epoch: 'original', messages: initial, unavailableBefore: new Set<number>() };
   const source: MemorySource = {
     async read(_id, cursor, direction) {
+      if (direction === 'before' && cursor && history.unavailableBefore.has(cursor.seq))
+        throw new Error('Test source is unavailable.');
       const latest = history.messages.at(-1)?.seq ?? -1;
       const entries =
         direction === 'before'
@@ -59,11 +63,13 @@ function noChanges({ trackers }: Prompt) {
 function fixture(
   complete: (prompt: Prompt, raw: string) => string | Promise<string>,
   budget = 5000,
+  validate?: (signal: AbortSignal) => Promise<string | undefined>,
 ) {
   const { source, history } = timeline();
   const database = openConversationProductStore(':memory:');
   const inputs: string[] = [];
   const inference = {
+    validate,
     async complete(_product: string, prompt: ConversationPrompt) {
       inputs.push(prompt.input);
       return complete(JSON.parse(prompt.input) as Prompt, prompt.input);
@@ -74,7 +80,7 @@ function fixture(
     source,
     database,
     inputs,
-    open: () => new TrackerService(database, source, inference, budget),
+    open: (inputTokens = budget) => new TrackerService(database, source, inference, inputTokens),
   };
 }
 
@@ -291,6 +297,254 @@ test('a user edit during inference makes the affected extraction incomplete', as
     expect(result.trackers[0]!.items[0]!.text).toBe(manualDecision);
   } finally {
     await service.close();
+    database.close();
+  }
+});
+
+test('a provider failure queues later sources durably for that Tracker while another Tracker continues', async () => {
+  let available = false;
+  let markValidated!: () => void;
+  const validated = new Promise<void>((resolve) => {
+    markValidated = resolve;
+  });
+  let markRecovered!: () => void;
+  const recovered = new Promise<void>((resolve) => {
+    markRecovered = resolve;
+  });
+  const { open, history, database, inputs } = fixture(
+    ({ current, trackers }) => {
+      if (trackers.some(({ id }) => id === decisions)) {
+        if (!available)
+          throw new ServiceInferenceError('authentication', 'Restore the test sign-in.', 'old');
+        if (current.seq === 3) markRecovered();
+      }
+      return noChanges({ current, trackers });
+    },
+    5000,
+    async () => {
+      if (available) return 'new';
+      markValidated();
+      return 'old';
+    },
+  );
+  const first = open();
+  try {
+    history.messages.push(messages.user(1, 'Use SQLite.'));
+    await collect(first);
+    first.configure(conversation, {
+      type: 'add',
+      name: 'Constraints',
+      instructions: 'Track explicit constraints.',
+    });
+    history.messages.push(
+      messages.user(2, 'Also enable foreign keys.'),
+      messages.user(3, 'Use one file per workspace.'),
+    );
+    const initial = await collect(first);
+    expect(initial.events.map(({ trackers }) => trackers.map(({ status }) => status))).toEqual([
+      ['failed'],
+      ['pending', 'no-change'],
+      ['pending', 'no-change'],
+    ]);
+    expect(initial.events[0]!.trackers[0]).toMatchObject({
+      reason: 'authentication',
+      detail: 'Restore the test sign-in.',
+    });
+    expect(inputs).toHaveLength(3);
+    await first.close();
+
+    const reopened = open();
+    try {
+      await collect(reopened);
+      expect(inputs).toHaveLength(3);
+      await validated;
+      await reopened.settled();
+      expect(inputs).toHaveLength(3);
+
+      available = true;
+      await recovered;
+      await reopened.settled();
+      expect(inputs.slice(3).map((input) => JSON.parse(input) as Prompt)).toMatchObject([
+        { current: { seq: 1 }, trackers: [{ id: decisions }] },
+        { current: { seq: 2 }, trackers: [{ id: decisions }] },
+        { current: { seq: 3 }, trackers: [{ id: decisions }] },
+      ]);
+      expect(
+        (await reopened.snapshot(conversation)).events.map(({ trackers }) =>
+          trackers.map(({ status }) => status),
+        ),
+      ).toEqual([['no-change'], ['no-change', 'no-change'], ['no-change', 'no-change']]);
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await first.close();
+    database.close();
+  }
+}, 10_000);
+
+test('unavailable source retains incomplete coverage until the original evidence becomes readable', async () => {
+  const { open, history, database, inputs } = fixture(noChanges);
+  const service = open();
+  try {
+    history.messages.push(
+      messages.user(1, 'Use SQLite.'),
+      messages.user(3, 'Enforce foreign keys.'),
+    );
+    history.unavailableBefore.add(2);
+    const initial = await collect(service);
+    expect(initial.events.map(({ trackers }) => trackers[0]!.status)).toEqual([
+      'incomplete',
+      'pending',
+    ]);
+    expect(initial.events[0]!.trackers[0]!.reason).toBe('source');
+    expect(inputs).toHaveLength(0);
+
+    history.unavailableBefore.clear();
+    const recovered = await collect(service);
+    expect(recovered.events.map(({ trackers }) => trackers[0]!.status)).toEqual([
+      'no-change',
+      'no-change',
+    ]);
+    expect(inputs.map((input) => (JSON.parse(input) as Prompt).current.seq)).toEqual([1, 3]);
+  } finally {
+    await service.close();
+    database.close();
+  }
+});
+
+test('messages observed while a Tracker is disabled are never replayed after re-enabling it', async () => {
+  const { open, history, database, inputs } = fixture(noChanges);
+  const service = open();
+  try {
+    await collect(service);
+    service.configure(conversation, { type: 'enable', id: decisions, enabled: false });
+    history.messages.push(messages.user(1, 'While disabled.'));
+    await collect(service);
+    service.configure(conversation, { type: 'enable', id: decisions, enabled: true });
+    history.messages.push(messages.user(2, 'After re-enabling.'));
+    await collect(service);
+    expect(inputs.map((input) => (JSON.parse(input) as Prompt).current.seq)).toEqual([2]);
+  } finally {
+    await service.close();
+    database.close();
+  }
+});
+
+test('a budget gap stays incomplete after unchanged retry or skip, and can recover after the budget changes', async () => {
+  const { open, history, database, inputs } = fixture(noChanges, 900);
+  const first = open();
+  try {
+    history.messages.push(
+      messages.user(1, 'Keep the deployment in Europe. '.repeat(250)),
+      messages.user(2, 'Use separate credentials.'),
+      messages.user(3, 'Set the renewal period to 90 days.'),
+    );
+    const initial = await collect(first);
+    expect(initial.events.map(({ trackers }) => trackers[0]!.status)).toEqual([
+      'incomplete',
+      'pending',
+      'pending',
+    ]);
+    expect(initial.events[0]!.trackers[0]!.reason).toBe('budget');
+    const source = { epoch: 'original', seq: 1 };
+    first.recover(conversation, { type: 'retry', trackerId: decisions, source });
+    await first.settled();
+    expect(inputs).toHaveLength(0);
+    expect((await first.snapshot(conversation)).events[0]!.trackers[0]!.reason).toBe('budget');
+
+    first.recover(conversation, { type: 'skip', trackerId: decisions, source });
+    await first.settled();
+    expect(
+      (await first.snapshot(conversation)).events.map(({ trackers }) => trackers[0]!.status),
+    ).toEqual(['skipped', 'no-change', 'no-change']);
+    expect(inputs.map((input) => (JSON.parse(input) as Prompt).current.seq)).toEqual([2, 3]);
+    await first.close();
+
+    const reopened = open(8000);
+    try {
+      expect((await collect(reopened)).events[0]!.trackers[0]!.status).toBe('skipped');
+      reopened.recover(conversation, { type: 'retry', trackerId: decisions, source });
+      await reopened.settled();
+      expect(
+        (await reopened.snapshot(conversation)).events.map(({ trackers }) => trackers[0]!.status),
+      ).toEqual(['no-change', 'no-change', 'no-change']);
+      expect(inputs.map((input) => (JSON.parse(input) as Prompt).current.seq)).toEqual([
+        2, 3, 1, 2, 3,
+      ]);
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await first.close();
+    database.close();
+  }
+});
+
+test('a committed suffix is recomputed in source order without resurrecting manually removed or edited items', async () => {
+  let replay = false;
+  const itemText = ['Gap filled', 'Remove this item', 'Edit this item', 'Stale automatic result'];
+  const { open, history, database, inputs } = fixture(({ current, trackers }) => {
+    if (current.seq === 1 && !replay) return noChanges({ current, trackers });
+    const text =
+      replay && current.seq >= 2
+        ? `Reworded: ${itemText[current.seq - 1]}`
+        : itemText[current.seq - 1];
+    return JSON.stringify({
+      trackers: [
+        {
+          trackerId: decisions,
+          changes: [{ type: 'add', text, sources: [current.seq] }],
+        },
+      ],
+    });
+  });
+  const first = open();
+  try {
+    history.messages.push(...itemText.map((text, index) => messages.user(index + 1, text)));
+    const initial = await collect(first);
+    const [removed, edited] = initial.trackers[0]!.items;
+    first.editItem(conversation, decisions, removed!.id, null);
+    first.editItem(conversation, decisions, edited!.id, 'My manual note');
+    await first.close();
+
+    const store = new TrackerStore(database);
+    const oldCoverage = store.load(conversation);
+    oldCoverage.events[0]!.trackers[0]!.status = 'failed';
+    store.save(conversation, oldCoverage);
+    const reopened = open();
+    try {
+      const paused = await collect(reopened);
+      expect(paused.trackers[0]!.items.map(({ text }) => text)).toEqual(['My manual note']);
+      expect(paused.events.map(({ trackers }) => trackers[0]!.status)).toEqual([
+        'failed',
+        'pending',
+        'pending',
+        'pending',
+      ]);
+      expect(inputs).toHaveLength(4);
+      replay = true;
+      reopened.recover(conversation, {
+        type: 'retry',
+        trackerId: decisions,
+        source: { epoch: 'original', seq: 1 },
+      });
+      await reopened.settled();
+      const recovered = await reopened.snapshot(conversation);
+      expect(recovered.trackers[0]!.items.map(({ text }) => text)).toEqual([
+        'Gap filled',
+        'Reworded: Stale automatic result',
+        'My manual note',
+      ]);
+      expect(recovered.trackers[0]!.items.find(({ manual }) => manual)?.id).toBe(edited!.id);
+      expect(inputs.slice(4).map((input) => (JSON.parse(input) as Prompt).current.seq)).toEqual([
+        1, 2, 3, 4,
+      ]);
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await first.close();
     database.close();
   }
 });

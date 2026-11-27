@@ -9,6 +9,15 @@ const serviceStatus = z.object({
   lastSuccessAt: timestamp.nullable(),
   processed: z.number().int().nonnegative(),
   diagnostic: z.string().optional(),
+  diagnostics: z
+    .array(
+      z.object({
+        operation: z.enum(['classification', 'rename', 'labels', 'archive', 'settings']),
+        message: z.string(),
+        nextCheckAt: timestamp.optional(),
+      }),
+    )
+    .optional(),
 });
 
 export const WorkspaceServicesStatusSchema = z.object({

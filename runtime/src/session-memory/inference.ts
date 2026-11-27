@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { ollamaChat, type OllamaSettings } from '../integrations/ollama.js';
+import {
+  ollamaChat,
+  ollamaEndpoint,
+  summaryGeneration,
+  type OllamaSettings,
+} from '../integrations/ollama.js';
+import { inferenceRevision, ServiceInferenceError } from '../services/inference-recovery.js';
 
 export type ConversationProduct = 'clarify' | 'tracker';
 export type ConversationPrompt = { instructions: string; input: string };
@@ -11,11 +17,14 @@ export type InferenceResponse = {
   usage?: { inputTokens?: number; outputTokens?: number };
 };
 
-export type ConversationProvider = (
-  product: ConversationProduct,
-  prompt: ConversationPrompt,
-  signal: AbortSignal,
-) => Promise<InferenceResponse>;
+export type ConversationProvider = {
+  (
+    product: ConversationProduct,
+    prompt: ConversationPrompt,
+    signal: AbortSignal,
+  ): Promise<InferenceResponse>;
+  validate?(signal: AbortSignal): Promise<string>;
+};
 
 type Request = {
   product: ConversationProduct;
@@ -25,23 +34,108 @@ type Request = {
   reject(error: unknown): void;
 };
 
-export function localConversationProvider(settings: OllamaSettings): ConversationProvider {
-  return async (product, prompt, signal) => {
-    let usage: InferenceResponse['usage'];
-    const reply = await ollamaChat(
-      settings,
-      [
-        { role: 'system', content: prompt.instructions },
-        { role: 'user', content: prompt.input },
-      ],
-      signal,
-      (tokens) => {
-        usage = tokens;
-      },
-      product === 'tracker' ? 'json' : undefined,
-    );
-    return { text: reply.summary, complete: !reply.incomplete, usage };
+const localModelCorrection =
+  'Pull the configured model into the local Ollama instance or fix LTCOOK_CONVERSATION_LOCAL_MODEL in AppRC and restart LTCook.';
+
+export function localConversationProvider(
+  settings: OllamaSettings | (() => OllamaSettings),
+): ConversationProvider {
+  const configured = () => {
+    let chosen: OllamaSettings;
+    try {
+      chosen = typeof settings === 'function' ? settings() : settings;
+    } catch (error) {
+      if (error instanceof ServiceInferenceError) throw error;
+      throw new ServiceInferenceError(
+        'configuration',
+        'Set LTCOOK_CONVERSATION_LOCAL_MODEL to an Ollama model ID or Ollama alias in AppRC and restart LTCook.',
+      );
+    }
+    let endpoint: URL;
+    try {
+      endpoint = ollamaEndpoint(chosen.endpoint);
+    } catch {
+      throw new ServiceInferenceError(
+        'configuration',
+        'Set LTCOOK_OLLAMA_ENDPOINT to an HTTP loopback URL with a port in AppRC and restart LTCook.',
+      );
+    }
+    try {
+      summaryGeneration(chosen);
+    } catch {
+      throw new ServiceInferenceError(
+        'configuration',
+        'Fix LTCOOK_SUMMARIZER_GENERATION in AppRC and restart LTCook.',
+      );
+    }
+    if (!chosen.model.trim())
+      throw new ServiceInferenceError('configuration', localModelCorrection);
+    if (!Number.isSafeInteger(chosen.keepAlive) || chosen.keepAlive < -1)
+      throw new ServiceInferenceError(
+        'configuration',
+        'Set LTCOOK_SUMMARIZER_KEEP_ALIVE to -1 or nonnegative seconds in AppRC and restart LTCook.',
+      );
+    return { chosen, endpoint };
   };
+
+  const provider: ConversationProvider = async (product, prompt, signal) => {
+    const { chosen } = configured();
+    let usage: InferenceResponse['usage'];
+    try {
+      const reply = await ollamaChat(
+        chosen,
+        [
+          { role: 'system', content: prompt.instructions },
+          { role: 'user', content: prompt.input },
+        ],
+        signal,
+        (tokens) => {
+          usage = tokens;
+        },
+        product === 'tracker' ? 'json' : undefined,
+      );
+      return { text: reply.summary, complete: !reply.incomplete, usage };
+    } catch (error) {
+      signal.throwIfAborted();
+      if (
+        error instanceof Error &&
+        /^Ollama summarizer model .* is unavailable\./s.test(error.message)
+      )
+        throw new ServiceInferenceError('configuration', localModelCorrection);
+      throw new ServiceInferenceError(
+        'transient',
+        'Local Ollama did not complete the request. Check that the configured Ollama instance is running.',
+      );
+    }
+  };
+  provider.validate = async (signal) => {
+    const { chosen, endpoint } = configured();
+    const bounded = AbortSignal.any([signal, AbortSignal.timeout(5_000)]);
+    const unavailable = () =>
+      new ServiceInferenceError(
+        'transient',
+        'Local Ollama is unavailable. Start the configured Ollama instance.',
+      );
+    let response: Response;
+    try {
+      response = await fetch(new URL('/api/show', endpoint), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        redirect: 'error',
+        signal: bounded as NonNullable<Parameters<typeof fetch>[1]>['signal'],
+        body: JSON.stringify({ model: chosen.model.trim() }),
+      });
+      await response.body?.cancel();
+    } catch {
+      signal.throwIfAborted();
+      throw unavailable();
+    }
+    if (response.status === 404)
+      throw new ServiceInferenceError('configuration', localModelCorrection);
+    if (!response.ok) throw unavailable();
+    return inferenceRevision(chosen);
+  };
+  return provider;
 }
 
 export class ConversationInference {
@@ -60,10 +154,29 @@ export class ConversationInference {
       complete: boolean;
       usage?: InferenceResponse['usage'];
     }) => void,
+    private readonly configurationError?: ServiceInferenceError,
   ) {}
 
   selection() {
     return this.mode;
+  }
+
+  private provider() {
+    if (this.configurationError) throw this.configurationError;
+    const provider = this.providers[this.mode];
+    if (!provider)
+      throw new ServiceInferenceError(
+        'configuration',
+        'Configure the selected LTCOOK_CONVERSATION_INFERENCE provider in AppRC and restart LTCook.',
+      );
+    return provider;
+  }
+
+  /** Check the selected route without submitting a conversation prompt. */
+  async validate(signal: AbortSignal): Promise<string | undefined> {
+    const combined = AbortSignal.any([signal, this.lifetime.signal]);
+    combined.throwIfAborted();
+    return this.provider().validate?.(combined);
   }
 
   foregroundStarted(id: string) {
@@ -90,6 +203,7 @@ export class ConversationInference {
     const combined = AbortSignal.any([signal, this.lifetime.signal]);
     return new Promise((resolve, reject) => {
       combined.throwIfAborted();
+      if (this.configurationError) throw this.configurationError;
       const request = {
         product,
         prompt,
@@ -138,12 +252,13 @@ export class ConversationInference {
       const start = performance.now();
       let result: InferenceResponse | undefined;
       try {
-        const provider = this.providers[mode];
-        if (!provider) throw new Error(`The configured ${mode} inference provider is unavailable.`);
-        result = await provider(request.product, request.prompt, signal);
+        result = await this.provider()(request.product, request.prompt, signal);
         signal.throwIfAborted();
         if (!result.complete || !result.text.trim())
-          throw new Error('Inference returned an incomplete response.');
+          throw new ServiceInferenceError(
+            'transient',
+            'Inference returned an incomplete response.',
+          );
         request.resolve(result.text);
       } catch (error) {
         if (releaseLocal.signal.aborted && !request.signal.aborted) {

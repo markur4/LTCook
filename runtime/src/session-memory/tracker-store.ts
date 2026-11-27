@@ -11,7 +11,12 @@ export type TrackerSource = MemoryCursor & {
 export type Evidence = TrackerSource & { digest: string };
 
 export type TrackerStatus =
-  'pending' | 'changes' | 'no-change' | 'incomplete' | 'failed' | 'paused';
+  'pending' | 'changes' | 'no-change' | 'incomplete' | 'failed' | 'paused' | 'skipped';
+
+export type TrackerGap =
+  | { kind: 'budget'; inputDigest: string }
+  | { kind: 'configuration' | 'authentication' | 'transient'; revision?: string; detail?: string }
+  | { kind: 'source' | 'changed' | 'output' };
 
 export type TrackerConfig = {
   id: string;
@@ -19,6 +24,7 @@ export type TrackerConfig = {
   instructions: string;
   enabled: boolean;
   version: number;
+  disabledPeriods?: { started: number; ended?: number }[];
 };
 
 export type Revision = {
@@ -35,8 +41,15 @@ export type Revision = {
 export type TrackerEvent = {
   id: string;
   source: Evidence;
-  trackers: { trackerId: string; status: TrackerStatus }[];
+  trackers: TrackerCoverage[];
   invalidated?: true;
+};
+
+export type TrackerCoverage = {
+  trackerId: string;
+  status: TrackerStatus;
+  gap?: TrackerGap;
+  replay?: true;
 };
 
 export type TrackerState = {
@@ -45,6 +58,7 @@ export type TrackerState = {
   trackers: TrackerConfig[];
   revisions: Revision[];
   events: TrackerEvent[];
+  historyUnavailable?: true;
 };
 
 const defaultTracker: TrackerConfig = {
@@ -86,6 +100,13 @@ export class TrackerStore {
     `,
       )
       .run(agentId, JSON.stringify(state));
+  }
+
+  conversations(): string[] {
+    const rows = this.database.prepare('SELECT agent_id FROM tracker_conversation').all() as {
+      agent_id: string;
+    }[];
+    return rows.map(({ agent_id }) => agent_id);
   }
 
   paused(at?: number): boolean {

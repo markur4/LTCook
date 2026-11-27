@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import sys
+from dataclasses import asdict
 from importlib import metadata
 from pathlib import Path
 from typing import Annotated
@@ -15,14 +15,32 @@ import apprc as rc
 import typer
 
 import ltcook
-from ltcook._app_update import app_update_command
-from ltcook._runtime_client import RuntimeClientError, stop_runtime
+from ltcook._app_update import (
+    inspect_installed_build,
+    last_restart_result,
+    read_registered_build,
+    registration,
+    restart_stopped_runtime,
+    save_restart_result,
+)
+from ltcook._runtime_client import (
+    RuntimeClientError,
+    RuntimeStatus,
+    probe_runtime,
+    stop_runtime,
+)
 from ltcook.auth import auth_cli
 from ltcook.cli.eval import eval_cli
 from ltcook.cli.planning import guidance_cli, planning_cli
 from ltcook.config.app import APP_RC
 from ltcook.config.bundle import LtcookConfig
-from ltcook.launch import desktop_command, launch_cli, resolve_launch, services_cli
+from ltcook.launch import (
+    _shell_environment,
+    desktop_command,
+    launch_cli,
+    resolve_launch,
+    services_cli,
+)
 from ltcook_distr.payload.app_lifecycle.actions import maintenance_handlers
 
 PACKAGE_NAME = "ltcook"
@@ -194,6 +212,7 @@ runtime = rc.cli.CliRuntime(
                     ("model",),
                     ("environment",),
                     ("write-native-config",),
+                    ("_installed-build",),
                 },
                 skip_empty=True,
             ),
@@ -286,7 +305,7 @@ def serve_cmd() -> None:
     raise typer.Exit(desktop_command())
 
 
-def _registered_launcher() -> Path:
+def _registered_launcher(*, required: bool = True) -> Path | None:
     """Find the recorded public command so it can select the refreshed runtime."""
     record = APP_RC.installation().inspect().require_usable()
     if record is not None:
@@ -298,7 +317,19 @@ def _registered_launcher() -> Path:
         )
         if launcher is not None and launcher.is_file():
             return launcher
+    if not required and record is None:
+        return None
     raise ValueError("This restart requires the registered LTCook command.")
+
+
+@launch_cli.command("_installed-build", hidden=True)
+def _installed_build_cmd(revision: str) -> None:
+    """Report the registered Python and deployed runtime build to the restart caller."""
+    try:
+        build = inspect_installed_build(_shell_environment(os.environ), revision)
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(json.dumps(asdict(build)))
 
 
 @app.command("restart")
@@ -325,8 +356,13 @@ def restart_cmd(
         bool,
         typer.Option("--cancel", help="Cancel a queued idle restart before it starts."),
     ] = False,
+    last_result: Annotated[
+        bool,
+        typer.Option("--last-result", help="Show the last completed restart result."),
+    ] = False,
     output_json: Annotated[
-        bool, typer.Option("--json", help="Print the deferred restart status as JSON.")
+        bool,
+        typer.Option("--json", help="Print restart status or the last result as JSON."),
     ] = False,
 ) -> None:
     """Stop the local runtime and reopen Paseo or queue an idle restart.
@@ -336,16 +372,46 @@ def restart_cmd(
     :param yes: Approve the update without a caller-side prompt.
     :param status: Display the most recent deferred restart.
     :param cancel: Cancel a pending deferred restart.
-    :param output_json: Emit deferred status in machine-readable form.
+    :param last_result: Display the last completed registered restart.
+    :param output_json: Emit status or a recorded result in machine-readable form.
     """
-    if (status and cancel) or ((status or cancel) and (update or when_idle or yes)):
+    if sum((status, cancel, last_result)) > 1 or (
+        (status or cancel or last_result) and (update or when_idle or yes)
+    ):
         raise typer.BadParameter(
-            "Use --status or --cancel by itself with optional --json."
+            "Use --status, --cancel, or --last-result by itself with optional --json."
         )
-    if output_json and not (when_idle or status or cancel):
-        raise typer.BadParameter("--json requires --when-idle, --status, or --cancel.")
+    if output_json and not (when_idle or status or cancel or last_result):
+        raise typer.BadParameter(
+            "--json requires --when-idle, --status, --cancel, or --last-result."
+        )
     if yes and not update:
         raise typer.BadParameter("--yes requires --update.")
+    if last_result:
+        try:
+            shell = _shell_environment(os.environ)
+            installed = registration(shell, recovery=True)
+            environment = resolve_launch(None, original_environment=shell).environment
+            recorded = last_restart_result(environment, installed)
+        except (OSError, ValueError) as error:
+            raise typer.BadParameter(str(error)) from error
+        if output_json:
+            typer.echo(json.dumps(recorded))
+        elif recorded is None:
+            typer.echo("No completed restart has been recorded for this installation.")
+        else:
+            if recorded.get("update_exit") is not None:
+                typer.echo(recorded.get("update_error") or "AppRC update completed.")
+            if recorded.get("instance_id") is not None:
+                typer.echo(
+                    f"LTCook restarted on build {recorded.get('build_fingerprint')}."
+                )
+                typer.echo(
+                    f"AppRC registration revision {recorded.get('registration_revision')}."
+                )
+            elif recorded.get("runtime_error"):
+                typer.echo(recorded["runtime_error"])
+        return
     if when_idle or status or cancel:
         from ltcook._idle_restart import cancel_restart, queue_restart, restart_status
 
@@ -359,6 +425,7 @@ def restart_cmd(
                 result = cancel_restart(environment)
             else:
                 launcher = _registered_launcher()
+                assert launcher is not None
                 if update and not yes:
                     if not sys.stdin.isatty():
                         raise typer.BadParameter(
@@ -375,36 +442,63 @@ def restart_cmd(
         typer.echo(json.dumps(result) if output_json else result["message"])
         return
 
-    launcher = None
-    if update:
-        if sys.platform == "win32":
-            raise typer.BadParameter(
-                "AppRC updates finish in the background on Windows. Stop LTCook, "
-                "run ltcook app update, then run ltcook serve after the update finishes.",
-                param_hint="--update",
-            )
-        try:
-            launcher = _registered_launcher()
-        except (OSError, ValueError) as error:
-            raise typer.BadParameter(str(error), param_hint="--update") from error
-
-    stopped = _stop_desktop_runtime()
-    if stopped:
-        raise typer.Exit(stopped)
-    if launcher is None:
-        raise typer.Exit(desktop_command())
-
-    try:
-        result = subprocess.run(
-            app_update_command(launcher, assume_yes=yes), check=False
-        )
-        if result.returncode:
-            raise typer.Exit(result.returncode)
-        os.execv(launcher, [str(launcher), "serve"])
-    except OSError as error:
+    if update and sys.platform == "win32":
         raise typer.BadParameter(
-            f"Could not run the registered LTCook command: {error}"
-        ) from error
+            "AppRC updates finish in the background on Windows. Stop LTCook, "
+            "run ltcook app update, then run ltcook serve after the update finishes.",
+            param_hint="--update",
+        )
+    try:
+        launcher = _registered_launcher(required=update)
+        if launcher is None:
+            stopped = _stop_desktop_runtime()
+            raise typer.Exit(stopped or desktop_command())
+        shell = _shell_environment(os.environ)
+        environment = resolve_launch(None, original_environment=shell).environment
+        installed = registration(shell, launcher)
+        try:
+            build = read_registered_build(launcher, shell, installed)
+        except RuntimeClientError:
+            if not update:
+                raise
+            # > An explicit update may replace a build that predates attestation.
+            build = None
+        owner = probe_runtime(environment)
+        previous = owner.instance_id if isinstance(owner, RuntimeStatus) else None
+        stopped = stop_runtime(
+            environment,
+            expected_instance_id=previous,
+            expected_build_fingerprint=build.fingerprint if build is not None else None,
+        )
+        if stopped:
+            raise typer.Exit(stopped)
+        result = restart_stopped_runtime(
+            launcher,
+            environment,
+            shell,
+            previous,
+            installed,
+            build,
+            update=update,
+            assume_yes=yes,
+            detached=True,
+        )
+        try:
+            save_restart_result(environment, installed, result, update=update)
+        except RuntimeClientError as error:
+            typer.echo(str(error), err=True)
+        if result.update_error is not None:
+            typer.echo(result.update_error, err=True)
+        if result.start_error is not None:
+            typer.echo(result.start_error, err=True)
+        if result.update_error is not None and result.status is not None:
+            typer.echo("LTCook is running again.", err=True)
+        if result.update_exit or result.status is None:
+            raise typer.Exit(result.update_exit or 1)
+        typer.echo(f"Verified LTCook build {result.status.build_fingerprint}.")
+        os.execv(launcher, [str(launcher), "serve"])
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
 
 
 def main(argv: list[str] | None = None) -> None:

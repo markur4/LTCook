@@ -7,7 +7,6 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import type { PaseoAgent, PaseoApi, PaseoWorkspace } from '@getpaseo/client';
 import type { createHostClient } from '@getpaseo/client/node';
 import type { ProviderSubagentDescriptorPayload } from '@getpaseo/protocol/messages';
-import { z } from 'zod';
 import { readMemoryMessages } from '../paseo-plugin/server/memory-source.js';
 import { isWithin } from '../path-containment.js';
 import { WorkspaceOrganizer } from '../services/workspace-organizer.js';
@@ -142,13 +141,23 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
 
   constructor(private readonly options: PaseoWorkspaceServicesOptions) {
     const env = options.environment ?? process.env;
-    const enabled = (key: string) => z.enum(['true', 'false']).parse(env[key] ?? 'true') === 'true';
+    const invalidOrganizer: string[] = [];
+    const invalidRenamer: string[] = [];
+    const enabled = (key: string, invalid: string[]) => {
+      const value = env[key] ?? 'true';
+      if (value !== 'true' && value !== 'false') invalid.push(key);
+      return value === 'true';
+    };
+    const settingsDiagnostic = (invalid: string[]) =>
+      invalid.length
+        ? `Set ${invalid.join(', ')} to true or false in AppRC and restart LTCook.`
+        : undefined;
     this.settings = {
-      organizer: enabled('LTCOOK_WORKSPACE_ORGANIZER_ENABLED'),
-      autoArchive: enabled('LTCOOK_WORKSPACE_ORGANIZER_AUTO_ARCHIVE'),
-      renamer: enabled('LTCOOK_RENAMER_ENABLED'),
-      workspaces: enabled('LTCOOK_RENAMER_WORKSPACES'),
-      tabs: enabled('LTCOOK_RENAMER_TABS'),
+      organizer: enabled('LTCOOK_WORKSPACE_ORGANIZER_ENABLED', invalidOrganizer),
+      autoArchive: enabled('LTCOOK_WORKSPACE_ORGANIZER_AUTO_ARCHIVE', invalidOrganizer),
+      renamer: enabled('LTCOOK_RENAMER_ENABLED', invalidRenamer),
+      workspaces: enabled('LTCOOK_RENAMER_WORKSPACES', invalidRenamer),
+      tabs: enabled('LTCOOK_RENAMER_TABS', invalidRenamer),
     };
     const common = {
       host: this,
@@ -159,6 +168,13 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
       stateFile: path.join(options.stateDirectory, 'workspace-organizer.json'),
       enabled: () => this.settings.organizer,
       autoArchive: () => this.settings.autoArchive,
+      settingsDiagnostic: settingsDiagnostic(invalidOrganizer),
+      archiveDiagnostic: () =>
+        this.settings.organizer &&
+        this.settings.autoArchive &&
+        !options.archiveWorkspacePreservingFiles
+          ? 'Automatic archive is paused. Restart LTCook to enable directory-preserving archive.'
+          : undefined,
       onError: (error, id) => options.onError?.('Workspace Organizer', error, id),
     });
     this.renamer = new Renamer({
@@ -167,6 +183,7 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
       enabled: () => this.settings.renamer,
       renameWorkspaces: () => this.settings.workspaces,
       renameTabs: () => this.settings.tabs,
+      settingsDiagnostic: settingsDiagnostic(invalidRenamer),
       onError: (error, id) => options.onError?.('Renamer', error, id),
     });
   }
@@ -282,10 +299,7 @@ export class PaseoWorkspaceServices implements WorkspaceMetadataHost {
       if (workspace.internal) continue;
       snapshots.push(await this.snapshot(workspace, agents, signal));
     }
-    this.diagnostic =
-      this.settings.autoArchive && !this.options.archiveWorkspacePreservingFiles
-        ? 'Automatic archive is paused: restart LTCook to enable directory-preserving archive.'
-        : undefined;
+    this.diagnostic = undefined;
     await this.organizer.tick(snapshots, signal);
     await this.renamer.tick(snapshots, signal);
     const ids = new Set(agents.map(({ id }) => id));

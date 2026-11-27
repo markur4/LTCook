@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { ServiceInferenceError } from './inference-recovery.js';
 
 export const WORKSPACE_LABELS = [
   { name: 'Feature', color: 'blue' },
@@ -74,6 +75,7 @@ export interface RenameSelection {
 
 /** Only proposes data. Scheduling, validation, native writes, and archive remain runtime-owned. */
 export interface WorkspaceMetadataGenerator {
+  validate?(signal: AbortSignal): Promise<string>;
   classify(snapshot: WorkspaceMetadataSnapshot, signal: AbortSignal): Promise<unknown>;
   rename(
     snapshot: WorkspaceMetadataSnapshot,
@@ -88,6 +90,12 @@ export const RenameProposalSchema = z.strictObject({
   agents: z.array(z.strictObject({ id: z.string().min(1), title: z.string().min(1).max(500) })),
 });
 
+export type WorkspaceServiceDiagnostic = {
+  operation: 'classification' | 'rename' | 'labels' | 'archive' | 'settings';
+  message: string;
+  nextCheckAt?: number;
+};
+
 export interface WorkspaceServiceStatus {
   enabled: boolean;
   running: boolean;
@@ -95,6 +103,7 @@ export interface WorkspaceServiceStatus {
   lastSuccessAt: number | null;
   processed: number;
   diagnostic?: string;
+  diagnostics?: WorkspaceServiceDiagnostic[];
 }
 
 export interface WorkspaceServiceOptions {
@@ -102,6 +111,7 @@ export interface WorkspaceServiceOptions {
   host: WorkspaceMetadataHost;
   generator: WorkspaceMetadataGenerator;
   enabled?: () => boolean;
+  settingsDiagnostic?: string;
   now?: () => number;
   onError?: (error: unknown, workspaceId?: string) => void;
 }
@@ -153,4 +163,120 @@ export function boundedWorkspaceTitle(value: string, limit: number): string {
     .map(({ segment }) => segment)
     .join('')
     .trim();
+}
+
+export const workspaceInferenceState = z.strictObject({
+  validationFailure: z.string().optional(),
+  failures: z.record(
+    z.string(),
+    z.strictObject({
+      message: z.string(),
+      retryAt: z.number().int().nonnegative().optional(),
+      attempts: z.number().int().positive(),
+    }),
+  ),
+});
+type WorkspaceInferenceState = z.infer<typeof workspaceInferenceState>;
+
+const revalidationInterval = 60_000;
+const initialRetry = 60_000;
+const maximumRetry = 30 * 60_000;
+
+/** Keep provider readiness and workspace-specific operation failures visible between polls. */
+export class WorkspaceInferenceRecovery {
+  private revision?: string;
+  private nextValidationAt = 0;
+  private blocked?: { revision?: string; failedValidation: boolean };
+
+  constructor(
+    private readonly options: WorkspaceServiceOptions,
+    private readonly operation: 'classification' | 'rename',
+    private readonly fallback: string,
+    private readonly state: WorkspaceInferenceState,
+    private readonly save: () => void,
+  ) {}
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  async ready(signal: AbortSignal): Promise<boolean> {
+    const validate = this.options.generator.validate;
+    if (!validate) return true;
+    if (this.revision !== undefined && !this.blocked) return true;
+    if (this.now() < this.nextValidationAt) return false;
+    this.nextValidationAt = this.now() + revalidationInterval;
+    try {
+      const revision = await validate(signal);
+      signal.throwIfAborted();
+      if (this.blocked && !this.blocked.failedValidation && this.blocked.revision === revision)
+        return false;
+      this.revision = revision;
+      this.blocked = undefined;
+      if (this.state.validationFailure !== undefined) {
+        delete this.state.validationFailure;
+        this.save();
+      }
+      return true;
+    } catch (error) {
+      signal.throwIfAborted();
+      const safe =
+        error instanceof ServiceInferenceError
+          ? error
+          : new ServiceInferenceError('transient', 'The configured provider could not be checked.');
+      this.blocked = { revision: this.revision, failedValidation: true };
+      if (this.state.validationFailure !== safe.message) {
+        this.state.validationFailure = safe.message;
+        this.options.onError?.(safe);
+        this.save();
+      }
+      return false;
+    }
+  }
+
+  permits(id: string): boolean {
+    return !this.blocked && this.now() >= (this.state.failures[id]?.retryAt ?? 0);
+  }
+
+  failed(id: string, error: unknown, regularCheckAt: number): void {
+    const attempts = (this.state.failures[id]?.attempts ?? 0) + 1;
+    const issue = error instanceof ServiceInferenceError ? error : undefined;
+    if (issue && issue.kind !== 'transient' && this.options.generator.validate) {
+      this.blocked = { revision: issue.revision ?? this.revision, failedValidation: false };
+      this.nextValidationAt = this.now() + revalidationInterval;
+      this.state.validationFailure = issue.message;
+    }
+    const retryAt = this.blocked
+      ? undefined
+      : issue
+        ? this.now() + Math.min(maximumRetry, initialRetry * 2 ** Math.min(attempts - 1, 5))
+        : regularCheckAt;
+    this.state.failures[id] = { message: issue?.message ?? this.fallback, retryAt, attempts };
+    this.save();
+    this.options.onError?.(issue ?? new Error(this.fallback), id);
+  }
+
+  succeeded(id: string): boolean {
+    if (!Object.hasOwn(this.state.failures, id)) return false;
+    delete this.state.failures[id];
+    return true;
+  }
+
+  diagnostic(): WorkspaceServiceDiagnostic | undefined {
+    if (this.state.validationFailure)
+      return {
+        operation: this.operation,
+        message: this.state.validationFailure,
+        ...(this.nextValidationAt === 0 ? {} : { nextCheckAt: this.nextValidationAt }),
+      };
+    const failure = Object.values(this.state.failures).sort(
+      (first, second) => (first.retryAt ?? 0) - (second.retryAt ?? 0),
+    )[0];
+    if (failure)
+      return {
+        operation: this.operation,
+        message: failure.message,
+        ...(failure.retryAt === undefined ? {} : { nextCheckAt: failure.retryAt }),
+      };
+  }
 }

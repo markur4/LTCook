@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { SessionSnapshot } from './workflow-api/index.js';
@@ -10,6 +11,7 @@ import { createTools } from './tools/catalog.js';
 import { WebToolService } from './tools/web.js';
 import { WorkspaceMcp } from './integrations/mcp.js';
 import { ActivityPreferences } from './integrations/activity-preferences.js';
+import { verifyDeployedBuild } from './integrations/deployed-build.js';
 import { PaseoWorkspaceServices } from './integrations/paseo-workspace-services.js';
 import { createWorktreeScopeResolver, SessionWorktrees } from './integrations/session-worktrees.js';
 import { createColgrepProvider } from './repository/providers/colgrep.js';
@@ -24,6 +26,7 @@ import { hostedConversationProvider } from './session-memory/hosted.js';
 import { ConversationInference, localConversationProvider } from './session-memory/inference.js';
 import { ClarifyService } from './session-memory/clarify.js';
 import { TrackerService } from './session-memory/tracker.js';
+import { ServiceInferenceError } from './services/inference-recovery.js';
 import { openConversationProductStore } from './session-memory/product-store.js';
 import { PastedDocuments } from './session-memory/pasted-documents.js';
 import { catalogModelAliases, resolveModel } from './models/aliases.js';
@@ -247,10 +250,40 @@ async function run(): Promise<void> {
         'AppRC did not resolve required native runtime paths; launch through `ltcook launch runtime`.',
       );
     }
-    const summarizer = resolveModel('local-tiny', process.env);
+    const sourceRuntime = process.versions.bun !== undefined;
+    const installedRuntime =
+      !sourceRuntime && appRoot === path.join(canonicalDeploymentRoot, 'app');
+    const receipt = z
+      .looseObject({
+        app: z.string().optional(),
+        browser_available: z.boolean().optional(),
+        browser_executable: z.string().optional(),
+        fingerprint: z.string().optional(),
+      })
+      .parse(
+        JSON.parse(
+          await fs
+            .readFile(path.join(canonicalDeploymentRoot, 'runtime.json'), 'utf8')
+            .catch((error: unknown) => {
+              if (installedRuntime) throw error;
+              return '{}';
+            }),
+        ),
+      );
+    if (installedRuntime && receipt.app !== appRoot)
+      throw new Error('The installed runtime receipt belongs to a different deployment.');
+    const buildFingerprint = installedRuntime
+      ? await verifyDeployedBuild(appRoot, fileURLToPath(import.meta.url), receipt.fingerprint)
+      : undefined;
+    let summarizerModel = '';
+    try {
+      summarizerModel = resolveModel('local-tiny', process.env).model;
+    } catch {
+      // > A local evaluation model is resolved separately from the active conversation provider.
+    }
     const summarization = {
       endpoint: process.env.LTCOOK_OLLAMA_ENDPOINT ?? '',
-      model: summarizer.model,
+      model: summarizerModel,
       keepAlive: Number(process.env.LTCOOK_SUMMARIZER_KEEP_ALIVE ?? '-1'),
       generation: process.env.LTCOOK_SUMMARIZER_GENERATION,
     };
@@ -283,7 +316,6 @@ async function run(): Promise<void> {
       activity: { colgrep, preferences },
       worktrees: { store: worktrees, resolveScope },
     });
-    const sourceRuntime = process.versions.bun !== undefined;
     const web = new WebToolService(
       python,
       {
@@ -376,58 +408,56 @@ async function run(): Promise<void> {
     api.setConversationRecords(memory, (id) => runtime?.memoryContext(id));
 
     const configuredLocal = process.env.LTCOOK_CONVERSATION_LOCAL_MODEL?.trim() || '@local-CPU';
-    let localModel: string | undefined;
-    try {
-      const local = configuredLocal.startsWith('@')
-        ? resolveModel(configuredLocal, process.env)
-        : { provider: 'ollama', model: configuredLocal };
-      if (local.provider === 'ollama') localModel = local.model;
-    } catch {
-      // > History and Hosted inference remain available when Local configuration fails.
-    }
-    let hosted: ReturnType<typeof resolveModel> | undefined;
-    try {
-      hosted = resolveModel('tiny', process.env);
-    } catch {
-      // > History and Local inference remain available when Hosted configuration fails.
-    }
     const inferenceMode = z
       .enum(['hosted', 'local'])
-      .parse(process.env.LTCOOK_CONVERSATION_INFERENCE?.trim() || 'hosted');
+      .safeParse(process.env.LTCOOK_CONVERSATION_INFERENCE?.trim() || 'hosted');
+    const conversationInputTokens = z.coerce
+      .number()
+      .int()
+      .positive()
+      .safeParse(process.env.LTCOOK_CONVERSATION_INPUT_TOKENS ?? '8000');
+    const conversationConfigurationError = !inferenceMode.success
+      ? new ServiceInferenceError(
+          'configuration',
+          'Set LTCOOK_CONVERSATION_INFERENCE to hosted or local.',
+        )
+      : !conversationInputTokens.success
+        ? new ServiceInferenceError(
+            'configuration',
+            'Set LTCOOK_CONVERSATION_INPUT_TOKENS to a positive integer.',
+          )
+        : undefined;
     conversationInference = new ConversationInference(
       {
-        hosted: hosted && hostedConversationProvider(hosted),
-        local:
-          (localModel && localConversationProvider({ ...summarization, model: localModel })) ||
-          undefined,
+        hosted: hostedConversationProvider(() => resolveModel('tiny', process.env)),
+        local: localConversationProvider(() => {
+          const local = configuredLocal.startsWith('@')
+            ? resolveModel(configuredLocal, process.env)
+            : { provider: 'ollama', model: configuredLocal };
+          if (local.provider !== 'ollama')
+            throw new Error('Set LTCOOK_CONVERSATION_LOCAL_MODEL to an Ollama model.');
+          return { ...summarization, model: local.model };
+        }),
       },
-      inferenceMode,
+      inferenceMode.data ?? 'hosted',
       (event) => {
         void telemetry.log('info', 'conversation.inference', event);
       },
+      conversationConfigurationError,
     );
     api.setConversationInference(conversationInference);
     conversationProducts = openConversationProductStore(
       path.join(stateDirectory, 'conversation-products-v1.sqlite'),
     );
-    const conversationInputTokens = z.coerce
-      .number()
-      .int()
-      .positive()
-      .parse(process.env.LTCOOK_CONVERSATION_INPUT_TOKENS ?? '8000');
+    const inputBudget = conversationInputTokens.data ?? 8000;
     api.setClarify(
-      new ClarifyService(
-        conversationProducts,
-        source,
-        conversationInference,
-        conversationInputTokens,
-      ),
+      new ClarifyService(conversationProducts, source, conversationInference, inputBudget),
     );
     const tracking = new TrackerService(
       conversationProducts,
       source,
       conversationInference,
-      conversationInputTokens,
+      inputBudget,
     );
     tracker = tracking;
     api.setTracker(tracking);
@@ -443,25 +473,7 @@ async function run(): Promise<void> {
       })
       .catch(() => {});
 
-    const receipt = JSON.parse(
-      await fs
-        .readFile(path.join(canonicalDeploymentRoot, 'runtime.json'), 'utf8')
-        .catch(() => '{}'),
-    ) as {
-      app?: string;
-      browser_available?: boolean;
-      browser_executable?: string;
-      fingerprint?: string;
-    };
     if (stopping) return;
-    const buildFingerprint =
-      !sourceRuntime &&
-      typeof receipt.app === 'string' &&
-      path.resolve(receipt.app) === appRoot &&
-      typeof receipt.fingerprint === 'string' &&
-      /^[a-f0-9]{64}$/.test(receipt.fingerprint)
-        ? receipt.fingerprint
-        : undefined;
     const reserveIdleRestart = buildFingerprint ? host.reserveIdleRestart : undefined;
     const requestRestart =
       reserveIdleRestart && process.env.LTCOOK_PASEO_PASSWORD

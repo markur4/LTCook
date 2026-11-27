@@ -629,12 +629,14 @@ def stop_runtime(
     *,
     when_idle: bool = False,
     expected_instance_id: str | None = None,
+    expected_build_fingerprint: str | None = None,
 ) -> int:
     """Stop only the authenticated observed instance, optionally reserving idle Paseo.
 
     :param environment: Resolved launch credentials and installation identity.
     :param when_idle: Require an atomic Paseo idle reservation before shutdown.
     :param expected_instance_id: Fail when the queued job's runtime was replaced.
+    :param expected_build_fingerprint: Require the active owner's verified build.
     :return: Process exit status after the stop is confirmed.
     """
     status = probe_runtime(environment)
@@ -651,6 +653,13 @@ def stop_runtime(
     if status == "starting":
         raise RuntimeClientError(
             "The runtime is still starting or unresponsive; retry ltcook stop when ready."
+        )
+    if (
+        expected_build_fingerprint is not None
+        and status.build_fingerprint != expected_build_fingerprint
+    ):
+        raise RuntimeClientError(
+            "The running LTCook runtime differs from the installed build."
         )
     if when_idle and not status.idle_restart:
         raise RuntimeClientError("This runtime does not support restarting when idle.")

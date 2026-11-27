@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from collections.abc import Mapping
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 
+from ltcook import _app_update as lifecycle
 from ltcook import _idle_restart as restart
 from ltcook._runtime_client import RuntimeBusyError, RuntimeClientError, RuntimeStatus
 
@@ -27,9 +29,6 @@ def installation(
 ) -> tuple[dict[str, str], restart._Store, Path]:
     deployment = tmp_path / "deployment"
     deployment.mkdir()
-    (deployment / "runtime.json").write_text(
-        json.dumps({"fingerprint": "installed"}), encoding="utf-8"
-    )
     environment = {
         "LTCOOK_RUNTIME_STATE_DIR": str(tmp_path / "state"),
         "LTCOOK_DEPLOYMENT_DIR": str(deployment),
@@ -37,7 +36,33 @@ def installation(
     }
     store = restart._store(environment, restart._shell_environment(restart.os.environ))
     launcher = tmp_path / "bin" / "ltcook"
-    monkeypatch.setattr(restart, "_registration", lambda shell, launcher: "registered")
+    registered = lifecycle.Registration(
+        tmp_path / "installation", uuid4(), "registered", deployment, tmp_path, True
+    )
+    monkeypatch.setattr(restart, "registration", Mock(return_value=registered))
+    monkeypatch.setattr(
+        restart,
+        "read_registered_build",
+        Mock(return_value=lifecycle.InstalledBuild("installed", None)),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "registration",
+        lambda *args, **kwargs: restart.registration(*args, **kwargs),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "read_registered_build",
+        lambda *args, **kwargs: restart.read_registered_build(*args, **kwargs),
+    )
+    monkeypatch.setattr(
+        lifecycle, "probe_runtime", lambda env: restart.probe_runtime(env)
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "resolve_launch",
+        lambda *args, **kwargs: restart.resolve_launch(*args, **kwargs),
+    )
     monkeypatch.setattr(
         restart,
         "resolve_launch",
@@ -163,11 +188,9 @@ def test_worker_reports_busy_owner_and_cancellation_prevents_stop(
     environment, store, launcher = installation
     _seed(store, update=True)
     stop = Mock(side_effect=RuntimeBusyError(2))
-    update = Mock()
-    start = Mock()
+    replace = Mock()
     monkeypatch.setattr(restart, "stop_runtime", stop)
-    monkeypatch.setattr(restart, "_update", update)
-    monkeypatch.setattr(restart, "_start", start)
+    monkeypatch.setattr(restart, "restart_stopped_runtime", replace)
     observed: list[restart.RestartStatus] = []
 
     def cancel_while_waiting(seconds: float) -> None:
@@ -181,10 +204,12 @@ def test_worker_reports_busy_owner_and_cancellation_prevents_stop(
     assert observed[0]["active_turns"] == 2
     assert restart.restart_status(environment)["state"] == "canceled"
     stop.assert_called_once_with(
-        environment, when_idle=True, expected_instance_id="previous"
+        environment,
+        when_idle=True,
+        expected_instance_id="previous",
+        expected_build_fingerprint="installed",
     )
-    update.assert_not_called()
-    start.assert_not_called()
+    replace.assert_not_called()
 
 
 def test_worker_never_updates_after_its_authenticated_target_is_replaced(
@@ -194,11 +219,9 @@ def test_worker_never_updates_after_its_authenticated_target_is_replaced(
     environment, store, launcher = installation
     _seed(store, update=True)
     stop = Mock(side_effect=RuntimeClientError("The runtime instance changed."))
-    update = Mock()
-    start = Mock()
+    replace = Mock()
     monkeypatch.setattr(restart, "stop_runtime", stop)
-    monkeypatch.setattr(restart, "_update", update)
-    monkeypatch.setattr(restart, "_start", start)
+    monkeypatch.setattr(restart, "restart_stopped_runtime", replace)
 
     restart._worker(store, "job", launcher)
 
@@ -206,10 +229,12 @@ def test_worker_never_updates_after_its_authenticated_target_is_replaced(
     assert status["state"] == "failed"
     assert "instance changed" in status["message"]
     stop.assert_called_once_with(
-        environment, when_idle=True, expected_instance_id="previous"
+        environment,
+        when_idle=True,
+        expected_instance_id="previous",
+        expected_build_fingerprint="installed",
     )
-    update.assert_not_called()
-    start.assert_not_called()
+    replace.assert_not_called()
 
 
 def test_worker_never_updates_a_registration_replaced_during_shutdown(
@@ -218,43 +243,57 @@ def test_worker_never_updates_a_registration_replaced_during_shutdown(
 ) -> None:
     environment, store, launcher = installation
     _seed(store, update=True)
-    registration = Mock(side_effect=["registered", "replacement"])
+    previous = restart.registration({}, launcher)
+    registration = Mock(side_effect=[previous, previous, object()])
     stop = Mock(return_value=0)
-    update = Mock()
-    start = Mock()
-    monkeypatch.setattr(restart, "_registration", registration)
+    run = Mock()
+    monkeypatch.setattr(lifecycle.subprocess, "run", run)
+    monkeypatch.setattr(restart, "registration", registration)
     monkeypatch.setattr(restart, "stop_runtime", stop)
     monkeypatch.setattr(restart, "probe_runtime", Mock(return_value=None))
-    monkeypatch.setattr(restart, "_update", update)
-    monkeypatch.setattr(restart, "_start", start)
 
     restart._worker(store, "job", launcher)
 
     status = restart.restart_status(environment)
     assert status["state"] == "failed"
     assert "installation changed during shutdown" in status["message"]
-    assert registration.call_count == 2
+    assert registration.call_count == 3
     stop.assert_called_once_with(
-        environment, when_idle=True, expected_instance_id="previous"
+        environment,
+        when_idle=True,
+        expected_instance_id="previous",
+        expected_build_fingerprint="installed",
     )
-    update.assert_not_called()
-    start.assert_not_called()
+    run.assert_not_called()
 
 
-@pytest.mark.parametrize("update_exit", [0, 9])
-def test_worker_starts_the_registered_runtime_after_an_approved_update_attempt(
+@pytest.mark.parametrize(
+    ("update_exit", "published", "coherent", "expected_state"),
+    [
+        (0, True, True, "done"),
+        (0, False, True, "done"),
+        (9, False, True, "failed"),
+        (9, True, False, "failed"),
+    ],
+    ids=["new-build", "already-current", "recovered", "partial-update"],
+)
+def test_worker_verifies_the_registered_runtime_after_an_update(
     installation: tuple[dict[str, str], restart._Store, Path],
     monkeypatch: pytest.MonkeyPatch,
     update_exit: int,
+    published: bool,
+    coherent: bool,
+    expected_state: str,
 ) -> None:
     environment, store, launcher = installation
     _seed(store, update=True)
-    build = "refreshed" if update_exit == 0 else "installed"
+    build = "refreshed" if published else "installed"
     runtime = _owner(environment, "replacement", build=build)
-    receipt = Path(environment["LTCOOK_DEPLOYMENT_DIR"]) / "runtime.json"
     stop = Mock(side_effect=[RuntimeBusyError(1), 0])
     monkeypatch.setattr(restart, "stop_runtime", stop)
-    monkeypatch.setattr(restart, "probe_runtime", Mock(side_effect=[None, runtime]))
+    monkeypatch.setattr(
+        restart, "probe_runtime", Mock(side_effect=[None, None, runtime])
+    )
     monkeypatch.setenv("PROVIDER_TOKEN", "provider-secret")
 
     def observe_wait(seconds: float) -> None:
@@ -271,28 +310,70 @@ def test_worker_starts_the_registered_runtime_after_an_approved_update_attempt(
         assert kwargs["stdin"] == subprocess.DEVNULL
         assert restart.restart_status(environment)["state"] == "updating"
         assert restart.cancel_restart(environment)["state"] == "updating"
-        receipt.write_text(json.dumps({"fingerprint": build}), encoding="utf-8")
+        if coherent and published:
+            attempt = cast(dict[str, str], kwargs["env"])[lifecycle.UPDATE_ATTEMPT_ENV]
+            monkeypatch.setattr(
+                restart,
+                "read_registered_build",
+                Mock(return_value=lifecycle.InstalledBuild(build, attempt)),
+            )
+        if not coherent:
+            monkeypatch.setattr(
+                restart,
+                "read_registered_build",
+                Mock(side_effect=RuntimeClientError("Build mismatch.")),
+            )
         return subprocess.CompletedProcess(arguments, update_exit)
 
-    monkeypatch.setattr(restart.subprocess, "run", update)
+    monkeypatch.setattr(lifecycle.subprocess, "run", update)
     start = Mock(return_value=SimpleNamespace(poll=lambda: None))
-    monkeypatch.setattr(restart.subprocess, "Popen", start)
+    monkeypatch.setattr(lifecycle.subprocess, "Popen", start)
 
     restart._worker(store, "job", launcher)
 
     status = restart.restart_status(environment)
-    assert status["instance_id"] == "replacement"
-    if update_exit == 0:
-        assert status["state"] == "done"
-    else:
-        assert status["state"] == "failed"
+    assert status["state"] == expected_state
+    if update_exit:
         assert "exit 9" in status["message"]
-        assert "running again" in status["message"]
+    if coherent:
+        assert status["instance_id"] == "replacement"
+        assert start.call_args.args == ([str(launcher), "launch", "runtime"],)
+        assert ("running again" in status["message"]) == bool(update_exit)
+    else:
+        assert "Build mismatch" in status["message"]
+        assert "instance_id" not in status
+        start.assert_not_called()
     assert stop.call_count == 2
-    assert start.call_args.args == ([str(launcher), "launch", "runtime"],)
     payload = (store.directory / "receipt.json").read_text(encoding="utf-8")
     assert "runtime-secret" not in payload
     assert "provider-secret" not in payload
+
+
+def test_worker_rejects_a_build_from_a_different_update(
+    installation: tuple[dict[str, str], restart._Store, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment, store, launcher = installation
+    _seed(store, update=True)
+    initial = lifecycle.InstalledBuild("installed", None)
+    unrelated = lifecycle.InstalledBuild("new", "1" * 32)
+    monkeypatch.setattr(
+        restart, "read_registered_build", Mock(side_effect=[initial, unrelated])
+    )
+    monkeypatch.setattr(restart, "stop_runtime", Mock(return_value=0))
+    monkeypatch.setattr(restart, "probe_runtime", Mock(return_value=None))
+    monkeypatch.setattr(
+        lifecycle.subprocess, "run", Mock(return_value=SimpleNamespace(returncode=0))
+    )
+    start = Mock()
+    monkeypatch.setattr(lifecycle.subprocess, "Popen", start)
+
+    restart._worker(store, "job", launcher)
+
+    status = restart.restart_status(environment)
+    assert status["state"] == "failed"
+    assert "could not be attributed to this AppRC update" in status["message"]
+    start.assert_not_called()
 
 
 def test_worker_rejects_a_replacement_with_the_wrong_build(
@@ -305,7 +386,13 @@ def test_worker_rejects_a_replacement_with_the_wrong_build(
     monkeypatch.setattr(
         restart,
         "probe_runtime",
-        Mock(side_effect=[None, _owner(environment, "replacement", build="unrelated")]),
+        Mock(
+            side_effect=[
+                None,
+                None,
+                _owner(environment, "replacement", build="unrelated"),
+            ]
+        ),
     )
     monkeypatch.setattr(
         restart.subprocess,

@@ -18,7 +18,14 @@ from uuid import uuid4
 from filelock import FileLock
 from filelock import Timeout as LockTimeout
 
-from ltcook._app_update import app_update_command
+from ltcook._app_update import (
+    InstalledBuild,
+    Registration,
+    read_registered_build,
+    registration,
+    restart_stopped_runtime,
+    save_restart_result,
+)
 from ltcook._runtime_client import (
     RuntimeBusyError,
     RuntimeClientError,
@@ -73,7 +80,6 @@ _STATES = _ACTIVE | {"done", "failed", "canceled"}
 _ACK_SECONDS = 5
 _IDLE_SECONDS = 24 * 60 * 60
 _RETRY_SECONDS = 2
-_START_SECONDS = 120
 _EMPTY: _IdleStatus = {
     "state": "idle",
     "message": "No idle restart has been queued for this installation.",
@@ -206,24 +212,6 @@ def _store(environment: Mapping[str, str], shell: Mapping[str, str]) -> _Store:
     return _Store(state / f"idle-restart-{scope}")
 
 
-def _registration(shell: Mapping[str, str], launcher: Path) -> str:
-    inspection = APP_RC.installation(environment=shell).inspect()
-    record = inspection.require_usable()
-    if (
-        record is None
-        or inspection.revision is None
-        or inspection.status != "ready"
-        or launcher.name != record.command_name
-        or not launcher.is_file()
-        or not any(
-            item.kind == "command" and Path(item.path) == launcher
-            for item in record.owned_outputs
-        )
-    ):
-        raise RuntimeClientError("Idle restart requires the registered LTCook command.")
-    return inspection.revision
-
-
 def _launch_worker(
     store: _Store, job_id: str, launcher: Path, shell: Mapping[str, str]
 ) -> subprocess.Popen[bytes]:
@@ -293,7 +281,7 @@ def queue_restart(
         current = store.current()
         if current is not None and current["status"]["state"] in _ACTIVE:
             return _coalesce(current["status"], update)
-        revision = _registration(shell, launcher)
+        installed = registration(shell, launcher)
         owner = probe_runtime(environment)
         if not isinstance(owner, RuntimeStatus):
             raise RuntimeClientError("Idle restart requires a ready local runtime.")
@@ -302,7 +290,8 @@ def queue_restart(
                 "The running LTCook version does not support idle restart. "
                 "Restart it from a terminal after its work finishes."
             )
-        if owner.build_fingerprint != _expected_build(environment):
+        build = read_registered_build(launcher, shell, installed)
+        if owner.build_fingerprint != build.fingerprint:
             raise RuntimeClientError(
                 "The running LTCook runtime differs from the installed build."
             )
@@ -315,7 +304,7 @@ def queue_restart(
                 "previous_instance_id": owner.instance_id,
                 "message": "Idle restart queued.",
             },
-            "revision": revision,
+            "revision": installed.revision,
             "queued_at": time.time(),
         }
         store.write(receipt)
@@ -395,6 +384,8 @@ def _stop_when_idle(
     launcher: Path,
     environment: Mapping[str, str],
     shell: Mapping[str, str],
+    installed: Registration,
+    build: InstalledBuild,
 ) -> _Receipt | None:
     deadline = time.monotonic() + _IDLE_SECONDS
     while time.monotonic() < deadline:
@@ -406,7 +397,10 @@ def _stop_when_idle(
                 or receipt["status"]["state"] not in _CANCELABLE
             ):
                 return None
-            if _registration(shell, launcher) != receipt["revision"]:
+            if (
+                installed.revision != receipt["revision"]
+                or registration(shell, launcher) != installed
+            ):
                 raise RuntimeClientError(
                     "The registered installation changed while waiting."
                 )
@@ -418,6 +412,7 @@ def _stop_when_idle(
                     environment,
                     when_idle=True,
                     expected_instance_id=receipt["status"]["previous_instance_id"],
+                    expected_build_fingerprint=build.fingerprint,
                 )
             except RuntimeBusyError as error:
                 store.transition(
@@ -436,144 +431,69 @@ def _stop_when_idle(
     raise RuntimeClientError("Timed out waiting for the runtime to become idle.")
 
 
-def _update(launcher: Path, shell: Mapping[str, str]) -> str | None:
-    try:
-        result = subprocess.run(
-            app_update_command(launcher, assume_yes=True),
-            env=dict(shell),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-    except OSError:
-        return "The registered AppRC update could not be started."
-    if result.returncode:
-        return f"The registered AppRC update failed (exit {result.returncode})."
-    return None
-
-
-def _expected_build(environment: Mapping[str, str]) -> str:
-    path = Path(environment["LTCOOK_DEPLOYMENT_DIR"]) / "runtime.json"
-    _safe_file(path)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise RuntimeClientError(
-            "Could not read the installed runtime build receipt."
-        ) from error
-    if (
-        not isinstance(data, dict)
-        or not isinstance(fingerprint := data.get("fingerprint"), str)
-        or not fingerprint
-    ):
-        raise RuntimeClientError(
-            "The installed runtime build receipt has no fingerprint."
-        )
-    return fingerprint
-
-
-def _start(
-    launcher: Path,
-    environment: Mapping[str, str],
-    shell: Mapping[str, str],
-    previous_instance_id: str,
-) -> RuntimeStatus:
-    expected_build = _expected_build(environment)
-    # > The registered command selects the refreshed AppRC runtime after an update.
-    # > This foreground launch stays in the transient scope after the worker exits.
-    try:
-        process = subprocess.Popen(
-            [str(launcher), "launch", "runtime"],
-            env=dict(shell),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError as error:
-        raise RuntimeClientError(
-            "Could not start the registered LTCook runtime."
-        ) from error
-    deadline = time.monotonic() + _START_SECONDS
-    while time.monotonic() < deadline:
-        status = probe_runtime(environment)
-        if isinstance(status, RuntimeStatus):
-            if status.instance_id == previous_instance_id:
-                raise RuntimeClientError("The previous runtime is still responding.")
-            if status.build_fingerprint != expected_build:
-                raise RuntimeClientError(
-                    "The replacement runtime reported a different build."
-                )
-            return status
-        code = process.poll()
-        if code is not None:
-            raise RuntimeClientError(
-                f"The registered runtime launch exited before readiness (exit {code}). "
-                "Inspect LTCook's runtime logs or run ltcook serve."
-            )
-        time.sleep(0.2)
-    raise RuntimeClientError(
-        "Timed out waiting for the replacement runtime. Inspect LTCook's runtime logs."
-    )
-
-
 def _restart(store: _Store, job_id: str, launcher: Path) -> None:
     shell = _shell_environment(os.environ)
     environment = resolve_launch(None, original_environment=shell).environment
     if _store(environment, shell) != store:
         raise RuntimeClientError("The configured runtime state directory changed.")
-    receipt = _stop_when_idle(store, job_id, launcher, environment, shell)
+    installed = registration(shell, launcher)
+    build = read_registered_build(launcher, shell, installed)
+    receipt = _stop_when_idle(
+        store, job_id, launcher, environment, shell, installed, build
+    )
     if receipt is None:
         return
-    if probe_runtime(environment) is not None:
-        raise RuntimeClientError(
-            "Another runtime appeared after stop. Idle restart was halted."
-        )
-    if _registration(shell, launcher) != receipt["revision"]:
-        raise RuntimeClientError(
-            "The registered installation changed during shutdown. Idle restart was halted."
-        )
 
-    update_failure = None
-    if receipt["status"]["update"]:
+    update = receipt["status"]["update"]
+    if update:
         with store.lock():
             store.transition(
                 receipt, "updating", "Updating the registered installation."
             )
-        update_failure = _update(launcher, shell)
-        try:
-            environment = resolve_launch(None, original_environment=shell).environment
-        except (OSError, ValueError):
-            # > The registered launcher can still start using the refreshed Python.
-            # > Verify against the prior environment if this worker cannot re-resolve it.
-            pass
-    with store.lock():
-        message = "Starting the registered runtime."
-        if update_failure is not None:
-            message = f"{update_failure} Attempting to bring the runtime back."
-        store.transition(receipt, "starting", message)
+
+    def starting(update_error: str | None) -> None:
+        with store.lock():
+            message = "Starting the registered runtime."
+            if update_error is not None:
+                message = f"{update_error} Attempting to bring the runtime back."
+            store.transition(receipt, "starting", message)
+
+    result = restart_stopped_runtime(
+        launcher,
+        environment,
+        shell,
+        receipt["status"]["previous_instance_id"],
+        installed,
+        build,
+        update=update,
+        assume_yes=True,
+        detached=False,
+        starting=starting,
+    )
     try:
-        status = _start(
-            launcher, environment, shell, receipt["status"]["previous_instance_id"]
-        )
+        save_restart_result(environment, installed, result, update=update)
     except RuntimeClientError as error:
-        if update_failure is not None:
-            raise RuntimeClientError(f"{update_failure} {error}") from error
-        raise
+        # > The idle job's own receipt still carries the verified outcomes.
+        print(str(error), file=sys.stderr)
     with store.lock():
-        if update_failure is not None:
+        if result.status is None:
+            message = " ".join(filter(None, (result.update_error, result.start_error)))
+            store.transition(
+                receipt, "failed", redact_runtime_token(message, environment)
+            )
+        elif result.update_error is not None:
             store.transition(
                 receipt,
                 "failed",
-                f"{update_failure} LTCook is running again.",
-                instance_id=status.instance_id,
+                f"{result.update_error} LTCook is running again.",
+                instance_id=result.status.instance_id,
             )
         else:
             store.transition(
                 receipt,
                 "done",
                 "Idle restart complete.",
-                instance_id=status.instance_id,
+                instance_id=result.status.instance_id,
             )
 
 

@@ -1,7 +1,12 @@
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
-import { useCodexOpenAiAuth } from '../integrations/codex-auth.js';
+import { codexModelAuth, useCodexOpenAiAuth } from '../integrations/codex-auth.js';
 import type { ResolvedModel } from '../models/aliases.js';
+import {
+  inferenceRevision,
+  providerInferenceFailure,
+  ServiceInferenceError,
+} from '../services/inference-recovery.js';
 import type { ConversationProvider } from './inference.js';
 
 const standardTier = 'default';
@@ -46,28 +51,76 @@ export function validHostedConversationRequest(
   );
 }
 
-export function hostedConversationProvider(selection: ResolvedModel): ConversationProvider {
+const hostedCorrection = {
+  authentication:
+    'Hosted conversation inference requires a valid Codex subscription sign-in. Run ltcook auth login openai-codex with a ChatGPT subscription.',
+  model:
+    'Set LTCOOK_MODEL_SMOL in AppRC to a supported openai-codex model for @tiny and restart LTCook.',
+};
+
+function requestPolicyError(revision?: string) {
+  return new ServiceInferenceError(
+    'configuration',
+    'Pi could not enforce the Hosted request policy. Update LTCook and restart it.',
+    revision,
+  );
+}
+
+type HostedDependencies = {
+  createRuntime?: typeof ModelRuntime.create;
+  authorize?: typeof codexModelAuth;
+};
+
+export function hostedConversationProvider(
+  selection: ResolvedModel | (() => ResolvedModel),
+  dependencies: HostedDependencies = {},
+): ConversationProvider {
   let runtime: Promise<ModelRuntime> | undefined;
-  return async (_product, { instructions, input }, signal) => {
-    if (selection.provider !== 'openai-codex' || selection.reasoning !== 'low')
-      throw new Error('Hosted conversation inference requires a Codex model with low reasoning.');
-    const bounded = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
-    const pi = await (runtime ??= ModelRuntime.create({
-      modelsPath: null,
-      refreshOnCreate: false,
-    })
-      .then(useCodexOpenAiAuth)
-      .catch((error: unknown) => {
+  const authRevisions = new WeakMap<AbortSignal, string>();
+  const createRuntime = dependencies.createRuntime ?? ModelRuntime.create.bind(ModelRuntime);
+  const authorize = dependencies.authorize ?? codexModelAuth;
+  const prepare = async () => {
+    let configured: ResolvedModel;
+    try {
+      configured = typeof selection === 'function' ? selection() : selection;
+    } catch {
+      throw new ServiceInferenceError('configuration', hostedCorrection.model);
+    }
+    if (configured.provider !== 'openai-codex' || configured.reasoning !== 'low')
+      throw new ServiceInferenceError(
+        'configuration',
+        `Hosted conversation inference requires a Codex model with low reasoning. ${hostedCorrection.model}`,
+      );
+    const pi = await (runtime ??= createRuntime({ modelsPath: null, refreshOnCreate: false })
+      .then((value) =>
+        useCodexOpenAiAuth(value, async (provider, signal) => {
+          const credentials = await authorize(provider, signal);
+          if (signal) authRevisions.set(signal, inferenceRevision(credentials.auth));
+          return credentials;
+        }),
+      )
+      .catch(() => {
         runtime = undefined;
-        throw error;
+        throw new ServiceInferenceError('configuration', hostedCorrection.model);
       }));
-    const model = pi.getModel('openai-codex', selection.model);
+    const model = pi.getModel('openai-codex', configured.model);
     if (
       !model ||
       model.api !== 'openai-codex-responses' ||
-      model.baseUrl.replace(/\/$/, '') !== 'https://chatgpt.com/backend-api'
+      model.baseUrl.replace(/\/$/, '') !== 'https://chatgpt.com/backend-api' ||
+      !model.reasoning ||
+      model.thinkingLevelMap?.low === null
     )
-      throw new Error('The selected Hosted conversation model is unavailable in Pi.');
+      throw new ServiceInferenceError('configuration', hostedCorrection.model);
+    return { pi, model, reasoning: configured.reasoning };
+  };
+  const provider: ConversationProvider = async (_product, { instructions, input }, signal) => {
+    const bounded = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
+    const { pi, model, reasoning } = await prepare();
+    const revision = () => {
+      const auth = authRevisions.get(bounded);
+      return auth && inferenceRevision(model.id, auth);
+    };
     let submitted = false;
     let invalidRequest = false;
     let responseStatus: number | undefined;
@@ -76,7 +129,7 @@ export function hostedConversationProvider(selection: ResolvedModel): Conversati
     const options = {
       signal: bounded,
       serviceTier: standardTier,
-      reasoningEffort: selection.reasoning,
+      reasoningEffort: reasoning,
       transport: 'sse',
       maxRetries: 0,
       cacheRetention: 'none',
@@ -100,36 +153,54 @@ export function hostedConversationProvider(selection: ResolvedModel): Conversati
       },
     } as const;
     bounded.throwIfAborted();
-    const answer = await pi.complete(
-      model,
-      {
-        systemPrompt: instructions,
-        messages: [{ role: 'user', content: input, timestamp: Date.now() }],
-      },
-      options,
-    );
+    const answer = await pi
+      .complete(
+        model,
+        {
+          systemPrompt: instructions,
+          messages: [{ role: 'user', content: input, timestamp: Date.now() }],
+        },
+        options,
+      )
+      .catch((error: unknown) => {
+        signal.throwIfAborted();
+        if (bounded.aborted)
+          throw new ServiceInferenceError('transient', 'Hosted conversation inference timed out.');
+        if (invalidRequest) throw requestPolicyError(revision());
+        throw providerInferenceFailure(
+          hostedCorrection,
+          responseStatus,
+          error instanceof Error ? error.message : undefined,
+          revision(),
+        );
+      });
     const usage = answer.usage;
     signal.throwIfAborted();
-    if (bounded.aborted) throw new Error('Hosted conversation inference timed out.');
-    if (invalidRequest)
-      throw new Error(
-        'Pi could not enforce the isolated prompt, Standard speed, and low reasoning for Hosted inference.',
-      );
+    if (bounded.aborted)
+      throw new ServiceInferenceError('transient', 'Hosted conversation inference timed out.');
+    if (invalidRequest) throw requestPolicyError(revision());
     if (
-      responseStatus === 429 ||
-      /(?:rate.limit|usage.limit|quota|usage.not.included)/i.test(answer.errorMessage ?? '')
+      !submitted ||
+      (responseStatus !== undefined && responseStatus >= 400) ||
+      answer.stopReason === 'error' ||
+      answer.stopReason === 'aborted'
     )
-      throw new Error('Hosted conversation inference reached a subscription quota or rate limit.');
-    if (!submitted || responseStatus === 401 || responseStatus === 403)
-      throw new Error('Hosted conversation inference requires a valid Codex subscription sign-in.');
-    if (answer.stopReason === 'error' || answer.stopReason === 'aborted')
-      throw new Error('Hosted conversation inference failed.');
+      throw providerInferenceFailure(
+        hostedCorrection,
+        responseStatus,
+        answer.errorMessage,
+        revision(),
+      );
     const text = answer.content
       .flatMap((item) => (item.type === 'text' ? [item.text] : []))
       .join('');
     const actual = responseModel ?? answer.responseModel ?? answer.model;
     if (actual !== model.id || (responseTier !== undefined && responseTier !== standardTier))
-      throw new Error('Hosted conversation inference received an unexpected model or speed.');
+      throw new ServiceInferenceError(
+        'configuration',
+        'Hosted inference returned an unexpected model or speed. Verify LTCOOK_MODEL_SMOL in AppRC or update LTCook.',
+        revision(),
+      );
     return {
       text,
       complete: answer.stopReason === 'stop' && !!text.trim(),
@@ -139,4 +210,16 @@ export function hostedConversationProvider(selection: ResolvedModel): Conversati
       },
     };
   };
+  provider.validate = async (signal) => {
+    const { pi, model } = await prepare();
+    try {
+      const credentials = await pi.getAuth(model, { signal });
+      if (!credentials) throw new Error();
+      return inferenceRevision(model.id, inferenceRevision(credentials.auth));
+    } catch {
+      signal.throwIfAborted();
+      throw new ServiceInferenceError('authentication', hostedCorrection.authentication);
+    }
+  };
+  return provider;
 }

@@ -14,11 +14,20 @@ function servicePresentation(
   diagnostic?: string,
 ) {
   if (!service) return { label: diagnostic ? 'Unavailable' : 'Loading', tone: 'muted' as const };
-  if (!service.enabled) return { label: 'Off', tone: 'muted' as const };
   if (diagnostic || service.diagnostic) return { label: 'Attention', tone: 'warning' as const };
+  if (!service.enabled) return { label: 'Off', tone: 'muted' as const };
   if (service.running) return { label: 'Running', tone: 'running' as const };
+  if (service.lastRunAt === null) return { label: 'Checking', tone: 'muted' as const };
   return { label: 'Ready', tone: 'success' as const };
 }
+
+const operations = {
+  classification: 'Classification',
+  rename: 'Renaming',
+  labels: 'Label synchronization',
+  archive: 'Automatic archive',
+  settings: 'Settings',
+};
 
 function ServiceObservations({
   theme,
@@ -46,9 +55,20 @@ function ServiceObservations({
           {`${service.processed.toLocaleString()} since runtime startup`}
         </ActivityField>
       )}
-      {(diagnostic || service?.diagnostic) && (
+      {diagnostic && (
         <ActivityText theme={theme} tone="warning">
-          {diagnostic || service?.diagnostic}
+          {diagnostic}
+        </ActivityText>
+      )}
+      {service?.diagnostics?.map(({ operation, message, nextCheckAt }) => (
+        <ActivityText key={operation} theme={theme} tone="warning">
+          {`${operations[operation]} · ${message}`}
+          {nextCheckAt !== undefined && ` Next check ${new Date(nextCheckAt).toLocaleString()}.`}
+        </ActivityText>
+      ))}
+      {!service?.diagnostics?.length && service?.diagnostic && (
+        <ActivityText theme={theme} tone="warning">
+          {service.diagnostic}
         </ActivityText>
       )}
       <ActivityText theme={theme} tone="muted" size={10}>

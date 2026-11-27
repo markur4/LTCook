@@ -38,7 +38,7 @@ default:
 # Update the registered editable installation and reopen Paseo.
 [group('Runtime')]
 restart:
-    ltcook stop && ltcook app update && ltcook serve
+    ltcook restart --update
 
 # ---------------------------------------------------------------
 # Optional Git worktree workflows
