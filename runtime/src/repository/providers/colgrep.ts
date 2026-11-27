@@ -16,7 +16,7 @@ import {
   RepositoryIndexService,
   type IndexJobStatus,
 } from '../../services/repository-index.js';
-import { ColgrepIndexStore } from './colgrep-index-store.js';
+import { ColgrepIndexStore, type ColgrepIndexActivity } from './colgrep-index-store.js';
 import {
   captureColgrepSource,
   readColgrepSource,
@@ -25,7 +25,7 @@ import {
   writeColgrepSource,
 } from './colgrep-source.js';
 
-export interface ColgrepStatus {
+export interface ColgrepStatus extends ColgrepIndexActivity {
   availability: 'ready' | 'not-ready' | 'unavailable' | 'unknown';
   activity: IndexJobStatus['activity'] | 'updating' | 'unknown';
   diagnostic: string | null;
@@ -557,6 +557,10 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         ((source.complete && source.ignoreRulesObserved) ||
           (scheduled && Date.now() - Date.parse(published.publishedAt) < PARTIAL_SCAN_REFRESH_MS))
       ) {
+        signal.throwIfAborted();
+        await workspace.assertUnchanged();
+        signal.throwIfAborted();
+        store.recordActivity('check');
         return performance.now() - started;
       }
 
@@ -626,6 +630,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       // > Keep the observation from before the last native pass so late edits are checked again.
       await writeColgrepSource(candidate.indices, checkpointSource);
       await writer.publish(candidate, signal);
+      store.recordActivity('check');
       return performance.now() - started;
     } finally {
       await writer.release();
@@ -676,6 +681,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
             job.diagnostic ??
             (published && !usable ? 'ColGREP index files are missing or damaged.' : null),
           ...(ready && { generation: ready.id, publishedAt: ready.publishedAt }),
+          ...store?.readActivity(),
         };
       } catch {
         return { availability: 'unavailable', activity: 'error', diagnostic: failure };
@@ -706,6 +712,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       const timeout = AbortSignal.timeout(timeoutMs);
       const signal = AbortSignal.any([callerSignal, timeout]);
       const outcome = rankedResult();
+      let queriedStore: ColgrepIndexStore | undefined;
       try {
         // > ColGREP also matches globs below the root. Verify exact literal scope on every hit.
         const filters = paths.some(({ filter }) => !filter) ? [] : paths;
@@ -774,11 +781,13 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
             outcome,
             source,
           );
+          signal.throwIfAborted();
           if (options.background && outcome.freshness === 'stale' && input.updateIndex !== false)
             indexService.request(workspace);
         } finally {
           await published.release();
         }
+        queriedStore = store;
       } catch (error) {
         callerSignal.throwIfAborted();
         if (error instanceof ColgrepPatternError) throw error;
@@ -800,6 +809,7 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       }
       await workspace.assertUnchanged();
       callerSignal.throwIfAborted();
+      queriedStore?.recordActivity('query');
       outcome.capturedAt = new Date().toISOString();
       return outcome;
     },

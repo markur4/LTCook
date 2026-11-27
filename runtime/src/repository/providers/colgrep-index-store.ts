@@ -36,6 +36,22 @@ const schema = `
   CREATE INDEX IF NOT EXISTS pinned_generation ON pins (generation);
 `;
 
+const activitySchema = `
+  CREATE TABLE IF NOT EXISTS activity (
+    binding TEXT NOT NULL,
+    event TEXT NOT NULL CHECK (event IN ('check', 'query')),
+    occurred_at INTEGER NOT NULL,
+    PRIMARY KEY (binding, event)
+  );
+`;
+
+type IndexActivityEvent = 'check' | 'query';
+
+export interface ColgrepIndexActivity {
+  lastCheckedAt?: string;
+  lastQueriedAt?: string;
+}
+
 export interface ColgrepIndexGeneration {
   readonly id: string;
   readonly indices: string;
@@ -155,6 +171,7 @@ function isNativeTemporaryFile(file: string): boolean {
 export class ColgrepIndexStore {
   private readonly catalog: string;
   private readonly generations: string;
+  private readonly activityFile: string;
 
   private constructor(
     private readonly root: string,
@@ -164,6 +181,7 @@ export class ColgrepIndexStore {
   ) {
     this.catalog = path.join(directory, 'catalog.sqlite');
     this.generations = path.join(directory, 'generations');
+    this.activityFile = path.join(directory, 'activity.sqlite');
   }
 
   static async open(
@@ -281,6 +299,51 @@ export class ColgrepIndexStore {
   async readPublished(): Promise<ColgrepIndexGeneration | undefined> {
     await this.workspace.assertUnchanged();
     return this.withCatalog((db) => this.published(db));
+  }
+
+  private withActivity<T>(run: (db: Database.Database) => T, create = false): T | undefined {
+    try {
+      if (create) ensureDatabaseFile(this.activityFile);
+      else if (!managedEntry(this.activityFile, 'file')) return undefined;
+      const db = openDatabase(this.activityFile);
+      try {
+        db.exec('PRAGMA busy_timeout = 50');
+        return run(db);
+      } finally {
+        db.close();
+      }
+    } catch {
+      // > Activity is optional. Storage contention or damage must not affect the index.
+      return undefined;
+    }
+  }
+
+  readActivity(): ColgrepIndexActivity {
+    const activity: ColgrepIndexActivity = {};
+    const rows = this.withActivity((db) =>
+      db.prepare('SELECT event, occurred_at FROM activity WHERE binding = ?').all(this.binding),
+    );
+    for (const row of rows ?? []) {
+      if (!row || typeof row !== 'object' || !('event' in row) || !('occurred_at' in row)) continue;
+      if (typeof row.occurred_at !== 'number') continue;
+      const timestamp = new Date(row.occurred_at);
+      if (!Number.isFinite(timestamp.valueOf())) continue;
+      if (row.event === 'check') activity.lastCheckedAt = timestamp.toISOString();
+      if (row.event === 'query') activity.lastQueriedAt = timestamp.toISOString();
+    }
+    return activity;
+  }
+
+  recordActivity(event: IndexActivityEvent): void {
+    const occurredAt = Date.now();
+    this.withActivity((db) => {
+      db.exec(activitySchema);
+      db.prepare(
+        `INSERT INTO activity VALUES (?, ?, ?)
+         ON CONFLICT (binding, event) DO UPDATE SET occurred_at = excluded.occurred_at
+         WHERE excluded.occurred_at > activity.occurred_at`,
+      ).run(this.binding, event, occurredAt);
+    }, true);
   }
 
   async pinPublished(): Promise<ColgrepIndexPin | undefined> {

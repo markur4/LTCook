@@ -24,6 +24,7 @@ import type { Theme } from '../components/PanelChrome';
 import { useFocusedAgent } from '../explorer-panels';
 import { openTracker } from '../tracker-navigation';
 import { openSkillDocument } from './SkillDocument';
+import { openRepositoryQuery } from './RepositoryQuery';
 
 type ActivityPanelProps = PluginWorkspacePanelProps & {
   client: Pick<PluginClientContext, 'composers' | 'openPanel'>;
@@ -114,6 +115,18 @@ function ObservedActivity(
     }
   }
 
+  function queryRepository(worktree: NonNullable<ActivitySnapshot['rag']['worktree']>) {
+    try {
+      openRepositoryQuery(client, host.id, selectedWorkspaceId, selectedAgentId, {
+        identity: worktree.id,
+        path: worktree.path,
+      });
+    } catch {
+      toast.error('Could not open the repository query tab.');
+    }
+  }
+
+  const ragWorktree = snapshot?.rag.worktree;
   return (
     <>
       <TrackerService
@@ -142,6 +155,9 @@ function ObservedActivity(
             rag={snapshot.rag}
             lastHandoff={snapshot.lastHandoff}
             agentWorktree={snapshot.agent.worktree?.path}
+            onQueryRepo={
+              ragWorktree && !unavailable ? () => queryRepository(ragWorktree) : undefined
+            }
           />
           <Section theme={theme} title="Agent" />
           <ActivityAgentCard

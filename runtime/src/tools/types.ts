@@ -1,5 +1,6 @@
 import type { Static, TObject } from 'typebox';
 import { Value } from 'typebox/value';
+import type { RepositoryWorkspace } from '../repository/workspace.js';
 
 export interface ToolContext {
   agentId: string;
@@ -7,6 +8,7 @@ export interface ToolContext {
   sessionId?: string;
   workspaceFileAccess: boolean;
   repositorySearchAccess?: boolean;
+  repositoryWorkspace?: RepositoryWorkspace;
   signal: AbortSignal;
 }
 

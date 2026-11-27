@@ -111,7 +111,7 @@ if (process.argv[2] === 'init') {
 } else if (process.argv.includes('blocked query')) {
   await Bun.write(${JSON.stringify(path.join(root, 'query-started'))}, 'started');
   await Bun.sleep(10000);
-} else if (process.argv.includes('repository index validation')) {
+} else if (process.argv.includes('repository index validation') || process.argv.includes('no matches')) {
   console.log('[]');
 } else if (process.argv.includes('checkpoint file')) {
   const { unit } = await Bun.file(path.join(process.env.COLGREP_DATA_DIR, 'fixture-index', 'record.json')).json();
@@ -167,10 +167,11 @@ if (process.argv[2] === 'init') {
           { unit: unit(path.join(source, 'b.ts'), longLine) },
         ]),
       );
-      const provider = createColgrepProvider({
+      const providerOptions = {
         deploymentDirectory: root,
         cacheDirectory: path.join(root, 'cache'),
-      });
+      };
+      const provider = createColgrepProvider(providerOptions);
       const workspace = await openRepositoryWorkspace(source);
       const signal = new AbortController().signal;
       const tool = createRepoSearchTool(provider);
@@ -224,6 +225,38 @@ if (process.argv[2] === 'init') {
       await expect(lstat(path.join(root, 'cache'))).rejects.toHaveProperty('code', 'ENOENT');
       await provider.buildIndex(workspace, signal);
       expect(provider.isIndexingEnabled()).toBe(true);
+      const observer = createColgrepProvider(providerOptions);
+      const initial = await observer.readStatus(workspace);
+      expect(initial.lastCheckedAt).toEqual(expect.any(String));
+      expect(initial.lastQueriedAt).toBeUndefined();
+      await Bun.sleep(5);
+      expect(await observer.readStatus(workspace)).toEqual(initial);
+
+      if (Bun.which('rg')) {
+        await provider.buildIndex(workspace, signal);
+        const checked = await observer.readStatus(workspace);
+        expect(Date.parse(checked.lastCheckedAt ?? '')).toBeGreaterThan(
+          Date.parse(initial.lastCheckedAt ?? ''),
+        );
+        expect(checked.generation).toBe(initial.generation);
+        expect(checked.publishedAt).toBe(initial.publishedAt);
+        expect(checked.lastQueriedAt).toBeUndefined();
+      }
+
+      const lastCheckedAt = (await observer.readStatus(workspace)).lastCheckedAt;
+      const empty = await provider.search(workspace, { query: 'no matches' }, signal);
+      expect(empty.value).toMatchObject({ status: 'ready', hits: [] });
+      expect(await observer.readStatus(workspace)).toMatchObject({
+        lastCheckedAt,
+        lastQueriedAt: expect.any(String),
+      });
+
+      const otherSource = path.join(root, 'other-worktree');
+      await mkdir(otherSource);
+      const other = await observer.readStatus(await openRepositoryWorkspace(otherSource));
+      expect(other.lastCheckedAt).toBeUndefined();
+      expect(other.lastQueriedAt).toBeUndefined();
+
       const cold = await trace();
       const lexical = cold.trace?.leads[1];
       if (Bun.which('rg')) expect(lexical?.evidenceIds.length).toBeGreaterThan(0);
@@ -262,6 +295,7 @@ if (process.argv[2] === 'init') {
         activity: 'idle',
       });
 
+      const beforeRejectedQueries = await observer.readStatus(workspace);
       for (const [query, code] of [
         ['large output', 'output-limit'],
         ['large diagnostics', 'diagnostic-limit'],
@@ -279,6 +313,7 @@ if (process.argv[2] === 'init') {
       await expect(tool.invoke({ query: 'cache', pattern: '[' }, context)).rejects.toThrow(
         'ColGREP could not search with the supplied regular expression.',
       );
+      expect(await observer.readStatus(workspace)).toEqual(beforeRejectedQueries);
 
       provider.setIndexingEnabled(false);
       expect(await provider.readStatus(workspace)).toMatchObject({
@@ -290,7 +325,8 @@ if (process.argv[2] === 'init') {
         value: { status: 'ready' },
       });
 
-      const previousGeneration = (await provider.readStatus(workspace)).generation;
+      const beforeRefresh = await provider.readStatus(workspace);
+      const previousGeneration = beforeRefresh.generation;
       expect(previousGeneration).toEqual(expect.any(String));
       await writeFile(path.join(root, 'hold-refresh'), 'hold');
       await writeFile(path.join(source, 'changed.ts'), 'const backgroundRefresh = 2;\n');
@@ -303,13 +339,19 @@ if (process.argv[2] === 'init') {
         queryAbort.abort(new Error('The caller cancelled this query.'));
         await expect(query).rejects.toThrow('The caller cancelled this query.');
         expect(provider.indexService.status(workspace).activity).toBe('indexing');
-        expect((await provider.readStatus(workspace)).generation).toBe(previousGeneration);
+        expect(await provider.readStatus(workspace)).toMatchObject({
+          generation: previousGeneration,
+          lastCheckedAt: beforeRefresh.lastCheckedAt,
+          lastQueriedAt: beforeRefresh.lastQueriedAt,
+        });
 
         await writeFile(path.join(root, 'finish-refresh'), 'finish');
         let refreshed = await provider.readStatus(workspace);
         for (
           let attempt = 0;
-          attempt < 200 && refreshed.generation === previousGeneration;
+          attempt < 200 &&
+          (refreshed.generation === previousGeneration ||
+            refreshed.lastCheckedAt === beforeRefresh.lastCheckedAt);
           attempt++
         ) {
           await Bun.sleep(10);
@@ -317,6 +359,10 @@ if (process.argv[2] === 'init') {
         }
         expect(refreshed).toMatchObject({ availability: 'ready' });
         expect(refreshed.generation).not.toBe(previousGeneration);
+        expect(Date.parse(refreshed.lastCheckedAt ?? '')).toBeGreaterThan(
+          Date.parse(beforeRefresh.lastCheckedAt ?? ''),
+        );
+        expect(refreshed.lastQueriedAt).toBe(beforeRefresh.lastQueriedAt);
       } finally {
         releaseAuthorization();
       }
@@ -325,12 +371,15 @@ if (process.argv[2] === 'init') {
       await rm(path.join(root, 'refresh-started'), { force: true });
       await writeFile(path.join(source, 'changed.ts'), 'const failedRefresh = 3;\n');
       await writeFile(path.join(root, 'fail-refresh'), 'fail');
-      const beforeFailure = (await provider.readStatus(workspace)).generation;
+      const beforeFailure = await provider.readStatus(workspace);
       const failedRefresh = provider.buildIndex(workspace, signal);
       await waitForFile(path.join(root, 'refresh-started'));
       await writeFile(path.join(root, 'finish-refresh'), 'finish');
       await expect(failedRefresh).rejects.toThrow();
-      expect((await provider.readStatus(workspace)).generation).toBe(beforeFailure);
+      expect(await provider.readStatus(workspace)).toMatchObject({
+        generation: beforeFailure.generation,
+        lastCheckedAt: beforeFailure.lastCheckedAt,
+      });
 
       const priorPath = process.env.PATH;
       process.env.PATH = '';

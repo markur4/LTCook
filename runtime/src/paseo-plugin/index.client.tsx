@@ -14,6 +14,11 @@ import { TeamStatus } from './client/screens/TeamStatus';
 import { TurnSkills } from './client/components/TurnSkills';
 import { TURN_SKILLS_TIMELINE_KIND, TurnSkillsTimelineSchema } from './shared/activity';
 import { ActivityPanel } from './client/screens/ActivityPanel';
+import {
+  clearPendingRepositoryQueries,
+  REPOSITORY_QUERY_PANEL_ID,
+  RepositoryQuery,
+} from './client/screens/RepositoryQuery';
 import { TrackedItems } from './client/screens/TrackedItems';
 import { WorkspaceServices } from './client/components/WorkspaceServices';
 import { ActivityText } from './client/components/ActivityCard';
@@ -172,6 +177,13 @@ export default function contribute(client: PluginClientContext) {
       Component: TrackedItems,
     }),
     client.addAgentPanel({
+      id: REPOSITORY_QUERY_PANEL_ID,
+      title: 'Query Repo',
+      icon: 'Search',
+      locations: ['workspace'],
+      Component: RepositoryQuery,
+    }),
+    client.addAgentPanel({
       id: SKILL_DOCUMENT_PANEL_ID,
       title: 'Skill',
       icon: 'BookOpen',
@@ -245,6 +257,7 @@ export default function contribute(client: PluginClientContext) {
   ];
   return () => {
     clearPendingSkillDocuments();
+    clearPendingRepositoryQueries();
     cleanup.forEach((dispose) => dispose());
   };
 }

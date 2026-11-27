@@ -20,6 +20,7 @@ import { SessionWorktreesSchema, sessionWorktreesSubscription } from './shared/s
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
 import { workspaceActivityRpc, workspaceServicesRpc } from './shared/workspace-services';
 import { trackerModifyRpc, trackerSubscription } from './shared/tracker';
+import { repositoryQuerySubscription } from './shared/repository-query';
 import {
   ModelCatalogRequestSchema,
   ModelCatalogResponseSchema,
@@ -285,6 +286,8 @@ const activityServices = z.object({
     activity: RagIndexActivitySchema,
     diagnostic: z.string().nullable(),
     publishedAt: z.string().optional(),
+    lastCheckedAt: z.iso.datetime().optional(),
+    lastQueriedAt: z.iso.datetime().optional(),
     retryAt: z.string().optional(),
   }),
   workspace: z.object({ root: z.string(), identity: z.string() }).optional(),
@@ -323,6 +326,16 @@ export default function contribute(server: PluginServerContext) {
   server.handle(activityToggleRpc, async (input) =>
     activityToggleRpc.output.parse(await runtimeJson('/v1/activity/toggle', input)),
   );
+  server.handle(repositoryQuerySubscription, async (input, { paseo, signal, push }) => {
+    const agent = (await paseo.agents.ref(input.agentId).refresh())?.agent;
+    if (!agent || agent.archivedAt) throw new Error('The conversation is unavailable.');
+    if (signal.aborted) return;
+    const sessionId = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
+    const result = repositoryQuerySubscription.event.parse(
+      await runtimeJson('/v1/activity/repository-query', { ...input, sessionId }, signal, 125_000),
+    );
+    if (!signal.aborted) await push(result);
+  });
   server.handle(trackerModifyRpc, async (input, { paseo }) => {
     const agent = (await paseo.agents.ref(input.agentId).refresh())?.agent;
     if (!agent || agent.archivedAt) throw new Error('The conversation is unavailable.');
@@ -443,6 +456,8 @@ export default function contribute(server: PluginServerContext) {
             availability: services?.rag.availability ?? 'unknown',
             activity: services?.rag.activity ?? 'unknown',
             publishedAt: services?.rag.publishedAt,
+            lastCheckedAt: services?.rag.lastCheckedAt,
+            lastQueriedAt: services?.rag.lastQueriedAt,
             retryAt: services?.rag.retryAt,
             ...(services?.rag.diagnostic ? { diagnostic: services.rag.diagnostic } : {}),
           },

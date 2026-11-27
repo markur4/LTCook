@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { Switch, Text, View } from 'react-native';
 import { useRpc } from '@getpaseo/plugin/client';
+import { Icon } from '@getpaseo/plugin/client/ui';
 import { activityToggleRpc, type ActivitySnapshot } from '../../shared/activity';
 import {
+  ActivityButton,
   ActivityCard,
   ActivityField,
   ActivityText,
@@ -84,14 +86,60 @@ function ActivitySwitch({
   );
 }
 
+function ActivityTimestamp({
+  theme,
+  label,
+  at,
+  description,
+}: {
+  theme: Theme;
+  label: string;
+  at?: string;
+  description: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const value = at ? new Date(at).toLocaleString() : 'Not recorded';
+  return (
+    <View style={{ gap: 4 }}>
+      <ActivityButton
+        theme={theme}
+        label={`${label}, ${value}`}
+        expanded={open}
+        onPress={() => setOpen(!open)}
+      >
+        <View style={{ flex: 1, gap: 2 }}>
+          <ActivityText theme={theme} strong>
+            {label}
+          </ActivityText>
+          <ActivityText theme={theme} tone="muted">
+            {value}
+          </ActivityText>
+        </View>
+        <Icon
+          name={open ? 'ChevronUp' : 'ChevronDown'}
+          size={12}
+          color={theme.colors.foregroundMuted}
+        />
+      </ActivityButton>
+      {open && (
+        <ActivityText theme={theme} tone="muted">
+          {description}
+        </ActivityText>
+      )}
+    </View>
+  );
+}
+
 export function ActivityServices({
   theme,
   rag,
   lastHandoff,
   agentWorktree,
+  onQueryRepo,
 }: Pick<ActivitySnapshot, 'rag' | 'lastHandoff'> & {
   theme: Theme;
   agentWorktree?: string;
+  onQueryRepo?: () => void;
 }) {
   const [ragOpen, setRagOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
@@ -142,6 +190,26 @@ export function ActivityServices({
         <ActivityField theme={theme} label="Activity">
           {ragActivity}
         </ActivityField>
+        {onQueryRepo && (
+          <ActivityButton theme={theme} label="Query Repo" onPress={onQueryRepo}>
+            <Icon name="Search" size={13} color={theme.colors.foreground} />
+            <ActivityText theme={theme} strong>
+              Query Repo
+            </ActivityText>
+          </ActivityButton>
+        )}
+        <ActivityTimestamp
+          theme={theme}
+          label="Last checked"
+          at={rag.lastCheckedAt}
+          description="The last completed index check for this worktree. A check can finish without publishing a new index."
+        />
+        <ActivityTimestamp
+          theme={theme}
+          label="Last queried"
+          at={rag.lastQueriedAt}
+          description="The last successful query using this worktree’s published index, including queries with zero matches."
+        />
         {rag.publishedAt && (
           <ActivityField theme={theme} label="Last completed index">
             {new Date(rag.publishedAt).toLocaleString()}
