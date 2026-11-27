@@ -368,10 +368,12 @@ See the [BugHunter diagnostics coverage assessment](bughunter-diagnostics/PLAN.m
 for the current inventory and known evidence gaps.
 
 BugScan reads this diagnostic stream into the existing coordination database.
-An explicit host-wide BugHunter setting enables the service and can name the
-checkout to investigate. The service queues a hunt after three distinct failed
-or degraded operations in a component within 30 minutes, an unexpected
-critical failure, or a single indexing stall. It holds new background work
+BugHunter starts by default in `dev` mode. In `user` mode, set the host-wide
+`runtime.services.bughunter.enabled` setting to `true` to start it. An explicit
+`false` disables it in either mode. Use `runtime.services.bughunter.workspace`
+to name the checkout to investigate. The service queues a hunt after three
+distinct failed or degraded operations in a component within 30 minutes, an
+unexpected critical failure, or a single indexing stall. It holds new background work
 while a foreground agent is running. Open Activity → Services to manually run,
 pause, or resume a hunt. The card shows the current
 status, supported causes or hypotheses, remedies, and explicit immediate or

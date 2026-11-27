@@ -182,6 +182,55 @@ def test_native_preparation_attests_the_second_configuration_resolution(
             ]
 
 
+@pytest.mark.parametrize(
+    ("user_settings", "shell_settings", "expected"),
+    [
+        ({}, {}, "false"),
+        ({"MODE": "dev"}, {}, "true"),
+        ({"MODE": "dev", "ENABLED": "false"}, {}, "false"),
+        ({"MODE": "dev"}, {"ENABLED": "false"}, "false"),
+        ({"ENABLED": "true"}, {}, "true"),
+    ],
+)
+def test_launch_defaults_bughunter_to_enabled_only_in_dev_mode(
+    tmp_path: Path,
+    user_settings: dict[str, str],
+    shell_settings: dict[str, str],
+    expected: str,
+) -> None:
+    from ltcook.config.app import APP_RC
+
+    environment = {
+        "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),
+        "APPDATA": str(tmp_path / "config"),
+        "LOCALAPPDATA": str(tmp_path / "data"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+        **{f"LTCOOK_BUGHUNTER_{key}": value for key, value in shell_settings.items()},
+    }
+    user_config = APP_RC.paths(environment=environment).require("config")
+    user_config.mkdir(parents=True)
+    (user_config / APP_RC.schema.user_dotenv_filename).write_text(
+        "".join(
+            f"LTCOOK_BUGHUNTER_{key}={value}\n" for key, value in user_settings.items()
+        ),
+        encoding="utf-8",
+    )
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / APP_RC.schema.workspace_dotenv_filename).write_text(
+        "LTCOOK_BUGHUNTER_MODE=user\nLTCOOK_BUGHUNTER_ENABLED=false\n",
+        encoding="utf-8",
+    )
+    result = launch.resolve_launch(project, original_environment=environment)
+
+    assert result.environment["LTCOOK_BUGHUNTER_ENABLED"] == expected
+
+
 def test_markerless_launch_uses_global_app_rc_without_creating_selection_files(
     tmp_path,
 ):

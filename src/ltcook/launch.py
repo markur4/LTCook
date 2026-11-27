@@ -277,6 +277,11 @@ def resolve_launch(
         environment.update(
             section.current_env_mapping(prefixed=True, include_empty=True)
         )
+    if (
+        environment.get("LTCOOK_BUGHUNTER_MODE") == "dev"
+        and "LTCOOK_BUGHUNTER_ENABLED" not in global_resolved.values
+    ):
+        environment["LTCOOK_BUGHUNTER_ENABLED"] = "true"
     # > Even an empty CONTAINER_CONNECTION switches Podman into remote mode.
     if not environment.get("CONTAINER_CONNECTION"):
         environment.pop("CONTAINER_CONNECTION", None)
