@@ -231,7 +231,7 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
 | `LTCOOK_CONVERSATION_INFERENCE` | Global `runtime.conversation_inference`. Defaults to `hosted` for Codex subscription inference with `@tiny`. Set `local` to use Ollama. |
 | `LTCOOK_CONVERSATION_LOCAL_MODEL` | Global `runtime.conversation_local_model`. An empty value uses `@local-CPU`. Supply an Ollama alias or installed model tag. |
-| `LTCOOK_CONVERSATION_INPUT_TOKENS` | Global `runtime.conversation_input_tokens`. Estimated per-request input budget for Clarify and Tracker. Defaults to 8,000. |
+| `LTCOOK_CONVERSATION_INPUT_TOKENS` | Global `runtime.conversation_input_tokens`. Estimated per-request input budget for Tracker. Defaults to 8,000. |
 | `LTCOOK_SESSION_MEMORY_DELEGATION` | Global `runtime.session_memory_delegation`. Set `true` to add original conversation evidence to Core assignments. Defaults to `false`. |
 | `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |

@@ -25,7 +25,6 @@ import { createPaseoMemorySource } from './integrations/paseo-memory.js';
 import { ConversationRecords } from './session-memory/conversation.js';
 import { hostedConversationProvider } from './session-memory/hosted.js';
 import { ConversationInference, localConversationProvider } from './session-memory/inference.js';
-import { ClarifyService } from './session-memory/clarify.js';
 import { TrackerService } from './session-memory/tracker.js';
 import { ServiceInferenceError } from './services/inference-recovery.js';
 import { openConversationProductStore } from './session-memory/product-store.js';
@@ -446,7 +445,7 @@ async function run(): Promise<void> {
       },
       inferenceMode.data ?? 'hosted',
       (event) => {
-        void telemetry.log('info', 'conversation.inference', event);
+        void telemetry.log('info', 'conversation.inference', { product: 'tracker', ...event });
       },
       conversationConfigurationError,
     );
@@ -455,9 +454,6 @@ async function run(): Promise<void> {
       path.join(stateDirectory, 'conversation-products-v1.sqlite'),
     );
     const inputBudget = conversationInputTokens.data ?? 8000;
-    api.setClarify(
-      new ClarifyService(conversationProducts, source, conversationInference, inputBudget),
-    );
     const tracking = new TrackerService(
       conversationProducts,
       source,

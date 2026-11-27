@@ -73,7 +73,7 @@ function fixture(
   const inputs: string[] = [];
   const inference = {
     validate,
-    async complete(_product: string, prompt: ConversationPrompt) {
+    async complete(prompt: ConversationPrompt) {
       inputs.push(prompt.input);
       return complete(JSON.parse(prompt.input) as Prompt, prompt.input);
     },
@@ -440,7 +440,7 @@ test('disabling one Tracker cancels its queued request while another Tracker con
   const submitted: string[][] = [];
   const inference = new ConversationInference(
     {
-      local: async (_product, prompt) => {
+      local: async (prompt) => {
         const request = JSON.parse(prompt.input) as Prompt;
         submitted.push(request.trackers.map(({ id }) => id));
         return { text: noChanges(request), complete: true };

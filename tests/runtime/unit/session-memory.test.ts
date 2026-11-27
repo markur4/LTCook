@@ -103,8 +103,7 @@ test('Hosted conversation inference rejects the separately billed provider befor
   });
   await expect(
     hosted(
-      'clarify',
-      { instructions: 'Clarify.', input: 'Fixture.' },
+      { instructions: 'Extract tracked items.', input: 'Fixture.' },
       new AbortController().signal,
     ),
   ).rejects.toThrow('requires a Codex model');

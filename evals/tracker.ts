@@ -1,5 +1,4 @@
 import { resolveModel } from '../runtime/src/models/aliases.js';
-import { ClarifyService } from '../runtime/src/session-memory/clarify.js';
 import type { MemorySource } from '../runtime/src/session-memory/conversation.js';
 import { hostedConversationProvider } from '../runtime/src/session-memory/hosted.js';
 import { ConversationInference } from '../runtime/src/session-memory/inference.js';
@@ -47,7 +46,6 @@ async function evaluate() {
     'hosted',
   );
   const tracker = new TrackerService(database, source, inference, 8000);
-  const clarify = new ClarifyService(database, source, inference, 8000);
   const started = performance.now();
 
   function append(author: 'user' | 'agent', text: string) {
@@ -107,37 +105,6 @@ async function evaluate() {
       'Incorrectly updated or retired a design decision.',
     );
     console.log(`Tracker passed in ${Math.round(performance.now() - started)} ms.`);
-
-    const clarifyStarted = performance.now();
-    const reply = append(
-      'agent',
-      'We cap retries at 3 because the upstream has a tight quota; assuming it stays up, ' +
-        'the recovery path should finish within 35 seconds. I have not run the integration tests. ' +
-        'The unit tests passed. Redis connections are unchanged.',
-    );
-    append('agent', 'Later update: the integration tests passed and recovery took 22 seconds.');
-    const text = await clarify.generate(agentId, {
-      epoch,
-      seq: reply,
-      messageId: `message-${reply}`,
-    });
-    requireCheck(
-      /\b(?:3|three)\b/i.test(text) &&
-        /35\s*seconds/i.test(text) &&
-        /quota/i.test(text) &&
-        /(?:if|assuming|provided)/i.test(text) &&
-        /(?:should|expect|estimate|predict)/i.test(text) &&
-        /unit tests?.{0,60}pass/is.test(text) &&
-        /(?:integration tests?.{0,60}(?:not|haven't|weren't)|(?:not|haven't|weren't).{0,60}integration tests?)/is.test(
-          text,
-        ) &&
-        /Redis/i.test(text) &&
-        !/22\s*seconds/i.test(text),
-      'Clarify lost a claim, caveat, or outcome, or incorporated a later claim.',
-    );
-    console.log(`Clarify passed in ${Math.round(performance.now() - clarifyStarted)} ms.`);
-    console.log(text);
-    console.log(`Combined Agent Evals passed in ${Math.round(performance.now() - started)} ms.`);
   } finally {
     await tracker.close();
     await inference.close();

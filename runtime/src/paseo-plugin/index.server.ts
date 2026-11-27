@@ -19,7 +19,6 @@ import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
 import { SessionWorktreesSchema, sessionWorktreesSubscription } from './shared/session-worktrees';
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
 import { workspaceActivityRpc, workspaceServicesRpc } from './shared/workspace-services';
-import { clarifyGenerateRpc, clarifyReadRpc } from './shared/clarify';
 import { trackerModifyRpc, trackerSubscription } from './shared/tracker';
 import {
   ModelCatalogRequestSchema,
@@ -324,18 +323,6 @@ export default function contribute(server: PluginServerContext) {
   server.handle(activityToggleRpc, async (input) =>
     activityToggleRpc.output.parse(await runtimeJson('/v1/activity/toggle', input)),
   );
-  server.handle(clarifyReadRpc, async (input, { paseo }) => {
-    const agent = (await paseo.agents.ref(input.agentId).refresh())?.agent;
-    if (!agent || agent.archivedAt) throw new Error('The conversation is unavailable.');
-    return clarifyReadRpc.output.parse(await runtimeJson('/v1/clarify/read', input));
-  });
-  server.handle(clarifyGenerateRpc, async (input, { paseo }) => {
-    const agent = (await paseo.agents.ref(input.agentId).refresh())?.agent;
-    if (!agent || agent.archivedAt) throw new Error('The conversation is unavailable.');
-    return clarifyGenerateRpc.output.parse(
-      await runtimeJson('/v1/clarify/generate', input, undefined, 240_000),
-    );
-  });
   server.handle(trackerModifyRpc, async (input, { paseo }) => {
     const agent = (await paseo.agents.ref(input.agentId).refresh())?.agent;
     if (!agent || agent.archivedAt) throw new Error('The conversation is unavailable.');

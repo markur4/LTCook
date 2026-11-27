@@ -3,11 +3,6 @@ import type { PluginClientContext } from '@getpaseo/plugin/client';
 import { TeamsBrowser } from './client/screens/TeamsBrowser';
 import { TeamStatus } from './client/screens/TeamStatus';
 import { TurnSkills } from './client/components/TurnSkills';
-import {
-  CLARIFY_REPLY_KIND,
-  ClarifyReply,
-  ClarifyReplySchema,
-} from './client/components/ClarifyReply';
 import { TURN_SKILLS_TIMELINE_KIND, TurnSkillsTimelineSchema } from './shared/activity';
 import { ActivityPanel } from './client/screens/ActivityPanel';
 import { TrackedItems } from './client/screens/TrackedItems';
@@ -178,49 +173,6 @@ export default function contribute(client: PluginClientContext) {
       },
     }),
   ];
-  if ('timelineDecorations' in client && client.timelineDecorations === true) {
-    cleanup.push(
-      client.addTimelineTransformer({
-        id: CLARIFY_REPLY_KIND,
-        query: { itemType: 'assistant_message' },
-        transform(source) {
-          if (source.phase !== 'complete' || !source.item.text.trim()) return;
-          const cursor = 'timelineCursor' in source ? source.timelineCursor : undefined;
-          const reply = ClarifyReplySchema.safeParse({
-            ...(cursor && typeof cursor === 'object' ? cursor : {}),
-            messageId: source.item.messageId,
-          });
-          if (!reply.success) return;
-          return {
-            preserveSource: true,
-            items: [
-              {
-                type: 'plugin',
-                kind: CLARIFY_REPLY_KIND,
-                version: 1,
-                data: {
-                  epoch: reply.data.epoch,
-                  seq: reply.data.seq,
-                  ...(reply.data.messageId ? { messageId: reply.data.messageId } : {}),
-                },
-              },
-            ],
-          };
-        },
-      }),
-      client.addTimelineRenderer({
-        kind: CLARIFY_REPLY_KIND,
-        schema: ClarifyReplySchema,
-        version: 1,
-        Component: (props) => (
-          <ClarifyReply
-            key={JSON.stringify([props.host.id, props.agentId, props.item.data])}
-            {...props}
-          />
-        ),
-      }),
-    );
-  }
   return () => {
     clearPendingSkillDocuments();
     cleanup.forEach((dispose) => dispose());

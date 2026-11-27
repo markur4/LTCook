@@ -23,11 +23,6 @@ worktree subscription from LTCook. The **Worktree** picker lets the user pin a
 checkout or resume following. When the panel shows a linked checkout, the inline
 diff uses its directory and provides read-only controls.
 
-`clarify-reply-decoration.patch` lets LTCook add **Clarify** immediately
-below a completed assistant reply with a canonical timeline cursor. The
-original row keeps its native rendering. The bundled web host advertises the
-capability so the plugin can register the control on supported clients.
-
 ## Build the web assets
 
 Run the builder from the LTCook repository with Node, npm, curl, tar, Git, and

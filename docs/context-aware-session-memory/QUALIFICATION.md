@@ -4,7 +4,7 @@ This is historical evidence for continuous Session Memory. The evaluation
 commands refer to the code and fixtures at
 [the final Session Memory revision](https://github.com/markur4/LTCook/tree/b500ce32c8d2e3291aced42d2651fd5459fc1b29).
 The current verification guide covers
-[Clarify and Tracker](../Development.md#clarify-and-tracker-verification).
+[Tracker](../Development.md#tracker-verification).
 
 The initial runtime passed local verification and was integrated ahead of
 model qualification. Rolling history remains below the critical-retention
