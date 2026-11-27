@@ -1073,6 +1073,10 @@ try {
     path.join(workspace, 'query-fixture.ts'),
     'export const directRepoQuery = true;\n',
   );
+  await writeFile(
+    path.join(workspace, 'query-decoy.ts'),
+    'export const directRepoQueryExtra = false;\n',
+  );
   const modelCallsBeforeQuery = modelCalls;
   await clickButton('Query Repo');
   await browser('wait', '[data-testid="ltcook-repository-query"]');
@@ -1089,6 +1093,19 @@ try {
     await browser('get', 'text', queryResult),
     /1 \| export const directRepoQuery = true/,
   );
+  await clickButton('Use simple input');
+  await clickButton('Search mode: Hybrid');
+  await browser('find', 'role', 'menuitem', 'click', '--name', 'Literal', '--exact');
+  await browser('fill', '[aria-label="Search query"]', ' directRepoQuery ');
+  await clickButton('Run query');
+  await browser('wait', queryResult);
+  const literalResult = await browser('get', 'text', queryResult);
+  assert.match(literalResult, /1 \| export const directRepoQuery = true/);
+  assert.doesNotMatch(
+    literalResult,
+    /query-decoy\.ts/,
+    'Literal search preserves query whitespace',
+  );
   assert.equal(modelCalls, modelCallsBeforeQuery, 'The repository tool runs without a model turn');
   await browser('click', '[aria-label^="RAG Index,"]');
   await clickButton(mobileLeader.agent.title);
@@ -1096,14 +1113,19 @@ try {
   stage = 'tracked-items';
   await hiddenLeader.send('Use an opaque public cursor.', { clientMessageId: randomUUID() });
   await hiddenLeader.waitForFinish(30_000);
-  await openExplorerPanel('Tracked Items');
-  await browser('wait', '--text', 'Design Decisions (1)');
-  await clickButton('Design Decisions (1)');
+  await browser('click', '[aria-label^="Tracker,"]');
+  await clickButton('Open Tracker');
+  await browser('wait', '[data-testid="ltcook-tracker"]');
   await browser('wait', '--text', 'Keep the public cursor opaque.');
+  await clickButton('Service');
   await clickButton('Pause Tracker everywhere');
   await browser('wait', '--text', 'Resume Tracker everywhere');
   await clickButton('Resume Tracker everywhere');
   await browser('wait', '--text', 'Pause Tracker everywhere');
+  await browser('click', '#overlay-root [aria-label="Close"]');
+  await browser('wait', '--fn', `!document.querySelector('#overlay-root [aria-label="Close"]')`);
+  await clickButton('Conversation');
+  await waitForComposer(mobileLeader.agent.title);
   let acknowledgeMemory: (() => void) | undefined;
   await memory.handoff(mobileSession.id, hiddenPrompt, undefined, (payload) => {
     acknowledgeMemory = memory!.prepareDelivery(mobileSession.id, adjutantId, payload);
@@ -1243,7 +1265,7 @@ try {
       teamsBrowser: 'reuse and New Session',
       childNavigation: 'native subagent track and contextual panel',
       panels: 'Activity Explorer, Team hierarchy, Task Board, Diagnostics',
-      conversationProducts: 'exact replies, Hosted confirmation, saved results, and Tracked Items',
+      conversationProducts: 'recorded Tracker notes and host-wide pause and resume',
       telemetry: 'existing Perfetto timings exported',
       idleRestart: 'busy refusal, admission freeze, release and graceful shutdown',
       modelCalls,
