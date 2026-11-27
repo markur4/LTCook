@@ -346,6 +346,7 @@ const environment = {
   PASEO_WEB_UI_DIST_DIR: path.join(root, 'runtime/dist/paseo-web'),
   LTCOOK_PI_AUTH_DIR: authHome,
   PI_OFFLINE: '1',
+  LTCOOK_MODEL_MEDIUM: 'fixture/test',
   LTCOOK_MODEL_SMART: 'fixture/test',
   LTCOOK_MODEL_SMOL: 'fixture/test',
   LTCOOK_MODEL_EXPENSIVE: 'fixture/test',

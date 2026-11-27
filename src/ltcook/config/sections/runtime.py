@@ -18,6 +18,9 @@ class RuntimeSettings(rc.Config):
     paseo_password: str = rc.field("LTCOOK_PASEO_PASSWORD", default="", secret=True)
     js_root: str = rc.field("LTCOOK_JS_ROOT", default="")
     pi_auth_dir: str = rc.field("LTCOOK_PI_AUTH_DIR", default="~/.pi/agent")
+    medium_model: str = rc.field(
+        "LTCOOK_MODEL_MEDIUM", default="openai-codex/gpt-6.1-terra"
+    )
     smart_model: str = rc.field(
         "LTCOOK_MODEL_SMART", default="openai-codex/gpt-6.2-sol"
     )

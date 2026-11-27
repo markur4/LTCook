@@ -33,6 +33,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- BugHunter can collect diagnostics and run an opt-in, read-only BugScan.
+  Activity → Services shows findings, proposed remedies, and deferred work.
+
 - Repository indexing reports correlated failures, retries, and a stalled refresh
   in the runtime diagnostics. Startup failures before the owner process launches
   are recorded in the private backend log.

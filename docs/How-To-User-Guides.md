@@ -641,6 +641,7 @@ management commands rather than inventing another configuration editor.
 | Alias | Model | Preset reasoning |
 | --- | --- | --- |
 | `@smol` | GPT-6 Luna | Provider default |
+| `@medium` | GPT-6.1 Terra | High |
 | `@tiny` | GPT-6 Luna | Low |
 | `@local-CPU` | LFM3 1.7B QAD Q4_0 on Ollama | Off |
 | `@local-tiny` | Spark X2.6 4B Q8_0 on Ollama | Off |

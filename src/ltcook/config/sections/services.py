@@ -55,3 +55,16 @@ class RenamerSettings(rc.Config):
         title="Rename agent tabs",
         explanation_short="Keep agent-session titles within 15 visible characters.",
     )
+
+
+@APP_RC.config(
+    "bughunter",
+    prefix="LTCOOK_BUGHUNTER_",
+    title="BugHunter",
+    rc_path=("runtime", "services", "bughunter"),
+)
+class BugHunterSettings(rc.Config):
+    """Host-wide permission to investigate LTCook diagnostics."""
+
+    enabled: bool = rc.field("LTCOOK_BUGHUNTER_ENABLED", default=False)
+    workspace: str = rc.field("LTCOOK_BUGHUNTER_WORKSPACE", default="")

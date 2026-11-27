@@ -8,6 +8,7 @@ import {
   repositoryWorkspaceQueryInput,
 } from '../paseo-plugin/shared/repository-query.js';
 import type { createColgrepProvider } from '../repository/providers/colgrep.js';
+import type { BugScanService } from '../services/bugscan.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from '../repository/workspace.js';
 import type { ConversationRecords } from '../session-memory/conversation.js';
 import type { ToolCatalog } from '../tools/catalog.js';
@@ -32,9 +33,16 @@ export interface ActivityServices {
   colgrep: ReturnType<typeof createColgrepProvider>;
 }
 
+export interface BugScanActivity {
+  service: BugScanService;
+  scope: string;
+  requireWorkspace: boolean;
+}
+
 interface ActivityDependencies {
   shutdownSignal: AbortSignal;
   activity?: ActivityServices;
+  bugScan?: BugScanActivity;
   catalog?: ToolCatalog;
   workspaceServices?: PaseoWorkspaceServices;
   lastDelivered: ConversationRecords['lastDelivered'];
@@ -104,6 +112,23 @@ async function activityRepositoryScope(
 }
 
 const activityRoutes = {
+  async '/v1/activity/bugscan'(parsed, response, dependencies) {
+    const input = z
+      .object({ nativeAgentId: z.string().min(1), sessionId: z.string().optional() })
+      .parse(parsed);
+    const scope = await activityRepositoryScope(input.nativeAgentId, input.sessionId, dependencies);
+    const bugScan = dependencies.bugScan;
+    if (
+      !bugScan ||
+      !scope ||
+      (bugScan.requireWorkspace && scope.workspace?.root !== bugScan.scope)
+    ) {
+      response.writeHead(403).end('{"error":"BugScan is unavailable for this scope"}');
+      return;
+    }
+    await bugScan.service.trigger(bugScan.scope);
+    response.writeHead(200).end('{"accepted":true}');
+  },
   async '/v1/activity/workspace-touch'(parsed, response, dependencies) {
     const { workspaceId } = workspaceActivityRpc.input.parse(parsed);
     const service = dependencies.workspaceServices;
@@ -279,6 +304,9 @@ const activityRoutes = {
         value.nativeAgentId === agentId && (value.status === 'sending' || value.status === 'sent'),
     );
     const task = session?.tasks.find((value) => value.id === assignment?.taskId);
+    const bugScan = dependencies.bugScan;
+    const showBugScan = bugScan && (!bugScan.requireWorkspace || workspace?.root === bugScan.scope);
+    const hunt = showBugScan ? bugScan.service.list().at(-1) : undefined;
     response.writeHead(200).end(
       JSON.stringify({
         rag: {
@@ -292,6 +320,21 @@ const activityRoutes = {
           identity: activityWorkspaceIdentity(workspace),
         },
         lastDelivered: session && dependencies.lastDelivered(session.session.id, agentId),
+        ...(showBugScan
+          ? {
+              bugScan: {
+                status: hunt?.status ?? 'idle',
+                failure: hunt?.failure,
+                findings:
+                  hunt?.findings.map(({ confidence, cause, remedy, technicalDebt }) => ({
+                    confidence,
+                    cause,
+                    remedy: remedy?.description,
+                    technicalDebt,
+                  })) ?? [],
+              },
+            }
+          : {}),
       }),
     );
   },

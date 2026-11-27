@@ -16,6 +16,7 @@ from ltcook.config.sections.runtime import (
     RuntimeSettings,
 )
 from ltcook.config.sections.services import (
+    BugHunterSettings,
     RenamerSettings,
     WorkspaceOrganizerSettings,
 )
@@ -40,6 +41,7 @@ class LtcookConfig:
         default_factory=WorkspaceOrganizerSettings
     )
     renamer: RenamerSettings = field(default_factory=RenamerSettings)
+    bughunter: BugHunterSettings = field(default_factory=BugHunterSettings)
     paseo: PaseoSettings = field(default_factory=PaseoSettings)
     pi: PiSettings = field(default_factory=PiSettings)
     anthropic: AnthropicSettings = field(default_factory=AnthropicSettings)

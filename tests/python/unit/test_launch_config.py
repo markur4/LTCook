@@ -365,6 +365,7 @@ def _native_config():
             api_token="secret-value",
             paseo_listen="127.0.0.1:6767",
             paseo_password="secret-value",
+            medium_model="openai-codex/gpt-6.1-terra",
             ollama_endpoint="http://localhost:11435/",
             tiny_local_model="hf.co/Test/model:Q8_0",
             local_cpu_model="lfm3:1.7b-qad-q4_0",
@@ -612,6 +613,12 @@ def test_pi_documents_keep_secrets_out_of_json_and_write_private_files(tmp_path)
         assert sol["id"] == "gpt-6.2-sol"
         assert sol["api"] == api
         assert sol["thinkingLevelMap"]["xhigh"] == "xhigh"
+    assert config.runtime.medium_model == "openai-codex/gpt-6.1-terra"
+    terra = providers["openai-codex"]["models"][1]
+    assert terra["id"] == "gpt-6.1-terra"
+    assert terra["api"] == "openai-codex-responses"
+    assert terra["thinkingLevelMap"]["high"] == "high"
+    assert terra["thinkingLevelMap"]["xhigh"] is None
     assert "$CRAWL4AI_API_TOKEN" in rendered
     assert "secret-value" not in rendered
     assert all("context7" not in document for document in documents.values())

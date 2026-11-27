@@ -1,4 +1,6 @@
 import type { Telemetry } from '../diagnostics/telemetry.js';
+import type { BugScanService } from '../services/bugscan.js';
+import type { BugScanActivity } from './runtime-activity.js';
 import process from 'node:process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -157,6 +159,7 @@ export class RuntimeApi {
     this.workspaceTools = catalog;
   }
   private evals: EvalRunService | undefined;
+  private bugScan?: BugScanActivity;
   private evaluationObserver:
     | ((agentId: string, value: Record<string, unknown>) => EvaluationExecutionScope | void)
     | undefined;
@@ -184,6 +187,10 @@ export class RuntimeApi {
   }
   setEval(service: EvalRunService): void {
     this.evals = service;
+  }
+
+  setBugScan(service: BugScanService, scope: string, requireWorkspace: boolean): void {
+    this.bugScan = { service, scope, requireWorkspace };
   }
   setLifecycle(
     identity: RuntimeLifecycleIdentity,
@@ -514,6 +521,7 @@ export class RuntimeApi {
         await handleActivityRoute(activityRoute, parsed, response, {
           shutdownSignal: this.shutdownController.signal,
           activity: this.services.activity,
+          bugScan: this.bugScan,
           catalog: this.workspaceTools,
           workspaceServices: this.workspaceServices,
           lastDelivered: (sessionId, agentId) => this.memory?.lastDelivered(sessionId, agentId),

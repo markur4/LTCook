@@ -153,6 +153,8 @@ function ObservedActivity(
           <ActivityServices
             theme={theme}
             rag={snapshot.rag}
+            bugScan={snapshot.bugScan}
+            agentId={snapshot.selectedAgentId}
             lastHandoff={snapshot.lastHandoff}
             agentWorktree={snapshot.agent.worktree?.path}
             onQueryRepo={

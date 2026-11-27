@@ -79,6 +79,12 @@ function workspaceKey(workspace: RepositoryWorkspace): string {
   return JSON.stringify([workspace.root, workspace.identity]);
 }
 
+export function repositoryIndexWorkspaceId(workspace: RepositoryWorkspace): string {
+  return createHash('sha256')
+    .update(JSON.stringify([workspace.root, workspace.cacheIdentity]))
+    .digest('hex');
+}
+
 const noAuthorization = (cause?: unknown) =>
   new RepositoryIndexError(
     'The worktree authorization expired. Reopen the workspace.',
@@ -126,9 +132,7 @@ export class RepositoryIndexService {
     let job = this.jobs.get(key);
     if (!job) {
       job = {
-        workspaceId: createHash('sha256')
-          .update(JSON.stringify([workspace.root, workspace.cacheIdentity]))
-          .digest('hex'),
+        workspaceId: repositoryIndexWorkspaceId(workspace),
         authorizations: new Set(),
         dueAt: Date.now(),
         lastStartedAt: 0,

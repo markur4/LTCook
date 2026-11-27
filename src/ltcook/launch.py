@@ -269,7 +269,11 @@ def resolve_launch(
         )
     # > Runtime services maintain the whole host, so project overlays cannot
     # > replace their user settings. Deliberate shell exports still apply.
-    for section in (global_config.workspace_organizer, global_config.renamer):
+    for section in (
+        global_config.workspace_organizer,
+        global_config.renamer,
+        global_config.bughunter,
+    ):
         environment.update(
             section.current_env_mapping(prefixed=True, include_empty=True)
         )

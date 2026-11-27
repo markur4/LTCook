@@ -12,6 +12,7 @@ const environment = {
   LTCOOK_MODEL_TINY_LOCAL: 'hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0',
   LTCOOK_MODEL_LOCAL_CPU: 'lfm3:1.7b-qad-q4_0',
   LTCOOK_MODEL_LOCAL_EVALS: 'bonsai-2:27b',
+  LTCOOK_MODEL_MEDIUM: 'openai-codex/gpt-6.1-terra',
   LTCOOK_MODEL_SMART: 'openai-codex/gpt-6.2-sol',
   LTCOOK_MODEL_EXPENSIVE: 'openai-codex/gpt-6-astra',
   LTCOOK_OLLAMA_ENDPOINT: 'http://127.0.0.1:21434/',
@@ -23,6 +24,7 @@ test.each([
   ['local-CPU', 'ollama', environment.LTCOOK_MODEL_LOCAL_CPU, 'none'],
   ['local-tiny', 'ollama', environment.LTCOOK_MODEL_TINY_LOCAL, 'none'],
   ['local-evals', 'ollama', environment.LTCOOK_MODEL_LOCAL_EVALS, undefined],
+  ['medium', 'openai-codex', 'gpt-6.1-terra', 'high'],
   ['smart', 'openai-codex', 'gpt-6.2-sol', undefined],
   ['plan', 'openai-codex', 'gpt-6.2-sol', 'xhigh'],
   ['expensive', 'openai-codex', 'gpt-6-astra', undefined],
@@ -145,6 +147,21 @@ test('hosted launcher adapters translate explicit effort and omit unset effort',
   expect(modelCommand('pi', custom, environment).args).toContain('lab/model:free');
   expect(() => modelCommand('codex', custom, environment)).toThrow(
     'Codex cannot use the configured provider',
+  );
+});
+
+test('runs the managed Terra alias with high reasoning on the native Pi route', () => {
+  const resolved = resolveModel('medium', environment);
+  expect(modelCommand('pi', resolved, environment).args).toEqual([
+    '--provider',
+    'openai-codex',
+    '--model',
+    'gpt-6.1-terra',
+    '--thinking',
+    'high',
+  ]);
+  expect(() => resolveModel('medium', environment, { teamReasoning: 'low' })).toThrow(
+    'supports high reasoning',
   );
 });
 

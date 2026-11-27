@@ -12,6 +12,7 @@ import { RiedService } from '../repository/discovery.js';
 import { createColgrepProvider } from '../repository/providers/colgrep.js';
 import { Telemetry } from '../diagnostics/telemetry.js';
 import { repositoryIndexDiagnosticEvent } from '../services/repository-index.js';
+import { bugHunterTeamId } from '../services/bughunter-team.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
 import type { RiedRequest } from '../repository/requests.js';
 import { createRepoSearchTool } from '../tools/repo-search.js';
@@ -384,6 +385,9 @@ export default async function activate(
     }
   });
   pi.on('tool_call', async (event, ctx) => {
+    const bugScan = teamId === bugHunterTeamId;
+    if (bugScan && event.toolName !== 'read' && event.toolName !== 'ltcook_team')
+      return { block: true, reason: 'BugScan permits only approved source reads and reports.' };
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
     // > Repository and web tools use their existing invocation-time authorization.
@@ -391,9 +395,10 @@ export default async function activate(
     try {
       // > Native new/resume may change cwd; authorize exactly the path the tool will use.
       const input =
-        ['write', 'edit'].includes(event.toolName) &&
+        (['write', 'edit'].includes(event.toolName) || (bugScan && event.toolName === 'read')) &&
         'path' in event.input &&
         typeof event.input.path === 'string' &&
+        !(bugScan && /^[@~]/.test(event.input.path)) &&
         !path.isAbsolute(event.input.path)
           ? { ...event.input, path: path.resolve(ctx.cwd, event.input.path) }
           : event.input;

@@ -171,6 +171,7 @@ const environment = {
   PI_CODING_AGENT_DIR: piHome,
   LTCOOK_PI_AUTH_DIR: authHome,
   PI_OFFLINE: '1',
+  LTCOOK_MODEL_MEDIUM: 'fixture/test',
   LTCOOK_MODEL_SMART: 'fixture/test',
   LTCOOK_MODEL_SMOL: 'fixture/test',
   LTCOOK_MODEL_EXPENSIVE: 'fixture/test',

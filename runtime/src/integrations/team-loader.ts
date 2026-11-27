@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { ModelAliasSchema, ReasoningEffortSchema } from '@ltcook/model-contracts';
 import type { TeamPackage } from '../team-api/index.js';
+import { bugHunterTeam, bugHunterTeamId } from '../services/bughunter-team.js';
 
 export interface TeamCatalogEntry {
   origin: 'bundled';
@@ -195,5 +196,6 @@ export class TeamRegistry {
 
 /** Resolve an explicitly selected local Team for a native agent process. */
 export async function loadTeam(selection: string, root?: string): Promise<TeamPackage> {
+  if (selection === bugHunterTeamId) return validateTeam(bugHunterTeam);
   return (await TeamRegistry.load(root)).resolve(selection);
 }
