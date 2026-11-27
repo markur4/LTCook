@@ -665,15 +665,6 @@ try {
     'Native mobile shell fits its viewport',
   );
   await inspectStage('native-mobile-entry');
-  await clickButton('Open menu');
-  await clickButton('Services');
-  await browser('click', `${group} [aria-label^="Workspace Organizer,"]`);
-  await browser('click', `${group} [aria-label^="Tagger,"]`);
-  await browser('wait', '--text', 'Feature, Bugfix, CSC, Research');
-  await browser('click', `${group} [aria-label^="Auto-archive,"]`);
-  await browser('wait', '--text', 'Unarchive or Restore');
-  await clickButton('Services');
-  await clickButton('Close menu');
   await browser('find', 'role', 'button', 'click', '--name', 'Switch tabs');
   await inspectStage('native-mobile-tab-switcher');
   await clickButton('New agent');
@@ -701,6 +692,37 @@ try {
   );
   await inspectStage('native-mobile-leader-chat');
   assert(modelCalls >= 2, 'Submitted native prompts reached the local scripted provider');
+
+  stage = 'workspace-organizer-compact';
+  await clickButton('Open menu');
+  const mobileServices = '[aria-label="Services"]';
+  const clickDrawerControl = async (selector: string) => {
+    await browser('scrollintoview', selector);
+    await browser(
+      'wait',
+      '--fn',
+      `(() => {
+        const button = document.querySelector(${JSON.stringify(selector)});
+        if (!button) return false;
+        const rect = button.getBoundingClientRect();
+        return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+      })()`,
+    );
+    await browser('click', selector);
+  };
+  await clickDrawerControl(mobileServices);
+  await clickDrawerControl(`${group} [aria-label^="Workspace Organizer,"]`);
+  const tagger = `${group} [aria-label^="Tagger,"]`;
+  await clickDrawerControl(tagger);
+  await browser('wait', '--text', 'Feature, Bugfix, CSC, Research');
+  await clickDrawerControl(tagger);
+  const archive = `${group} [aria-label^="Auto-archive,"]`;
+  await clickDrawerControl(archive);
+  await browser('wait', '--text', 'Unarchive or Restore');
+  await clickDrawerControl(archive);
+  await clickDrawerControl(mobileServices);
+  await clickButton('Close sidebar');
+  await browser('wait', '[aria-label="Open menu"]');
 
   await browser('set', 'viewport', '1440', '1000');
   await waitForComposer();
@@ -1123,6 +1145,34 @@ try {
       `Existing telemetry measured ${operation}`,
     );
   }
+  stage = 'workspace-auto-rename-opt-out';
+  const optedOutDirectory = path.join(directory, 'auto-rename-off');
+  await mkdir(optedOutDirectory);
+  const optedOut = await host.api.workspaces.open(optedOutDirectory);
+  await optedOut.setMetadata({ 'ltcook.autoRename': false });
+  const nativePi = { config: { provider: 'pi/fixture/test' }, env: environment };
+  const draftPrompt = 'Draft prompt in the workspace with naming off';
+  const optedOutDraft = await optedOut.agents.create({
+    ...nativePi,
+    prompt: draftPrompt,
+    clientMessageId: randomUUID(),
+  });
+  assert.equal((await optedOutDraft.refresh())?.agent.title, null);
+  const optedOutExisting = await optedOut.agents.create(nativePi);
+  const existingPrompt = 'First prompt to the untitled tab with naming off';
+  await optedOutExisting.send(existingPrompt, { clientMessageId: randomUUID() });
+  assert.equal((await optedOutExisting.refresh())?.agent.title, null);
+  assert.deepEqual(
+    await host.workspaceNaming.pending(optedOut.id, new AbortController().signal),
+    [],
+  );
+  const optOutDeadline = Date.now() + 10_000;
+  while (Date.now() < optOutDeadline) {
+    const agents = await Promise.all([optedOutDraft.refresh(), optedOutExisting.refresh()]);
+    if (agents.every((result) => result?.agent.status === 'idle')) break;
+    await Bun.sleep(50);
+  }
+
   stage = 'native-idle-restart';
   const rejected = await fetch(`http://${host.listen}/api/ltcook/idle-restart`, {
     method: 'POST',
