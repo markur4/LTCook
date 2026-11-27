@@ -12,14 +12,12 @@ import {
   type RequestId,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import type { ToolDefinition, ToolContext } from '../tools/types.js';
-import {
-  isRepositoryTool,
-  WORKSPACE_MCP_SERVER,
-  WORKTREE_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
+import type { ToolCatalog } from '../tools/catalog.js';
+import { WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
+import { isRepositoryTool, WORKTREE_TOOL_NAME } from '../tools/workspace-tools.js';
 import { repositoryEvidenceText } from '../tools/repository-evidence-text.js';
-import { openRepositoryWorkspace } from '../repository/workspace.js';
+import { openRepositoryWorkspace, repositoryWorkspaceIdentity } from '../repository/workspace.js';
+import type { RepositoryIndexService } from '../services/repository-index.js';
 import type { WebToolService } from '../tools/web.js';
 import type { PlanningDialogEvent } from './planning-dialogs.js';
 
@@ -30,6 +28,7 @@ type Grant = {
   workspaceFileAccess: boolean;
   repositorySearchAccess: boolean;
   token: string;
+  stopIndexing?: () => void;
 };
 
 type Connection = {
@@ -66,7 +65,7 @@ function requiresRepositoryAccess(name: string): boolean {
 function directoryIdentity(directory: string): string {
   const stats = statSync(directory, { bigint: true });
   if (!stats.isDirectory()) throw new Error('MCP requires a workspace directory.');
-  return `${stats.dev}:${stats.ino}`;
+  return repositoryWorkspaceIdentity(stats);
 }
 
 /** In-memory grants remain stable on warm resume and expire with the runtime. */
@@ -75,17 +74,16 @@ export class WorkspaceMcp {
   private readonly tokens = new Map<string, Grant>();
   private readonly connections = new Map<string, Connection>();
   private readonly restartApprovals = new Map<string, RestartApproval>();
-  private readonly catalog: Tool[];
-  private readonly tools: Map<string, ToolDefinition>;
+  private readonly descriptors: Tool[];
 
   constructor(
-    tools: readonly ToolDefinition[],
+    private readonly tools: ToolCatalog,
     private readonly authority: string,
     private readonly web?: WebToolService,
     private readonly requestRestart?: (update: boolean) => Promise<Record<string, unknown>>,
+    private readonly repositoryIndex?: Pick<RepositoryIndexService, 'activate'>,
   ) {
-    this.tools = new Map(tools.map((tool) => [tool.name, tool]));
-    this.catalog = tools.map(({ name, description, inputSchema, outputSchema }) =>
+    this.descriptors = tools.definitions.map(({ name, description, inputSchema, outputSchema }) =>
       ToolSchema.parse({
         name,
         description,
@@ -113,10 +111,12 @@ export class WorkspaceMcp {
       existing.workspaceIdentity === workspaceIdentity &&
       existing.workspaceFileAccess === workspaceFileAccess &&
       existing.repositorySearchAccess === repositorySearchAccess
-    )
+    ) {
+      await this.activateIndex(existing);
       return existing.token;
+    }
     const previous = this.revoke(agentId);
-    const grant = {
+    const grant: Grant = {
       agentId,
       workspaceRoot,
       workspaceIdentity,
@@ -127,7 +127,15 @@ export class WorkspaceMcp {
     this.grants.set(agentId, grant);
     this.tokens.set(grant.token, grant);
     await previous;
+    await this.activateIndex(grant);
     return grant.token;
+  }
+
+  private async activateIndex(grant: Grant): Promise<void> {
+    if (!this.repositoryIndex || !grant.repositorySearchAccess || grant.stopIndexing) return;
+    const workspace = await this.repositorySearchWorkspace(grant.agentId);
+    if (workspace && this.grants.get(grant.agentId) === grant && !grant.stopIndexing)
+      grant.stopIndexing = this.repositoryIndex.activate(workspace);
   }
 
   async repositorySearchWorkspace(agentId: string) {
@@ -150,16 +158,6 @@ export class WorkspaceMcp {
     };
   }
 
-  async invokeTool(
-    name: string,
-    args: unknown,
-    context: ToolContext,
-  ): Promise<Record<string, unknown>> {
-    const tool = this.tools.get(name);
-    if (!tool) throw new Error('Unknown LTCook tool.');
-    return tool.invoke(args, context);
-  }
-
   async revoke(agentId: string): Promise<void> {
     const grant = this.grants.get(agentId);
     if (!grant) {
@@ -168,6 +166,7 @@ export class WorkspaceMcp {
     }
     this.grants.delete(agentId);
     this.tokens.delete(grant.token);
+    grant.stopIndexing?.();
     await Promise.all([
       this.web?.disposeAgent(agentId),
       ...[...this.connections.values()]
@@ -177,6 +176,7 @@ export class WorkspaceMcp {
   }
 
   async close(): Promise<void> {
+    for (const grant of this.grants.values()) grant.stopIndexing?.();
     this.grants.clear();
     this.tokens.clear();
     await Promise.all([
@@ -278,8 +278,8 @@ export class WorkspaceMcp {
     const connection = { id, server, transport, grant };
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       const tools = grant.repositorySearchAccess
-        ? this.catalog
-        : this.catalog.filter(({ name }) => !requiresRepositoryAccess(name));
+        ? this.descriptors
+        : this.descriptors.filter(({ name }) => !requiresRepositoryAccess(name));
       return {
         tools:
           this.requestRestart && server.getClientCapabilities()?.elicitation?.form
@@ -294,10 +294,9 @@ export class WorkspaceMcp {
         if (params.name === RESTART_TOOL.name) {
           output = await this.approveRestart(params.arguments ?? {}, connection, requestId, signal);
         } else {
-          const tool = this.tools.get(params.name);
-          if (!tool || (requiresRepositoryAccess(params.name) && !grant.repositorySearchAccess))
+          if (requiresRepositoryAccess(params.name) && !grant.repositorySearchAccess)
             throw new Error('Unknown LTCook tool.');
-          output = await tool.invoke(params.arguments ?? {}, {
+          output = await this.tools.invoke(params.name, params.arguments ?? {}, {
             agentId: grant.agentId,
             workspaceRoot: grant.workspaceRoot,
             workspaceFileAccess: grant.workspaceFileAccess,

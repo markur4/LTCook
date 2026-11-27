@@ -9,6 +9,7 @@ import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import { createEvalEngine } from '../../../runtime/src/evals/engine.js';
 import { EVAL_MODEL } from '../../../runtime/src/evals/setup.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 
 const roots: string[] = [];
 afterEach(async () =>
@@ -145,7 +146,12 @@ describe('Agent Evals run service', () => {
     if (!address || typeof address === 'string') throw new Error('No test port assigned');
     await new Promise<void>((resolve) => socket.close(() => resolve()));
     const secret = 'test-user-token';
-    const api = new RuntimeApi(undefined, secret, `127.0.0.1:${address.port}`);
+    const api = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${address.port}`,
+      new SessionActivation(),
+    );
     api.setEval(service);
     const base = await api.listen();
     try {
@@ -179,14 +185,20 @@ describe('Agent Evals run service', () => {
     const address = socket.address();
     if (!address || typeof address === 'string') throw new Error('No test port assigned');
     await new Promise<void>((resolve) => socket.close(() => resolve()));
-    const api = new RuntimeApi(undefined, 'test-user-token', `127.0.0.1:${address.port}`);
+    const activation = new SessionActivation();
+    const api = new RuntimeApi(
+      undefined,
+      'test-user-token',
+      `127.0.0.1:${address.port}`,
+      activation,
+    );
     api.setEval(service);
     api.setRuntime({
       snapshot: () => ({ session: { workspaceRoot: root, teamId: 'team-b' } }),
       listSessions: () => [{ teamId: 'team-a' }, { teamId: 'team-b' }],
       teamCatalog: () => [{ teamId: 'team-b', selection: 'team-b-selection', status: 'installed' }],
     } as never);
-    api.setSession(root, 'leader-b');
+    activation.register(root, 'leader-b');
     const base = await api.listen();
     const start = (body: Record<string, unknown>) =>
       fetch(`${base}/v1/evals/start`, {
@@ -368,7 +380,8 @@ test('Current Setup preserves allowed caller overrides while rejecting credentia
   const address = socket.address();
   if (!address || typeof address === 'string') throw new Error('No test port assigned');
   await new Promise<void>((resolve) => socket.close(() => resolve()));
-  const api = new RuntimeApi(undefined, 'user-secret', `127.0.0.1:${address.port}`);
+  const activation = new SessionActivation();
+  const api = new RuntimeApi(undefined, 'user-secret', `127.0.0.1:${address.port}`, activation);
   api.setEval(service);
   api.setRuntime({
     snapshot: () => ({ session: { workspaceRoot: root, teamId: 'team-b' } }),
@@ -378,7 +391,7 @@ test('Current Setup preserves allowed caller overrides while rejecting credentia
       { teamId: 'team-b', selection: 'team-b-selection', status: 'installed' },
     ],
   } as never);
-  api.setSession(root, 'leader-b');
+  activation.register(root, 'leader-b');
   const base = await api.listen();
   const start = (body: Record<string, unknown>, token = 'user-secret') =>
     fetch(`${base}/v1/evals/start`, {

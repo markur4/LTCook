@@ -1,5 +1,5 @@
 import type { PaseoMemoryMessage } from '../paseo-plugin/server/memory-source.js';
-import { estimateMemoryTokens } from './text.js';
+import { estimateMemoryTokens } from '../paseo-plugin/server/memory-text.js';
 import type { MemoryAttachment } from './pasted-documents.js';
 
 export type MemoryScope = {

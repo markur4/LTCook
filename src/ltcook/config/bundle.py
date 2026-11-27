@@ -15,6 +15,10 @@ from ltcook.config.sections.runtime import (
     PiSettings,
     RuntimeSettings,
 )
+from ltcook.config.sections.services import (
+    RenamerSettings,
+    WorkspaceOrganizerSettings,
+)
 from ltcook.config.sections.web import (
     ContainerSettings,
     Crawl4AISettings,
@@ -32,6 +36,10 @@ class LtcookConfig:
 
     app: AppSettings = field(default_factory=AppSettings)
     runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
+    workspace_organizer: WorkspaceOrganizerSettings = field(
+        default_factory=WorkspaceOrganizerSettings
+    )
+    renamer: RenamerSettings = field(default_factory=RenamerSettings)
     paseo: PaseoSettings = field(default_factory=PaseoSettings)
     pi: PiSettings = field(default_factory=PiSettings)
     anthropic: AnthropicSettings = field(default_factory=AnthropicSettings)

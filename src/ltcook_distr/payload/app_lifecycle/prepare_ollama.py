@@ -95,7 +95,7 @@ def summarizer_readiness(
         model = settings.tiny_local_model.strip()
         if not model or settings.summarizer_keep_alive < -1:
             raise SetupError(
-                "Configure a tiny-local model and a summarizer keep-alive "
+                "Configure a model for @local-tiny and a summarizer keep-alive "
                 "of -1 or nonnegative seconds."
             )
         endpoint = local_ollama_endpoint(settings.ollama_endpoint)
@@ -114,7 +114,7 @@ def summarizer_readiness(
             for item in models
         ):
             raise SetupError(
-                f"The tiny-local model is missing. Run `ollama pull {shlex.quote(model)}` "
+                f"The @local-tiny model is missing. Run `ollama pull {shlex.quote(model)}` "
                 f"against {endpoint}."
             )
         status["ready"] = True

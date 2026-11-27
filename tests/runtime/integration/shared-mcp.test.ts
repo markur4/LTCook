@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ElicitRequestSchema, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { WORKSPACE_MCP_SERVER } from '../../../runtime/src/paseo-plugin/shared/workspace-tools.js';
 import {
@@ -15,13 +16,10 @@ import {
   ollamaChat,
   OllamaSummaryError,
   releaseOllamaModel,
+  type OllamaChatProgress,
   type OllamaUsage,
 } from '../../../runtime/src/integrations/ollama.js';
-import { createTools } from '../../../runtime/src/tools/catalog.js';
-import {
-  summarizeMemory,
-  type MemorySummaryProgress,
-} from '../../../runtime/src/session-memory/summarization.js';
+import { createTools, ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { RiedService } from '../../../runtime/src/repository/discovery.js';
 import { createSummarizeTool } from '../../../runtime/src/tools/summarize.js';
 
@@ -34,13 +32,14 @@ async function localAuthority(): Promise<string> {
   return `127.0.0.1:${address.port}`;
 }
 
-test('requests a named GPU and streams Session Memory rates before parsing final JSON', async () => {
+test('requests a named GPU and streams Ollama progress before returning complete content', async () => {
   const model = 'fixture:latest';
   const content = { findings: [{ detail: 'Stored summary' }] };
   const text = JSON.stringify(content);
   const encoder = new TextEncoder();
   const parts = [text.slice(0, 14), text.slice(14)];
-  const progress: Array<MemorySummaryProgress | undefined> = [];
+  const progress: Array<OllamaChatProgress | undefined> = [];
+  let usage: OllamaUsage | undefined;
   let finish: (() => void) | undefined;
   const ollama = Bun.serve({
     hostname: '127.0.0.1',
@@ -75,25 +74,29 @@ test('requests a named GPU and streams Session Memory rates before parsing final
     },
   });
   const abort = new AbortController();
-  const summary = summarizeMemory(
+  const summary = ollamaChat(
     { endpoint: `http://127.0.0.1:${ollama.port}`, model, mainGpu: 0, keepAlive: 0 },
     [{ role: 'user', content: 'Summarize this fixture.' }],
     AbortSignal.any([abort.signal, AbortSignal.timeout(4000)]),
-    'UAMP',
+    (tokens) => {
+      usage = tokens;
+    },
+    'json',
+    undefined,
     false,
-    (rate) => progress.push(rate),
+    (event) => progress.push(event),
   );
   void summary.catch(() => {});
   try {
     for (let attempt = 0; attempt < 100 && !progress.length; attempt++) await Bun.sleep(25);
     expect(progress[0]).toMatchObject({ estimated: true });
-    expect(progress[0]!.tokensPerSecond).toBeGreaterThan(0);
+    expect(progress[0]!.uncountedText.length).toBeGreaterThan(0);
     finish?.();
     expect(await summary).toMatchObject({
-      content,
-      complete: true,
-      usage: { inputTokens: 20, outputTokens: 12 },
+      summary: text,
+      incomplete: false,
     });
+    expect(usage).toMatchObject({ inputTokens: 20, outputTokens: 12 });
     expect(progress.at(-1)).toBeUndefined();
   } finally {
     abort.abort();
@@ -102,36 +105,7 @@ test('requests a named GPU and streams Session Memory rates before parsing final
   }
 });
 
-test('keeps a completed Ollama transport response pending when its summary is invalid JSON', async () => {
-  const model = 'fixture:latest';
-  const ollama = Bun.serve({
-    hostname: '127.0.0.1',
-    port: 0,
-    async fetch(request) {
-      expect(await request.json()).toMatchObject({ model, format: 'json' });
-      return Response.json({
-        model,
-        message: { content: '{"findings": ["missing closing delimiters"' },
-        done: true,
-        done_reason: 'stop',
-      });
-    },
-  });
-  try {
-    const summary = await summarizeMemory(
-      { endpoint: `http://127.0.0.1:${ollama.port}`, model, keepAlive: 0 },
-      [{ role: 'user', content: 'Summarize this fixture.' }],
-      AbortSignal.timeout(3000),
-      'AAB',
-    );
-    expect(summary.complete).toBe(false);
-    expect(summary).not.toHaveProperty('content');
-  } finally {
-    await ollama.stop(true);
-  }
-});
-
-test('distinguishes a terminal Ollama stream error from invalid summary JSON', async () => {
+test('reports and redacts a terminal Ollama stream error', async () => {
   const model = 'fixture:latest';
   const ollama = Bun.serve({
     hostname: '127.0.0.1',
@@ -148,11 +122,13 @@ test('distinguishes a terminal Ollama stream error from invalid summary JSON', a
     },
   });
   try {
-    const summary = summarizeMemory(
+    const summary = ollamaChat(
       { endpoint: `http://127.0.0.1:${ollama.port}`, model, keepAlive: 0 },
       [{ role: 'user', content: 'Summarize this fixture.' }],
       AbortSignal.timeout(3000),
-      'AAB',
+      undefined,
+      'json',
+      undefined,
       false,
       () => {},
     );
@@ -212,7 +188,7 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
   const base = `http://${authority}`;
   const secret = 'fixture-runtime-authority';
   const createApi = async () => {
-    const api = new RuntimeApi(undefined, secret, authority);
+    const api = new RuntimeApi(undefined, secret, authority, new SessionActivation());
     const ried = new RiedService(path.join(root, 'cache'), undefined, () => ({ PATH: '' }));
     api.setWorkspaceMcp(new WorkspaceMcp(createTools(ried), authority));
     await api.listen();
@@ -474,9 +450,14 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
 test('MCP restart requires matching Paseo approval and MCP acceptance before queueing', async () => {
   const workspace = await mkdtemp(path.join(tmpdir(), 'ltcook-mcp-restart-'));
   const authority = await localAuthority();
-  const api = new RuntimeApi(undefined, 'fixture-runtime-authority', authority);
+  const api = new RuntimeApi(
+    undefined,
+    'fixture-runtime-authority',
+    authority,
+    new SessionActivation(),
+  );
   const queued: boolean[] = [];
-  const mcp = new WorkspaceMcp([], authority, undefined, async (update) => {
+  const mcp = new WorkspaceMcp(new ToolCatalog([]), authority, undefined, async (update) => {
     queued.push(update);
     return { status: 'queued', update };
   });
@@ -649,7 +630,7 @@ test('MCP summarization enforces workspace grants and cancels local Ollama reque
   if (!address || typeof address === 'string') throw new Error('No fixture Ollama port.');
   const authority = await localAuthority();
   const secret = 'fixture-unshared-secret';
-  const api = new RuntimeApi(undefined, secret, authority);
+  const api = new RuntimeApi(undefined, secret, authority, new SessionActivation());
   const mcp = new WorkspaceMcp(
     createTools(new RiedService(path.join(root, 'cache'), undefined, () => ({ PATH: '' })), {
       endpoint: `http://127.0.0.1:${address.port}`,

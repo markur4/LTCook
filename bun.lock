@@ -26,9 +26,10 @@
         "@getpaseo/client": "0.16.0-beta.2",
         "@getpaseo/plugin": "0.16.0-beta.2",
         "@getpaseo/server": "0.16.0-beta.2",
+        "@lezer/python": "1.1.19",
+        "@ltcook/model-contracts": "0.1.0",
         "@ltcook/team-default": "0.1.0",
         "@ltcook/team-default-minimal": "0.1.0",
-        "@lezer/python": "1.1.19",
         "@modelcontextprotocol/sdk": "1.29.0",
         "@nicknisi/pi-codesearch": "0.3.4",
         "agent-browser": "0.43.0",
@@ -43,6 +44,13 @@
       "devDependencies": {
         "@types/react": "19.3.0",
         "typescript": "7.0.2",
+      },
+    },
+    "runtime/src/models/contracts": {
+      "name": "@ltcook/model-contracts",
+      "version": "0.1.0",
+      "dependencies": {
+        "zod": "4.6.7",
       },
     },
     "teams/default": {
@@ -344,6 +352,8 @@
     "@libsql/linux-x64-musl": ["@libsql/linux-x64-musl@0.5.29", "", { "os": "linux", "cpu": "x64" }, "sha512-gquqwA/39tH4pFl+J9n3SOMSymjX+6kZ3kWgY3b94nXFTwac9bnFNMffIomgvlFaC4ArVqMnOZD3nuJ3H3VO1w=="],
 
     "@libsql/win32-x64-msvc": ["@libsql/win32-x64-msvc@0.5.29", "", { "os": "win32", "cpu": "x64" }, "sha512-4/0CvEdhi6+KjMxMaVbFM2n2Z44escBRoEYpR+gZg64DdetzGnYm8mcNLcoySaDJZNaBd6wz5DNdgRmcI4hXcg=="],
+
+    "@ltcook/model-contracts": ["@ltcook/model-contracts@workspace:runtime/src/models/contracts"],
 
     "@ltcook/runtime": ["@ltcook/runtime@workspace:runtime"],
 

@@ -1,39 +1,133 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync } from 'node:fs';
+import { constants, type Stats } from 'node:fs';
+import { lstat, open, realpath } from 'node:fs/promises';
+import path from 'node:path';
+
+export type NativeInputGuard = {
+  identity: [string, string, string, string, string];
+  version?: [string, string, string];
+};
 
 export type WorkspacePreparation = {
   environment: Record<string, string>;
   dependencies: string[];
   identityPaths: string[];
+  outputHashes: Record<string, string>;
+  inputGuards: Record<string, NativeInputGuard | null> | null;
   reusable: boolean;
 };
 
-function fingerprint(preparation: WorkspacePreparation): string | undefined {
+const defaultMaxEntries = 128;
+
+function identity(stat: Stats): string {
+  return JSON.stringify([stat.mode, stat.size, stat.dev, stat.ino, stat.uid, stat.gid]);
+}
+
+function isMissing(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+async function statOrMissing(file: string): Promise<Stats | undefined> {
+  try {
+    return await lstat(file);
+  } catch (error) {
+    if (isMissing(error)) return undefined;
+    throw error;
+  }
+}
+
+async function readCurrentFile(file: string, expected: Stats): Promise<Buffer | undefined> {
+  const expectedIdentity = identity(expected);
+  const matches = (stat: Stats) =>
+    stat.isFile() &&
+    identity(stat) === expectedIdentity &&
+    stat.mtimeMs === expected.mtimeMs &&
+    stat.ctimeMs === expected.ctimeMs;
+  const handle = await open(
+    file,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+  );
+  try {
+    // > File identity can change between an asynchronous stat and open.
+    if (!matches(await handle.stat())) return undefined;
+    const bytes = await handle.readFile();
+    return matches(await lstat(file)) ? bytes : undefined;
+  } finally {
+    await handle.close();
+  }
+}
+
+function matchesOutput(bytes: Buffer, expected: string | undefined): boolean {
+  return expected === undefined || createHash('sha256').update(bytes).digest('hex') === expected;
+}
+
+async function outputHomeMatches(preparation: WorkspacePreparation): Promise<boolean> {
+  const [file] = Object.keys(preparation.outputHashes);
+  if (file === undefined) return true;
+  const home = preparation.environment.PI_CODING_AGENT_DIR;
+  return home !== undefined && path.relative(path.dirname(file), await realpath(home)) === '';
+}
+
+async function inputGuardsMatch(guards: WorkspacePreparation['inputGuards']): Promise<boolean> {
+  if (guards === null) return false;
+  for (const [file, guard] of Object.entries(guards)) {
+    try {
+      const stat = await lstat(file, { bigint: true });
+      if (guard === null) return false;
+      const identity = [stat.dev, stat.ino, stat.mode, stat.uid, stat.gid];
+      if (!identity.every((value, index) => String(value) === guard.identity[index])) return false;
+      const requiredVersion = guard.version;
+      if (requiredVersion) {
+        const version = [stat.size, stat.mtimeNs, stat.ctimeNs];
+        if (!version.every((value, index) => String(value) === requiredVersion[index]))
+          return false;
+      }
+    } catch (error) {
+      if (guard !== null || !isMissing(error)) return false;
+    }
+  }
+  return true;
+}
+
+async function fingerprint(preparation: WorkspacePreparation): Promise<string | undefined> {
   const hash = createHash('sha256');
-  for (const file of preparation.identityPaths) {
-    hash.update(JSON.stringify(file));
-    try {
-      const stat = lstatSync(file);
-      if (!stat.isFile() && !stat.isDirectory()) return undefined;
-      hash.update(JSON.stringify([stat.mode, stat.size, stat.dev, stat.ino, stat.uid, stat.gid]));
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) return undefined;
-      hash.update('missing');
+  try {
+    for (const file of preparation.identityPaths) {
+      const stat = await statOrMissing(file);
+      if (stat && !stat.isFile() && !stat.isDirectory()) return undefined;
+      hash.update(JSON.stringify(file)).update(stat ? identity(stat) : 'missing');
     }
-  }
-  for (const file of preparation.dependencies) {
-    hash.update(JSON.stringify(file));
-    try {
-      const stat = lstatSync(file);
-      if (!stat.isFile() && !stat.isDirectory()) return undefined;
-      hash.update(JSON.stringify([stat.mode, stat.size, stat.dev, stat.ino, stat.uid, stat.gid]));
-      if (stat.isFile()) hash.update(readFileSync(file));
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) return undefined;
-      hash.update('missing');
+    for (const file of preparation.dependencies) {
+      const stat = await statOrMissing(file);
+      if (stat && !stat.isFile() && !stat.isDirectory()) return undefined;
+      hash.update(JSON.stringify(file)).update(stat ? identity(stat) : 'missing');
+      const outputHash = preparation.outputHashes[file];
+      if (stat?.isFile()) {
+        const bytes = await readCurrentFile(file, stat);
+        if (!bytes || !matchesOutput(bytes, outputHash)) return undefined;
+        hash.update(bytes);
+      } else if (outputHash !== undefined) {
+        return undefined;
+      }
     }
+    if (await outputHomeMatches(preparation)) return hash.digest('hex');
+  } catch {
+    return undefined;
   }
-  return hash.digest('hex');
+}
+
+async function outputsMatch(preparation: WorkspacePreparation): Promise<boolean> {
+  try {
+    for (const [file, expected] of Object.entries(preparation.outputHashes)) {
+      const stat = await lstat(file);
+      if (!stat.isFile()) return false;
+      const bytes = await readCurrentFile(file, stat);
+      if (!bytes || !matchesOutput(bytes, expected)) return false;
+    }
+    return await outputHomeMatches(preparation);
+  } catch {
+    return false;
+  }
 }
 
 /** Reuse only while every resolved input and generated configuration remains unchanged. */
@@ -42,18 +136,54 @@ export class WorkspacePreparationCache {
     string,
     { preparation: WorkspacePreparation; fingerprint: string }
   >();
-  async get(key: string, prepare: () => WorkspacePreparation): Promise<WorkspacePreparation> {
+  private tail = Promise.resolve();
+
+  constructor(private readonly options: { maxEntries?: number; signal?: AbortSignal } = {}) {}
+
+  get(
+    key: string,
+    prepare: () => WorkspacePreparation | Promise<WorkspacePreparation>,
+  ): Promise<WorkspacePreparation> {
+    // > Different keys can publish to the same Pi home.
+    const pending = this.tail.then(() => this.resolve(key, prepare));
+    this.tail = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
+  }
+
+  private async resolve(
+    key: string,
+    prepare: () => WorkspacePreparation | Promise<WorkspacePreparation>,
+  ): Promise<WorkspacePreparation> {
+    const { maxEntries = defaultMaxEntries, signal } = this.options;
+    signal?.throwIfAborted();
     const existing = this.entries.get(key);
-    if (existing) {
-      const observed = fingerprint(existing.preparation);
-      if (observed !== undefined && observed === existing.fingerprint) return existing.preparation;
-    }
     this.entries.delete(key);
-    // > Preparation is synchronous; publish reusable results before the next caller can run.
-    const preparation = prepare();
-    if (preparation.reusable) {
-      const observed = fingerprint(preparation);
-      if (observed !== undefined) this.entries.set(key, { preparation, fingerprint: observed });
+    if (existing) {
+      const observed = await fingerprint(existing.preparation);
+      signal?.throwIfAborted();
+      if (observed === existing.fingerprint) {
+        this.entries.set(key, existing);
+        return existing.preparation;
+      }
+    }
+    const preparation = await prepare();
+    signal?.throwIfAborted();
+    const observed = preparation.reusable ? await fingerprint(preparation) : undefined;
+    // > The fingerprint may have observed newer bytes than AppRC resolved.
+    const attested = observed !== undefined && (await inputGuardsMatch(preparation.inputGuards));
+    const published = await outputsMatch(preparation);
+    signal?.throwIfAborted();
+    if (!published)
+      throw new Error('AppRC workspace preparation outputs changed. Retry preparation.');
+    if (observed !== undefined && attested) {
+      this.entries.set(key, { preparation, fingerprint: observed });
+      if (this.entries.size > maxEntries) {
+        const oldest = this.entries.keys().next().value;
+        if (oldest !== undefined) this.entries.delete(oldest);
+      }
     }
     return preparation;
   }

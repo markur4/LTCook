@@ -1,0 +1,17 @@
+{
+  "name": "@ltcook/model-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "types": "./index.ts",
+    "bun": "./index.ts",
+    "default": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "\"$npm_execpath\" build index.ts --target=node --format=esm --packages=external --outfile=dist/index.js"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  }
+}

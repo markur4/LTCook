@@ -5,34 +5,30 @@ import { z } from 'zod';
 import { defineRpc, PluginAttachmentItemSchema } from '@getpaseo/plugin';
 import { EvalRequestSchema, EvalResponseSchema } from './shared/evals';
 import {
+  RagIndexActivitySchema,
   activitySkillDocumentRpc,
   activitySubscription,
   activityToggleRpc,
-  memoryDeviceRpc,
-  memoryEvidenceRpc,
-  MemoryEvidenceReferencesSchema,
-  MemoryDeviceSchema,
-  MemoryRateSchema,
-  MEMORY_SUMMARIES_TIMELINE_KIND,
-  MemorySummariesTimelineSchema,
-  MemoryUnitCountsSchema,
-  storedSummariesRpc,
+  TURN_SKILLS_TIMELINE_KIND,
+  TurnSkillsTimelineSchema,
 } from './shared/activity';
 import { observeActivity, observedTimestamp } from './server/activity';
 import { readTurnSkills, type RegisteredSkill } from './server/activity-uses';
 import { readSkillDocument } from './server/skill-documents';
-import { readPaseoMemoryEvidence, readPaseoMemoryPassage } from './server/memory-source';
 import { WORKSPACE_MCP_SERVER } from './shared/workspace-tools';
 import { SessionWorktreesSchema, sessionWorktreesSubscription } from './shared/session-worktrees';
 import { discardPastedTextRpc, pastedTextRpc, pastedTextSearchRpc } from './shared/pasted-text';
+import { workspaceActivityRpc, workspaceServicesRpc } from './shared/workspace-services';
+import { clarifyGenerateRpc, clarifyReadRpc } from './shared/clarify';
+import { trackerModifyRpc, trackerSubscription } from './shared/tracker';
 import {
   ModelCatalogRequestSchema,
   ModelCatalogResponseSchema,
-  ResolvedModelSchema,
+  ResolvedModelDtoSchema,
   MODEL_ALIAS_METADATA_KEY,
   MODEL_REASONING_METADATA_KEY,
   RESOLVED_MODEL_METADATA_KEY,
-} from './shared/models';
+} from '@ltcook/model-contracts';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import {
   PanelDetailSourceSchema,
@@ -287,46 +283,21 @@ const activityServices = z.object({
   rag: z.object({
     indexingEnabled: z.boolean().nullable(),
     availability: z.enum(['ready', 'not-ready', 'unavailable', 'unknown']),
-    activity: z.enum([
-      'idle',
-      'checking',
-      'indexing',
-      'updating',
-      'interrupted',
-      'error',
-      'unknown',
-    ]),
+    activity: RagIndexActivitySchema,
     diagnostic: z.string().nullable(),
+    publishedAt: z.string().optional(),
+    retryAt: z.string().optional(),
   }),
   workspace: z.object({ root: z.string(), identity: z.string() }).optional(),
   task: z.string().optional(),
-  memoryDisabled: z.boolean().optional(),
-  memory: z
+  lastDelivered: z
     .object({
-      device: MemoryDeviceSchema,
-      rate: MemoryRateSchema.nullable(),
-      summarization: z.enum([
-        'paused',
-        'summarizing',
-        'queued',
-        'up-to-date',
-        'below-threshold',
-        'failed',
-        'unknown',
-      ]),
-      lastSuccessfulSummaryAt: z.string().nullable(),
-      lastError: z.object({ message: z.string() }).nullable(),
-      stored: MemoryUnitCountsSchema.nullable(),
-      lastDelivered: MemoryUnitCountsSchema.extend({
-        sourceAgentId: z.string(),
-        recipientAgentId: z.string(),
-        deliveredAt: z.string(),
-        bytes: z.number().int().nonnegative(),
-      }).nullable(),
-      pendingUamp: z.number().int().nonnegative().nullable(),
-      pendingAab: z.number().int().nonnegative().nullable(),
+      sourceAgentId: z.string(),
+      deliveredAt: z.string(),
+      bytes: z.number().int().nonnegative(),
+      aab: z.number().int().nonnegative(),
     })
-    .optional(),
+    .nullish(),
   subagents: z
     .array(
       z.object({
@@ -344,21 +315,48 @@ const activityServices = z.object({
 });
 
 export default function contribute(server: PluginServerContext) {
+  server.handle(workspaceActivityRpc, async (input) =>
+    workspaceActivityRpc.output.parse(await runtimeJson('/v1/activity/workspace-touch', input)),
+  );
+  server.handle(workspaceServicesRpc, async (input) =>
+    workspaceServicesRpc.output.parse(await runtimeJson('/v1/activity/workspace-services', input)),
+  );
   server.handle(activityToggleRpc, async (input) =>
     activityToggleRpc.output.parse(await runtimeJson('/v1/activity/toggle', input)),
   );
-  server.handle(memoryDeviceRpc, async (input) =>
-    memoryDeviceRpc.output.parse(
-      await runtimeJson('/v1/activity/memory-device', input, undefined, 20_000),
-    ),
-  );
-  server.handle(storedSummariesRpc, async (input, { paseo }) => {
-    const entry = await paseo.agents.ref(input.agentId).refresh();
-    if (!entry || entry.agent.archivedAt)
-      throw new Error('The Activity conversation is unavailable.');
-    return storedSummariesRpc.output.parse(
-      await runtimeJson('/v1/activity/stored-summaries', input),
+  server.handle(clarifyReadRpc, async (input, { paseo }) => {
+    const agent = (await paseo.agents.ref(input.agentId).refresh())?.agent;
+    if (!agent || agent.archivedAt) throw new Error('The conversation is unavailable.');
+    return clarifyReadRpc.output.parse(await runtimeJson('/v1/clarify/read', input));
+  });
+  server.handle(clarifyGenerateRpc, async (input, { paseo }) => {
+    const agent = (await paseo.agents.ref(input.agentId).refresh())?.agent;
+    if (!agent || agent.archivedAt) throw new Error('The conversation is unavailable.');
+    return clarifyGenerateRpc.output.parse(
+      await runtimeJson('/v1/clarify/generate', input, undefined, 240_000),
     );
+  });
+  server.handle(trackerModifyRpc, async (input, { paseo }) => {
+    const agent = (await paseo.agents.ref(input.agentId).refresh())?.agent;
+    if (!agent || agent.archivedAt) throw new Error('The conversation is unavailable.');
+    return trackerModifyRpc.output.parse(await runtimeJson('/v1/tracker/modify', input));
+  });
+  server.handle(trackerSubscription, async ({ agentId }, { paseo, signal, push }) => {
+    const agent = (await paseo.agents.ref(agentId).refresh())?.agent;
+    if (!agent || agent.archivedAt) throw new Error('The conversation is unavailable.');
+    let previous: string | undefined;
+    while (!signal.aborted) {
+      const snapshot = trackerSubscription.event.parse(
+        await runtimeJson('/v1/tracker/snapshot', { agentId }, signal),
+      );
+      const current = JSON.stringify(snapshot);
+      if (signal.aborted) return;
+      if (current !== previous) {
+        previous = current;
+        await push(snapshot);
+      }
+      await delay(1000, undefined, { signal }).catch(() => undefined);
+    }
   });
   server.handle(sessionWorktreesSubscription, async ({ agentId }, { paseo, signal, push }) => {
     const reference = paseo.agents.ref(agentId);
@@ -389,18 +387,6 @@ export default function contribute(server: PluginServerContext) {
       await delay(1000, undefined, { signal }).catch(() => undefined);
     }
   });
-  server.handle(memoryEvidenceRpc, async (input, { paseo }) => {
-    const signal = AbortSignal.timeout(5_000);
-    const agent = paseo.agents.ref(input.agentId);
-    const entry = await agent.refresh();
-    if (!entry || entry.agent.archivedAt)
-      throw new Error('The Activity conversation is unavailable.');
-    const { sources, next } = MemoryEvidenceReferencesSchema.parse(
-      await runtimeJson('/v1/activity/memory-evidence', input, signal),
-    );
-    const entries = await readPaseoMemoryEvidence(agent.timeline, input.epoch, sources, signal);
-    return { entries, next };
-  });
   server.handle(activitySkillDocumentRpc, ({ agentId, ...input }, { paseo }) =>
     readSkillDocument(paseo.agents.ref(agentId), input, (agent) =>
       registeredSkills(agent, AbortSignal.timeout(5000)),
@@ -428,8 +414,7 @@ export default function contribute(server: PluginServerContext) {
         );
         const services = parsed.success ? parsed.data : undefined;
         const workspace = services?.workspace;
-        const memory = services?.memory;
-        const delivery = memory?.lastDelivered;
+        const delivery = services?.lastDelivered;
         const source = delivery?.sourceAgentId
           ? (
               await paseo.agents
@@ -470,32 +455,18 @@ export default function contribute(server: PluginServerContext) {
             indexingEnabled: services?.rag.indexingEnabled ?? null,
             availability: services?.rag.availability ?? 'unknown',
             activity: services?.rag.activity ?? 'unknown',
+            publishedAt: services?.rag.publishedAt,
+            retryAt: services?.rag.retryAt,
             ...(services?.rag.diagnostic ? { diagnostic: services.rag.diagnostic } : {}),
           },
-          memory: {
-            device: memory?.device ?? null,
-            rate: memory?.rate ?? null,
-            summarization: services?.memoryDisabled
-              ? 'disabled'
-              : (memory?.summarization ?? 'unknown'),
-            lastSummaryAt: memory?.lastSuccessfulSummaryAt
-              ? observedTimestamp(memory.lastSuccessfulSummaryAt)
-              : null,
-            stored: memory?.stored ?? null,
-            pending:
-              memory?.pendingUamp != null && memory.pendingAab != null
-                ? { uamp: memory.pendingUamp, aab: memory.pendingAab }
-                : null,
-            ...(memory?.lastError?.message ? { diagnostic: memory.lastError.message } : {}),
-            lastHandoff: delivery
-              ? {
-                  at: observedTimestamp(delivery.deliveredAt),
-                  bytes: delivery.bytes,
-                  sourceName: source ?? null,
-                  summaries: { uamp: delivery.uamp, aab: delivery.aab },
-                }
-              : null,
-          },
+          lastHandoff: delivery
+            ? {
+                at: observedTimestamp(delivery.deliveredAt),
+                bytes: delivery.bytes,
+                sourceName: source ?? null,
+                aab: delivery.aab,
+              }
+            : null,
         };
       },
       registeredSkills,
@@ -523,10 +494,9 @@ export default function contribute(server: PluginServerContext) {
       () => undefined,
     );
   };
-  const memoryObservation = z.object({ memoryEnabled: z.boolean() });
   const cleanup = [
     server.addHook('agent.turn.before', async ({ agent, turnId }, context) => {
-      const model = ResolvedModelSchema.safeParse(agent.metadata[RESOLVED_MODEL_METADATA_KEY]);
+      const model = ResolvedModelDtoSchema.safeParse(agent.metadata[RESOLVED_MODEL_METADATA_KEY]);
       const reference = context.paseo.agents.ref(agent.id);
       const current = model.success
         ? reference.current()
@@ -537,9 +507,7 @@ export default function contribute(server: PluginServerContext) {
       void observeMemory(agent, { turnId, outcome: 'running', local });
     }),
     server.addHook('agent.turn.after', async ({ agent, turnId, outcome }, { paseo, signal }) => {
-      const observed = memoryObservation.safeParse(
-        await observeMemory(agent, { turnId, outcome: outcome.kind }),
-      );
+      await observeMemory(agent, { turnId, outcome: outcome.kind });
       if (
         !turnId ||
         !agent.workspaceId ||
@@ -559,31 +527,26 @@ export default function contribute(server: PluginServerContext) {
         if (!page.agent || page.agent.archivedAt || page.error || page.reset || signal.aborted) {
           return;
         }
-        const [passage, skills] = await Promise.all([
-          outcome.kind === 'completed' && observed.success && observed.data.memoryEnabled
-            ? readPaseoMemoryPassage(timeline, page, turnId, signal).catch(() => undefined)
-            : undefined,
-          readTurnSkills(
-            page.agent,
-            handle,
-            { epoch: page.epoch, turnId, tail: page },
-            signal,
-            registeredSkills,
-          ).catch(() => []),
-        ]);
-        if (signal.aborted || (!passage && !skills.length)) return;
-        const markerId = `${MEMORY_SUMMARIES_TIMELINE_KIND}:${turnId}`;
-        const data = { ...(passage && { passage }), ...(skills.length && { skills }) };
+        const skills = await readTurnSkills(
+          page.agent,
+          handle,
+          { epoch: page.epoch, turnId, tail: page },
+          signal,
+          registeredSkills,
+        );
+        if (signal.aborted || !skills.length) return;
+        const markerId = `${TURN_SKILLS_TIMELINE_KIND}:${turnId}`;
+        const data = { skills };
         if (
           page.entries.some(({ item }) => {
             if (
               item.type !== 'plugin' ||
               item.id !== markerId ||
-              item.kind !== MEMORY_SUMMARIES_TIMELINE_KIND
+              item.kind !== TURN_SKILLS_TIMELINE_KIND
             ) {
               return false;
             }
-            const marker = MemorySummariesTimelineSchema.safeParse(item.data);
+            const marker = TurnSkillsTimelineSchema.safeParse(item.data);
             return marker.success && JSON.stringify(marker.data) === JSON.stringify(data);
           })
         ) {
@@ -592,7 +555,7 @@ export default function contribute(server: PluginServerContext) {
         await timeline.append({
           type: 'plugin',
           id: markerId,
-          kind: MEMORY_SUMMARIES_TIMELINE_KIND,
+          kind: TURN_SKILLS_TIMELINE_KIND,
           version: 1,
           data,
         });
@@ -608,7 +571,7 @@ export default function contribute(server: PluginServerContext) {
       const selection = request.metadata?.['ltcook.team'];
       if (typeof selection !== 'string' || !selection)
         throw new Error('Choose an installed Team before starting LTCook.');
-      const selected = ResolvedModelSchema.parse(
+      const selected = ResolvedModelDtoSchema.parse(
         await runtimeJson('/v1/model/resolve', {
           teamSelection: selection,
           workspaceRoot: request.config.cwd,
@@ -668,7 +631,7 @@ export default function contribute(server: PluginServerContext) {
         workspaceRoot: request.cwd,
         teamSelection,
       };
-      const savedModel = ResolvedModelSchema.safeParse(
+      const savedModel = ResolvedModelDtoSchema.safeParse(
         request.metadata[RESOLVED_MODEL_METADATA_KEY],
       );
       if (!savedModel.success)

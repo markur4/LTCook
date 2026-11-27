@@ -7,11 +7,11 @@ import {
   MODEL_ALIAS_METADATA_KEY,
   MODEL_REASONING_METADATA_KEY,
   RESOLVED_MODEL_METADATA_KEY,
-  ResolvedModelSchema,
-  effectiveRunningModel,
+  ResolvedModelDtoSchema,
   type ReasoningEffort,
-  type ResolvedModel,
-} from '../../shared/models';
+  type ResolvedModelDto,
+} from '@ltcook/model-contracts';
+import { effectiveRunningModel } from '../running-model';
 import { useModelCatalog } from '../use-model-catalog';
 
 const TEAM_METADATA_KEY = 'ltcook.team';
@@ -27,7 +27,7 @@ function reasoningLabel(reasoning: ReasoningEffort | undefined) {
   return reasoning ?? 'provider default';
 }
 
-function resolutionLabel(model: ResolvedModel) {
+function resolutionLabel(model: ResolvedModelDto) {
   const effort = reasoningLabel(model.reasoning);
   if (model.reasoningSource === 'session')
     return model.preset && model.preset !== model.reasoning
@@ -47,7 +47,7 @@ function ModelBadge({
   model,
 }: {
   theme: PluginComposerItemProps['theme'];
-  model: ResolvedModel;
+  model: ResolvedModelDto;
 }) {
   const label = `@${model.alias} · ${model.provider}/${model.model} · ${resolutionLabel(model)}`;
   return (
@@ -76,7 +76,7 @@ export function ModelComposerItem({ theme }: PluginComposerItemProps) {
   const teamSelection = stringMetadata(composer.agent.metadata, TEAM_METADATA_KEY);
   const catalog = useModelCatalog(teamSelection, canChooseModel);
   const [error, setError] = useState<string>();
-  const storedModel = ResolvedModelSchema.safeParse(
+  const storedModel = ResolvedModelDtoSchema.safeParse(
     composer.agent.metadata[RESOLVED_MODEL_METADATA_KEY],
   );
 

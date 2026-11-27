@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { SessionSnapshot } from './workflow-api/index.js';
 import { TeamRegistry } from './integrations/team-loader.js';
@@ -8,20 +10,25 @@ import { RiedService } from './repository/discovery.js';
 import { createTools } from './tools/catalog.js';
 import { WebToolService } from './tools/web.js';
 import { WorkspaceMcp } from './integrations/mcp.js';
+import { ActivityPreferences } from './integrations/activity-preferences.js';
+import { verifyDeployedBuild } from './integrations/deployed-build.js';
+import { PaseoWorkspaceServices } from './integrations/paseo-workspace-services.js';
+import { createWorktreeScopeResolver, SessionWorktrees } from './integrations/session-worktrees.js';
+import { createColgrepProvider } from './repository/providers/colgrep.js';
+import type { RepositoryIndexService } from './services/repository-index.js';
+import { createSessionWorktreeTool } from './tools/session-worktree.js';
 import { isWithin } from './path-containment.js';
 import { connectPlanningDialogs } from './integrations/planning-dialogs.js';
 import { EvalRunService } from './evals/service.js';
 import { createEvalEngine } from './evals/engine.js';
 import { createPaseoMemorySource } from './integrations/paseo-memory.js';
-import { releaseOllamaModel } from './integrations/ollama.js';
-import { createOllamaDeviceCatalog } from './integrations/ollama-devices.js';
-import { SessionMemory } from './session-memory/service.js';
-import {
-  defaultMemoryBudgets,
-  sessionMemoryGeneration,
-  sessionMemoryModel,
-  summarizeMemory,
-} from './session-memory/summarization.js';
+import { ConversationRecords } from './session-memory/conversation.js';
+import { hostedConversationProvider } from './session-memory/hosted.js';
+import { ConversationInference, localConversationProvider } from './session-memory/inference.js';
+import { ClarifyService } from './session-memory/clarify.js';
+import { TrackerService } from './session-memory/tracker.js';
+import { ServiceInferenceError } from './services/inference-recovery.js';
+import { openConversationProductStore } from './session-memory/product-store.js';
 import { PastedDocuments } from './session-memory/pasted-documents.js';
 import { catalogModelAliases, resolveModel } from './models/aliases.js';
 const EX_TEMPFAIL = 75;
@@ -79,10 +86,12 @@ async function run(): Promise<void> {
     await runServiceAction(args[1]);
     return;
   }
+  const instanceId = args[0] === '--restart-instance-id' ? z.uuid().parse(args[1]) : randomUUID();
 
   const [
     { createRuntime },
     { RuntimeApi, agentBearer },
+    { SessionActivation },
     { captureShellEnvironment },
     { createPaseoAgentBackend, startPaseoHost },
     { Telemetry },
@@ -91,6 +100,7 @@ async function run(): Promise<void> {
   ] = await Promise.all([
     import('./core/runtime.js'),
     import('./integrations/runtime-api.js'),
+    import('./integrations/session-activation.js'),
     import('./integrations/shell-environment.js'),
     import('./integrations/paseo.js'),
     import('./diagnostics/telemetry.js'),
@@ -167,9 +177,15 @@ async function run(): Promise<void> {
   let apiListening = false;
   let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined;
   let evals: EvalRunService | undefined;
-  let memory: SessionMemory | undefined;
+  let memory: ConversationRecords | undefined;
+  let conversationInference: ConversationInference | undefined;
+  let conversationProducts: ReturnType<typeof openConversationProductStore> | undefined;
+  let tracker: TrackerService | undefined;
+  let workspaceServices: PaseoWorkspaceServices | undefined;
+  let repositoryIndex: RepositoryIndexService | undefined;
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
+  const nativePreparation = new AbortController();
   let shutdownPromise: Promise<void> | undefined;
   let disconnectPlanningDialogs: (() => void) | undefined;
   let serviceStartup: Promise<unknown> | undefined;
@@ -185,6 +201,7 @@ async function run(): Promise<void> {
   };
   const cleanup = (signal: string, exitCode: number): Promise<void> => {
     stopping = true;
+    nativePreparation.abort(new Error('LTCook runtime is stopping.'));
     startup.end();
     shutdownPromise ??= (async () => {
       const failures: unknown[] = [];
@@ -203,6 +220,11 @@ async function run(): Promise<void> {
           sessionId: initialSnapshot?.session.id,
         }),
       );
+      if (workspaceServices) await attempt(() => workspaceServices!.close());
+      if (repositoryIndex) await attempt(() => repositoryIndex!.close());
+      if (tracker) await attempt(() => tracker!.close());
+      if (conversationInference) await attempt(() => conversationInference!.close());
+      if (conversationProducts) await attempt(() => conversationProducts!.close());
       if (memory) await attempt(() => memory!.close());
       if (runtime) await attempt(() => runtime!.close());
       if (evals) await attempt(() => evals!.close());
@@ -232,10 +254,40 @@ async function run(): Promise<void> {
         'AppRC did not resolve required native runtime paths; launch through `ltcook launch runtime`.',
       );
     }
-    const summarizer = resolveModel('tiny-local', process.env);
+    const sourceRuntime = process.versions.bun !== undefined;
+    const installedRuntime =
+      !sourceRuntime && appRoot === path.join(canonicalDeploymentRoot, 'app');
+    const receipt = z
+      .looseObject({
+        app: z.string().optional(),
+        browser_available: z.boolean().optional(),
+        browser_executable: z.string().optional(),
+        fingerprint: z.string().optional(),
+      })
+      .parse(
+        JSON.parse(
+          await fs
+            .readFile(path.join(canonicalDeploymentRoot, 'runtime.json'), 'utf8')
+            .catch((error: unknown) => {
+              if (installedRuntime) throw error;
+              return '{}';
+            }),
+        ),
+      );
+    if (installedRuntime && receipt.app !== appRoot)
+      throw new Error('The installed runtime receipt belongs to a different deployment.');
+    const buildFingerprint = installedRuntime
+      ? await verifyDeployedBuild(appRoot, fileURLToPath(import.meta.url), receipt.fingerprint)
+      : undefined;
+    let summarizerModel = '';
+    try {
+      summarizerModel = resolveModel('local-tiny', process.env).model;
+    } catch {
+      // > A local evaluation model is resolved separately from the active conversation provider.
+    }
     const summarization = {
       endpoint: process.env.LTCOOK_OLLAMA_ENDPOINT ?? '',
-      model: summarizer.model,
+      model: summarizerModel,
       keepAlive: Number(process.env.LTCOOK_SUMMARIZER_KEEP_ALIVE ?? '-1'),
       generation: process.env.LTCOOK_SUMMARIZER_GENERATION,
     };
@@ -255,10 +307,20 @@ async function run(): Promise<void> {
     const ried = new RiedService(riedCacheDirectory, process.env.LTCOOK_BRIEF_EXECUTABLE, (id) =>
       workspaceShellEnvironments.get(id),
     );
-    api = new RuntimeApi(undefined, apiToken, apiListen, process.env, telemetry);
     await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
-    api.setActivityPreferences(path.join(stateDirectory, 'activity-settings.json'));
-    const sourceRuntime = process.versions.bun !== undefined;
+    const colgrep = createColgrepProvider({ background: true });
+    repositoryIndex = colgrep.indexService;
+    const preferences = new ActivityPreferences(
+      path.join(stateDirectory, 'activity-settings.json'),
+    );
+    const worktrees = new SessionWorktrees(process.env.PATH ?? '');
+    const resolveScope = createWorktreeScopeResolver((id) => runtime?.snapshot(id));
+    const worktreeTool = createSessionWorktreeTool(worktrees, resolveScope);
+    const activation = new SessionActivation(process.env, repositoryIndex);
+    api = new RuntimeApi(undefined, apiToken, apiListen, activation, process.env, telemetry, {
+      activity: { colgrep, preferences },
+      worktrees: { store: worktrees, resolveScope },
+    });
     const web = new WebToolService(
       python,
       {
@@ -281,14 +343,27 @@ async function run(): Promise<void> {
       return;
     }
     if (workspaceRoot) {
-      const configResult = childProcess.spawnSync(
-        python,
-        ['-m', 'ltcook.launch', 'write-native-config', '--workspace', workspaceRoot],
-        { encoding: 'utf8', env: process.env, windowsHide: true },
-      );
-      if (configResult.status !== 0) {
+      try {
+        await promisify(childProcess.execFile)(
+          python,
+          ['-m', 'ltcook.launch', 'write-native-config', '--workspace', workspaceRoot],
+          {
+            encoding: 'utf8',
+            env: process.env,
+            signal: nativePreparation.signal,
+            timeout: 15_000,
+            windowsHide: true,
+            maxBuffer: 1024 * 1024,
+          },
+        );
+      } catch (error) {
+        if (nativePreparation.signal.aborted) return;
+        const stderr =
+          error instanceof Error && 'stderr' in error && typeof error.stderr === 'string'
+            ? error.stderr
+            : '';
         const pathError = /PI_CODING_AGENT_DIR must resolve inside the LTCook deployment\./.exec(
-          configResult.stderr ?? '',
+          stderr,
         )?.[0];
         throw new Error(
           pathError ?? 'AppRC native configuration adapter failed to write its registered files.',
@@ -317,102 +392,93 @@ async function run(): Promise<void> {
       return;
     }
     api.setProviderSubagents(host.listProviderSubagents);
-    const threshold = Number(process.env.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000');
     const pastedDocuments = new PastedDocuments(
       path.join(stateDirectory, 'pasted-documents'),
       apiToken,
     );
     api.setPastedDocuments(pastedDocuments);
-    if (threshold !== 0) {
-      try {
-        const memorySettings = {
-          ...summarization,
-          model: process.env.LTCOOK_SESSION_MEMORY_MODEL?.trim() || sessionMemoryModel,
-          generation: JSON.stringify(sessionMemoryGeneration),
-        };
-        memory = new SessionMemory({
-          databasePath: path.join(stateDirectory, 'session-memory-v5.sqlite'),
-          source: createPaseoMemorySource(host.api, apiToken, pastedDocuments),
-          threshold,
-          deviceCatalog: createOllamaDeviceCatalog(memorySettings.endpoint),
-          summarize: (type, prompt, signal, placement, onProgress, format) =>
-            summarizeMemory(
-              { ...memorySettings, ...placement },
-              prompt,
-              signal,
-              type,
-              false,
-              onProgress,
-              format,
-            ),
-          releaseCpuModel: (signal) => releaseOllamaModel(memorySettings, signal),
-          model: memorySettings.model,
-          configuration: memorySettings.generation,
-          budgets: {
-            input: Number(
-              process.env.LTCOOK_SESSION_MEMORY_INPUT_TOKENS ?? defaultMemoryBudgets.input,
-            ),
-          },
-          peers: (agentId, workspace) => runtime?.memoryPeers(agentId, workspace) ?? [],
-          onRequest: ({ result, ...request }) => {
-            void telemetry.log('info', 'session-memory.request', {
-              ...request,
-              complete: result.complete,
-              elapsedMs: result.elapsedMs,
-              inputCount: result.usage?.inputTokens,
-              outputCount: result.usage?.outputTokens,
-              cachedCount: result.metrics?.cachedInputTokens,
-              prefillMs: result.metrics?.prefillMs,
-              generationMs: result.metrics?.generationMs,
-              thinkingPresent: result.metrics?.thinkingPresent,
-            });
-          },
-          onDispatch: (data) => {
-            void telemetry.log('info', 'session-memory.dispatch', {
-              agentId: data.agentId,
-              elapsedMs: data.elapsedMs,
-              estimatedSize: data.estimatedTokens,
-            });
-          },
-          onFailure: () => {
-            void telemetry.log('warn', 'session-memory.update_failed', {});
-          },
-        });
-        api.setSessionMemory(memory, (id) => runtime?.memoryContext(id));
-        const activeMemory = memory;
-        void host.api.agents
-          .list()
-          .then(({ entries }) => {
-            activeMemory.recover(
-              entries.flatMap(({ agent }) =>
-                ['ltcook', 'pi', 'codex'].includes(agent.provider) ? [agent.id] : [],
-              ),
-            );
-          })
-          .catch(() => {});
-      } catch {
-        void telemetry.log('warn', 'session-memory.unavailable', {});
-      }
-    }
-    const receipt = JSON.parse(
-      await fs
-        .readFile(path.join(canonicalDeploymentRoot, 'runtime.json'), 'utf8')
-        .catch(() => '{}'),
-    ) as {
-      app?: string;
-      browser_available?: boolean;
-      browser_executable?: string;
-      fingerprint?: string;
-    };
-    if (stopping) return;
-    const buildFingerprint =
-      !sourceRuntime &&
-      typeof receipt.app === 'string' &&
-      path.resolve(receipt.app) === appRoot &&
-      typeof receipt.fingerprint === 'string' &&
-      /^[a-f0-9]{64}$/.test(receipt.fingerprint)
-        ? receipt.fingerprint
+    const source = createPaseoMemorySource(host.api, apiToken, pastedDocuments);
+    memory = new ConversationRecords({
+      databasePath: path.join(stateDirectory, 'conversation-records-v1.sqlite'),
+      source,
+      onObserved: (id) => tracker?.observe(id),
+      peers: (agentId, workspace) => runtime?.memoryPeers(agentId, workspace) ?? [],
+      onDispatch: (event) => {
+        void telemetry.log('info', 'conversation.handoff', event);
+      },
+      onFailure: (event) => {
+        void telemetry.log('warn', 'conversation.observation_failed', event);
+      },
+    });
+    api.setConversationRecords(memory, (id) => runtime?.memoryContext(id));
+
+    const configuredLocal = process.env.LTCOOK_CONVERSATION_LOCAL_MODEL?.trim() || '@local-CPU';
+    const inferenceMode = z
+      .enum(['hosted', 'local'])
+      .safeParse(process.env.LTCOOK_CONVERSATION_INFERENCE?.trim() || 'hosted');
+    const conversationInputTokens = z.coerce
+      .number()
+      .int()
+      .positive()
+      .safeParse(process.env.LTCOOK_CONVERSATION_INPUT_TOKENS ?? '8000');
+    const conversationConfigurationError = !inferenceMode.success
+      ? new ServiceInferenceError(
+          'configuration',
+          'Set LTCOOK_CONVERSATION_INFERENCE to hosted or local.',
+        )
+      : !conversationInputTokens.success
+        ? new ServiceInferenceError(
+            'configuration',
+            'Set LTCOOK_CONVERSATION_INPUT_TOKENS to a positive integer.',
+          )
         : undefined;
+    conversationInference = new ConversationInference(
+      {
+        hosted: hostedConversationProvider(() => resolveModel('tiny', process.env)),
+        local: localConversationProvider(() => {
+          const local = configuredLocal.startsWith('@')
+            ? resolveModel(configuredLocal, process.env)
+            : { provider: 'ollama', model: configuredLocal };
+          if (local.provider !== 'ollama')
+            throw new Error('Set LTCOOK_CONVERSATION_LOCAL_MODEL to an Ollama model.');
+          return { ...summarization, model: local.model };
+        }),
+      },
+      inferenceMode.data ?? 'hosted',
+      (event) => {
+        void telemetry.log('info', 'conversation.inference', event);
+      },
+      conversationConfigurationError,
+    );
+    api.setConversationInference(conversationInference);
+    conversationProducts = openConversationProductStore(
+      path.join(stateDirectory, 'conversation-products-v1.sqlite'),
+    );
+    const inputBudget = conversationInputTokens.data ?? 8000;
+    api.setClarify(
+      new ClarifyService(conversationProducts, source, conversationInference, inputBudget),
+    );
+    const tracking = new TrackerService(
+      conversationProducts,
+      source,
+      conversationInference,
+      inputBudget,
+    );
+    tracker = tracking;
+    api.setTracker(tracking);
+    const recording = memory;
+    void host.api.agents
+      .list()
+      .then(({ entries }) => {
+        const conversations = entries.flatMap(({ agent }) =>
+          ['ltcook', 'pi', 'codex'].includes(agent.provider) ? [agent.id] : [],
+        );
+        for (const id of conversations) tracking.observe(id, { baseline: true });
+        return recording.recover(conversations);
+      })
+      .catch(() => {});
+
+    if (stopping) return;
     const reserveIdleRestart = buildFingerprint ? host.reserveIdleRestart : undefined;
     const requestRestart =
       reserveIdleRestart && process.env.LTCOOK_PASEO_PASSWORD
@@ -445,12 +511,17 @@ async function run(): Promise<void> {
               );
             })
         : undefined;
-    const workspaceMcp = new WorkspaceMcp(
-      createTools(ried, summarization, web, memory, api.activityColgrep, api.worktreeTool),
-      apiListen,
+    const tools = createTools(
+      ried,
+      summarization,
       web,
-      requestRestart,
+      memory,
+      colgrep,
+      worktreeTool,
+      conversationInference,
     );
+    const workspaceMcp = new WorkspaceMcp(tools, apiListen, web, requestRestart, repositoryIndex);
+    api.setWorkspaceTools(tools);
     api.setWorkspaceMcp(workspaceMcp);
     const backend = await createPaseoAgentBackend({
       telemetry,
@@ -464,6 +535,7 @@ async function run(): Promise<void> {
       deploymentNode: node,
       browserAvailable: receipt.browser_available === true,
       browserExecutable: receipt.browser_executable,
+      workspacePreparationSignal: nativePreparation.signal,
       originalShellEnvironment(_workspace, currentSessionId) {
         return workspaceShellEnvironments.get(currentSessionId);
       },
@@ -497,11 +569,19 @@ async function run(): Promise<void> {
     api.setRuntime(runtimeController);
     if (workspaceRoot && sessionId) {
       workspaceShellEnvironments.set(sessionId, captureShellEnvironment(process.env));
-      initialSnapshot = await runtimeController.openSession({ id: sessionId, workspaceRoot });
-      api.setSession(workspaceRoot, initialSnapshot.session.id);
+      try {
+        initialSnapshot = await runtimeController.openSession({ id: sessionId, workspaceRoot });
+      } catch (error) {
+        if (nativePreparation.signal.aborted) return;
+        throw error;
+      }
+      if (stopping) return;
+      activation.register(workspaceRoot, initialSnapshot.session.id, {
+        authorizeRepositoryIndex: true,
+      });
     }
     if (stopping) return;
-    api.setOpenWorkspaceHandler(async (request) => {
+    activation.setWorkspaceActivator(async (request) => {
       const targetWorkspace = path.resolve(request.workspaceRoot);
       const shellEnvironment = { ...request.shellEnvironment };
       delete shellEnvironment.LTCOOK_SHELL_PROVENANCE;
@@ -539,23 +619,8 @@ async function run(): Promise<void> {
         return backend.resolveSelection(workspaceRoot, leaderFor(teamSelection), alias, reasoning);
       },
     });
-    api.setPrepareSessionHandler(async (request) => {
-      const snapshot = runtimeController.snapshot(request.sessionId);
-      const leader = snapshot.definition.members.find(
-        (member) => member.key === snapshot.definition.leaderKey,
-      );
-      if (!leader) throw new Error('Selected Team has no Leader');
-      const prepared = await backend.prepare(
-        {
-          member: leader,
-          sessionId: snapshot.session.id,
-          teamInstanceId: snapshot.session.teamInstanceId,
-          teamId: snapshot.session.teamId,
-          workspaceRoot: snapshot.session.workspaceRoot,
-        },
-        request.leaderAgentId,
-        request.savedModel,
-      );
+    api.setPrepareSessionHandler(async (options, leaderAgentId, savedModel) => {
+      const prepared = await backend.prepare(options, leaderAgentId, savedModel);
       return {
         env: prepared.env,
         ...(prepared.mcpServers ? { mcpServers: prepared.mcpServers } : {}),
@@ -580,7 +645,6 @@ async function run(): Promise<void> {
       backendLogPath = path.join(parent, path.basename(candidate));
     }
     if (stopping) return;
-    const instanceId = randomUUID();
     api.setLifecycle(
       {
         instanceId,
@@ -595,6 +659,49 @@ async function run(): Promise<void> {
       () => cleanup('API stop', 0),
       reserveIdleRestart,
     );
+    workspaceServices = new PaseoWorkspaceServices({
+      api: host.api,
+      mutations: host.workspaceMutations,
+      archiveWorkspacePreservingFiles: host.archiveWorkspacePreservingFiles,
+      listProviderSubagents: host.listProviderSubagents,
+      stateDirectory,
+      isQueued(agents) {
+        const sessions = new Set(
+          agents.flatMap((agent) => {
+            const id = agent.provider === 'ltcook' ? agent.id : agent.labels['ltcook.session'];
+            return id ? [id] : [];
+          }),
+        );
+        for (const id of sessions) {
+          try {
+            const snapshot = runtimeController.snapshot(id);
+            if (
+              snapshot.assignments.some(({ status }) => status !== 'reported') ||
+              snapshot.tasks.some(
+                ({ scheduled, status }) =>
+                  scheduled && ['pending', 'running', 'ready'].includes(status),
+              ) ||
+              snapshot.decisions.some(({ blocking, answeredAt }) => blocking && !answeredAt) ||
+              snapshot.planning.some(({ stage }) => stage === 'awaiting-approval')
+            )
+              return true;
+          } catch {
+            // A missing managed binding is not evidence that its work has finished.
+            return true;
+          }
+        }
+        return false;
+      },
+      onError(service, error, workspaceId) {
+        void telemetry.log('warn', 'workspace-services.update-failed', {
+          service,
+          workspaceId,
+          message: safeErrorMessage(error),
+        });
+      },
+    });
+    api.setWorkspaceServices(workspaceServices);
+    workspaceServices.start();
     if (stopping) return;
     const summary = initialSnapshot
       ? `${teamSelection}, ${initialSnapshot.members.length} declared members, ` +

@@ -88,6 +88,76 @@ Treat this as the parking lot for actionable problems discovered while working b
 
 <br>
 
+# 2026-11-26
+
+## P2 / E2 [Tooling] - *Make effective Codex approval settings visible in Paseo*
+
+- **Area:** Paseo's Codex app-server adapter and [LTCook's Paseo host configuration](runtime/src/integrations/paseo.ts).
+- **Observed while:** Investigating why a Codex command approval blocked default-branch integration.
+- **Why not fixed now:** The current Pass aligns instructions and documentation. A diagnostics or provider change needs its own scope.
+- **Evidence:** The affected Paseo agent had `modeId: "auto-review"` and its turn used `on-request` with `auto_review`. The pinned Paseo adapter defaults to Auto-review for Codex 0.115.0 and newer and forwards that preset to Codex. The affected session ran Codex 0.171.0. Codex app-server itself assigns the historical `vscode` source label.
+- **Context:** The active chat mode can override the user's CLI defaults. The historical records establish the effective mode, and the adapter source establishes the provider default. The original mode selection or inheritance for that chat remains unconfirmed.
+- **Suggested next step:** Trace how a fresh or resumed Codex chat obtains its mode. Verify the effective reviewer, approval policy, and sandbox for standalone Codex and Paseo's Default Permissions and Auto-review presets. Make the effective values and their sources visible through existing diagnostics.
+
+The [architectural CSC report](code-smells.md) records findings, accepted
+decisions, the Explorer fix status, and the order for the remaining passes.
+
+## P3 / E2 [Code smell] - *Give LTCook Services and container deployment distinct homes*
+
+- **Area:** `runtime/src/session-memory/`, `runtime/src/services/`, `runtime/src/repository/`, `services/`, and `docs/`.
+- **Observed while:** Reviewing runtime ownership and the Activity sidebar's Services terminology during the architectural CSC.
+- **Why not fixed now:** This records the approved ownership decision. Schedule the moves with the CSC follow-ups after the next milestone.
+- **Evidence:** Tracker and Clarify live under `runtime/src/session-memory/`; Activity lists RAG Index and handoff evidence, while `runtime/src/services/controller.ts` controls external containers and root `services/` holds Compose definitions and templates.
+- **Context:** LTCook Services live in the single runtime, remain available while enabled, wait for events, schedules, or requests, and maintain their own state. AI is optional and a separate process or daemon is unnecessary. Reserve `runtime/src/services/` for these capabilities. Keep search, indexing, and providers in `runtime/src/repository/`. The background repository indexing service in `runtime/src/services/repository-index.ts` calls the Repository Core provider and reports its work through the RAG Index view.
+- **Suggested next step:** Rename root `services/` to `containers/` and move the controller to `runtime/src/integrations/containers.ts` or an equally clear container integration path. Update packaging, asset staging, and `docs/` in the same change, including [repository routing](docs/Development.md#repository-routing), the [conversation evidence explanation](docs/Explanations.md#clarify-tracker-and-conversation-evidence), and affected container paths and links. Preserve the Activity labels and GUI experience, keep one runtime, and omit migrations and legacy adapters. Coordinate the moves with [runtime decomposition](#p3--e1-code-smell---separate-runtime-composition-transport-and-coordination).
+
+## P2 / E1 [Code smell] - *Give managed tool classification and bound-member lookup explicit owners*
+
+- **Area:** `runtime/src/tools`, `runtime/src/core`, `runtime/src/integrations/native-policy.ts`, and `runtime/src/integrations/runtime-api.ts`.
+- **Observed while:** Reviewing the managed Pi Session Memory denial and its server authorization path.
+- **Why not fixed now:** Explorer restoration is tracked in PR #62. This pass covers classification and bound-member lookup. The timeline decoder and neutral Memory contract remain with the Session Memory pass.
+- **Evidence:** The authorization pass consolidates classification and replaces two Session snapshots with one binding lookup per managed HTTP invocation. Session Memory and worktree calls retain the native precheck because Pi's call hook lacks the selected handler's identity.
+- **Context:** The next milestone depends on explicit tool classification and a current binding lookup. Keep role, Pass approval, workspace grants, and Memory peer scope distinct.
+- **Suggested next step:** Use the scoped invocation authority in the transport decomposition, then finish Memory-specific ownership with the Session Memory pass. See [CSC-01](code-smells.md#csc-01--tool-classification-and-authorization-disagree), [CSC-05](code-smells.md#csc-05--backend-contracts-sit-under-the-paseo-plugin), [CSC-06A](code-smells.md#csc-06a--managed-authorization-repeats-broad-reads), and the [runtime decomposition](#p3--e1-code-smell---separate-runtime-composition-transport-and-coordination) entry.
+
+## P3 / E1 [Code smell] - *Separate runtime composition, transport and coordination*
+
+- **Area:** `runtime/src/main.ts`, `runtime/src/integrations/runtime-api.ts`, `runtime/src/integrations/mcp.ts`, and `runtime/src/core/runtime.ts`.
+- **Observed while:** Tracing shared tool construction, startup and scheduling.
+- **Why not fixed now:** Shared construction and the Activity, tool, and Session route families have explicit owners. Core extraction, the remaining adapter boundaries, and correction of failure details remain open.
+- **Evidence:** HTTP and MCP invoke tools through the same runtime catalog. Session activation owns canonical workspace registration and pending Open requests. RuntimeController still implements command policy, scheduling, native lifecycle, delivery, and snapshot projection. RIED and Session Memory lose returned error detail at the native boundary.
+- **Context:** Preserve startup readiness, one coordination owner, uncertain-send protection, approval and review gates, and the existing user workflows.
+- **Suggested next step:** Extract route families on the injected service boundary, then extract cohesive Core responsibilities using the shared task gates and fix evidenced error detail losses. See [CSC-02](code-smells.md#csc-02--http-constructs-services-also-used-by-the-tool-catalog), [CSC-04](code-smells.md#csc-04--runtimecontroller-concentrates-coordination-responsibilities), [CSC-09](code-smells.md#csc-09--adapters-discard-actionable-failure-detail), [tool classification and lookup](#p2--e1-code-smell---give-managed-tool-classification-and-bound-member-lookup-explicit-owners), [model contract ownership](#p3--e3-code-smell---clarify-model-contract-and-documentation-ownership), and [Services and container ownership](#p3--e2-code-smell---give-ltcook-services-and-container-deployment-distinct-homes).
+
+## P3 / E1 [Question] - *Measure authorized conversation retrieval scaling*
+
+- **Area:** `runtime/src/session-memory/conversation.ts` and `runtime/src/integrations/paseo-memory.ts`.
+- **Observed while:** Tracing broad discovery through authorized original history.
+- **Why not fixed now:** The local Paseo pilot met the current deadlines and found every expected source on the measured corpus. It gives no reason to introduce an index for that workload.
+- **Evidence:** Exact lookup used one page at every tested size. Targeted broad search walked 200 pages at 9,600 messages. Handoff read one page for current context and 200 pages when recovering older originals. See the [retrieval measurements](code-smells.md#retrieval-measurements) for latency, recall, and fixture limits.
+- **Context:** Evaluate search, exact lookup, and handoff recovery separately. Preserve epoch, peer scope, citations, and truthful incomplete results.
+- **Suggested next step:** Reconsider an epoch-aware lexical index if a representative workload shows missed deadlines or recall loss. See [CSC-06B](code-smells.md#csc-06b--broad-memory-search-walks-original-history).
+
+## P3 / E2 [Question] - *Measure live workspace preparation and cache growth*
+
+- **Area:** `runtime/src/integrations/paseo.ts`, `runtime/src/integrations/workspace-preparation.ts`, and `src/ltcook/config/pi_config.py`.
+- **Observed while:** Tracing AppRC workspace preparation for managed native agents.
+- **Why not fixed now:** [Draft #75](https://github.com/markur4/LTCook/pull/75) has a measured and reviewed implementation awaiting integration.
+- **Evidence:** The live runtime uses `spawnSync` and synchronous fingerprints. The cache has no eviction. Different Session keys can point to the same generated Pi configuration.
+- **Context:** AppRC owns configuration and shell provenance. Configuration writes include read-merge-replace behavior.
+- **Suggested next step:** Reconcile the async startup and bounded cache with Session activation on the target. Preserve shared Pi-home serialization, fingerprint invalidation, and shell provenance. See the [workspace preparation measurements](code-smells.md#workspace-preparation-measurements) and [CSC-06C](code-smells.md#csc-06c--live-workspace-preparation-uses-synchronous-io).
+
+## P3 / E3 [Code smell] - *Clarify model contract and documentation ownership*
+
+- **Area:** `runtime/src/models/aliases.ts`, `runtime/src/paseo-plugin/shared/models.ts`, and `docs/Development.md`.
+- **Observed while:** Comparing strict model inputs, panel DTOs, and contributor routing.
+- **Why not fixed now:** The model contract and documentation should follow the actual module owners as boundaries move.
+- **Evidence:** Model DTOs repeat reasoning values and fields. The panel deliberately accepts broader identifiers and projects native overrides. Contributors have only broad runtime routing guidance.
+- **Context:** Preserve public aliases, provider-native overrides, and appropriate validation at each boundary.
+- **Suggested next step:** Derive common declarations where deployed dependency resolution supports it, then update routing and qualification documentation in place. See [CSC-08](code-smells.md#csc-08--model-and-documentation-contracts-have-split-ownership) and [runtime decomposition](#p3--e1-code-smell---separate-runtime-composition-transport-and-coordination).
+
+<br>
+
 # 2026-11-25
 
 ## P2 / E2 [Question] - *Align the chat diff count with the reviewed worktree*

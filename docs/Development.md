@@ -7,6 +7,7 @@ quick checks, and submission expectations. This page covers the deeper project
 layout, packaging boundary, verification limits, and current release workflow.
 
 - [Work in the project](#work-in-the-project)
+  - [Prototype workflow](#prototype-workflow)
   - [Maintainer environment](#maintainer-environment)
   - [Repository routing](#repository-routing)
   - [Workspace tool guidance](#workspace-tool-guidance)
@@ -16,7 +17,7 @@ layout, packaging boundary, verification limits, and current release workflow.
 - [Verify and release](#verify-and-release)
   - [Verification](#verification)
   - [Local Ollama and Agent Evals](#local-ollama-and-agent-evals)
-    - [Session Memory qualification](#session-memory-qualification)
+    - [Clarify and Tracker verification](#clarify-and-tracker-verification)
   - [Repository retrieval evaluation](#repository-retrieval-evaluation)
   - [Asset packaging](#asset-packaging)
   - [Integration and system procedures](#integration-and-system-procedures)
@@ -28,14 +29,46 @@ layout, packaging boundary, verification limits, and current release workflow.
 
 # Work in the project
 
+## Prototype workflow
+
+Develop and test instructions and skills in Codex first. Use ordinary Codex
+chats in Paseo to check that the project and personal guidance, shared skills,
+and LTCook workspace tools reach the agent together. Keep the policy in its
+owning instructions or skill and use the fixed
+[Pass and Task definitions](Explanations.md#domain-terminology). Pi is the
+target for additional runtime enforcement after the policy is settled and the
+behavior still needs enforcement. Existing Pi qualification and the
+[verification commands](#verification) continue to apply.
+
+Use one shared branch, worktree, and draft PR for each Pass that changes
+LTCook. Review is a Task on that checkout. A denied integration action leaves
+the integration Task and its dependents pending in the same Pass. Preserve the
+checkout and report the denied action, the reason, and the relevant user
+authorization. Leave the Pass open until the agreed integration succeeds.
+
+For an ordinary Codex chat in Paseo, start with **Default Permissions** when
+testing guidance with the user's command approval flow. That preset uses
+`on-request`, `workspace-write`, and the `user` reviewer. LTCook's pinned
+Paseo adapter defaults to **Auto-review** when the host Codex version supports
+it (0.115.0 and newer). Auto-review keeps the same policy and sandbox, and
+passes `approvalsReviewer: "auto_review"` to Codex app-server, overriding the
+user's reviewer setting for that chat. Check the effective mode when diagnosing
+a denial, including after resuming. [Pinned Paseo adapter](https://github.com/getpaseo/paseo/blob/23bae61535542a45ade7196a7b3c152705f16de3/packages/server/src/server/agent/providers/codex-app-server-agent.ts#L8012-L8032)
+
+The Codex command approval flow and the Team's code review Task have separate
+criteria and authority. In Codex 0.171.0, the app-server entry point supplies
+`vscode` as the thread source label even when Paseo launches it. Check the mode
+and approval settings to identify which reviewer resolved a request.
+[Codex app-server entry point](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/cli/src/main.rs#L1361-L1369) · [Instruction sources](Explanations.md#instruction-sources-in-codex-and-pi)
+
 ## Maintainer environment
 
-Use Python 3.12+, Bun 1.4.4+, the Node version in `.node-version`, uv, and just.
+Use Python 3.13+, Bun 1.4.4+, the Node version in `.node-version`, uv, and just.
 The root [sync recipe](../justfile) is the supported locked full setup. Create the
 checkout's virtual environment explicitly when selecting an interpreter:
 
 ```shell
-uv venv --python 3.12 .venv
+uv venv --python 3.13 .venv
 just sync
 ```
 
@@ -113,6 +146,43 @@ requirement imposed on users of the application.
 The Python application resolves settings through AppRC. Keep native component
 translation in LTCook-owned paths and avoid a second hidden settings layer. The
 TypeScript runtime owns coordination; team packages use its public Team API v3.
+Runtime startup constructs the ColGREP provider and its indexing service,
+Activity preferences, and the Session worktree store. The HTTP routes and workspace catalog use the same
+instances. The HTTP listener starts before its native host and Core controller
+are ready. Worktree reads and reports share Session and Pass scope resolution.
+The Activity HTTP routes live in `runtime/src/integrations/runtime-activity.ts`.
+The native tool routes, including the dedicated Session RIED operation, live in
+`runtime/src/integrations/runtime-tool-routes.ts`. RuntimeApi authenticates the
+caller and parses the request before delegating to these handlers.
+Session open, prepare, list, snapshot, Team catalog, and command requests
+use `runtime/src/integrations/runtime-session-routes.ts`. The
+`session-activation.ts` service owns active workspace registration and pending
+Session opens. Core owns the durable Sessions and native bindings.
+
+The Pass scheduler in `runtime/src/core/pass-scheduler.ts` owns each
+Session's scheduling queue and selects scheduled assignments. It delegates
+native delivery to RuntimeController. The Session projection in
+`runtime/src/core/session-snapshot.ts` uses the same dependency and approval
+rules as the scheduler and controller, from `runtime/src/core/task-gates.ts`.
+
+Native workspace preparation calls AppRC asynchronously from
+`runtime/src/integrations/paseo.ts`. The preparation cache bounds reusable
+workspace entries and checks recorded dependency fingerprints and generated
+output hashes before reuse. The shared Python writer in
+`src/ltcook/config/pi_config.py` serializes updates by canonical Pi home for
+native, web, and CLI callers. For reusable installations, AppRC first discovers
+the input paths, then resolves settings again after the helper captures their
+file versions. The runtime verifies those versions and the generated outputs
+before caching the result. An input change during preparation or a wait for the
+writer lock makes the next request resolve configuration again.
+
+Model alias policy and strict runtime validation live in
+`runtime/src/models/aliases.ts`. The `@ltcook/model-contracts` workspace
+owns the shared model fields, reasoning values, and catalog schema. Asset
+staging includes the package and its compiled entry so the installed Paseo
+plugin can resolve it. The plugin projects native model changes onto that
+shared contract.
+
 Purpose-named contracts live in `runtime/src/team-api`, `guidance-api` and
 `workflow-api`. Core guidance lives in `runtime/resources`; imported bodies and
 notices retain their provenance. Design/Plan Markdown lives in global AppRC state,
@@ -122,6 +192,12 @@ wheel and installer, not general build debris. See
 [asset packaging](#asset-packaging).
 
 ## Workspace tool guidance
+
+Runtime tool names and capability checks live in `runtime/src/tools`.
+Runtime startup supplies one catalog to the native HTTP and ordinary MCP
+handlers. Core checks current Session bindings and Pass authority for managed
+calls, and the MCP adapter checks ordinary workspace grants. The installed
+Paseo plugin keeps its MCP server registration name within its copied source tree.
 
 When adding a workspace tool or changing what agents should use it for, ship
 concise agent-facing guidance with the registration. Explain when to choose the
@@ -145,6 +221,12 @@ Check that a normal launch exposes the tool and delivers its guidance. Use the
 existing [Repository Agent Behavior Evaluation](#repository-agent-behavior-evaluation)
 when comparing tool selection and evidence quality. Compare time to verified
 evidence and total turn time separately.
+
+For web research, agents prefer `ltcook_web_search` and `ltcook_web_fetch` when
+available and use `ltcook_web_content` to continue stored results. Search reports
+engine issues as well as sources; agents should inspect source content and use
+another available tool when evidence is incomplete or a capability is missing.
+Core standing guidance and Paseo's agent instructions both carry this policy.
 
 ---
 
@@ -371,220 +453,34 @@ The qualification verdict belongs to the summarization report, independently
 of whether the runner completed. Existing elapsed-time history and fallback for
 the three agent cases still use their original attempts.
 
-### Session Memory qualification
+<a id="session-memory-qualification"></a>
 
-Run the matched CPU comparison after suspending production inference:
+### Clarify and Tracker verification
 
-```shell
-bun evals/session-memory-live.ts --simplified --production-suspended
-```
+Use the existing Traditional Test suite for deterministic history, AAB
+recording, attachment handling, authorization, delegation, and concurrent
+inference. The focused tests for Tracker exercise manual edits and deletions,
+rewind, restart, pause gaps, input-budget outcomes, and independently valid
+changes across Trackers. Clarify tests cover exact reply identity, cache reuse,
+rewind during inference, and earlier context boundaries.
 
-The comparison uses the pinned LFM3 QAD Q4 model at seed 17. It compares the
-prior JSON pipeline, deterministic AABs and the short UAMP threshold with
-JSON, and the same pipeline with Markdown. The report gives request counts,
-CPU request time and provider prefill and generation measurements, along with
-storage and handoff size. The final arm must retain all critical facts assigned
-to generated UAMP summaries, all 14 critical facts across stored records, and
-all 14 in delegation handoffs. Ordinary retrieval of cited records counts
-toward record quality. The handoff may also recover missing evidence from
-other authorized originals. Critical contradictions fail each layer. Controls
-cover consecutive skipped Discussions before a Task approval and a large
-batch containing a failed check followed by a pass. The 30% reductions in
-requests and CPU wall time are optimization targets.
-
-Use the same CPU isolation for approval reference diagnostics and semantic
-qualification:
+Run the focused Hosted Agent Evals with a Codex subscription sign-in and
+`@tiny` resolving to GPT-6 Luna with low reasoning.
 
 ```shell
-bun evals/session-memory-live.ts --diagnose-approval --production-suspended
-bun evals/session-memory-live.ts --semantic --production-suspended
+bun evals/conversation-products.ts
 ```
 
-The approval diagnostic compares JSON and Markdown on one fixed current
-exchange. Each pair sees the same preceding context. The three pairs use
-generated context, original source for the preceding UAMP, and compact
-chronological context. With `--audit-output`, the report includes the exact
-rendered prompts and answers. Keep that output local. The semantic baseline
-requires each intended long UAMP to run the summarizer. It gates critical
-facts and contradictions in generated summaries, complete records and
-assembled handoffs. It uses the same pinned LFM3 model and seed 17.
+The fixtures use synthetic conversations. Tracker is graded on false approvals,
+older proposal citations, and correct decision replacements. Clarify is graded
+on stated facts, caveats, predictions, and earlier outcomes. Review the returned
+clarification for readability as well as fidelity.
 
-For progressive screening of the four smaller checkpoints against the
-qualified Session Memory code at `e7f1d60`, install the exact model tags and
-suspend production inference before running:
-
-```shell
-bun evals/session-memory-live.ts --screen-candidates --production-suspended
-```
-
-The screen runs export discovery, retry correction, manifest approval, and
-approval after skipped Discussions in that order. It stops a profile on the
-first failed gate. A complete, contradiction-free result that misses exactly
-one critical fact permits one temperature-0.1 retry from the first fixture.
-`--screen-profile=ID` selects one candidate and `--no-screen-retry` disables
-further retries for a focused replay. The screen grades generated summaries
-before original-source recovery and runs the matched CPU LFM3 comparison only
-for a fully qualifying profile. Reports include provider timings and token
-counts, model residency and runner peak RSS. The model aliases created during
-the screen are removed after use.
-
-Add `--mnn-approval-first` to test only MNN-Pocket at temperature 0.6. The
-screen starts with manifest approval and, if it passes, continues through
-export discovery, retry correction, and approval after skipped Discussions.
-This profile has no retry. A qualifying result runs LFM3 in the same order
-for the CPU comparison.
-
-Use `--screen-profile=mnn-pocket-q4-1` for the official MNN-Pocket Q4_1 QAT
-checkpoint at temperature 0.8. This runs the same manifest-first order at
-seed 17. It stops at the first failed fixture and runs a single profile.
-
-To diagnose MNN-Pocket's manifest approval failure on CPU, use:
-
-```shell
-bun evals/session-memory-live.ts --diagnose-mnn-approval --production-suspended
-```
-
-The evaluator uses both MNN-Pocket checkpoints at seed 17, reproduces each
-original approval prompt and changes one input at a time. The diagnostic
-reports generated-summary grades only. With `--audit-output`, keep the exact
-rendered system and user messages and generated answers local.
-
-Use `--diagnose-minimal-approval --production-suspended` for the three
-replacement-prompt experiments on Q8_0 alone. The evaluator keeps the current
-source messages, Task context and full manifest acceptance criteria. An
-incomplete answer fails the gate and remains available in the local audit.
-
-For downstream qualification on a host without a usable GPU, use the same
-CPU production pause and the native Pi GPT-6 Luna high-reasoning worker:
-
-```shell
-bun evals/session-memory-edit-live.ts --simplified --production-suspended
-```
-
-The runner compares an original-source control with the real simplified
-handoff on both pinned edit fixtures. Both workers use the same provider and
-reasoning settings. Each must finish its turn and pass the executable checks.
-
-Run `bun evals/session-memory-live.ts --context-aware` on the GPU host to
-compare authoritative Task context and Immediate Context on short cache
-recovery, an attachment on a turn with trailing tool evidence, a reference to
-a previous Discussion, and held-out index restore. The runner keeps source
-portions, the model, and sampling settings matched. Both Session Memory
-runners default to seed 17. Use `--seeds=43` to follow up on an ambiguous or
-failing result, `--fixture=ID` to select one fixture, or
-`--strategy=immediate` to focus one arm. Use `--full` for the expanded corpus
-or `--held-out` for the index fixture alone. The report checks that attached
-text reached the summarizer and grades exact named outcomes by source portion.
-Add `--audit-output` to include generated fixture summaries for manual
-hallucination and attribution review. Keep those reports local until reviewed.
-
-Run `bun evals/session-memory-live.ts --cpu-sample` on an idle Ollama listener
-to time one production-model cache-check summary. Repeat this measurement when
-the model, inference settings, or prompt size changes. Record CPU residency,
-model digest, source portion, input and output tokens, prefill and generation
-times, load time, and end-to-end latency.
-
-For handoff presentation changes, run `bun evals/session-memory-handoff-live.ts`
-to compare chronological and generated presentations of the same six excerpts
-in paired fresh Pi sessions. The first optional argument selects the Pi model.
-
-To replay the historical CPU extraction baseline, run
-`bun evals/session-memory-live.ts` on the fixed workflow corpus. The runner
-uses relevant original source as the native Pi control. It grades omissions,
-contradictions, attribution, categorization, and invalid output separately.
-It records model digests, reasoning token evidence, prefill and generation time,
-end-to-end request latency, CPU residency, available process peak RSS and Pi
-input-token changes. Positional arguments select the downstream Pi model,
-extractor tag, and estimated token threshold. Pass `--extract-only` to run
-the CPU extractor comparison without the Pi handoffs. Use `--include-cadence`
-to add the long transcript or `--cadence` to run it alone. Add `--task-aware`
-to test a task-focus prompt with the same input, model and batch settings.
-Pass `--recommended-sampling` to use Liquid AI's published sampling settings
-for each candidate. The report records the request configuration per model.
-Use `--output-cap=2048` or `--temperature=0.4` to override the response cap or
-sampling temperature for all selected candidates in an evaluation.
-Add `--reasoning-fallback` to try each extraction batch and native Pi
-handoff with reasoning off first. The runner retries failed batches and
-handoff checks once with the same model's thinking enabled. The output cap
-and temperature apply to both Pi handoff arms in this mode. The report keeps
-both request times and records whether the retry recovered the failed check.
-
-Save a JSON report from `--cadence` or `--include-cadence` and pass its path
-with `--luna-low-from=report.json` to retry failed cadence batches with
-GPT-6 Luna at low reasoning in native Pi. The replay uses the existing Codex
-sign-in and sends only the numbered excerpts of the synthetic evaluation
-fixture to the provider. It grades each batch on its own evidence.
-
-For changes affecting Pi handoffs, run the local GPU repository-edit
-qualification.
-
-```shell
-bun evals/session-memory-edit-live.ts --context-aware
-```
-
-The default Pi worker is the prepared local Bonsai model. The runner retrieves
-original evidence and the latest correction and gives them to Pi for the
-first edit. A passing control enables the Immediate Context edit. A failing
-control leaves the comparison inconclusive and skips its summary arm. Pi
-stops after three consecutive tool calls repeat known requests with unchanged
-results. Use `--fixture=trace-pairing` or `--fixture=workspace-preparation` for
-the affected edit, and `--strategy=original-search` to verify only its control.
-
-The edit report records implementation checks, normal Pi turn completion,
-and tool-loop stops independently. Qualification requires a scoped edit that
-passes the executable checks and a normally completed turn. Use
-`--audit-output` to inspect the exact fixture prompt, handoff, available files
-and tools, and tool arguments and results. Keep the raw audit local.
-Use `--compare-check-instructions` to replay a looping Immediate Context edit
-with the same evidence and a clarification that the evaluator runs the named
-checks. The report records the diagnostic result independently of the normal
-qualification result.
-Use `--compare-handoff-format` to compare the compact handoff with a
-decision-last JSON control. Both presentations use the same selected evidence,
-source citations, and worker instructions. The audit reports their shared
-evidence hash. This diagnostic comparison can run after a failed worker
-control when original evidence is complete. Qualification remains inconclusive
-for that fixture.
-
-To replay the historical extraction comparison on repository edits, run
-`bun evals/session-memory-edit-live.ts` with optional extractor and worker model
-tags. It compares conventional delegation, deterministic conversation search,
-and hybrid context. Pass `gpt-6-luna` as the worker to use the high-reasoning
-fallback in Pi through the existing Codex sign-in. Each Pi worker edits its own
-copy of the same files from a pinned LTCook commit. The runner checks the edits
-against the latest confirmed decisions and records tool calls and usage. See the
-[CPU and edit comparison](../evals/session-memory-budget-results.md), the
-[hybrid qualification](../evals/session-memory-hybrid-results.md), and the
-[initial qualification](../evals/session-memory-results.md).
-
-The runtime stores Session Memory records, native turn receipts, original
-user prompts and the Paseo checkpoint in `session-memory-v5.sqlite` under
-runtime state. This version starts a fresh derived store. To reset it, stop the
-LTCook instance, remove only that database and its SQLite sidecars from the
-instance's runtime state, and restart. Preserve Paseo's native history and
-the pasted attachment store. Older conversations remain available through
-authorized original search. Rebuilding UAMPs requires valid native turn
-receipts.
-
-Generated UAMP summaries use Markdown. The full response is retained for
-display and retrieval even when its headings are irregular. Truncated or
-failed requests do not become completed summaries. Short UAMPs and AABs store
-references without inference and continue while generation is paused. Rewind
-invalidates the affected record suffix.
-
-The previous extractive summarizer is limited to the Agent Evals baseline.
-The production default runs local LFM3 QAD Q4 at temperature 0.4 with
-reasoning disabled. In Activity, **Auto** delegates placement to Ollama.
-**CPU** forces CPU inference. Named selections use Ollama's `main_gpu` option
-where the device identity can be mapped to a usable index for the configured
-server. The picker requests discovery from the host's Ollama installation
-when opened. A server started with different device visibility settings can
-see a different inventory. The host stores identity and resolves the index
-for inference. Live throughput samples come from the
-background Ollama stream and are estimated when the provider omits token
-counts. Memory work starts when foreground local inference is idle. See the
-[architecture diagrams](Explanations.md#context-aware-session-memory) and the
-[CPU timing and GPU qualification results](context-aware-session-memory/QUALIFICATION.md#lean-single-seed-qualification).
+The fresh `conversation-records-v1.sqlite` holds deterministic receipts and
+AABs. `conversation-products-v1.sqlite` holds Clarify and Tracker state. Both
+are in runtime state. Preserve native Paseo history and the separate
+`pasted-documents` store. The application starts these databases fresh and
+ignores the old Session Memory records.
 
 ### Opt-in summarization utility comparison
 
@@ -707,10 +603,12 @@ An intentionally limited case demonstrates truncation. Edit, rename, and delete
 scenarios reuse each provider's search state. Traditional Tests inject stale
 and malformed evidence to cover failures during index updates.
 
-The first query runs with an empty application index. The next invocation of
-the same question measures warm retrieval. ColGREP also measures its native
-index build on a fresh copy and reports cache bytes. Filesystem caches remain
-in place. Each result records serialized bytes and elapsed time. Save the JSON
+The ColGREP arm measures the initial build separately from its first query
+and warm retrieval. It measures cache bytes before and after each refresh
+and samples the peak while the candidate is being built. A new provider also
+checks that a simulated change to the live device identity reuses the same
+published generation. Filesystem caches remain in place. Each result records
+serialized bytes and elapsed time. Save the JSON
 to compare per-question outcomes across runs using the recorded source revision,
 corpus, labels, implementation hash, and provider versions. Invalid evidence,
 an unavailable or indexing response, or a failed standalone index build
@@ -854,8 +752,10 @@ tests and the required Linux clockwork acceptance. That acceptance starts
 isolated real Pi and Paseo processes against a local scripted OpenAI-compatible
 endpoint with fake credentials. It covers approved delegation, a real local
 verification command, failure/correction, restart, independent review, and Pass
-completion without model downloads or external services. It is a PR CI gate;
-other slow installer/service scenarios retain their separate prerequisites.
+completion without model downloads or external services. Hosted CI runs this
+acceptance and the native Paseo GUI acceptance on release candidates, stable tags
+that need extended checks, and manual dispatches. Other slow installer and
+service scenarios retain their separate prerequisites.
 
 Native package smoke requires a built setup from an explicit immutable commit
 and normal download/toolchain prerequisites. Run only the selected maintained
@@ -873,29 +773,41 @@ from WSL.
 
 ## Releases
 
+Hosted CI runs the Linux Python 3.13 source checks on pull requests and pushes
+to `main`. A new commit cancels stale CI for the same PR or ref. Routine CI
+checks the Bun workspaces and runs the quick Python suite directly from source.
+Release candidates add Python 3.14, package builds, and offline native
+acceptance. Stable tags run the same extended checks unless a same-version
+ancestor release candidate passed its tag CI with identical source and
+dependencies. An equivalent stable promotion still runs the source checks.
+Manual CI dispatch runs extended checks and the separate integration, system,
+macOS, and Windows jobs.
+
 The committed `RELEASE_REQUIRE_CI` setting controls the hosted CI gate.
 With its default value `false`, the release command relies on successful local
-tests and artifact verification. Set it to `true` to also require hosted CI on
-the exact tag and commit. Raw version tag pushes trigger CI. The independent
-`RELEASE_PYPI` setting is `false` for LTCook.
+tests and artifact verification. Report hosted CI separately from local results
+before merging or releasing. A beta tag selects the CI profile and skips the
+test jobs with this setting. Set it to `true` to run the source checks on beta
+tags and require successful hosted CI on the exact release tag and commit.
+`RELEASE_PYPI` is independently set to `false`, so publication goes to GitHub.
 
-Keep one cumulative changelog section per target version. Start the section
-with a heading such as `## [0.2.0] - YYYY-MM-DD (b1)`, then update the same
-heading and entries for `(rc1)`. Remove the stage marker for the stable
-version. One beta and one release candidate are the default. Use `b2` or
-`rc2` when a fix needs another preview. Move the entries out of `[Unreleased]`
-before preparing the release. Each tag preserves its changelog snapshot.
+Keep one cumulative changelog section per target version. For a stable release,
+use a heading such as `## [0.2.0] - YYYY-MM-DD`. For an optional preview, append
+`(b1)` or `(rc1)` to that heading and update the same section for later previews
+or stable. Use `b2` or `rc2` when a fix needs another preview. Move the entries
+out of `[Unreleased]` before preparing the release. Each tag preserves its
+changelog snapshot.
 
 ```shell
 just release-check
-just release-prepare 0.2.0rc1
-just release-push v0.2.0rc1
+just release-prepare 0.2.0
+just release-push v0.2.0
 ```
 
-`release-check` runs the source checks and verifies the built wheel and source
-archive. `release-prepare` accepts an explicit version or `patch`, `minor`,
-and `major`. It validates the prepared notes, updates project metadata and locks,
-and creates an annotated local tag on the version commit.
+`release-check` runs the source checks on Python 3.13 and verifies the built
+wheel and source archive. `release-prepare` accepts an explicit version or
+`patch`, `minor`, and `major`. It validates the prepared notes, updates project
+metadata and locks, and creates an annotated local tag on the version commit.
 
 `release-push` runs the local checks, builds the committed Linux setup, and
 smoke-tests the staged installer. It uses its embedded binding and checksum to
@@ -903,11 +815,14 @@ verify the app, distribution, command, version, and source commit. The command
 caches the verified bundle under `.cache/apprc/releases/`, pushes `main` and
 the tag together, and publishes the matching GitHub Release. Run it again to
 retry the checked bundle. `just release VERSION` combines preparation and
-publication. Git pushes and release publication require explicit authorization.
+publication. Pushing the release commit and tag and publishing the release
+require explicit release authorization. An approved Pass authorizes its normal
+reviewed PR merge under the repository's execution permissions.
 
 GitHub marks beta and RC builds as prereleases. Publishing keeps the newest
-beta and the three newest release candidates. Retention removes older preview
-releases and their downloads, while Git tags and stable releases stay available.
+published beta and the newest published release candidate across target
+versions. Retention removes older releases and downloads in the published
+channel. Git tags and all stable releases stay available.
 The published-release workflow verifies and starts the uploaded Linux setup.
 The manual workflow remains available for building downloadable GitHub Actions
 artifacts. Native Windows and macOS behavior requires checks on those platforms.

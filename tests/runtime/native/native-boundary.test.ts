@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -18,15 +19,23 @@ import {
 import { panelSnapshot } from '../../../runtime/src/paseo-plugin/shared/panel-snapshot.js';
 import { Telemetry } from '../../../runtime/src/diagnostics/telemetry.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
-import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
+import { ActivityPreferences } from '../../../runtime/src/integrations/activity-preferences.js';
+import type { PaseoWorkspaceServices } from '../../../runtime/src/integrations/paseo-workspace-services.js';
+import {
+  createWorktreeScopeResolver,
+  SessionWorktrees,
+} from '../../../runtime/src/integrations/session-worktrees.js';
+import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
+import type { RepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
+import type { RiedRequest } from '../../../runtime/src/repository/requests.js';
+import { createSessionWorktreeTool } from '../../../runtime/src/tools/session-worktree.js';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import { createRepoSearchTool } from '../../../runtime/src/tools/repo-search.js';
 import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js';
 import { createWebTools, type WebToolService } from '../../../runtime/src/tools/web.js';
 import { captureShellEnvironment } from '../../../runtime/src/integrations/shell-environment.js';
-import { storedSummariesRpc } from '../../../runtime/src/paseo-plugin/shared/activity.js';
-import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
-import { MemoryStore } from '../../../runtime/src/session-memory/store.js';
+import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
 
 const directories: string[] = [];
 afterEach(() => {
@@ -111,25 +120,179 @@ function snapshotFor(
 }
 
 describe('native runtime boundary', () => {
+  test('applies Activity user authority and route validation before runtime readiness', async () => {
+    const secret = 'activity-family-secret';
+    const nativeAgentId = 'ordinary-agent';
+    const api = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
+    const endpoint = await api.listen();
+    const post = (route: string, token: string, input: object) =>
+      fetch(`${endpoint}/v1/activity/${route}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+    try {
+      const agent = agentBearer(secret, nativeAgentId);
+      for (const route of ['toggle', 'services', 'workspace-touch', 'workspace-services']) {
+        const denied = await post(route, agent, { nativeAgentId });
+        expect(denied.status).toBe(403);
+        expect(await denied.json()).toEqual({});
+      }
+      expect((await fetch(`${endpoint}/v1/activity/services`)).status).toBe(404);
+      expect((await post('workspace-touch', secret, { workspaceId: 'workspace-1' })).status).toBe(
+        503,
+      );
+      expect((await post('workspace-services', secret, {})).status).toBe(503);
+      const services = await post('services', secret, { nativeAgentId });
+      expect(services.status).toBe(200);
+      expect(await services.json()).toMatchObject({
+        rag: { availability: 'unavailable', activity: 'unknown', indexingEnabled: null },
+      });
+    } finally {
+      await api.close();
+    }
+  });
+
+  test('trusted native archive releases the managed Session worktree from indexing', async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'ltcook-index-archive-')));
+    directories.push(directory);
+    let activate!: (workspace: RepositoryWorkspace) => void;
+    const activated = new Promise<RepositoryWorkspace>((resolve) => (activate = resolve));
+    let released = false;
+    const activation = new SessionActivation(
+      {},
+      {
+        activate(workspace) {
+          activate(workspace);
+          return () => {
+            released = true;
+          };
+        },
+      },
+    );
+    const agentId = 'managed-index-session';
+    const secret = 'archive-fixture';
+    const address = `127.0.0.1:${await freePort()}`;
+    const api = new RuntimeApi(undefined, secret, address, activation);
+    await api.listen();
+    try {
+      activation.register(directory, agentId, { authorizeRepositoryIndex: true });
+      const workspace = await activated;
+      const revoke = (token: string) =>
+        fetch(`http://${address}/v1/mcp/revoke`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ nativeAgentId: agentId }),
+        });
+      expect((await revoke(agentBearer(secret, agentId))).status).toBe(403);
+      await workspace.assertUnchanged();
+      expect((await revoke(secret)).status).toBe(200);
+      expect(released).toBe(true);
+      await expect(workspace.assertUnchanged()).rejects.toThrow('no longer authorized');
+      expect(activation.registeredWorkspace(agentId)).toBe(directory);
+    } finally {
+      await api.close();
+    }
+  });
+
+  test('records workspace use only with user authority and rejects client timestamps', async () => {
+    const secret = 'workspace-service-secret';
+    const nativeAgentId = 'ordinary-agent';
+    const activity: string[] = [];
+    const serviceStatus = {
+      enabled: true,
+      running: false,
+      lastRunAt: null,
+      lastSuccessAt: null,
+      processed: 0,
+    };
+    const status = {
+      organizer: serviceStatus,
+      renamer: serviceStatus,
+      autoArchive: true,
+      renameWorkspaces: false,
+      renameTabs: true,
+      archiveBlocked: [{ workspaceId: 'protected', reason: 'Checkout has unpreserved files.' }],
+    };
+    const api = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
+    api.setWorkspaceServices({
+      async recordActivity(workspaceId: string) {
+        await Promise.resolve();
+        activity.push(workspaceId);
+      },
+      status: () => status,
+    } as unknown as PaseoWorkspaceServices);
+    const endpoint = await api.listen();
+    const post = (route: string, token: string, input: object) =>
+      fetch(`${endpoint}/v1/activity/${route}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+    try {
+      expect(
+        (await post('workspace-touch', 'invalid', { workspaceId: 'workspace-1' })).status,
+      ).toBe(401);
+      expect(
+        (
+          await post('workspace-touch', agentBearer(secret, nativeAgentId), {
+            nativeAgentId,
+            workspaceId: 'workspace-1',
+          })
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await post('workspace-touch', secret, {
+            workspaceId: 'workspace-1',
+            lastActivityAt: Date.now(),
+          })
+        ).status,
+      ).toBe(400);
+      expect((await post('workspace-touch', secret, { workspaceId: '' })).status).toBe(400);
+      expect(activity).toEqual([]);
+
+      const recorded = await post('workspace-touch', secret, { workspaceId: 'workspace-1' });
+      expect(recorded.status).toBe(200);
+      expect(await recorded.json()).toEqual({ recorded: true });
+      expect(activity).toEqual(['workspace-1']);
+      const read = await post('workspace-services', secret, {});
+      expect(read.status).toBe(200);
+      expect(await read.json()).toEqual(status);
+      expect(activity).toEqual(['workspace-1']);
+      expect((await post('workspace-services', secret, { enabled: false })).status).toBe(400);
+    } finally {
+      await api.close();
+    }
+  });
+
   test('persistently applies Activity switches only on authenticated user requests', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-activity-controls-'));
     directories.push(directory);
     const preferences = join(directory, 'activity-settings.json');
     const secret = 'activity-control-secret';
-    const memory = new SessionMemory({
-      databasePath: ':memory:',
-      source: {
-        async read() {
-          throw new Error('Toggle must not load history.');
-        },
+    const colgrep = createColgrepProvider({ deploymentDirectory: '' });
+    const first = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation({}),
+      {},
+      undefined,
+      {
+        activity: { colgrep, preferences: new ActivityPreferences(preferences) },
       },
-      async summarize() {
-        throw new Error('Toggle must not run inference.');
-      },
-    });
-    const first = new RuntimeApi(undefined, secret, `127.0.0.1:${await freePort()}`);
-    first.setActivityPreferences(preferences);
-    first.setSessionMemory(memory);
+    );
     const endpoint = await first.listen();
     const change = (body: object, token = secret) =>
       fetch(`${endpoint}/v1/activity/toggle`, {
@@ -143,214 +306,104 @@ describe('native runtime boundary', () => {
         agentBearer(secret, 'worker'),
       );
       expect(denied.status).toBe(403);
-      expect(first.activityColgrep.isIndexingEnabled()).toBe(true);
-      for (const feature of ['rag-index', 'summarizer']) {
-        const response = await change({ feature, enabled: false });
-        expect(response.status).toBe(200);
-        expect(await response.json()).toEqual({ enabled: false });
-      }
-      expect(first.activityColgrep.isIndexingEnabled()).toBe(false);
-      expect(memory.status(undefined, 'leader').summarization).toBe('paused');
-      const restored = new RuntimeApi(undefined, secret, '127.0.0.1:0');
-      restored.setActivityPreferences(preferences);
-      restored.setSessionMemory(memory);
-      expect(restored.activityColgrep.isIndexingEnabled()).toBe(false);
-      expect(memory.status(undefined, 'leader').summarization).toBe('paused');
+      expect(colgrep.isIndexingEnabled()).toBe(true);
+      const response = await change({ feature: 'rag-index', enabled: false });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ enabled: false });
+      expect(colgrep.isIndexingEnabled()).toBe(false);
+      const restoredColgrep = createColgrepProvider({ deploymentDirectory: '' });
+      const restored = new RuntimeApi(
+        undefined,
+        secret,
+        '127.0.0.1:0',
+        new SessionActivation({}),
+        {},
+        undefined,
+        {
+          activity: { colgrep: restoredColgrep, preferences: new ActivityPreferences(preferences) },
+        },
+      );
+      expect(restoredColgrep.isIndexingEnabled()).toBe(false);
     } finally {
       await first.close();
-      await memory.close();
     }
   });
 
-  test('only the user can change the host Session Memory device', async () => {
-    let probes = 0;
-    const gpu = { id: 'CUDA:device-1', label: 'Fixture CUDA GPU', mainGpu: 0 };
-    const ambiguous = {
-      id: 'ROCm:device-2',
-      label: 'Fixture AMD GPU',
-      unavailable: 'Ollama cannot select this device uniquely.',
-    };
-    const memory = new SessionMemory({
-      databasePath: ':memory:',
-      async deviceCatalog() {
-        probes++;
-        return { devices: [gpu, ambiguous] };
-      },
-      source: {
-        async read() {
-          throw new Error('Changing the inference device must not read conversation history.');
-        },
-      },
-      async summarize() {
-        throw new Error('Changing the inference device must not start inference.');
-      },
-    });
-    const master = 'test-master-secret';
-    const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`);
-    const endpoint = await api.listen();
-    const post = (path: string, input: object, token = master) =>
-      fetch(`${endpoint}/v1/activity/${path}`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify(input),
-      });
-    try {
-      expect((await post('memory-device', { deviceId: 'cpu' })).status).toBe(503);
-      api.setSessionMemory(memory);
-      const nativeAgentId = 'selected';
-      for (const input of [{ nativeAgentId }, { nativeAgentId, deviceId: gpu.id }]) {
-        const rejected = await post('memory-device', input, agentBearer(master, nativeAgentId));
-        expect(rejected.status).toBe(403);
-      }
-      expect(probes).toBe(0);
-      expect((await post('memory-device', { deviceId: 0 })).status).toBe(400);
-      const inventory = await post('memory-device', {});
-      expect(inventory.status).toBe(200);
-      expect(await inventory.json()).toMatchObject({
-        device: { id: 'auto', label: 'Auto' },
-        devices: [
-          { id: 'auto', label: 'Auto' },
-          { id: 'cpu', label: 'CPU' },
-          { id: gpu.id, label: gpu.label },
-          ambiguous,
-        ],
-      });
-      const rejected = await post('memory-device', { deviceId: ambiguous.id });
-      expect(rejected.status).toBe(400);
-      expect(await rejected.json()).toMatchObject({ error: ambiguous.unavailable });
-      const updated = await post('memory-device', { deviceId: gpu.id });
-      expect(updated.status).toBe(200);
-      expect(await updated.json()).toMatchObject({ device: { id: gpu.id, label: gpu.label } });
-      const snapshot = await post('services', { nativeAgentId: 'another-agent' });
-      expect(await snapshot.json()).toMatchObject({ memory: { device: { id: gpu.id } } });
-    } finally {
-      await api.close();
-      await memory.close();
-    }
-  });
-
-  test('only the user can page completed summaries for the requested agent and current history', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'ltcook-summary-reader-'));
+  test('shows reported worktrees in the authenticated Session view', async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'ltcook-native-worktree-')));
     directories.push(directory);
-    const databasePath = join(directory, 'memory.sqlite');
-    const store = new MemoryStore(databasePath);
-    try {
-      for (let position = 1; position <= 12; position++) {
-        store.saveSummary({
-          id: `summary-${position}`,
-          agentId: 'selected',
-          sessionId: 'session-1',
-          epoch: 'original',
-          type: position % 2 ? 'UAMP' : 'AAB',
-          position,
-          sources: [{ seq: position, author: 'agent', messageId: `native-${position}` }],
-          state: position === 10 ? 'recorded' : undefined,
-          createdAt: '2026-01-01T00:00:00Z',
-          historyHash: 'fixture',
-          parts: [
-            { content: { findings: [{ detail: `Stored body ${position}` }] }, sources: [position] },
-          ],
-          expectedParts: 1,
-          complete: position !== 11,
-        });
-      }
-      store.saveSummary({
-        ...store.summaries('selected', 'original')[0]!,
-        agentId: 'other-agent',
-        parts: [{ content: { findings: ['Other agent summary'] }, sources: [1] }],
-      });
-    } finally {
-      store.close();
-    }
-    let epoch = 'original';
-    const memory = new SessionMemory({
-      databasePath,
-      source: {
-        async read() {
-          return { epoch, latest: 11, through: 11, reset: false, messages: [] };
-        },
-      },
-      async summarize() {
-        throw new Error('Reading stored summaries must never invoke inference.');
-      },
-    });
-    const master = 'test-master-secret';
-    const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`);
-    api.setSessionMemory(memory);
-    const endpoint = await api.listen();
-    const readPage = (body: object, token = master) =>
-      fetch(`${endpoint}/v1/activity/stored-summaries`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ agentId: 'selected', ...body }),
-      });
-    const readEvidence = (body: object, token = master) =>
-      fetch(`${endpoint}/v1/activity/memory-evidence`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ agentId: 'selected', ...body }),
-      });
-    try {
-      const record = { epoch, id: 'summary-10', position: 10 };
-      expect((await readEvidence(record, agentBearer(master, 'selected'))).status).toBe(401);
-      expect(await (await readEvidence(record)).json()).toEqual({
-        sources: [{ seq: 10, messageId: 'native-10', author: 'agent' }],
-        next: null,
-      });
-      for (const forged of [
-        { ...record, position: 9 },
-        { ...record, agentId: 'other-agent' },
-      ]) {
-        expect(await (await readEvidence(forged)).json()).toEqual({ sources: [], next: null });
-      }
-      const agent = await readPage({ nativeAgentId: 'selected' }, agentBearer(master, 'selected'));
-      expect(agent.status).toBe(403);
-      const firstResponse = await readPage({});
-      expect(firstResponse.status).toBe(200);
-      const first = storedSummariesRpc.output.parse(await firstResponse.json());
-      expect(first.summaries.map(({ id }) => id)).toEqual(
-        Array.from({ length: 8 }, (_, index) => `summary-${10 - index}`),
+    const workspaceRoot = join(directory, 'repository');
+    const checkout = join(directory, 'linked');
+    mkdirSync(workspaceRoot);
+    const git = (...args: string[]) =>
+      execFileSync(
+        'git',
+        [
+          '-c',
+          'user.name=Fixture',
+          '-c',
+          'user.email=fixture@example.invalid',
+          '-c',
+          'core.hooksPath=',
+          ...args,
+        ],
+        { cwd: workspaceRoot, stdio: 'pipe' },
       );
-      expect(first.summaries[0]).toMatchObject({
-        type: 'AAB',
-        parts: [{ content: { findings: [{ detail: 'Stored body 10' }] }, sources: [10] }],
-      });
-      expect(first.storagePath).toBe(databasePath);
-      const passage = storedSummariesRpc.output.parse(
-        await (await readPage({ passage: { epoch, start: 5, position: 5 } })).json(),
-      );
-      expect(passage.summaries.map(({ id }) => id)).toEqual(['summary-5']);
-      const oldPassage = await readPage({ passage: { epoch: 'prior', start: 5, position: 5 } });
-      expect(oldPassage.status).toBe(400);
+    git('init', '-qb', 'main');
+    git('commit', '--allow-empty', '--no-gpg-sign', '-qm', 'Fixture');
+    git('worktree', 'add', '-qb', 'fixture-linked', checkout);
 
-      expect(first.summaries[0]).toMatchObject({
-        position: 10,
-        originalTokens: null,
-        durationMs: null,
+    const secret = 'worktree-user-secret';
+    const agentId = 'bound-worktree-agent';
+    const sessionId = 'session-1';
+    const snapshot = snapshotFor(agentId, false, sessionId, workspaceRoot);
+    const store = new SessionWorktrees(process.env.PATH ?? '');
+    const resolveScope = createWorktreeScopeResolver((id) =>
+      id === sessionId ? snapshot : undefined,
+    );
+    const report = createSessionWorktreeTool(store, resolveScope);
+    const api = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation({}),
+      {},
+      undefined,
+      {
+        worktrees: { store, resolveScope },
+      },
+    );
+    const endpoint = await api.listen();
+    const read = (nativeAgentId: string, token = secret) =>
+      fetch(`${endpoint}/v1/session/worktrees`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ nativeAgentId, workspaceRoot: directory, sessionId }),
       });
-      const metadataOnly = storedSummariesRpc.output.parse(
-        await (await readPage({ includeContent: false })).json(),
-      );
-      expect(metadataOnly.summaries.map(({ id }) => id)).toEqual(
-        first.summaries.map(({ id }) => id),
-      );
-      expect(metadataOnly.summaries.flatMap(({ parts }) => parts)).toEqual([]);
-      expect(metadataOnly.next).toEqual(first.next);
-      expect(first.next).not.toBeNull();
-      const second = storedSummariesRpc.output.parse(
-        await (await readPage({ before: first.next })).json(),
-      );
-      expect(second.summaries.map(({ id }) => id)).toEqual(['summary-2', 'summary-1']);
-      expect(second.next).toBeNull();
-      epoch = 'replacement';
-      expect(await (await readEvidence(record)).json()).toEqual({ sources: [], next: null });
-      expect((await readPage({ before: first.next })).status).toBe(400);
-      expect(storedSummariesRpc.output.parse(await (await readPage({})).json()).summaries).toEqual(
-        [],
-      );
+    try {
+      const context = {
+        agentId,
+        workspaceRoot: directory,
+        sessionId,
+        workspaceFileAccess: false,
+        signal: new AbortController().signal,
+      };
+      await expect(
+        report.invoke({ operation: 'use', path: checkout, passId: 'foreign-pass' }, context),
+      ).rejects.toThrow('The Pass does not belong to this session.');
+      await report.invoke({ operation: 'use', path: checkout }, context);
+      expect((await read(agentId, agentBearer(secret, agentId))).status).toBe(403);
+      expect((await read('unbound-agent')).status).toBe(400);
+      const response = await read(agentId);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        original: workspaceRoot,
+        following: { path: checkout, branch: 'fixture-linked' },
+      });
+      await report.invoke({ operation: 'release', path: checkout }, context);
+      expect(await (await read(agentId)).json()).toMatchObject({ following: null });
     } finally {
       await api.close();
-      await memory.close();
     }
   });
 
@@ -367,8 +420,9 @@ describe('native runtime boundary', () => {
       },
       close: async () => undefined,
     } as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
-    api.setSession('/workspace', 'session-1');
+    const activation = new SessionActivation();
+    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`, activation);
+    activation.register('/workspace', 'session-1');
     const endpoint = await api.listen();
     try {
       const command = {
@@ -438,14 +492,20 @@ describe('native runtime boundary', () => {
     let authorized = 0;
     let invoked = 0;
     const controller = {
-      snapshot: () => snapshotFor(nativeAgentId, true, 'session-1', process.cwd()),
-      authorizeTool() {
+      snapshot() {
+        throw new Error('Managed tool authorization must not read a Session snapshot');
+      },
+      authorizeWorkspaceTool(sessionId: string, agentId: string) {
         authorized++;
-        return { allowed, reason: 'Tool budget exhausted' };
+        if (sessionId !== 'session-1' || agentId !== nativeAgentId)
+          return { allowed: false, unbound: true, reason: 'Native identity is not bound' };
+        return allowed
+          ? { allowed: true, workspaceRoot: process.cwd(), reason: 'Authorized' }
+          : { allowed: false, reason: 'Tool budget exhausted' };
       },
     } as unknown as RuntimeController;
     const authority = `127.0.0.1:${await freePort()}`;
-    const api = new RuntimeApi(controller, master, authority);
+    const api = new RuntimeApi(undefined, master, authority, new SessionActivation());
     const searchResult = {
       content: 'Search result',
       responseId: 'search-result',
@@ -465,12 +525,11 @@ describe('native runtime boundary', () => {
     const repositorySearch = createRepoSearchTool(
       createColgrepProvider({ deploymentDirectory: '' }),
     );
-    api.setWorkspaceMcp(
-      new WorkspaceMcp(
-        [...createWebTools(service), repositorySearch, createRepoLocateTool(repositorySearch)],
-        authority,
-      ),
-    );
+    const tools = new ToolCatalog([
+      ...createWebTools(service),
+      repositorySearch,
+      createRepoLocateTool(repositorySearch),
+    ]);
     const endpoint = await api.listen();
     const call = (agentId: string = nativeAgentId, toolName = 'ltcook_web_search') =>
       fetch(`${endpoint}/v1/workspace-tool`, {
@@ -484,6 +543,16 @@ describe('native runtime boundary', () => {
         }),
       });
     try {
+      const preReady = await call();
+      expect(preReady.status).toBe(503);
+      expect(await preReady.json()).toEqual({ error: 'LTCook runtime is not ready' });
+      api.setRuntime(controller);
+      const noCatalog = await call();
+      expect(noCatalog.status).toBe(403);
+      expect(await noCatalog.text()).toBe('{}');
+      expect(authorized).toBe(0);
+      api.setWorkspaceTools(tools);
+
       const denied = await call();
       expect(denied.status).toBe(403);
       expect(await denied.json()).toEqual({ error: 'Tool budget exhausted' });
@@ -491,8 +560,9 @@ describe('native runtime boundary', () => {
       expect(invoked).toBe(0);
       allowed = true;
       expect((await call('unbound')).status).toBe(403);
+      expect(invoked).toBe(0);
       expect(await (await call()).json()).toEqual(searchResult);
-      expect(authorized).toBe(2);
+      expect(authorized).toBe(3);
       expect(invoked).toBe(1);
       const search = await call(nativeAgentId, 'ltcook_repo_search');
       expect(search.status).toBe(200);
@@ -509,7 +579,7 @@ describe('native runtime boundary', () => {
         ],
       });
       expect(await (await call('unbound', 'ltcook_repo_search')).text()).toBe('{}');
-      expect(authorized).toBe(3);
+      expect(authorized).toBe(5);
       const locate = await call(nativeAgentId, 'ltcook_repo_locate');
       expect(locate.status).toBe(200);
       expect(await locate.json()).toMatchObject({
@@ -517,7 +587,60 @@ describe('native runtime boundary', () => {
         searches: [{ mode: 'hybrid', status: 'unavailable', provider: 'colgrep' }],
       });
       expect((await call('unbound', 'ltcook_repo_locate')).status).toBe(403);
-      expect(authorized).toBe(4);
+      expect(authorized).toBe(7);
+    } finally {
+      await api.close();
+    }
+  });
+  test('Session RIED requires a current agent binding or a registered user Session', async () => {
+    const master = 'ried-user-secret';
+    const nativeAgentId = 'ried-native-agent';
+    const snapshot = snapshotFor(nativeAgentId);
+    const calls: Array<{ sessionId: string; request: RiedRequest }> = [];
+    const inventory = { provider: 'ried' };
+    const controller = {
+      snapshot: () => snapshot,
+      async ried(sessionId: string, request: RiedRequest) {
+        calls.push({ sessionId, request });
+        return inventory;
+      },
+    } as RuntimeController;
+    const activation = new SessionActivation();
+    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`, activation);
+    const endpoint = await api.listen();
+    const call = (bearer: string, id = nativeAgentId, request: object = { operation: 'summary' }) =>
+      fetch(`${endpoint}/v1/ried`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bearer}` },
+        body: JSON.stringify({
+          sessionId: snapshot.session.id,
+          nativeAgentId: id,
+          ...request,
+        }),
+      });
+    try {
+      const inactive = await call(master);
+      expect(inactive.status).toBe(403);
+      expect(await inactive.json()).toEqual({ error: 'session is not active in this runtime' });
+      const unbound = await call(agentBearer(master, 'unbound'), 'unbound');
+      expect(unbound.status).toBe(403);
+      expect(await unbound.json()).toEqual({ error: 'native agent is not bound to this session' });
+      expect(calls).toEqual([]);
+
+      const bearer = agentBearer(master, nativeAgentId);
+      expect((await call(bearer, nativeAgentId, { operation: 'invalid' })).status).toBe(400);
+      const agentResult = await call(bearer);
+      expect(agentResult.status).toBe(200);
+      expect(await agentResult.json()).toEqual({ value: inventory });
+
+      activation.register(snapshot.session.workspaceRoot, snapshot.session.id);
+      const userResult = await call(master);
+      expect(userResult.status).toBe(200);
+      expect(await userResult.json()).toEqual({ value: inventory });
+      expect(calls).toEqual([
+        { sessionId: snapshot.session.id, request: { operation: 'summary' } },
+        { sessionId: snapshot.session.id, request: { operation: 'summary' } },
+      ]);
     } finally {
       await api.close();
     }
@@ -535,7 +658,12 @@ describe('native runtime boundary', () => {
       createdAt: '2026-01-01T00:00:00Z',
     });
     const controller = { snapshot: () => snapshot } as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
+    const api = new RuntimeApi(
+      controller,
+      master,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
     const endpoint = await api.listen();
     const request = (bearer = agentBearer(master, nativeAgentId), id = nativeAgentId) =>
       fetch(`${endpoint}/v1/evaluation/observe`, {
@@ -676,7 +804,12 @@ describe('native runtime boundary', () => {
         .snapshot(opened.session.id)
         .members.find((member) => member.member.key === 'explorer')?.binding?.nativeAgentId;
       if (!nativeAgentId) throw new Error('Readonly explorer was not bound');
-      api = new RuntimeApi(runtime, 'readonly-report-user-secret', `127.0.0.1:${await freePort()}`);
+      api = new RuntimeApi(
+        runtime,
+        'readonly-report-user-secret',
+        `127.0.0.1:${await freePort()}`,
+        new SessionActivation(),
+      );
       const endpoint = await api.listen();
       const denied = await fetch(`${endpoint}/v1/tool/authorize`, {
         method: 'POST',
@@ -745,13 +878,33 @@ describe('native runtime boundary', () => {
     ).toEqual({ A: 'original' });
   });
   test('stops on the authenticated idle route only after Paseo commits', async () => {
-    const api = new RuntimeApi(undefined, 'owner', `127.0.0.1:${await freePort()}`);
+    const activation = new SessionActivation();
+    const api = new RuntimeApi(undefined, 'owner', `127.0.0.1:${await freePort()}`, activation);
     const endpoint = await api.listen();
     const stopFinished = Promise.withResolvers<void>();
     let attempt = 0;
     let released = 0;
     let stopCalls = 0;
-    api.setOpenWorkspaceHandler(async () => {
+    let observing = 0;
+    const observationsAtCommit: number[] = [];
+    const records = new ConversationRecords({
+      databasePath: ':memory:',
+      source: {
+        async read() {
+          return { epoch: 'idle', latest: -1, through: -1, reset: false, messages: [] };
+        },
+        watch() {
+          observing++;
+          return async () => {
+            observing--;
+          };
+        },
+      },
+    });
+    records.turn('agent', { turnId: 'completed-turn', outcome: 'completed' });
+    await records.settled();
+    api.setConversationRecords(records);
+    activation.setWorkspaceActivator(async () => {
       throw new Error('lifecycle does not open a session');
     });
     api.setLifecycle(
@@ -778,6 +931,7 @@ describe('native runtime boundary', () => {
             released += 1;
           },
           async commit() {
+            observationsAtCommit.push(observing);
             if (attempt === 2) throw new Error('Could not commit');
             return { status: 'committed' };
           },
@@ -804,21 +958,27 @@ describe('native runtime boundary', () => {
       const busy = await stop('owner');
       expect(busy.status).toBe(423);
       expect(await busy.json()).toEqual({ status: 'busy', activeTurns: 3 });
+      expect(observing).toBe(1);
       expect((await stop('owner')).status).toBe(503);
       expect(released).toBe(1);
+      expect(observing).toBe(1);
       expect(stopCalls).toBe(0);
       expect((await stop('owner')).status).toBe(202);
       await stopFinished.promise;
       expect(stopCalls).toBe(1);
       expect(released).toBe(1);
+      expect(observationsAtCommit).toEqual([0, 0]);
+      expect(observing).toBe(0);
     } finally {
+      await records.close();
       await api.close();
     }
   });
 
   test('requires user authentication and readiness for runtime status', async () => {
     const master = 'test-master-secret';
-    const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`);
+    const activation = new SessionActivation();
+    const api = new RuntimeApi(undefined, master, `127.0.0.1:${await freePort()}`, activation);
     const endpoint = await api.listen();
     try {
       expect(
@@ -872,7 +1032,7 @@ describe('native runtime boundary', () => {
       });
       expect(stopBeforeHandler.status).toBe(503);
       expect(readyBeforeHandler.status).toBe(503);
-      api.setOpenWorkspaceHandler(async () => {
+      activation.setWorkspaceActivator(async () => {
         throw new Error('status does not open a session');
       });
       const ready = await fetch(`${endpoint}/v1/status`, {
@@ -906,6 +1066,11 @@ describe('native runtime boundary', () => {
           },
           body: JSON.stringify(body),
         });
+      const openBeforeCore = await post('/v1/session/open', master, {});
+      expect(openBeforeCore.status).toBe(503);
+      expect(await openBeforeCore.json()).toEqual({
+        error: 'Runtime session activation is not ready',
+      });
       expect((await stop(master, '{')).status).toBe(400);
       expect((await stop(agentBearer(master, 'native-agent'), '{}')).status).toBe(401);
       expect((await stop(master, JSON.stringify({ instanceId: 'stale-runtime' }))).status).toBe(
@@ -930,6 +1095,11 @@ describe('native runtime boundary', () => {
         teamSelection: 'default-minimal',
       });
       expect(sessionOpen.status).toBe(503);
+      expect(await sessionOpen.json()).toEqual({ error: 'LTCook runtime is stopping' });
+      const agentOpen = await post('/v1/session/open', agentBearer(master, 'native-agent'), {
+        nativeAgentId: 'native-agent',
+      });
+      expect(agentOpen.status).toBe(403);
       const command = {
         type: 'task.create',
         title: 'Task',
@@ -945,6 +1115,54 @@ describe('native runtime boundary', () => {
     } finally {
       await api.close();
     }
+  });
+  test('coalesces pending Session opens and rejects a conflicting workspace', async () => {
+    const activation = new SessionActivation({});
+    const nativeOpen = Promise.withResolvers<SessionSnapshot>();
+    const request = {
+      workspaceRoot: '/workspace',
+      sessionId: 'opening-session',
+      teamSelection: 'default-minimal',
+    };
+    const snapshot = snapshotFor('native-agent', true, request.sessionId, request.workspaceRoot);
+    const runtime: Pick<RuntimeController, 'snapshot' | 'teamCatalog'> = {
+      snapshot: () => snapshot,
+      teamCatalog: () => [
+        {
+          origin: 'bundled',
+          selection: request.teamSelection,
+          teamId: snapshot.session.teamId,
+          name: snapshot.definition.name,
+          description: '',
+          status: 'installed',
+          leader: { key: 'worker', name: 'Worker' },
+          persistentMembers: 1,
+          temporaryMembers: 0,
+        },
+      ],
+    };
+    let nativeOpens = 0;
+    activation.setWorkspaceActivator(() => {
+      nativeOpens++;
+      return nativeOpen.promise;
+    });
+
+    const results = Promise.all([
+      activation.open(runtime, request),
+      activation.open(runtime, request),
+      activation.open(runtime, { ...request, workspaceRoot: '/other-workspace' }),
+    ]);
+    const workspaceBeforeOpen = activation.registeredWorkspace(request.sessionId);
+    nativeOpen.resolve(snapshot);
+
+    expect(await results).toEqual([
+      { snapshot },
+      { snapshot },
+      { conflict: 'Session initialization is already requested for a different workspace' },
+    ]);
+    expect(nativeOpens).toBe(1);
+    expect(workspaceBeforeOpen).toBeUndefined();
+    expect(activation.registeredWorkspace(request.sessionId)).toBe(request.workspaceRoot);
   });
   test('opens same-team Sessions across projects with single-flight and authority boundaries', async () => {
     const master = 'test-master-secret';
@@ -970,15 +1188,23 @@ describe('native runtime boundary', () => {
       },
       execute: async () => undefined,
     } as unknown as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`, {
+    const startupEnvironment = {
       LTCOOK_SHELL_PROVENANCE: JSON.stringify({
         LTCOOK_API_TOKEN: 'original-shell-token',
         LTCOOK_TEAM: 'default-minimal',
         ORIGINAL_ONLY: 'startup',
       }),
       LTCOOK_TEAM: 'merged-project-team',
-    });
-    api.setOpenWorkspaceHandler(async (request) => {
+    };
+    const activation = new SessionActivation(startupEnvironment);
+    const api = new RuntimeApi(
+      controller,
+      master,
+      `127.0.0.1:${await freePort()}`,
+      activation,
+      startupEnvironment,
+    );
+    activation.setWorkspaceActivator(async (request) => {
       opened.push(request);
       const snapshot = snapshotFor(
         `native-${request.sessionId}`,
@@ -1111,8 +1337,9 @@ describe('native runtime boundary', () => {
         return snapshot;
       },
     } as unknown as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
-    api.setOpenWorkspaceHandler(async (request) => {
+    const activation = new SessionActivation();
+    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`, activation);
+    activation.setWorkspaceActivator(async (request) => {
       attempts += 1;
       if (attempts === 1) throw new Error('temporary activation failure');
       snapshot = snapshotFor('native-agent', true, request.sessionId, request.workspaceRoot);
@@ -1150,7 +1377,12 @@ describe('native runtime boundary', () => {
         return command;
       },
     } as unknown as RuntimeController;
-    const api = new RuntimeApi(controller, master, `127.0.0.1:${await freePort()}`);
+    const api = new RuntimeApi(
+      controller,
+      master,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
     const endpoint = await api.listen();
     const post = (command: unknown) =>
       fetch(`${endpoint}/v1/command`, {

@@ -1,8 +1,5 @@
 import { Type, type Static } from 'typebox';
-import {
-  REPO_LOCATE_TOOL_NAME,
-  REPO_SEARCH_TIMEOUT_MS,
-} from '../paseo-plugin/shared/workspace-tools.js';
+import { REPO_LOCATE_TOOL_NAME, REPO_SEARCH_TIMEOUT_MS } from './workspace-tools.js';
 import { RepositorySourceReader } from '../repository/evidence.js';
 import { assertRepositoryPathVisible, isRepositoryPathVisible } from '../repository/filesystem.js';
 import {
@@ -29,7 +26,7 @@ import {
 } from './repo-trace.js';
 import { defineTool } from './types.js';
 
-export { REPO_LOCATE_TOOL_NAME } from '../paseo-plugin/shared/workspace-tools.js';
+export { REPO_LOCATE_TOOL_NAME } from './workspace-tools.js';
 
 const LocateHit = Type.Object({
   ...RepositoryHitSchema.properties,
@@ -198,6 +195,7 @@ export function createRepoLocateTool(
     name: REPO_LOCATE_TOOL_NAME,
     description:
       'For multi-file investigations use trace {question, leads?} to get verified source, connections and evidence gaps in one call. Add up to four leads {mode, query}: hybrid for separate behaviors, exact for symbols, literal for routes and setting names. For quick lookups use symbol, symbols, query, or location {path, line, maxLines}. Set follow to true on quick symbol lookups for one verified local connection. Optionally supply base (a local Git ref) to prioritize changed code and related tests.' +
+      ' Hybrid trace leads use an existing complete index. Run a ranked repository search to build or resume it.' +
       repositoryEvidenceGuidance,
     inputSchema: Type.Object(
       {
@@ -306,6 +304,7 @@ export function createRepoLocateTool(
               {
                 source: reader,
                 priority,
+                updateIndex: false,
                 ...(group && { collection: { group, perGroup: HITS_PER_ROLE } }),
               },
             );

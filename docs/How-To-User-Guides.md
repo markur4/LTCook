@@ -6,8 +6,9 @@
   - [Install a release](#install-a-release)
   - [Install from a checkout](#install-from-a-checkout)
   - [Run the first command](#run-the-first-command)
+  - [Use Clarify and Tracked Items](#use-clarify-and-tracked-items)
   - [Use workspace tools in Pi or Codex](#use-workspace-tools-in-pi-or-codex)
-    - [Search Session Memory](#search-session-memory)
+    - [Search conversation evidence](#search-conversation-evidence)
     - [Attach pasted text](#attach-pasted-text)
   - [Enable an Intel iGPU for Ollama on WSL](#enable-an-intel-igpu-for-ollama-on-wsl)
   - [Run Agent Evals](#run-agent-evals)
@@ -18,6 +19,9 @@
   - [Authenticate with Pi](#authenticate-with-pi)
   - [Choose application paths](#choose-application-paths)
   - [Select a team and resume a session](#select-a-team-and-resume-a-session)
+  - [Organize workspaces and find the archive](#organize-workspaces-and-find-the-archive)
+    - [Find and restore archived conversations](#find-and-restore-archived-conversations)
+    - [Change the service settings](#change-the-service-settings)
   - [Plan work and answer decisions](#plan-work-and-answer-decisions)
   - [Configure guidance](#configure-guidance)
   - [Configure research tools](#configure-research-tools)
@@ -47,7 +51,7 @@ Building an asset does not prove installation or native Windows/macOS support.
 
 ## Install from a checkout
 
-Start with Python 3.12+, Node matching `.node-version`, Bun, uv, Git and just.
+Start with Python 3.13+, Node matching `.node-version`, Bun, uv, Git and just.
 From the repository root:
 
 ```shell
@@ -84,7 +88,7 @@ default engine selection. Set it to a configured Podman connection name only whe
 a remote engine is intended.
 
 On Linux or macOS, run `just restart` from the checkout to update and restart an
-editable installation. It runs `ltcook stop`, `ltcook app update`, and `ltcook serve` in order.
+editable installation. It runs `ltcook restart --update`.
 AppRC selects the registered checkout, which must be clean and track an upstream
 branch. It runs `just build-assets` before synchronizing Python and refreshing
 registration, even if Git is already current.
@@ -132,8 +136,19 @@ separately by `ltcook services stop`.
 Run `ltcook restart` to stop the runtime and reopen Paseo. On Linux or macOS,
 use `ltcook restart --update` (or `-u`) to apply the registered AppRC update
 before starting. Pass `-y` or `--yes` to confirm AppRC's update without a
-prompt. On Windows, stop LTCook, run `ltcook app update`, and run
-`ltcook serve` once AppRC finishes the update.
+prompt. The command checks that a new runtime instance serves the verified
+installation and reports the build fingerprint. If an update fails after
+shutdown, LTCook attempts to bring back a verified installation and reports
+the update failure separately from the recovery result. On Windows, stop
+LTCook, run `ltcook app update`, and run `ltcook serve` once AppRC finishes the
+update.
+
+Use `ltcook restart --last-result` to inspect the most recent completed
+registered restart later. Add `--json` for the build fingerprint, AppRC
+registration revision, and separate update and runtime results.
+
+The bundled Paseo web app shows the loaded web build in **Workspace Services**.
+An open tab that detects a newer build offers **Reload Paseo**.
 
 On Linux and WSL with user systemd 254 or newer, run
 `ltcook restart --when-idle` to queue a restart for when Paseo finishes its
@@ -182,8 +197,8 @@ turn breakdown; settings are under **Settings → Plugins → Turn speed**.
 
 On desktop, **Activity** opens in the right Explorer the first time you open
 an agent conversation in a workspace. Paseo remembers your layout after that.
-Use the Explorer **+** menu to open **Activity**, **Team**, or **Tasks**
-whenever you need them.
+Use the Explorer **+** menu to open **Activity**, **Workspace Services**,
+**Tracked Items**, **Team**, or **Tasks** whenever you need them.
 
 - **Activity** follows the focused agent. Expand the agent or a direct subagent
   to inspect running and recent tools, observed skill loads, and model context
@@ -191,7 +206,7 @@ whenever you need them.
   or skill to see its observed occurrences. **Show in Chat** jumps to the exact
   occurrence in LTCook's bundled Paseo web app. The details header offers
   **Open skill in new tab** when the skill document is available. Skills loaded
-  during a turn also appear beside **Show summary** in the chat. Select a skill
+  during a turn also appear in the chat. Select a skill
   for an inline preview or use **Open in new tab** to read the full document.
   The conversation button opens a subagent's native chat.
   For Codex, Activity recognizes successful direct reads of `SKILL.md` with
@@ -204,8 +219,8 @@ whenever you need them.
 - **Tasks** opens the Task Board for that Session. Select a Task to inspect its
   description, acceptance criteria, ordered Steps, blocker, and report.
 
-The Command Center also offers **Open Activity panel**, **Open Team panel**,
-and **Open Tasks panel**.
+The Command Center also offers **Open Activity panel**, **Open Workspace
+Services**, **Open Tracked Items**, **Open Team panel**, and **Open Tasks panel**.
 
 In the bundled Paseo web app, **Changes** follows the focused session's active
 Git worktree. Managed Pi and supported Paseo Pi and Codex agents report the
@@ -220,39 +235,50 @@ says a branch is already in use by a worktree, select that checkout in the
 **Worktree** picker to view its changes where the branch is checked out.
 
 Expand **RAG Index** to see the worktree that the selected conversation is
-authorized to search. Index availability and indexing activity are independent.
-**Checking index** means a ranked query is active and its indexing phase is
-unconfirmed. Opening the panel does not start a search or build. Turn off
-**Index updates** to pause ColGREP indexing in the LTCook runtime serving this
-Paseo host. Ranked searches can still use a complete existing index, and lexical
-search remains available. Standalone Pi and independently launched ColGREP
-manage their own index updates.
+authorized to search. **Building first index** means ranked search is warming
+up. **Ready · Refreshing** means the previous generation is still searchable.
+The runtime starts indexing when an authorized worktree becomes active.
+Opening the panel shows the last completed index, the next retry when
+scheduled, and any repair needed.
 
-**Session Memory** shows the selected agent's background summaries and last
-acknowledged delegation handoff. Stored and pending counts describe that
-agent's conversation. Turn off **Summarizer** to pause generation. Existing
-summaries remain available. Session Memory still records actions and short
-Discussions. Pending generation resumes when you turn it back on.
-Both switches apply across conversations and persist across runtime restarts.
-Select the device next to **Inference device** to open the list. **Auto** lets
-Ollama choose placement. **CPU** forces CPU inference.
-On supported Ollama hosts, the list also shows named GPUs discovered on the
-host. The picker explains when Ollama's device index is ambiguous or discovery
-is unavailable. LTCook saves the host-wide choice and applies it to the next
-summary request. While a summary is generating, the panel updates tokens per
-second once a second and labels estimated rates.
+Turn off **Index updates** to pause ColGREP indexing in the LTCook runtime
+serving this Paseo host. Ranked queries can keep using the published index,
+and lexical search remains available. Turn updates back on to resume active
+work. Standalone Pi owns its indexing preference for its process.
 
-Expand **Stored for this agent** to open the record viewer. It shows Markdown
-summaries, a notice when a short Discussion skipped generation, and execution
-cards. Expand a card to see its original actions and intermediate messages
-where Paseo still has them. **Show summary** opens the records for that passage
-inside the conversation. Reload the viewer to see newly stored records.
+**Last delegation handoff** shows the sending agent, receipt time, payload size,
+and number of action batches represented. The agent card shows model context
+usage when Paseo reports it.
 
-The handoff shows the sending agent, receipt time, payload size, and the number
-of summaries represented. A handoff can also carry original user instructions
-and tool evidence. The agent card shows model context usage when Paseo reports
-it. Summarization and search continue independently of whether the panel is
-visible.
+## Use Clarify and Tracked Items
+
+In LTCook's bundled Paseo web app, select **Clarify** below a completed
+reply to read a clearer version. In Hosted mode, the control shows which
+content will be sent to OpenAI and asks you to confirm generation. You can
+hide and reopen the saved clarification from the same reply. The original
+reply stays available above it. The additive reply control is supplied by the
+bundled web app.
+
+Open **Tracked Items** in the Explorer sidebar for the focused conversation.
+Expand **Design Decisions** to see decisions you've made or explicitly
+accepted. Select an item's source to reveal its original message where the
+client supports timeline navigation. You can edit or remove items, and create
+Trackers by writing plain-language criteria in **Add Tracker**. For example,
+enter “Track open architecture questions and retire them when the user
+resolves them.”
+
+Use **Coverage** to see where extraction stopped. A failed or incomplete message
+blocks only its Tracker. Later eligible messages for that Tracker wait and
+continue in order after the gap is resolved. Use **Retry message** after correcting the
+cause. An oversized input requires less source material or a higher configured
+input budget. **Skip blocked message** resumes later messages and retains the
+skipped message as incomplete coverage.
+
+Use **Pause Tracker everywhere** to stop extraction across conversations.
+Messages during that user pause are skipped, and resuming processes new messages. In
+Hosted mode, new user messages, relevant earlier text, and existing item text
+can be sent to OpenAI through the Codex subscription. You can select Local
+Ollama through the [conversation inference settings](References.md#environment-variables).
 
 ## Use workspace tools in Pi or Codex
 
@@ -283,10 +309,11 @@ and shells use their harness permissions for operations in other checkouts.
   source file or directory. See the [RIED operations and limits](References.md#repository-inventory).
 - Use `ltcook_repo_search` for source evidence. Ask for an
   exact identifier to use ripgrep or ask a question by meaning to use ColGREP.
-  Add a relative path to narrow results. The first ColGREP search builds the
-  workspace index and can take longer than later searches. If another request
-  is populating the index, retry once it finishes. If ColGREP assets are missing
-  or damaged, repeat the [installation procedure](#install-from-a-checkout).
+  Add a relative path to narrow results. While the first index is building,
+  hybrid search can offer approximate lexical results labeled with the
+  `lexical-fallback` diagnostic. Check **RAG Index** for progress or details
+  about a failure. If ColGREP assets are missing or damaged, repeat the
+  [installation procedure](#install-from-a-checkout).
 - Use `ltcook_repo_locate` when you want source locations
   for a definition, caller, or test. For example, ask “Locate the implementation
   and callers of `resolveLaunch`.” For an unfamiliar symbol, describe the behavior
@@ -296,7 +323,7 @@ and shells use their harness permissions for operations in other checkouts.
   Locate to follow a local import, re-export, or wrapper. For a multi-file
   investigation, ask the agent to use Locate trace for the behavior, relevant
   settings, and tests in one call. For example, ask “Trace how the launcher
-  enables Session Memory and how the runtime handles a stale citation. Cite the
+  configures Tracker and how the runtime handles a stale citation. Cite the
   configuration and the test assertion.” For Search and Locate,
   name a local Git base to prioritize changed files and related tests. Reopen the
   chat through Paseo after launching the updated runtime. See the
@@ -306,7 +333,7 @@ and shells use their harness permissions for operations in other checkouts.
   focus tells the summarizer what to emphasize. Check consequential details
   such as identifiers and negated actions against the source.
 
-The summarizer uses `@tiny-local`, which defaults to Spark X2.6 4B Q8_0 with
+The summarizer uses `@local-tiny`, which defaults to Spark X2.6 4B Q8_0 with
 reasoning off. Pull it on the configured Ollama instance before the first
 summary. Setup checks readiness without downloading Spark.
 
@@ -320,27 +347,19 @@ hosted chats work without Spark. AppRC's global
 starts. A keep-alive of `-1` keeps the model resident after use. Set it to `0`
 to unload after a request or to a positive number of seconds for timed residency.
 
-### Search Session Memory
+<a id="search-session-memory"></a>
 
-Ask the agent to call `session-memory` with a short `query` after resuming a
-conversation or starting work that depends on an earlier decision. Results
-include UAMP summaries, short Discussions, execution records, and original
-conversation messages. Summary results list source sequences and
-identify the original user sources. Use `source` with its `agentId`, `epoch`
-and `seq` to inspect a full original message. A result with `truncated: true`
-is a preview.
+### Search conversation evidence
 
-An ordinary Paseo chat can read its own Session Memory. Managed agents can
-read conversations bound to their authorized TeamInstance in the same
-workspace. A resumed conversation may contain a prompt whose original author
-cannot be verified. Search lists it as `unattributed-prompt`. Follow the latest
-cited user instruction when it differs from a summary.
+Ask the agent to call `session-memory` with a short `query` when a Task depends
+on an earlier decision. Use `source` with the returned `agentId`, `epoch`, and
+`seq` to reopen an exact original. A result with `truncated: true` is an excerpt.
+Search has access to the current conversation and authorized conversations in
+the same managed TeamInstance and workspace.
 
-Automatic enrichment is opt-in. Set `LTCOOK_SESSION_MEMORY_DELEGATION=true`
-in global AppRC and make `lfm3:1.7b-qad-q4_0` available on the configured
-Ollama instance. Restart LTCook to apply the
-[settings](References.md#environment-variables). Agent work can proceed
-with original messages while a summary is pending.
+Set `LTCOOK_SESSION_MEMORY_DELEGATION=true` in global AppRC and restart LTCook
+to add relevant original evidence to automatic handoffs. This works while
+Tracker is paused and before any clarifications are generated.
 
 ### Attach pasted text
 
@@ -589,7 +608,9 @@ management commands rather than inventing another configuration editor.
 | --- | --- | --- |
 | `@smol` | GPT-6 Luna | Provider default |
 | `@tiny` | GPT-6 Luna | Low |
-| `@tiny-local` | Spark X2.6 4B Q8_0 on Ollama | Off |
+| `@local-CPU` | LFM3 1.7B QAD Q4_0 on Ollama | Off |
+| `@local-tiny` | Spark X2.6 4B Q8_0 on Ollama | Off |
+| `@local-evals` | Bonsai 2 27B on Ollama | Provider default |
 | `@smart` | GPT-6.2 Sol | Provider default |
 | `@plan` | GPT-6.2 Sol | Xhigh |
 | `@expensive` | GPT-6 Astra | Provider default |
@@ -613,7 +634,7 @@ Use the terminal launcher to start a new native conversation:
 ```shell
 ltcook launch model pi @plan
 ltcook launch model codex @tiny
-ltcook launch model pi @tiny-local --reasoning high
+ltcook launch model pi @local-tiny --reasoning high
 ```
 
 Pi uses the configured provider and the native Pi login. Codex uses its installed
@@ -628,8 +649,10 @@ can generate.
 Change the physical model slots in
 [AppRC](References.md#environment-variables). For hosted slots enter
 `provider/model` and set effort through the Team or session. Drop any previous
-`:effort` suffix. `@plan` shares the smart slot. The tiny-local slot accepts the
-Ollama model tag, including its quantization suffix.
+`:effort` suffix. `@plan` shares the smart slot and `@tiny` shares the smol
+slot. Local slots accept Ollama tags including quantization suffixes. Pull
+the configured tag if it is missing from your Ollama instance. Ollama can
+use available GPU acceleration with any local alias, including `@local-CPU`.
 
 ## Authenticate with Pi
 
@@ -737,6 +760,89 @@ The new store starts new coordination Sessions. Pi/Paseo histories and shared
 authentication remain with their native owners; selecting a fresh store does
 not authorize replay of an uncertain action.
 
+## Organize workspaces and find the archive
+
+Use a Paseo project for a repository and a Paseo workspace for related work.
+Start with one main user-facing session in that workspace; add sessions and
+supporting tabs when useful. Select the host where you want to run the work.
+See the [Paseo and AppRC glossary](Explanations.md#paseo-and-apprc-terminology)
+for the distinction between a workspace container and its working directory.
+
+Workspace Organizer maintains **Feature** (blue), **Bugfix** (red), **CSC**
+(amber), and **Research** (violet) on this LTCook host. It selects a category
+from the first conversation content, then reassesses changed conversations or
+observed Git revisions every 12 hours. If work changes during the first
+classification, it can retry once after at least 60 seconds, when the workspace
+is idle. Other labels remain available.
+Use Paseo's native label filters to narrow the workspace list. The native default sorts workspaces by
+creation time, newest first; an existing display preference is preserved.
+
+Renamer keeps workspace titles within 20 visible characters and agent-session
+tab titles within 15. It updates a new conversation when content becomes
+available, then at most every 30 minutes when its source changes. Workspace
+names also respond to observed Git changes; agent-tab names follow their own
+conversations. File, diff, terminal, browser, and native provider-subagent titles
+remain native.
+Renamer and category selection use `@tiny` with low reasoning and the configured
+model authentication. They resume later when inference is unavailable; the
+current names and labels remain usable.
+
+Open **Explorer → + → Workspace Services** or **Activity → Services** to see
+what each service is doing and any operation that needs attention. Workspace
+Organizer also shows why workspaces are protected from automatic archival.
+Update the reported setting or sign-in to allow blocked inference to resume.
+Change service switches through AppRC as described below.
+
+### Find and restore archived conversations
+
+Open **History** in Paseo's left sidebar, select an archived conversation, and
+choose **Unarchive** to resume it. If Paseo needs to recreate a removed workspace
+directory, the workspace recovery action is **Restore**. These records remain
+on their original host under Paseo's data home; there is no separate archive
+folder to organize or synchronize. The host must be connected to read them.
+History lists agent conversations, so a workspace that never had an agent has
+no conversation entry there.
+
+Workspace Organizer's automatic archive waits for 14 days without meaningful
+use. Conversation activity, observed Git revisions and tracked or untracked file
+changes, and interaction in LTCook's bundled Paseo web app reset the inactivity
+period. External-only edits in ordinary-directory projects and changes only to
+ignored files do not. Other Paseo clients do not report focus-only use. Pin a
+workspace if you use another Paseo client or edit files that the service does
+not observe.
+Running or queued work, a pending request for your input, live terminals,
+incomplete activity information, or unavailable archive support prevents archival.
+Empty workspaces remain active. First discovery and restoration each start a
+fresh 14-day observation period. Automatic relabeling and renaming do not reset it.
+
+Automatic archive keeps the entire working directory, including modified,
+untracked, and ignored files, and skips project teardown commands. This includes
+Paseo-owned worktrees and does not require a commit or remote push. If the
+connected daemon cannot guarantee this behavior, automatic archival stays
+paused and **Workspace Services** asks you to restart LTCook. Paseo's manual
+archive action can still remove a Paseo-owned worktree directory.
+
+### Change the service settings
+
+All five [service switches](References.md#workspace-service-settings) default to
+`true` and apply across this installation's Paseo workspaces. Save them at user
+scope and restart LTCook to apply changes. For example, to retain automatic
+labels and agent-tab names while disabling automatic archival and workspace
+renaming:
+
+```shell
+ltcook config set runtime.services.workspace_organizer.auto_archive false --scope user
+ltcook config set runtime.services.renamer.workspaces false --scope user
+ltcook restart
+```
+
+Set the same values to `true` to enable them again. The respective `enabled`
+setting pauses the whole service. `runtime.services.renamer.tabs` independently
+controls agent-tab renaming. Deliberate shell exports take precedence over saved
+user values; AppRC project overlays do not change the host-wide service policy.
+The `ltcook services` commands manage research containers, while these two
+services follow the LTCook runtime lifecycle.
+
 ## Plan work and answer decisions
 
 Open an explicit project Session first. Have the Team write its Design under
@@ -784,6 +890,10 @@ reset approval; a material scope change requires an explicit new user decision.
 
 ## Configure guidance
 
+For ordinary Codex chats in Paseo, use Codex's native user and repository
+guidance. See [instruction sources in Codex and Pi](Explanations.md#instruction-sources-in-codex-and-pi)
+for what Paseo supplies and which resources apply to a managed Team.
+
 User guidance defaults to `<AppRC config>/guidance/rules/` and `skills/`. Set its
 global root through AppRC when needed:
 
@@ -813,6 +923,10 @@ redirect shared state, User guidance or the shared auth home. Core planning guid
 it or the execution guards.
 
 ## Configure research tools
+
+Agents prefer LTCook's web search and fetch tools when available. They can use
+another available tool when a needed capability is missing or search evidence
+is incomplete.
 
 Use the `web` section for `web.searxng_url`, `web.crawl4ai_url`, and
 `web.ssrf_allow_ranges`, and the AppRC setting `web.crawl4ai.api_token` for the

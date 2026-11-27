@@ -11,9 +11,21 @@ import { EvalRunService } from '../../../runtime/src/evals/service.js';
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
-import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
+import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
+import { ClarifyService } from '../../../runtime/src/session-memory/clarify.js';
+import { ConversationInference } from '../../../runtime/src/session-memory/inference.js';
+import { openConversationProductStore } from '../../../runtime/src/session-memory/product-store.js';
+import { TrackerService } from '../../../runtime/src/session-memory/tracker.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
+import { ActivityPreferences } from '../../../runtime/src/integrations/activity-preferences.js';
+import {
+  createWorktreeScopeResolver,
+  SessionWorktrees,
+} from '../../../runtime/src/integrations/session-worktrees.js';
+import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import {
   createPaseoAgentBackend,
   startPaseoHost,
@@ -325,12 +337,15 @@ const environment = {
     ),
   ),
   PI_CODING_AGENT_DIR: piHome,
+  PASEO_WEB_UI_DIST_DIR: path.join(root, 'runtime/dist/paseo-web'),
   LTCOOK_PI_AUTH_DIR: authHome,
   PI_OFFLINE: '1',
   LTCOOK_MODEL_SMART: 'fixture/test',
   LTCOOK_MODEL_SMOL: 'fixture/test',
   LTCOOK_MODEL_EXPENSIVE: 'fixture/test',
   LTCOOK_MODEL_TINY_LOCAL: 'fixture-model',
+  LTCOOK_MODEL_LOCAL_CPU: 'fixture-cpu',
+  LTCOOK_MODEL_LOCAL_EVALS: 'fixture-evals',
   LTCOOK_GUIDANCE_DIR: path.join(directory, 'guidance'),
   LTCOOK_BROWSER_ENABLED: 'false',
   LTCOOK_CODESEARCH_ENABLED: 'false',
@@ -338,8 +353,16 @@ const environment = {
 };
 const tracePath = path.join(directory, 'gui.perfetto.json');
 const telemetry = new Telemetry(path.join(directory, 'gui.events.jsonl'), tracePath);
-const api = new RuntimeApi(undefined, secret, listen, environment, telemetry);
-api.setActivityPreferences(path.join(directory, 'activity-settings.json'));
+let runtime: ReturnType<typeof createRuntime> | undefined;
+const colgrep = createColgrepProvider();
+const preferences = new ActivityPreferences(path.join(directory, 'activity-settings.json'));
+const worktrees = new SessionWorktrees(process.env.PATH ?? '');
+const resolveScope = createWorktreeScopeResolver((id) => runtime?.snapshot(id));
+const activation = new SessionActivation(environment);
+const api = new RuntimeApi(undefined, secret, listen, activation, environment, telemetry, {
+  activity: { colgrep, preferences },
+  worktrees: { store: worktrees, resolveScope },
+});
 const evals = new EvalRunService(path.join(directory, 'eval-state'), async (request) => {
   assert.equal(request.preset, 'full');
   assert.equal(request.setup, 'synthetic');
@@ -361,12 +384,15 @@ const evals = new EvalRunService(path.join(directory, 'eval-state'), async (requ
 });
 await evals.initialize();
 api.setEval(evals);
-api.setWorkspaceMcp(new WorkspaceMcp([], listen));
+const tools = new ToolCatalog([]);
+api.setWorkspaceTools(tools);
+api.setWorkspaceMcp(new WorkspaceMcp(tools, listen));
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
-let runtime: ReturnType<typeof createRuntime> | undefined;
-let memory: SessionMemory | undefined;
-let backgroundSummary = false;
+let memory: ConversationRecords | undefined;
+let products: ReturnType<typeof openConversationProductStore> | undefined;
+let inference: ConversationInference | undefined;
+let tracker: TrackerService | undefined;
 let activityRequests = 0;
 const paseoHome = path.join(deployment, 'paseo');
 try {
@@ -413,7 +439,7 @@ try {
     });
   runtime = createController();
   api.setRuntime(runtime);
-  api.setOpenWorkspaceHandler(async (request) =>
+  activation.setWorkspaceActivator(async (request) =>
     runtime!.openSession({
       id: request.sessionId,
       workspaceRoot: request.workspaceRoot,
@@ -432,21 +458,8 @@ try {
     resolve: ({ teamSelection, workspaceRoot, alias, reasoning }) =>
       backend.resolveSelection(workspaceRoot, leaderFor(teamSelection), alias, reasoning ?? 'none'),
   });
-  api.setPrepareSessionHandler(async (request) => {
-    const snapshot = runtime!.snapshot(request.sessionId);
-    const member = snapshot.definition.members.find((member) => member.key === 'leader');
-    assert(member);
-    const prepared = await backend.prepare(
-      {
-        member,
-        sessionId: request.sessionId,
-        teamInstanceId: snapshot.session.teamInstanceId,
-        teamId: snapshot.session.teamId,
-        workspaceRoot: request.workspaceRoot,
-      },
-      request.leaderAgentId,
-      request.savedModel,
-    );
+  api.setPrepareSessionHandler(async (options, leaderAgentId, savedModel) => {
+    const prepared = await backend.prepare(options, leaderAgentId, savedModel);
     return {
       env: prepared.env,
       ...(prepared.mcpServers ? { mcpServers: prepared.mcpServers } : {}),
@@ -519,6 +532,9 @@ try {
     '0',
     'Returning to the same workspace and reloading respects the closed Activity tab',
   );
+  await openExplorerPanel('Workspace Services');
+  await browser('wait', '--text', 'Workspace Organizer');
+  await browser('wait', '--text', 'Renamer');
   await openExplorerPanel('Activity');
   await browser('wait', '--text', 'Recent conversation activity');
   assert.equal(
@@ -805,14 +821,37 @@ try {
   await browser('screenshot', path.join(directory, 'activity-explorer-dark.png'));
   await browser('set', 'media', 'light');
   await inspectStage('native-activity-tools-and-skills');
-  await browser('set', 'viewport', '1440', '1000');
 
+  await browser(
+    'wait',
+    '--fn',
+    `(() => {
+      const row = document.querySelector('[aria-label^="Adjutant,"]');
+      return row && row.getAttribute('aria-expanded') !== 'true';
+    })()`,
+  );
+  await browser('wait', '[aria-label="Open Adjutant conversation"]');
+  assert.equal(
+    (await browser('get', 'text', '[aria-label="Open Adjutant conversation"]')).trim(),
+    'Open',
+  );
   await clickButton('Open Adjutant conversation');
   await waitForComposer('Adjutant');
+  await browser('set', 'viewport', '1440', '1000');
   await browser(
     'wait',
     '--fn',
     `Boolean(document.querySelector('[aria-label="Adjutant"][aria-selected="true"]'))`,
+  );
+  assert.equal(
+    (
+      await browser(
+        'eval',
+        `document.querySelectorAll('[aria-label="Adjutant"][aria-selected]').length`,
+      )
+    ).trim(),
+    '1',
+    'Open reuses the Adjutant tab opened earlier',
   );
   await clickButton(`Back to ${mobileLeader.agent.title}`);
   await waitForComposer(mobileLeader.agent.title);
@@ -835,59 +874,73 @@ try {
   await waitForComposer(mobileLeader.agent.title);
   await browser('wait', '--text', 'RAG Index');
 
-  const selectedGpu = { id: 'CUDA:fixture-4070', label: 'RTX 4070 Ti SUPER', mainGpu: 1 };
-  const summaryContent = '## Discoveries\n\n- Background summary fixture';
-  const latestSummary = '## Discoveries\n\n- Live throughput passage summary';
-  const longerPrompt =
-    ' Keep this Session Memory fixture long enough to qualify for inference.'.repeat(18);
-  const ambiguousReason = 'Ollama cannot select this device uniquely.';
-  let deviceProbes = 0;
-  const livePlacements: Array<{ cpuOnly?: boolean; mainGpu?: number }> = [];
-  memory = new SessionMemory({
-    databasePath: path.join(directory, 'activity-memory.sqlite'),
-    source: createPaseoMemorySource(host.api, secret),
-    async deviceCatalog() {
-      deviceProbes++;
-      return {
-        devices: [
-          { id: 'CUDA:fixture-5090', label: 'RTX 5090', mainGpu: 0 },
-          selectedGpu,
-          { id: 'ROCm:fixture-igpu', label: 'AMD integrated GPU', unavailable: ambiguousReason },
-        ],
-      };
+  const evidence = createPaseoMemorySource(host.api, secret);
+  products = openConversationProductStore(path.join(directory, 'conversation-products.sqlite'));
+  let clarificationRequests = 0;
+  inference = new ConversationInference(
+    {
+      hosted: async (product, prompt) => {
+        if (product === 'clarify') {
+          clarificationRequests++;
+          return { text: 'The public cursor hides its storage layout.', complete: true };
+        }
+        const decoded = JSON.parse(prompt.input) as {
+          current: { seq: number; text: string };
+          trackers: { id: string }[];
+        };
+        return {
+          complete: true,
+          text: JSON.stringify({
+            trackers: decoded.trackers.map(({ id }) => ({
+              trackerId: id,
+              changes: decoded.current.text.includes('Use an opaque public cursor.')
+                ? [
+                    {
+                      type: 'add',
+                      text: 'Keep the public cursor opaque.',
+                      sources: [decoded.current.seq],
+                    },
+                  ]
+                : [],
+            })),
+          }),
+        };
+      },
     },
-    async summarize(type, prompt, _signal, placement, onProgress) {
-      const input = JSON.stringify(prompt);
-      if (input.includes('Summarize without Activity')) backgroundSummary = true;
-      const isLatest = input.includes('Measure live summary throughput');
-      if (isLatest) {
-        livePlacements.push(placement);
-        onProgress?.({ tokensPerSecond: 12.5, estimated: true });
-        await Bun.sleep(2100);
-        onProgress?.({ tokensPerSecond: 19, estimated: true });
-        await Bun.sleep(2100);
-      }
-      const content = isLatest ? latestSummary : summaryContent;
-      return {
-        type,
-        text: content,
-        content,
-        complete: true,
-        elapsedMs: 1,
-      };
-    },
+    'hosted',
+  );
+  tracker = new TrackerService(products, evidence, inference, 8000);
+  tracker.observe(mobileSession.id, { baseline: true });
+  await tracker.settled();
+  api.setConversationInference(inference);
+  api.setClarify(new ClarifyService(products, evidence, inference, 8000));
+  api.setTracker(tracker);
+  memory = new ConversationRecords({
+    databasePath: path.join(directory, 'activity-conversation.sqlite'),
+    source: evidence,
+    onObserved: (id) => tracker?.observe(id),
   });
-  api.setSessionMemory(memory, () => ({ sessionId: mobileSession.id }));
+  api.setConversationRecords(memory, () => ({ scope: { sessionId: mobileSession.id } }));
   await clickButton('Close Explorer sidebar');
   await new Promise((resolve) => setTimeout(resolve, 1750));
   const requestsWhileHidden = activityRequests;
-  await host.api.agents
-    .ref(mobileSession.id)
-    .send('Summarize without Activity' + longerPrompt, { clientMessageId: randomUUID() });
-  for (let attempt = 0; attempt < 100 && !backgroundSummary; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  assert(backgroundSummary, 'Session Memory summarizes while Activity is hidden');
+  const hiddenLeader = host.api.agents.ref(mobileSession.id);
+  const hiddenPrompt = 'Exercise Activity tools while the panel is hidden.';
+  await hiddenLeader.send(hiddenPrompt, { clientMessageId: randomUUID() });
+  await hiddenLeader.waitForFinish(30_000);
+  await memory.finalize(mobileSession.id);
+  const hiddenEvidence = await memory.search(mobileSession.id, '', hiddenPrompt);
+  const hiddenMessage = hiddenEvidence.matches
+    .flatMap(({ entries }) => entries)
+    .find(({ author, text }) => author === 'user' && text === hiddenPrompt);
+  assert(hiddenMessage);
+  const actionBatches = (await memory.records(mobileSession.id)).batches;
+  assert(
+    actionBatches.some(({ sources }) =>
+      sources.some(({ author, seq }) => author === 'tool' && seq > hiddenMessage.seq),
+    ),
+    'Deterministic recording captures the hidden conversation’s tool actions',
+  );
   assert.equal(activityRequests, requestsWhileHidden, 'Hidden Activity releases observation');
   await clickButton('Open Explorer sidebar');
   await browser('wait', '--text', 'Recent conversation activity');
@@ -896,239 +949,64 @@ try {
   await browser('click', '[aria-label^="RAG Index,"]');
   const indexingSwitch = '[role="switch"][aria-label="Index updates"]';
   await browser('click', indexingSwitch);
-  await browser('wait', '[aria-label^="RAG Index,"][aria-label*="Index updates off"]');
-  assert.equal(api.activityColgrep.isIndexingEnabled(), false);
+  await browser('wait', '[aria-label^="RAG Index,"][aria-label*="Paused"]');
+  assert.equal(colgrep.isIndexingEnabled(), false);
   await browser('click', indexingSwitch);
   await browser(
     'wait',
     '--fn',
     `document.querySelector(${JSON.stringify(indexingSwitch)})?.checked === true`,
   );
-  assert.equal(api.activityColgrep.isIndexingEnabled(), true);
+  assert.equal(colgrep.isIndexingEnabled(), true);
   await browser('click', '[aria-label^="RAG Index,"]');
-  stage = 'native-activity-memory-summaries';
-  await browser('wait', '[aria-label^="Session Memory,"][aria-label*="stored"]');
-  await browser('click', '[aria-label^="Session Memory,"]');
-  const summarizerSwitch = '[role="switch"][aria-label="Summarizer"]';
-  await browser('click', summarizerSwitch);
-  await browser('wait', '[aria-label^="Session Memory,"][aria-label$="Paused"]');
-  assert.equal(memory.status(undefined, mobileSession.id).summarization, 'paused');
-  await browser('click', summarizerSwitch);
+  stage = 'conversation-products';
+  await hiddenLeader.send('Use an opaque public cursor.', { clientMessageId: randomUUID() });
+  await hiddenLeader.waitForFinish(30_000);
   await browser(
     'wait',
     '--fn',
-    `document.querySelector(${JSON.stringify(summarizerSwitch)})?.checked === true`,
+    `document.querySelectorAll('[data-testid="ltcook-clarify-reply"]').length > 1`,
   );
-  assert.notEqual(memory.status(undefined, mobileSession.id).summarization, 'paused');
-  stage = 'native-activity-memory-device';
-  await browser('wait', '[aria-label="Inference device: Auto"]');
-  assert.equal(deviceProbes, 0, 'Opening the Activity card does not probe GPUs');
-  const deviceRow = JSON.parse(
+  const original = (await evidence.read(mobileSession.id, undefined, 'tail')).messages.findLast(
+    ({ author }) => author === 'agent',
+  );
+  assert(original);
+  assert.equal(clarificationRequests, 0);
+  const clarifyButton = `[data-testid="ltcook-clarify-source-${original.seq}"] [data-testid="ltcook-clarify-reply"]`;
+  const clickClarify = async () => {
+    await browser('wait', clarifyButton);
     await browser(
       'eval',
-      `(() => {
-        const row = document.querySelector('[data-testid="ltcook-memory-device-row"]');
-        const trigger = row.querySelector('[aria-label="Inference device: Auto"]');
-        const label = [...row.querySelectorAll('div, span')].find(node => node.textContent === 'Inference device');
-        const rowHeight = row.getBoundingClientRect().height;
-        row.style.width = '174px';
-        const key = label.getBoundingClientRect();
-        const value = trigger.getBoundingClientRect();
-        const narrow = row.getBoundingClientRect();
-        row.style.removeProperty('width');
-        return {
-          rowHeight,
-          sameLine: key.right <= value.left + 1 && Math.abs(key.top + key.height / 2 - value.top - value.height / 2) <= 2,
-          reservedWidth: value.width / narrow.width,
-          fits: value.right <= narrow.right + 1,
-        };
-      })()`,
-    ),
-  ) as { rowHeight: number; sameLine: boolean; reservedWidth: number; fits: boolean };
-  assert(
-    deviceRow.sameLine &&
-      deviceRow.rowHeight < 32 &&
-      deviceRow.fits &&
-      deviceRow.reservedWidth > 0.5,
-    'The device label and control share one compact row',
-  );
-  await clickButton('Inference device: Auto');
-  await browser('wait', '--text', 'RTX 5090');
-  await browser('wait', '--text', 'RTX 4070 Ti SUPER');
-  await browser('wait', '--text', ambiguousReason);
-  await browser('wait', '[aria-label="AMD integrated GPU"][aria-disabled="true"]');
-  assert(deviceProbes > 0, 'Opening the device list probes Ollama');
-  await clickButton('CPU');
-  await browser(
-    'wait',
-    '--fn',
-    `(() => {
-      const button = document.querySelector('[aria-label="Inference device: CPU"]');
-      if (!button) return false;
-      const bounds = button.getBoundingClientRect();
-      const hit = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-      return button.contains(hit);
-    })()`,
-  );
-  assert.equal(memory.status(undefined, mobileSession.id).device.id, 'cpu');
-  await clickButton('Inference device: CPU');
-  await clickButton(selectedGpu.label);
-  await browser('wait', '[aria-label="Inference device: RTX 4070 Ti SUPER"]');
-  assert.equal(memory.status(undefined, mobileSession.id).device.id, selectedGpu.id);
-  stage = 'native-activity-memory-live-rate';
-  await host.api.agents
-    .ref(mobileSession.id)
-    .send('Measure live summary throughput. Exercise Activity tools.' + longerPrompt, {
-      clientMessageId: randomUUID(),
-    });
-  await browser('wait', '--text', '12.5 tokens/s');
-  await browser('wait', '--text', '19 tokens/s');
-  assert.deepEqual(livePlacements[0], { mainGpu: 1 });
-  let latestStored = false;
-  for (let attempt = 0; attempt < 100 && !latestStored; attempt++) {
-    const catalog = await memory.readStoredSummaries(mobileSession.id);
-    latestStored = catalog.summaries.some((summary) =>
-      summary.parts.some(
-        ({ content }) => JSON.stringify(content) === JSON.stringify(latestSummary),
-      ),
+      `document.querySelector(${JSON.stringify(clarifyButton)})?.scrollIntoView({ block: 'center' })`,
     );
-    if (!latestStored) await Bun.sleep(100);
-  }
-  assert(latestStored, 'The live Session Memory summary completed before opening its catalog');
-  stage = 'native-activity-memory-catalog';
-  await browser('wait', '--text', 'Stored for this agent');
-  await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
-  await browser('wait', '--text', 'Est. tokens');
-  await browser('wait', '--text', 'Source #');
-  assert(
-    !(await browser('snapshot')).includes('Background summary fixture'),
-    'The narrow Explorer does not render summary bodies',
-  );
-  stage = 'native-activity-memory-records-tab';
-  await clickButton('Open stored summaries');
-  await browser('wait', '--text', 'Live throughput passage summary');
-  await browser('wait', '--text', 'Background summary fixture');
-  await browser('wait', '--text', 'activity-memory.sqlite');
-  const storedRecords = '[data-testid="ltcook-stored-summaries-records"]';
-  const headings = await browser(
-    'eval',
-    `[...document.querySelectorAll(${JSON.stringify(storedRecords + ' h2')})].map(node => node.textContent)`,
-  );
-  assert.match(headings, /Discoveries/, 'The Stored Summaries tab renders the Markdown heading');
-  await browser(
-    'eval',
-    `(() => {
-      const writeText = navigator.clipboard.writeText.bind(navigator.clipboard);
-      navigator.clipboard.writeText = async value => {
-        await writeText(value);
-        window.__ltcookCopiedSummaries = value;
-      };
-    })()`,
-  );
-  await clickButton('Copy JSON');
-  await browser('wait', '--text', 'Copied stored summaries');
-  const copiedRecords = JSON.parse(
-    await browser('eval', 'JSON.parse(window.__ltcookCopiedSummaries)'),
-  ) as { parts: { content: unknown }[] }[];
-  assert.equal(copiedRecords[0]?.parts[0]?.content, latestSummary);
-  await clickButton(mobileLeader.agent.title);
-  await waitForComposer(mobileLeader.agent.title);
-  stage = 'native-activity-memory-chat-shortcut';
-  await browser('set', 'viewport', '1100', '950');
-  const showSummary = '[aria-label="Show summary"]';
-  const preview = '[data-testid="ltcook-passage-summary-preview"]';
-  const completeSummary = '[data-testid="ltcook-passage-summary-complete"]';
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelectorAll(${JSON.stringify(showSummary)}).length === 2`,
-  );
-  async function openPassage(index: number) {
-    await browser(
-      'eval',
-      `(() => {
-      document.querySelectorAll('[data-ltcook-test-summary]').forEach(node => node.removeAttribute('data-ltcook-test-summary'));
-      document.querySelectorAll(${JSON.stringify(showSummary)})[${index}].setAttribute('data-ltcook-test-summary', '');
-    })()`,
-    );
-    await browser('click', '[data-ltcook-test-summary]');
-    await browser('wait', preview);
-  }
-  await openPassage(0);
-  await browser('wait', '--text', 'Background summary fixture');
-  const earlier = await browser('get', 'text', preview);
-  assert(earlier.includes('Background summary fixture'));
-  assert(!earlier.includes('Live throughput passage summary'));
-  assert(!earlier.includes('"findings"'), 'The chat preview is rendered as fields, not JSON');
-  await clickButton('Hide summary');
-  await openPassage(1);
-  await browser('wait', '--text', 'Live throughput passage summary');
-  const later = await browser('get', 'text', preview);
-  assert(later.includes('Live throughput passage summary'));
-  assert(!later.includes('Background summary fixture'));
-  const previewLayout = JSON.parse(
-    await browser(
-      'eval',
-      `(() => {
-        const card = document.querySelector(${JSON.stringify(preview)});
-        return {
-          headings: [...card.querySelectorAll('[role="heading"], h1, h2, h3, h4, h5, h6')].map(node => node.textContent),
-          fits: card.scrollWidth <= card.clientWidth + 1,
-        };
-      })()`,
+    await browser('click', clarifyButton);
+  };
+  await clickClarify();
+  await browser('wait', '--text', 'Clarify with Hosted inference');
+  assert.equal(clarificationRequests, 0);
+  await clickClarify();
+  await browser('wait', '--text', 'The public cursor hides its storage layout.');
+  assert.equal(clarificationRequests, 1);
+  await clickClarify();
+  await clickClarify();
+  await browser('wait', '--text', 'The public cursor hides its storage layout.');
+  assert.equal(clarificationRequests, 1);
+  assert.deepEqual(
+    (await evidence.read(mobileSession.id, undefined, 'tail')).messages.findLast(
+      ({ author }) => author === 'agent',
     ),
-  ) as { headings: string[]; fits: boolean };
-  assert(previewLayout.headings.some((heading) => heading.includes('Discoveries')));
-  assert(previewLayout.fits, 'Summary fields fit the narrow conversation');
-  await browser('screenshot', path.join(directory, 'passage-summary-preview.png'));
-  await browser('click', `${preview} [aria-label="Show execution details"]`);
-  const execution = `${preview} [data-testid="ltcook-execution-evidence"]`;
-  await browser('wait', execution);
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelector(${JSON.stringify(execution)})?.textContent.includes(${JSON.stringify(fixtureSkill)})`,
+    original,
   );
-  const hideDetails = `${preview} [aria-label="Hide execution details"]`;
-  await browser('scrollintoview', hideDetails);
-  await browser('click', hideDetails);
-  await clickButton('Open complete summary');
-  await browser('wait', completeSummary);
-  const complete = await browser('get', 'text', completeSummary);
-  assert(complete.includes('Live throughput passage summary'));
-  assert(!complete.includes('Background summary fixture'));
-  assert(!complete.includes('"findings"'), 'The complete entry is rendered as fields, not JSON');
-  await browser('screenshot', path.join(directory, 'passage-summary-complete.png'));
-  await browser('press', 'Escape');
-  await browser(
-    'wait',
-    '--fn',
-    `(() => {
-    const button = document.querySelector('[aria-label="Hide summary"]');
-    if (!button) return false;
-    const bounds = button.getBoundingClientRect();
-    return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
-  })()`,
-  );
-  await clickButton('Hide summary');
-  await host.api.agents
-    .ref(mobileSession.id)
-    .send('Keep this reply short.', { clientMessageId: randomUUID() });
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelectorAll(${JSON.stringify(showSummary)}).length === 3`,
-  );
-  await openPassage(2);
-  await browser('wait', '--text', 'Not summarized, user-agent message pair is below 256 tokens.');
-  await clickButton('Hide summary');
-  await browser('set', 'viewport', '1440', '1000');
-  await browser('find', 'role', 'button', 'click', '--name', 'Stored for this agent');
-  await browser('wait', '--text', 'No acknowledged handoff available for this agent.');
-  await browser('click', '[aria-label^="Session Memory,"]');
-
+  await openExplorerPanel('Tracked Items');
+  await browser('wait', '--text', 'Design Decisions (1)');
+  await clickButton('Design Decisions (1)');
+  await browser('wait', '--text', 'Keep the public cursor opaque.');
+  await clickButton('Pause Tracker everywhere');
+  await browser('wait', '--text', 'Resume Tracker everywhere');
+  await clickButton('Resume Tracker everywhere');
+  await browser('wait', '--text', 'Pause Tracker everywhere');
   let acknowledgeMemory: (() => void) | undefined;
-  await memory.handoff(mobileSession.id, 'Summarize without Activity', undefined, (payload) => {
+  await memory.handoff(mobileSession.id, hiddenPrompt, undefined, (payload) => {
     acknowledgeMemory = memory!.prepareDelivery(mobileSession.id, adjutantId, payload);
   });
   assert(acknowledgeMemory, 'The Leader supplied a measured handoff');
@@ -1164,14 +1042,14 @@ try {
   await clickButton('Open conversation');
   await waitForComposer('Adjutant');
   await inspectStage('panel-direct-child-conversation');
-  stage = 'native-activity-memory-handoff';
+  stage = 'native-activity-delegation-handoff';
   await openActivityPanel();
-  await browser('wait', '[aria-label^="Session Memory,"][aria-label*="Handoff received"]');
-  await browser('click', '[aria-label^="Session Memory,"]');
-  await browser('wait', '--text', 'Summaries represented');
+  await browser('wait', '[aria-label^="Last delegation handoff,"]');
+  await browser('click', '[aria-label^="Last delegation handoff,"]');
+  await browser('wait', '--text', 'Action batches represented');
   const handoff = await browser('snapshot');
   assert(handoff.includes(mobileLeader.agent.title), 'Activity names the sending Leader');
-  await browser('click', '[aria-label^="Session Memory,"]');
+  await browser('click', '[aria-label^="Last delegation handoff,"]');
   await openExplorerPanel('Tasks');
   await browser('wait', '--text', 'Task Board');
   await inspectStage('contextual-task-board');
@@ -1212,7 +1090,7 @@ try {
   try {
     await assert.rejects(
       host.api.agents.ref(mobileSession.id).send('Prompt blocked by idle restart'),
-      /reserved for an LTCook restart/,
+      /reserved for LTCook maintenance/,
     );
     assert.equal(modelCalls, priorModelCalls);
   } finally {
@@ -1220,6 +1098,10 @@ try {
   }
   const committed = await reserveIdleRestart();
   assert.equal(committed.status, 'reserved');
+  await tracker.close();
+  tracker = undefined;
+  await memory.close();
+  memory = undefined;
   assert.deepEqual(await committed.commit(), { status: 'committed' });
   const shutdownDeadline = Date.now() + 10_000;
   while ((await readDaemonInstance(paseoHome)) && Date.now() < shutdownDeadline) {
@@ -1234,6 +1116,7 @@ try {
       teamsBrowser: 'reuse and New Session',
       childNavigation: 'native subagent track and contextual panel',
       panels: 'Activity Explorer, Team hierarchy, Task Board, Diagnostics',
+      conversationProducts: 'exact replies, Hosted confirmation, saved results, and Tracked Items',
       telemetry: 'existing Perfetto timings exported',
       idleRestart: 'busy refusal, admission freeze, release and graceful shutdown',
       modelCalls,
@@ -1254,6 +1137,9 @@ try {
   throw error;
 } finally {
   await browser('close').catch(() => undefined);
+  await tracker?.close();
+  await inference?.close();
+  products?.close();
   await memory?.close();
   await host?.close();
   await runtime?.close();

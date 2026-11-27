@@ -6,6 +6,6 @@ Adjutant provides bounded coordination and source-linked context but does not sc
 
 Before assigning work, include the task, relevant context, and acceptance conditions. Use explicit handoffs. Do not resend an assignment after a timeout or restart when delivery may have occurred; report the uncertainty and wait for reconciliation. Report findings through the assigned task and cite evidence.
 
-Create a Pass explicitly only for an integration unit; a standalone Task needs no Pass. Keep ordered Step progress on the Task current through `step.update`. Task completion is not gated by an individual review; the Leader integrates the work before the one whole-Pass review.
+Use the runtime's Pass record to track the Pass. Keep ordered Step progress current through `step.update`. The Leader assembles the combined changes on the shared Pass branch before the Pass-wide review Task.
 
 After submitting a report, send a concise `team.message` handoff to the Leader with the result and any blocker. A task report does not automatically notify the Leader; the handoff is not user approval.

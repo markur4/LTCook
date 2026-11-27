@@ -4,6 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { CoordinationStore } from '../../../runtime/src/storage/coordination.js';
 import { RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -36,7 +37,8 @@ async function run(): Promise<void> {
   const token = required('LTCOOK_API_TOKEN');
   const apiListen = required('LTCOOK_API_LISTEN');
   const instanceId = randomUUID();
-  const api = new RuntimeApi(undefined, token, apiListen);
+  const activation = new SessionActivation();
+  const api = new RuntimeApi(undefined, token, apiListen, activation);
   const endpoint = await api.listen();
   const delay = Number(process.env.LTCOOK_TEST_READY_DELAY_MS ?? '0');
   if (Number.isFinite(delay) && delay > 0) {
@@ -96,7 +98,7 @@ async function run(): Promise<void> {
     })();
     return shutdown;
   };
-  api.setOpenWorkspaceHandler(async () => {
+  activation.setWorkspaceActivator(async () => {
     await record('session-open', instanceId);
     throw new Error('The owner fixture does not open project Sessions');
   });

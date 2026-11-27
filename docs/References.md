@@ -11,6 +11,7 @@
   - [Lifecycle and deployment assets](#lifecycle-and-deployment-assets)
 - [Configuration and public interfaces](#configuration-and-public-interfaces)
   - [Environment variables](#environment-variables)
+    - [Workspace service settings](#workspace-service-settings)
   - [Configuration files](#configuration-files)
   - [Team API](#team-api)
   - [Guidance API](#guidance-api)
@@ -41,6 +42,8 @@
 | [runtime/src/workflow-api](../runtime/src/workflow-api) | Planning, decisions, approvals and coordination contract. |
 | [runtime/resources](../runtime/resources) | Required Core rules and shared native skills/references. |
 | [runtime/src/services/controller.ts](../runtime/src/services/controller.ts) | Internal local Compose controller used by the service commands. |
+| [runtime/src/services/workspace-organizer.ts](../runtime/src/services/workspace-organizer.ts) | Standard workspace classification and guarded automatic archive. |
+| [runtime/src/services/renamer.ts](../runtime/src/services/renamer.ts) | Scheduled workspace and agent-session naming. |
 | [teams](../teams) | Bundled team packages and Markdown resources. |
 | [services](../services) | Pinned Compose services and their non-secret configuration. |
 | [src/ltcook_distr/payload/app_lifecycle](../src/ltcook_distr/payload/app_lifecycle) | Authored installation, preparation, and maintenance behavior. |
@@ -58,6 +61,7 @@ commands provide launch operations and diagnostics:
 | `ltcook`, `ltcook serve` | Start/reuse the local runtime, open Paseo in the host default browser, and follow backend logs; Ctrl+C detaches. |
 | `ltcook stop` | Gracefully stop the matching local runtime; does not stop Compose containers or close browser tabs. |
 | `ltcook restart` | Stop the matching local runtime and reopen Paseo. Add `-u` or `--update` on Linux or macOS to apply the registered AppRC update before starting. |
+| `ltcook restart --last-result [--json]` | Show the most recent completed registered restart, including the verified build and separate update and runtime outcomes. |
 | `ltcook --help` | Show application and mounted AppRC command help. |
 | `ltcook --version`, `ltcook -V` | Print the installed package version before runtime preparation. |
 | `ltcook app doctor --verbose --json` | Include package/interpreter metadata, paths, configuration and resource diagnostics. |
@@ -204,7 +208,8 @@ accepted. The workflow creates no tag, GitHub Release or PyPI publication;
 ## Environment variables
 
 AppRC resolves each exact declared environment name. The settings bundle exposes
-`app`, `runtime`, `paseo`, `pi`, `anthropic`, `openai`, `google`, `openrouter`,
+`app`, `runtime`, `paseo`, `pi`, `workspace_organizer`, `renamer`, `anthropic`,
+`openai`, `google`, `openrouter`,
 `context7`, `agent_browser`, `web`, `searxng`, `crawl4ai`, `podman`, `container`,
 and `playwright` sections; their declarations are in
 [`src/ltcook/config/sections`](../src/ltcook/config/sections).
@@ -217,15 +222,17 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_RIED_CACHE_DIR` | Launch-derived `<AppRC cache>/projects`, holding the single versioned RIED cache. |
 | `LTCOOK_COLGREP_CACHE_DIR` | Launch-derived `<AppRC cache>/colgrep`, holding workspace-scoped ColGREP indexes. |
 | `LTCOOK_COLGREP_DEPLOYMENT` | Launch-derived `<global AppRC appdata>/deployment/colgrep`, holding the verified ColGREP executable, ONNX Runtime, and model snapshot. |
-| `LTCOOK_OLLAMA_ENDPOINT` | Global `runtime.ollama_endpoint`. Ollama loopback HTTP URL with a port, default `http://127.0.0.1:11434`. Used by the tiny-local adapters, summarization, and readiness. |
-| `LTCOOK_MODEL_TINY_LOCAL` | Global `runtime.tiny_local_model`. Ollama tag for `@tiny-local` and `ltcook_summarize`. Defaults to `hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0`. Pull it explicitly. |
+| `LTCOOK_OLLAMA_ENDPOINT` | Global `runtime.ollama_endpoint`. Ollama loopback HTTP URL with a port, default `http://127.0.0.1:11434`. Used by local model launchers, summarization, and summarizer readiness. |
+| `LTCOOK_MODEL_TINY_LOCAL` | Global `runtime.tiny_local_model`. Ollama tag for `@local-tiny` and `ltcook_summarize`. Defaults to `hf.co/XHToken/Spark-X2.6-4B-GGUF:Q8_0`. Pull it explicitly. |
+| `LTCOOK_MODEL_LOCAL_CPU` | Global `runtime.local_cpu_model`. Ollama tag for `@local-CPU`. Defaults to `lfm3:1.7b-qad-q4_0`. |
+| `LTCOOK_MODEL_LOCAL_EVALS` | Global `runtime.local_evals_model`. Ollama tag for `@local-evals`. Defaults to `bonsai-2:27b`. |
 | `LTCOOK_SUMMARIZER_KEEP_ALIVE` | Global `runtime.summarizer_keep_alive`. Default `-1` keeps the loaded model resident. Use `0` to unload or a positive number of seconds. |
 | `LTCOOK_SUMMARIZER_GENERATION` | Global `runtime.summarizer_generation`. Optional JSON object with `options` containing `num_ctx`, `num_predict`, and `temperature`. Supports optional `think`, `top_k`, and `repeat_penalty` (the latter two inside `options`). Streaming is disabled. The default Spark profile uses reasoning off, a 32,768-token context, a 512-token generation limit, and temperature 0.1. An explicit generation profile is used as supplied. A smaller context reduces the supported source byte limit. |
 | `LTCOOK_BRIEF_EXECUTABLE` | Launch-derived pinned `brief` executable in the LTCook deployment; development may select a matching PATH binary. |
-| `LTCOOK_SESSION_MEMORY_THRESHOLD` | Global `runtime.session_memory_threshold`. Default 3,000 estimated Agent Action tokens per AAB. Use an integer from 1 to 6,500. Set 0 to disable capture and the tool. |
-| `LTCOOK_SESSION_MEMORY_MODEL` | Global `runtime.session_memory_model`. An empty value uses `lfm3:1.7b-qad-q4_0`. A configured value selects an installed Ollama model for Session Memory with reasoning disabled. Ollama uses GPU acceleration when available and falls back to CPU. |
-| `LTCOOK_SESSION_MEMORY_INPUT_TOKENS` | Global `runtime.session_memory_input_tokens`. Total input target including history, instructions and source text. Defaults to 8,000 estimated tokens. |
-| `LTCOOK_SESSION_MEMORY_DELEGATION` | Global `runtime.session_memory_delegation`. Set to `true` to add automatic supplemental context on Core assignments. Default `false`. Search and source retrieval remain available when capture is enabled. |
+| `LTCOOK_CONVERSATION_INFERENCE` | Global `runtime.conversation_inference`. Defaults to `hosted` for Codex subscription inference with `@tiny`. Set `local` to use Ollama. |
+| `LTCOOK_CONVERSATION_LOCAL_MODEL` | Global `runtime.conversation_local_model`. An empty value uses `@local-CPU`. Supply an Ollama alias or installed model tag. |
+| `LTCOOK_CONVERSATION_INPUT_TOKENS` | Global `runtime.conversation_input_tokens`. Estimated per-request input budget for Clarify and Tracker. Defaults to 8,000. |
+| `LTCOOK_SESSION_MEMORY_DELEGATION` | Global `runtime.session_memory_delegation`. Set `true` to add original conversation evidence to Core assignments. Defaults to `false`. |
 | `LTCOOK_TEAM` | `AppSettings.team`; CLI Session creation default, `default-minimal`. GUI Sessions choose their Team independently. |
 | `LTCOOK_SESSION` | Optional explicit Session identifier used to resume a project chat; opening a project without it creates a fresh Session. Global startup creates none. |
 | `LTCOOK_TEAM_INSTANCE_ID` | Runtime-derived identifier for the persistent TeamInstance shared by Sessions on the same selected team and canonical workspace. |
@@ -233,7 +240,7 @@ and `playwright` sections; their declarations are in
 | `LTCOOK_WORKSPACE` | Project path supplied for an explicit project launch; absent for idle server startup. |
 | `LTCOOK_DEPLOYMENT_DIR` | LTCook-owned deployment location, normally beneath AppRC appdata. |
 | `LTCOOK_MODEL_SMART` | `runtime.smart_model` sets `@smart` and `@plan`. Defaults to `openai-codex/gpt-6.2-sol`. |
-| `LTCOOK_MODEL_SMOL` | `runtime.smol_model` sets `@smol` and `@tiny`. Defaults to `openai-codex/gpt-6-luna`. |
+| `LTCOOK_MODEL_SMOL` | `runtime.smol_model` sets `@smol` and `@tiny`. Defaults to `openai-codex/gpt-6-luna`. The `@tiny` preset uses low reasoning. |
 | `LTCOOK_MODEL_EXPENSIVE` | `runtime.expensive_model` sets `@expensive` and `@review-art`. Defaults to `openai-codex/gpt-6-astra`. |
 | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Optional provider credentials declared as secrets. |
 | `OPENAI_API_KEY` | Optional AppRC secret for custom child tooling. Managed LTCook OpenAI models use the Codex sign-in. |
@@ -270,6 +277,40 @@ source declarations for the complete exact names. Never print the raw
 launch environment: it can contain credentials. Secret redaction is presentation,
 not encryption of the AppRC-managed files.
 
+### Workspace service settings
+
+The settings in [`sections/services.py`](../src/ltcook/config/sections/services.py)
+apply to the whole LTCook-managed Paseo host. They are resolved from global
+AppRC settings and original shell inputs, ignoring project overlays. Changes
+apply when the runtime next starts. The typed bundle exposes
+`config.workspace_organizer` and `config.renamer`.
+
+| Environment name | AppRC setting | Default | Effect |
+| --- | --- | --- | --- |
+| `LTCOOK_WORKSPACE_ORGANIZER_ENABLED` | `runtime.services.workspace_organizer.enabled` | `true` | Enable standard label maintenance, classification, and eligible automatic archival. |
+| `LTCOOK_WORKSPACE_ORGANIZER_AUTO_ARCHIVE` | `runtime.services.workspace_organizer.auto_archive` | `true` | Enable the 14-day inactivity archive policy while Workspace Organizer is enabled. |
+| `LTCOOK_RENAMER_ENABLED` | `runtime.services.renamer.enabled` | `true` | Enable the Renamer schedule. |
+| `LTCOOK_RENAMER_WORKSPACES` | `runtime.services.renamer.workspaces` | `true` | Allow workspace titles of at most 20 Unicode grapheme clusters. |
+| `LTCOOK_RENAMER_TABS` | `runtime.services.renamer.tabs` | `true` | Allow agent-session titles of at most 15 Unicode grapheme clusters. |
+
+Workspace classification uses the first nonempty conversation context and then
+12-hour attempt intervals, with a changed conversation or Git revision required.
+Its first valid proposal may receive one early retry after at least 60 seconds
+if new content made it stale and the workspace is idle; the regular deadline
+stays fixed. Renamer uses the first nonempty context and then at least 30 minutes
+between attempts. Workspace titles follow conversation and observed Git changes;
+agent titles follow their own conversation. The runtime validates `@tiny`
+proposals; model calls do not decide archival or alter service schedules. See the
+[service explanation](Explanations.md#workspace-organizer-and-renamer) and
+[settings guide](How-To-User-Guides.md#change-the-service-settings).
+
+**Activity → Services** exposes read-only service status and archive-protection
+diagnostics. Automatic archive requires the connected Paseo daemon's verified
+directory-preserving HTTP operation; an unavailable operation leaves the
+workspace active. It keeps all working-directory files and skips project
+teardown, including for Paseo-owned worktrees. Manual native archival can still
+remove an owned checkout.
+
 ## Configuration files
 
 | File or path | Meaning |
@@ -282,6 +323,8 @@ not encryption of the AppRC-managed files.
 | `<state>/runtime/documents/designs/Design-YYYY_MM_DD-HH_MM-title.md` | Team-authored Design, using creation-machine local time and timezone metadata. |
 | `<state>/runtime/documents/plans/Plan-YYYY_MM_DD-HH_MM-title.md` | Team-authored Plan; stable filename and append-only reporting convention. |
 | `<state>/runtime/coordination.sqlite` | Runtime coordination, document references, decisions and approval metadata. |
+| `<LTCOOK_RUNTIME_STATE_DIR>/workspace-organizer.json` | Workspace observations, classification deadlines, and archive state; separate from AppRC settings. |
+| `<LTCOOK_RUNTIME_STATE_DIR>/renamer.json` | Rename deadlines and successfully processed conversation revisions; separate from AppRC settings. |
 | `<cache>/projects` | Lazily refreshed declarative facts; Git state is refreshed separately. |
 | `<LTCOOK_DEPLOYMENT_DIR>/paseo/config.json` | Paseo configuration written by the Node host; the home also holds mutable Paseo data. |
 | `<LTCOOK_DEPLOYMENT_DIR>/workspaces/<workspace-id>/pi` | Workspace-specific Pi home; `write-native-config` writes its private `web-search.json`. |
@@ -363,6 +406,10 @@ document references, decisions, approvals and work results.
 [`commands.ts`](../runtime/src/workflow-api/commands.ts) is the single authoritative
 TypeBox schema; public command types and agent-facing input schemas derive from it.
 The `ltcook_team` native tool uses that schema and Core enforces actor permissions.
+
+`pass.create` records a Pass. See [domain terminology](Explanations.md#domain-terminology)
+for the definitions of Pass and Task. Task acceptance and workflow delivery
+criteria are separate from those definitions.
 
 Scheduled Pass `task.create` requests use stable `requestId` values and may
 register `assigneeKey`, `dependencyIds`, `verificationRequirements`,
@@ -469,9 +516,12 @@ being built. `unavailable` reports operational failures such as missing assets
 or a failed search. Both include a `hint`. Invalid input and denied workspace
 access still return tool errors, and cancellation aborts the call.
 
-The outer call has a two-minute deadline. If ColGREP indexing persists, check
-the AppRC cache's storage and file locking. Lexical search uses an existing
-`rg` on the runtime's trusted executable path.
+The search call has a two-minute deadline. Indexing is scheduled separately
+for active authorized worktrees and can continue after a search is cancelled.
+During an initial build or recovery, hybrid search can return partial
+`ripgrep` evidence with a `lexical-fallback` diagnostic. Semantic mode
+reports that ranked retrieval is unavailable until a generation is published.
+Lexical search uses an existing `rg` on the runtime's trusted executable path.
 
 LTCook setup installs ColGREP 1.8.5, ONNX Runtime 1.23.0, and the
 `lightonai/LateOn-Code-edge` snapshot
@@ -519,9 +569,13 @@ Supply up to four independent `{mode, query}` leads. Use `hybrid` for a behavior
 `exact` for an identifier, and `literal` for an exact string such as an RPC route
 or environment variable. Without explicit leads, Locate searches up to four
 question clauses separated by question marks or semicolons. Searches run in
-parallel. Ranked results can seed bounded exact lookups for verified callable
-or class names. Trace follows up to three verified JavaScript or TypeScript
-connections per path, including direct calls whose bindings can be resolved.
+parallel. Hybrid trace leads use a complete cached index and report an
+unavailable gap if none exists. Run a ranked repository search with index
+updates enabled to build or resume that index. Exact and literal trace leads
+work independently of ColGREP. Ranked results can seed bounded exact lookups
+for verified callable or class names. Trace follows up to three verified
+JavaScript or TypeScript connections per path, including direct calls whose
+bindings can be resolved.
 An explicit `follow` is unnecessary for trace requests.
 
 Each `trace.evidence` entry has an ID and a source range. Tools render its

@@ -23,7 +23,7 @@ type AgentEvents = Pick<AgentActivity, 'tools' | 'skills'> & {
   generation: number;
   toolsPartial: boolean;
 };
-type Services = Pick<ActivitySnapshot, 'rag' | 'memory'> & {
+type Services = Pick<ActivitySnapshot, 'rag' | 'lastHandoff'> & {
   providerSubagents: AgentActivity[];
   task?: string;
 };

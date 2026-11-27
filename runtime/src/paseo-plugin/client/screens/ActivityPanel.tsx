@@ -18,10 +18,10 @@ import {
 import { ActivityStatus, ActivityText } from '../components/ActivityCard';
 import { ActivityAgentCard } from '../components/ActivityAgentCard';
 import { ActivityServices } from '../components/ActivityServices';
+import { WorkspaceServices } from '../components/WorkspaceServices';
 import type { Theme } from '../components/PanelChrome';
 import { useFocusedAgent } from '../explorer-panels';
 import { openSkillDocument } from './SkillDocument';
-import { MEMORY_SUMMARIES_PANEL_ID } from './StoredSummaries';
 
 type ActivityPanelProps = PluginWorkspacePanelProps & {
   client: Pick<PluginClientContext, 'composers' | 'openPanel'>;
@@ -112,23 +112,8 @@ function ObservedActivity(
     }
   }
 
-  function openStoredSummaries() {
-    try {
-      client.openPanel(MEMORY_SUMMARIES_PANEL_ID, {
-        agentId: selectedAgentId,
-        workspaceId: selectedWorkspaceId,
-        location: 'workspace',
-      });
-    } catch {
-      toast.error('Could not open stored summaries for this agent.');
-    }
-  }
-
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
-      contentContainerStyle={{ padding: 10, gap: 5 }}
-    >
+    <>
       {!snapshot ? (
         <ActivityText theme={theme} tone={unavailable ? 'warning' : 'muted'}>
           {unavailable ? 'Activity is unavailable.' : 'Loading activity…'}
@@ -138,18 +123,10 @@ function ObservedActivity(
           {unavailable && (
             <ActivityStatus theme={theme} label="Activity snapshot is stale" tone="warning" />
           )}
-          <Section theme={theme} title="Services" />
           <ActivityServices
             theme={theme}
-            agentId={selectedAgentId}
             rag={snapshot.rag}
-            memory={snapshot.memory}
-            onDeviceChange={(device) =>
-              setSnapshot((current) =>
-                current ? { ...current, memory: { ...current.memory, device } } : current,
-              )
-            }
-            onOpenSummaries={openStoredSummaries}
+            lastHandoff={snapshot.lastHandoff}
             agentWorktree={snapshot.agent.worktree?.path}
           />
           <Section theme={theme} title="Agent" />
@@ -206,7 +183,7 @@ function ObservedActivity(
           </View>
         </>
       )}
-    </ScrollView>
+    </>
   );
 }
 
@@ -215,11 +192,9 @@ function FocusedActivity(props: ActivityPanelProps) {
   const workspaceId = useAgent(focused ?? '', (agent) => agent.workspaceId);
   if (!focused || workspaceId !== props.workspaceId) {
     return (
-      <View style={{ padding: 10 }}>
-        <ActivityText theme={props.theme} tone="muted">
-          Select an agent to view activity.
-        </ActivityText>
-      </View>
+      <ActivityText theme={props.theme} tone="muted">
+        Select an agent to view conversation activity.
+      </ActivityText>
     );
   }
   return (
@@ -262,7 +237,14 @@ export function ActivityPanel(props: ActivityPanelProps) {
       {foreground &&
         (!Observer || inViewport) &&
         (hostStatus === 'online' ? (
-          <FocusedActivity {...props} />
+          <ScrollView
+            style={{ flex: 1, backgroundColor: props.theme.colors.surface0 }}
+            contentContainerStyle={{ padding: 10, gap: 5 }}
+          >
+            <Section theme={props.theme} title="Services" />
+            <WorkspaceServices theme={props.theme} />
+            <FocusedActivity {...props} />
+          </ScrollView>
         ) : (
           <View style={{ padding: 10 }}>
             <ActivityText theme={props.theme} tone="muted">

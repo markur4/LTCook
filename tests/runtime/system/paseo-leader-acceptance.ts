@@ -8,16 +8,18 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
+import { ToolCatalog } from '../../../runtime/src/tools/catalog.js';
 import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
+import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import {
   createPaseoAgentBackend,
   startPaseoHost,
 } from '../../../runtime/src/integrations/paseo.js';
 import { catalogModelAliases } from '../../../runtime/src/models/aliases.js';
 import { TeamRegistry } from '../../../runtime/src/integrations/team-loader.js';
-import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
-import type { MemoryMessage } from '../../../runtime/src/session-memory/text.js';
+import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
+import type { MemoryMessage } from '../../../runtime/src/paseo-plugin/server/memory-text.js';
 import { PastedDocuments } from '../../../runtime/src/session-memory/pasted-documents.js';
 import type { MemorySourceMessage } from '../../../runtime/src/session-memory/units.js';
 import { createSessionMemoryTool } from '../../../runtime/src/tools/session-memory.js';
@@ -55,7 +57,6 @@ const runtimeHandoff = 'Inspect the cobalt fixture for the acceptance case.';
 const memoryPrompt = 'Read the shared cobalt fixture requirement.';
 let peerMemoryRead = false;
 let attachmentReachedPi = false;
-let attachmentReachedUamp = false;
 let modelCalls = 0;
 let expectedModel = 'test';
 let providerError: unknown;
@@ -174,16 +175,19 @@ const environment = {
   LTCOOK_MODEL_SMOL: 'fixture/test',
   LTCOOK_MODEL_EXPENSIVE: 'fixture/test',
   LTCOOK_MODEL_TINY_LOCAL: 'fixture-model',
+  LTCOOK_MODEL_LOCAL_CPU: 'fixture-cpu',
+  LTCOOK_MODEL_LOCAL_EVALS: 'fixture-evals',
   LTCOOK_GUIDANCE_DIR: path.join(directory, 'guidance'),
   LTCOOK_BROWSER_ENABLED: 'false',
   LTCOOK_CODESEARCH_ENABLED: 'false',
   LTCOOK_CONTEXT7_ENABLED: 'false',
 };
-const api = new RuntimeApi(undefined, secret, listen, environment);
+const activation = new SessionActivation(environment);
+const api = new RuntimeApi(undefined, secret, listen, activation, environment);
 await api.listen();
 let host: Awaited<ReturnType<typeof startPaseoHost>> | undefined;
 let runtime: ReturnType<typeof createRuntime> | undefined;
-let memory: SessionMemory | undefined;
+let memory: ConversationRecords | undefined;
 let nativeUnavailable = false;
 const observedSources = new Map<string, MemoryMessage>();
 async function waitFor<T>(label: string, read: () => T | undefined | Promise<T | undefined>) {
@@ -245,9 +249,10 @@ try {
     });
   const startMemory = () => {
     const source = createPaseoMemorySource(host!.api, secret, pastedDocuments);
-    const instance = new SessionMemory({
-      databasePath: path.join(directory, 'session-memory.sqlite'),
+    const instance = new ConversationRecords({
+      databasePath: path.join(directory, 'conversation.sqlite'),
       source: {
+        ...source,
         async read(...args) {
           const page = await source.read(...args);
           for (const message of page.messages) {
@@ -259,29 +264,19 @@ try {
       },
       threshold: 1,
       peers: (agentId, workspaceRoot) => runtime?.memoryPeers(agentId, workspaceRoot) ?? [],
-      async summarize(type, prompt) {
-        attachmentReachedUamp ||=
-          type === 'UAMP' &&
-          prompt.some(({ content }) => content.includes('PASTE_REFERENCE_SENTINEL'));
-        return {
-          type,
-          text: 'Observed native conversation evidence.',
-          content: 'Observed native conversation evidence.',
-          complete: true,
-          elapsedMs: 0,
-        };
-      },
     });
-    api.setSessionMemory(instance);
+    api.setConversationRecords(instance);
     return instance;
   };
   memory = startMemory();
   runtime = createController();
   api.setRuntime(runtime);
   const memoryTool = createSessionMemoryTool(memory);
-  api.setWorkspaceMcp(new WorkspaceMcp([memoryTool], listen));
+  const tools = new ToolCatalog([memoryTool]);
+  api.setWorkspaceTools(tools);
+  api.setWorkspaceMcp(new WorkspaceMcp(tools, listen));
   api.setPastedDocuments(pastedDocuments);
-  api.setOpenWorkspaceHandler(async (request) =>
+  activation.setWorkspaceActivator(async (request) =>
     runtime!.openSession({
       id: request.sessionId,
       workspaceRoot: request.workspaceRoot,
@@ -300,21 +295,8 @@ try {
     resolve: ({ teamSelection, workspaceRoot, alias, reasoning }) =>
       backend.resolveSelection(workspaceRoot, leaderFor(teamSelection), alias, reasoning),
   });
-  api.setPrepareSessionHandler(async (request) => {
-    const snapshot = runtime!.snapshot(request.sessionId);
-    const member = snapshot.definition.members.find((member) => member.key === 'leader');
-    assert(member);
-    const prepared = await backend.prepare(
-      {
-        member,
-        sessionId: request.sessionId,
-        teamInstanceId: snapshot.session.teamInstanceId,
-        teamId: snapshot.session.teamId,
-        workspaceRoot: request.workspaceRoot,
-      },
-      request.leaderAgentId,
-      request.savedModel,
-    );
+  api.setPrepareSessionHandler(async (options, leaderAgentId, savedModel) => {
+    const prepared = await backend.prepare(options, leaderAgentId, savedModel);
     return {
       env: prepared.env,
       ...(prepared.mcpServers ? { mcpServers: prepared.mcpServers } : {}),
@@ -379,10 +361,6 @@ try {
   );
   assert.equal(source.author, 'user');
   assert.equal((source as MemorySourceMessage).attachments?.[0]?.text, pastedText);
-  await waitFor(
-    'the completed native UAMP with its attached source',
-    () => attachmentReachedUamp || undefined,
-  );
   const toolContext = {
     agentId: childId,
     workspaceRoot: workspace,
@@ -436,7 +414,9 @@ try {
   runtime = createController();
   api.setRuntime(runtime);
   const reopenedTool = createSessionMemoryTool(memory);
-  api.setWorkspaceMcp(new WorkspaceMcp([reopenedTool], listen));
+  const reopenedTools = new ToolCatalog([reopenedTool]);
+  api.setWorkspaceTools(reopenedTools);
+  api.setWorkspaceMcp(new WorkspaceMcp(reopenedTools, listen));
   await runtime.openSession({
     id: leaderId,
     workspaceRoot: workspace,
@@ -454,6 +434,7 @@ try {
     ...memoryReference,
     author: 'user',
     text: userRequirement,
+    attachments: [{ text: pastedText }],
   });
   nativeUnavailable = true;
   await leader.reload();

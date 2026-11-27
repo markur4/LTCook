@@ -1,4 +1,5 @@
-import type { MemorySearchEntry } from './service.js';
+import type { MemorySearchEntry } from './conversation.js';
+import { estimateMemoryTokens } from '../paseo-plugin/server/memory-text.js';
 
 export type OriginalHistoryAvailability = 'available' | 'partial' | 'unavailable';
 
@@ -6,6 +7,7 @@ export type MemoryHandoffSelection = {
   agentId: string;
   epoch: string;
   originalHistory: OriginalHistoryAvailability;
+  contextIncomplete?: boolean;
   evidence: readonly MemorySearchEntry[];
   decision?: MemorySearchEntry;
 };
@@ -22,24 +24,21 @@ export function memoryHandoffHeader({ agentId, epoch, originalHistory }: MemoryH
 }
 
 export function compactHandoffLine(entry: MemorySearchEntry): string {
-  const references = (entry.sources ?? [entry.seq]).map((seq) => `#${seq}`).join(', ');
-  const label =
-    entry.author === 'tool'
-      ? 'Historical tool outcome'
-      : entry.field === 'results'
-        ? 'Summary of historical results'
-        : entry.author === 'summary'
-          ? `${entry.kind} summary`
-          : `Original ${entry.author}`;
+  const label = entry.author === 'tool' ? 'Historical tool outcome' : `Original ${entry.author}`;
   const text = entry.text.trim().replace(/\r?\n/g, '\n  ');
-  return `- ${label} [${references}]${entry.truncated ? ' (excerpt)' : ''} ${text}`;
+  return `- ${label} [#${entry.seq}]${entry.truncated ? ' (excerpt)' : ''} ${text}`;
+}
+
+export function handoffEntryCost(entry: MemorySearchEntry): number {
+  return estimateMemoryTokens(compactHandoffLine(entry) + '\n');
 }
 
 export function renderMemoryHandoff(selection: MemoryHandoffSelection): string {
-  if (!selection.evidence.length && !selection.decision)
+  if (!selection.evidence.length && !selection.decision && !selection.contextIncomplete)
     return selection.originalHistory === 'unavailable' ? unavailableMemoryHandoff : '';
   return [
     ...memoryHandoffHeader(selection),
+    ...(selection.contextIncomplete ? ['Some relevant context is truncated or omitted.'] : []),
     ...(selection.evidence.length
       ? ['Older supplemental evidence', ...selection.evidence.map(compactHandoffLine)]
       : []),

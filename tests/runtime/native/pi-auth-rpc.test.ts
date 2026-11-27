@@ -4,7 +4,7 @@ import { ProjectTrustStore } from '@earendil-works/pi-coding-agent';
 import { once } from 'node:events';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
@@ -183,23 +183,42 @@ test('runs the compiled Pi entry through its npm-style symlink with Node', () =>
   const outputDirectory = join(appRoot, 'dist');
   const nodeModules = join(appRoot, 'node_modules');
   const binDirectory = join(nodeModules, '.bin');
+  const contractsSource = resolve(import.meta.dir, '../../../runtime/src/models/contracts');
+  const contractsPackage = join(appRoot, 'runtime', 'src', 'models', 'contracts');
+  const contractsOutput = join(contractsPackage, 'dist');
+  const packageScope = join(nodeModules, '@ltcook');
   const authDir = join(root, 'native-auth');
   const agentDir = join(root, 'pi-agent');
   mkdirSync(outputDirectory, { recursive: true });
   mkdirSync(binDirectory, { recursive: true });
+  mkdirSync(contractsOutput, { recursive: true });
+  mkdirSync(packageScope);
   mkdirSync(authDir);
   mkdirSync(agentDir);
   const entrypoint = resolve(import.meta.dir, '../../../runtime/src/integrations/pi-rpc.ts');
-  const build = Bun.build({
-    entrypoints: [entrypoint],
-    outdir: outputDirectory,
-    target: 'node',
-    format: 'esm',
-    packages: 'external',
-    naming: 'ltcook-pi.mjs',
-  });
-  return build.then((buildResult) => {
-    expect(buildResult.success, buildResult.logs.map((log) => log.message).join('\n')).toBe(true);
+  const builds = Promise.all([
+    Bun.build({
+      entrypoints: [entrypoint],
+      outdir: outputDirectory,
+      target: 'node',
+      format: 'esm',
+      packages: 'external',
+      naming: 'ltcook-pi.mjs',
+    }),
+    Bun.build({
+      entrypoints: [join(contractsSource, 'index.ts')],
+      outdir: contractsOutput,
+      target: 'node',
+      format: 'esm',
+      packages: 'external',
+      naming: 'index.js',
+    }),
+  ]);
+  return builds.then((results) => {
+    for (const build of results)
+      expect(build.success, build.logs.map((log) => log.message).join('\n')).toBe(true);
+    copyFileSync(join(contractsSource, 'package.json'), join(contractsPackage, 'package.json'));
+    symlinkSync(contractsPackage, join(packageScope, 'model-contracts'), 'dir');
     const launcher = join(outputDirectory, 'ltcook-pi.mjs');
     for (const dependency of ['@earendil-works', 'zod']) {
       symlinkSync(
@@ -250,7 +269,7 @@ test('launches a standalone Pi alias with a normalized managed model', () => {
   const launch = (id: string, effort: string) =>
     spawnSync(
       process.execPath,
-      [launcher, 'model-launch', 'pi', '@tiny-local', effort, '--', '--list-models', 'Spark'],
+      [launcher, 'model-launch', 'pi', '@local-tiny', effort, '--', '--list-models', 'Spark'],
       {
         cwd: root,
         encoding: 'utf8',

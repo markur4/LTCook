@@ -2,47 +2,38 @@ import type { Telemetry } from '../diagnostics/telemetry.js';
 import process from 'node:process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { isRuntimeCommand } from '../workflow-api/commands.js';
-import type {
-  RuntimeActor,
-  RuntimeCommand,
-  RuntimeController,
-  SessionSnapshot,
-} from '../workflow-api/index.js';
+import type { RuntimeActor, RuntimeController } from '../workflow-api/index.js';
 import { canonicalWorkspace } from '../core/workspace.js';
-import { captureShellEnvironment } from './shell-environment.js';
 import type { EvalRunService } from '../evals/service.js';
 import type { PaseoHost } from './paseo.js';
-import type { SessionMemory } from '../session-memory/service.js';
+import type { PaseoWorkspaceServices } from './paseo-workspace-services.js';
+import type { ConversationRecords } from '../session-memory/conversation.js';
+import type { ConversationInference } from '../session-memory/inference.js';
+import type { ClarifyService } from '../session-memory/clarify.js';
+import { clarifyReadRpc } from '../paseo-plugin/shared/clarify.js';
+import type { TrackerService } from '../session-memory/tracker.js';
+import { trackerModifyRpc, trackerSelection } from '../paseo-plugin/shared/tracker.js';
 import type { MemoryScope, MemoryTaskContext } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import type { WorkspaceMcp } from './mcp.js';
-import { ActivityPreferences } from './activity-preferences.js';
+import { handleActivityRoute, isActivityRoute, type ActivityServices } from './runtime-activity.js';
+import { handleToolRoute, isToolRoute } from './runtime-tool-routes.js';
 import {
-  activityToggleRpc,
-  memoryDeviceRpc,
-  memoryEvidenceRpc,
-  storedSummariesRpc,
-} from '../paseo-plugin/shared/activity.js';
-import {
-  isRepositoryTool,
-  SESSION_MEMORY_TOOL_NAME,
-  REPO_SEARCH_TIMEOUT_MS,
-  WORKTREE_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
-import { isWebTool } from '../tools/web.js';
-import { createSessionWorktreeTool } from '../tools/session-worktree.js';
-import type { ToolContext } from '../tools/types.js';
-import { SessionWorktrees, type WorktreeScope } from './session-worktrees.js';
-import { openRepositoryWorkspace } from '../repository/workspace.js';
-import { createColgrepProvider } from '../repository/providers/colgrep.js';
-import { validateRiedRequest } from '../repository/requests.js';
+  handleSessionRoute,
+  isSessionRoute,
+  SESSION_OPEN_PATH,
+  type PrepareSession,
+} from './runtime-session-routes.js';
+import type { SessionActivation } from './session-activation.js';
+import type { ToolCatalog } from '../tools/catalog.js';
+import type { SessionWorktrees, WorktreeScopeResolver } from './session-worktrees.js';
 import { z } from 'zod';
-import { ResolvedModelSchema, type ResolvedModel } from '../models/aliases.js';
+import type { ResolvedModel } from '../models/aliases.js';
 import {
   ModelCatalogRequestSchema,
-  type ModelCatalogResponseSchema,
-} from '../paseo-plugin/shared/models.js';
+  type ModelCatalogRequest,
+  type ModelCatalogResponse,
+} from '@ltcook/model-contracts';
 import {
   EvalDeleteRequestSchema,
   EvalRunIdSchema,
@@ -59,14 +50,6 @@ export interface RuntimeLifecycleIdentity {
   telemetryLogPath: string;
   buildFingerprint?: string;
   idleRestart?: boolean;
-}
-
-export interface WorkspaceSessionRequest {
-  workspaceRoot: string;
-  sessionId: string;
-  teamSelection: string;
-  shellEnvironment: Record<string, string>;
-  leaderAgentId?: string;
 }
 
 const modelSelectionRequest = ModelCatalogRequestSchema.extend({
@@ -95,51 +78,44 @@ export function agentBearer(secret: string, nativeAgentId: string): string {
   return createHmac('sha256', secret).update(nativeAgentId).digest('base64url');
 }
 
+interface RuntimeApiServices {
+  activity?: ActivityServices;
+  worktrees?: {
+    store: SessionWorktrees;
+    resolveScope: WorktreeScopeResolver;
+  };
+}
+
 export class RuntimeApi {
   private server: Server | undefined;
-  private memory?: SessionMemory;
-  private readonly memoryDisabled: boolean;
+  private memory?: ConversationRecords;
+  private conversationInference?: ConversationInference;
+  private clarify?: ClarifyService;
+  private tracker?: TrackerService;
+  private readonly localTurns = new Map<string, string>();
   private memoryContext?: (
     agentId: string,
   ) => { scope?: MemoryScope; task?: MemoryTaskContext } | undefined;
   private pastedDocuments?: PastedDocuments;
-  readonly activityColgrep = createColgrepProvider();
-  private activityPreferences?: ActivityPreferences;
-
-  setActivityPreferences(file: string): void {
-    const preferences = new ActivityPreferences(file);
-    this.activityPreferences = preferences;
-    this.activityColgrep.setIndexingEnabled(preferences.enabled('rag-index'));
-    this.memory?.setSummarizationEnabled(preferences.enabled('summarizer'));
-  }
   private providerSubagents?: PaseoHost['listProviderSubagents'];
+  private workspaceServices?: PaseoWorkspaceServices;
+
+  setWorkspaceServices(service: PaseoWorkspaceServices): void {
+    this.workspaceServices = service;
+  }
 
   setProviderSubagents(list: PaseoHost['listProviderSubagents']): void {
     this.providerSubagents = list;
   }
 
   private runtime: RuntimeController | undefined;
-  private readonly sessions = new Map<string, string>();
-  private readonly pendingSessions = new Map<
-    string,
-    { workspaceRoot: string; pending: Promise<SessionSnapshot> }
-  >();
-  private readonly startupShellEnvironment: Record<string, string>;
-  private openWorkspace:
-    ((request: WorkspaceSessionRequest) => Promise<SessionSnapshot>) | undefined;
-  private prepareSession:
-    | ((
-        request: WorkspaceSessionRequest & { leaderAgentId: string; savedModel?: ResolvedModel },
-      ) => Promise<{ env: Record<string, string>; mcpServers?: Record<string, unknown> }>)
-    | undefined;
-  setPrepareSessionHandler(handler: NonNullable<RuntimeApi['prepareSession']>): void {
+  private prepareSession?: PrepareSession;
+  setPrepareSessionHandler(handler: PrepareSession): void {
     this.prepareSession = handler;
   }
   private modelSelection:
     | {
-        catalog(
-          input: z.infer<typeof ModelCatalogRequestSchema>,
-        ): z.infer<typeof ModelCatalogResponseSchema>;
+        catalog(input: ModelCatalogRequest): ModelCatalogResponse;
         resolve(input: z.infer<typeof modelSelectionRequest>): Promise<ResolvedModel>;
       }
     | undefined;
@@ -152,12 +128,29 @@ export class RuntimeApi {
   private reservingIdleRestart = false;
   private stopping = false;
   private workspaceMcp: WorkspaceMcp | undefined;
-  private readonly sessionWorktrees: SessionWorktrees;
-  readonly worktreeTool: ReturnType<typeof createSessionWorktreeTool>;
-  setSessionMemory(memory: SessionMemory, context?: RuntimeApi['memoryContext']): void {
+  private workspaceTools: ToolCatalog | undefined;
+  setConversationRecords(memory: ConversationRecords, context?: RuntimeApi['memoryContext']): void {
     this.memory = memory;
-    memory.setSummarizationEnabled(this.activityPreferences?.enabled('summarizer') ?? true);
     this.memoryContext = context;
+  }
+
+  setConversationInference(inference: ConversationInference): void {
+    this.conversationInference = inference;
+  }
+
+  setClarify(service: ClarifyService): void {
+    this.clarify = service;
+  }
+
+  setTracker(service: TrackerService): void {
+    this.tracker = service;
+  }
+
+  private endLocalTurn(agentId: string, turnId?: string) {
+    const active = this.localTurns.get(agentId);
+    if (!active || (turnId !== undefined && turnId !== active)) return;
+    this.localTurns.delete(agentId);
+    this.conversationInference?.foregroundEnded(JSON.stringify([agentId, active]));
   }
   setPastedDocuments(documents: PastedDocuments): void {
     this.pastedDocuments = documents;
@@ -165,6 +158,9 @@ export class RuntimeApi {
 
   setWorkspaceMcp(mcp: WorkspaceMcp): void {
     this.workspaceMcp = mcp;
+  }
+  setWorkspaceTools(catalog: ToolCatalog): void {
+    this.workspaceTools = catalog;
   }
   private evals: EvalRunService | undefined;
   private evaluationObserver:
@@ -179,55 +175,16 @@ export class RuntimeApi {
     runtime: RuntimeController | undefined,
     private readonly secret: string,
     private readonly listenAddress: string,
-    startupEnvironment: NodeJS.ProcessEnv = process.env,
+    private readonly activation: SessionActivation,
+    _startupEnvironment: NodeJS.ProcessEnv = process.env,
     private readonly telemetry?: Telemetry,
+    private readonly services: RuntimeApiServices = {},
   ) {
     this.runtime = runtime;
-    this.memoryDisabled =
-      Number(startupEnvironment.LTCOOK_SESSION_MEMORY_THRESHOLD ?? '3000') === 0;
-    this.startupShellEnvironment = captureShellEnvironment(startupEnvironment);
-    this.sessionWorktrees = new SessionWorktrees(startupEnvironment.PATH ?? '');
-    this.worktreeTool = createSessionWorktreeTool(this.sessionWorktrees, (context, passId) =>
-      this.worktreeScope(context, passId),
-    );
+    const activity = services.activity;
+    if (activity) activity.colgrep.setIndexingEnabled(activity.preferences.enabled('rag-index'));
   }
 
-  private worktreeScope(
-    {
-      sessionId,
-      agentId,
-      workspaceRoot,
-    }: Pick<ToolContext, 'sessionId' | 'agentId' | 'workspaceRoot'>,
-    requestedPassId?: string,
-  ): WorktreeScope {
-    if (!sessionId) {
-      if (requestedPassId) throw new Error('This agent has no LTCook Pass.');
-      return { sessionId: agentId, agentId, workspaceRoot };
-    }
-    const snapshot = this.runtime?.snapshot(sessionId);
-    if (
-      !snapshot?.members.some(
-        ({ binding }) => binding?.state === 'bound' && binding.nativeAgentId === agentId,
-      )
-    )
-      throw new Error('The agent is not bound to this session.');
-    if (requestedPassId && !snapshot.passes.some(({ id }) => id === requestedPassId))
-      throw new Error('The Pass does not belong to this session.');
-
-    const running = snapshot.passes.filter(({ status }) => status === 'running');
-    const runningIds = new Set(running.map(({ id }) => id));
-    const focused = new Set(
-      snapshot.assignments.flatMap((assignment) => {
-        if (assignment.nativeAgentId !== agentId || assignment.status === 'reported') return [];
-        const passId = snapshot.tasks.find(({ id }) => id === assignment.taskId)?.passId;
-        return passId && runningIds.has(passId) ? [passId] : [];
-      }),
-    );
-    const passId =
-      requestedPassId ??
-      (focused.size === 1 ? [...focused][0] : running.length === 1 ? running[0]?.id : undefined);
-    return { sessionId, agentId, workspaceRoot: snapshot.session.workspaceRoot, passId };
-  }
   setRuntime(runtime: RuntimeController): void {
     this.runtime = runtime;
   }
@@ -258,7 +215,10 @@ export class RuntimeApi {
       }
 
       let committed = false;
+      let resumeObservations: (() => void) | undefined;
       try {
+        if (response.destroyed) return false;
+        if (!this.stopping) resumeObservations = await this.memory?.suspendObservations();
         if (response.destroyed) return false;
         if (this.stopping) {
           response.writeHead(503).end('{"error":"LTCook runtime is stopping"}');
@@ -272,7 +232,10 @@ export class RuntimeApi {
         committed = true;
         return true;
       } finally {
-        if (!committed) await reservation.release().catch(() => undefined);
+        if (!committed) {
+          await reservation.release().catch(() => undefined);
+          resumeObservations?.();
+        }
       }
     } catch {
       if (!response.destroyed) {
@@ -286,19 +249,6 @@ export class RuntimeApi {
 
   beginShutdown(): void {
     this.stopping = true;
-  }
-  setSession(workspaceRoot: string, sessionId: string): void {
-    const canonicalRoot = canonicalWorkspace(workspaceRoot);
-    const existingRoot = this.sessions.get(sessionId);
-    if (existingRoot && existingRoot !== canonicalRoot) {
-      throw new Error('Session is already bound to a different workspace');
-    }
-    this.sessions.set(sessionId, canonicalRoot);
-  }
-  setOpenWorkspaceHandler(
-    handler: (request: WorkspaceSessionRequest) => Promise<SessionSnapshot>,
-  ): void {
-    this.openWorkspace = handler;
   }
   async listen(): Promise<string> {
     const [host, rawPort] = this.listenAddress.startsWith('[')
@@ -362,41 +312,38 @@ export class RuntimeApi {
       response.once('close', finish);
     }
     response.setHeader('content-type', 'application/json');
-    if (!(
-      (request.method === 'POST' &&
-        [
-          '/v1/command',
-          '/v1/snapshot',
-          '/v1/session/open',
-          '/v1/team/catalog',
-          '/v1/model/catalog',
-          '/v1/model/resolve',
-          '/v1/session/list',
-          '/v1/session/worktrees',
-          '/v1/session/prepare',
-          '/v1/runtime/stop',
-          '/v1/tool/authorize',
-          '/v1/ried',
-          '/v1/workspace-tool',
-          '/v1/session-memory/observe',
-          '/v1/session-memory/paste',
-          '/v1/activity/services',
-          '/v1/activity/toggle',
-          '/v1/activity/memory-evidence',
-          '/v1/activity/memory-device',
-          '/v1/activity/stored-summaries',
-          '/v1/mcp/grant',
-          '/v1/mcp/revoke',
-          '/v1/evaluation/observe',
-          '/v1/evals/start',
-          '/v1/evals/status',
-          '/v1/evals/list',
-          '/v1/evals/report',
-          '/v1/evals/cancel',
-          '/v1/evals/delete',
-        ].includes(request.url ?? '')) ||
-      (request.method === 'GET' && request.url === '/v1/status')
-    )) {
+    const activityRoute = isActivityRoute(request.url) ? request.url : undefined;
+    const toolRoute = isToolRoute(request.url) ? request.url : undefined;
+    const sessionRoute = isSessionRoute(request.url) ? request.url : undefined;
+    const isPostRoute =
+      activityRoute !== undefined ||
+      toolRoute !== undefined ||
+      sessionRoute !== undefined ||
+      [
+        '/v1/model/catalog',
+        '/v1/model/resolve',
+        '/v1/session/worktrees',
+        '/v1/runtime/stop',
+        '/v1/session-memory/observe',
+        '/v1/session-memory/paste',
+        '/v1/clarify/read',
+        '/v1/clarify/generate',
+        '/v1/tracker/snapshot',
+        '/v1/tracker/modify',
+        '/v1/mcp/grant',
+        '/v1/mcp/revoke',
+        '/v1/evaluation/observe',
+        '/v1/evals/start',
+        '/v1/evals/status',
+        '/v1/evals/list',
+        '/v1/evals/report',
+        '/v1/evals/cancel',
+        '/v1/evals/delete',
+      ].includes(request.url ?? '');
+    if (
+      !(request.method === 'POST' && isPostRoute) &&
+      !(request.method === 'GET' && request.url === '/v1/status')
+    ) {
       response.writeHead(404).end('{}');
       return;
     }
@@ -408,7 +355,7 @@ export class RuntimeApi {
         response.writeHead(401).end('{"error":"unauthorized"}');
         return;
       }
-      if (this.stopping || !this.lifecycle || !this.openWorkspace) {
+      if (this.stopping || !this.lifecycle || !this.activation.ready) {
         response.writeHead(503).end('{"error":"LTCook runtime is starting or stopping"}');
         return;
       }
@@ -423,7 +370,7 @@ export class RuntimeApi {
       const maxBodyLength =
         request.url === '/v1/session-memory/paste'
           ? 2_097_152
-          : request.url === '/v1/session/open'
+          : sessionRoute === SESSION_OPEN_PATH
             ? 1_048_576
             : 64_000;
       let body = '';
@@ -445,7 +392,7 @@ export class RuntimeApi {
           response.writeHead(400).end('{"error":"instanceId is required"}');
           return;
         }
-        if (this.stopping || !this.lifecycle || !this.shutdown || !this.openWorkspace) {
+        if (this.stopping || !this.lifecycle || !this.shutdown || !this.activation.ready) {
           response.writeHead(503).end('{"error":"LTCook runtime is starting or stopping"}');
           return;
         }
@@ -493,20 +440,13 @@ export class RuntimeApi {
       }
       const input = parsed as {
         sessionId?: string;
-        command?: RuntimeCommand;
         workspaceRoot?: string;
         nativeAgentId?: string;
-        teamSelection?: string;
-        leaderAgentId?: string;
-        shellEnvironment?: unknown;
-        toolName?: unknown;
         force?: unknown;
         turnId?: unknown;
         outcome?: unknown;
         local?: unknown;
         closed?: unknown;
-        toolArgs?: unknown;
-        input?: unknown;
       };
       const isUser = equalToken(bearer, this.secret);
       const actor: RuntimeActor | undefined = isUser
@@ -518,14 +458,71 @@ export class RuntimeApi {
         response.writeHead(401).end('{"error":"unauthorized"}');
         return;
       }
+      if (request.url === '/v1/clarify/read' || request.url === '/v1/clarify/generate') {
+        if (!isUser) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        if (!this.clarify || !this.conversationInference) {
+          response.writeHead(503).end('{"error":"Clarify is unavailable."}');
+          return;
+        }
+        const { agentId, ...reference } = clarifyReadRpc.input.parse(parsed);
+        const connection = new AbortController();
+        response.once('close', () => connection.abort());
+        const mode = this.conversationInference.selection();
+        const text =
+          request.url === '/v1/clarify/read'
+            ? await this.clarify.get(agentId, reference, connection.signal)
+            : await this.clarify.generate(agentId, reference, connection.signal);
+        if (!connection.signal.aborted) response.writeHead(200).end(JSON.stringify({ text, mode }));
+        return;
+      }
+      if (request.url === '/v1/tracker/snapshot' || request.url === '/v1/tracker/modify') {
+        if (!isUser) {
+          response.writeHead(403).end('{}');
+          return;
+        }
+        if (!this.tracker || !this.conversationInference) {
+          response.writeHead(503).end('{"error":"Tracker is unavailable."}');
+          return;
+        }
+        const change =
+          request.url === '/v1/tracker/modify' ? trackerModifyRpc.input.parse(parsed) : undefined;
+        const { agentId } = change ?? trackerSelection.parse(parsed);
+        if (change) {
+          const { modification } = change;
+          if (modification.type === 'pause') this.tracker.setPaused(modification.paused);
+          else if (modification.type === 'item')
+            this.tracker.editItem(
+              agentId,
+              modification.trackerId,
+              modification.itemId,
+              modification.text,
+            );
+          else if (modification.type === 'retry' || modification.type === 'skip')
+            this.tracker.recover(agentId, modification);
+          else this.tracker.configure(agentId, modification);
+        }
+        const snapshot = await this.tracker.snapshot(agentId);
+        response
+          .writeHead(200)
+          .end(JSON.stringify({ ...snapshot, mode: this.conversationInference.selection() }));
+        return;
+      }
       if (request.url === '/v1/session/worktrees') {
         if (!isUser) {
           response.writeHead(403).end('{}');
           return;
         }
         const { nativeAgentId, ...requestScope } = worktreeRequest.parse(parsed);
-        const scope = this.worktreeScope({ ...requestScope, agentId: nativeAgentId });
-        const worktrees = await this.sessionWorktrees.read(scope, AbortSignal.timeout(3500));
+        const service = this.services.worktrees;
+        if (!service) {
+          response.writeHead(503).end('{"error":"Session worktrees are unavailable."}');
+          return;
+        }
+        const scope = service.resolveScope({ ...requestScope, agentId: nativeAgentId });
+        const worktrees = await service.store.read(scope, AbortSignal.timeout(3500));
         response.writeHead(200).end(
           JSON.stringify({
             agentId: scope.agentId,
@@ -536,65 +533,20 @@ export class RuntimeApi {
         );
         return;
       }
-      if (request.url === '/v1/activity/toggle') {
+      if (activityRoute) {
         if (!isUser) {
           response.writeHead(403).end('{}');
           return;
         }
-        const { feature, enabled } = activityToggleRpc.input.parse(parsed);
-        if (!this.activityPreferences || (feature === 'summarizer' && !this.memory)) {
-          response.writeHead(503).end('{"error":"This Activity control is unavailable."}');
-          return;
-        }
-        this.activityPreferences.set(feature, enabled);
-        if (feature === 'summarizer') this.memory?.setSummarizationEnabled(enabled);
-        else this.activityColgrep.setIndexingEnabled(enabled);
-        response.writeHead(200).end(JSON.stringify({ enabled }));
-        return;
-      }
-      if (request.url === '/v1/activity/memory-device') {
-        if (!isUser) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const { deviceId } = memoryDeviceRpc.input.parse(parsed);
-        if (!this.memory) {
-          response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
-          return;
-        }
-        const device = await this.memory.device(deviceId);
-        response.writeHead(200).end(JSON.stringify(device));
-        return;
-      }
-      if (request.url === '/v1/activity/memory-evidence') {
-        if (!isUser) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        if (!this.memory) {
-          response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
-          return;
-        }
-        const { agentId, after, ...record } = memoryEvidenceRpc.input.parse(parsed);
-        const references = await this.memory.readEvidenceReferences(agentId, record, after);
-        response.writeHead(200).end(JSON.stringify(references));
-        return;
-      }
-      if (request.url === '/v1/activity/stored-summaries') {
-        if (!isUser) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const { agentId, before, includeContent, passage } = storedSummariesRpc.input.parse(parsed);
-        if (!this.memory) {
-          response.writeHead(503).end('{"error":"Session Memory is unavailable."}');
-          return;
-        }
-        const page = await this.memory.readStoredSummaries(agentId, before, {
-          includeContent,
-          passage,
+        await handleActivityRoute(activityRoute, parsed, response, {
+          activity: this.services.activity,
+          workspaceServices: this.workspaceServices,
+          lastDelivered: (sessionId, agentId) => this.memory?.lastDelivered(sessionId, agentId),
+          readSession: (id) => this.runtime?.snapshot(id),
+          registeredWorkspace: (id) => this.activation.registeredWorkspace(id),
+          readGrantedWorkspace: (id) => this.workspaceMcp?.repositorySearchWorkspace(id),
+          listProviderSubagents: (id) => this.providerSubagents?.(id),
         });
-        response.writeHead(200).end(JSON.stringify(page));
         return;
       }
       if (request.url === '/v1/session-memory/paste') {
@@ -620,70 +572,6 @@ export class RuntimeApi {
         }
         return;
       }
-      if (request.url === '/v1/activity/services') {
-        if (actor.kind !== 'user') {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const agentId = input.nativeAgentId;
-        if (typeof agentId !== 'string' || !agentId) {
-          response.writeHead(400).end('{}');
-          return;
-        }
-        const timelineEpoch =
-          'timelineEpoch' in parsed && typeof parsed.timelineEpoch === 'string'
-            ? parsed.timelineEpoch
-            : undefined;
-        const session = input.sessionId ? this.runtime?.snapshot(input.sessionId) : undefined;
-        if (
-          session &&
-          !session.members.some(
-            ({ binding }) => binding?.state === 'bound' && binding.nativeAgentId === agentId,
-          )
-        ) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const registeredWorkspace = session && this.sessions.get(session.session.id);
-        const workspace = session
-          ? registeredWorkspace === session.session.workspaceRoot
-            ? await openRepositoryWorkspace(registeredWorkspace)
-                .then((opened) => (opened.root === registeredWorkspace ? opened : undefined))
-                .catch(() => undefined)
-            : undefined
-          : await this.workspaceMcp?.repositorySearchWorkspace(agentId);
-        const [rag, subagents] = await Promise.all([
-          workspace
-            ? this.activityColgrep.readStatus(workspace)
-            : {
-                availability: 'unavailable',
-                activity: 'unknown',
-                diagnostic: 'Repository search scope is unavailable.',
-              },
-          this.providerSubagents?.(agentId).catch(() => undefined),
-        ]);
-        const memory = this.memory?.status(session?.session.id, agentId, timelineEpoch);
-        const assignment = session?.assignments.find(
-          (value) =>
-            value.nativeAgentId === agentId &&
-            (value.status === 'sending' || value.status === 'sent'),
-        );
-        const task = session?.tasks.find((value) => value.id === assignment?.taskId);
-        response.writeHead(200).end(
-          JSON.stringify({
-            rag: {
-              ...rag,
-              indexingEnabled: this.activityPreferences?.enabled('rag-index') ?? null,
-            },
-            task: task?.title,
-            subagents,
-            workspace: workspace && { root: workspace.root, identity: workspace.identity },
-            memory,
-            memoryDisabled: this.memoryDisabled,
-          }),
-        );
-        return;
-      }
       if (request.url === '/v1/session-memory/observe') {
         const id = input.nativeAgentId;
         const session = input.sessionId;
@@ -703,6 +591,7 @@ export class RuntimeApi {
         }
         const outcome = input.outcome;
         if (actor.kind === 'user' && input.closed === true) {
+          this.endLocalTurn(id);
           this.memory?.agentClosed(id);
         } else if (
           actor.kind === 'user' &&
@@ -713,15 +602,20 @@ export class RuntimeApi {
             outcome === 'failed' ||
             outcome === 'canceled')
         ) {
-          this.memory?.turn(
-            id,
-            { turnId: input.turnId, outcome, ...this.memoryContext?.(id) },
-            input.local === true,
-          );
+          if (outcome === 'running') {
+            this.endLocalTurn(id);
+            if (input.local === true) {
+              this.localTurns.set(id, input.turnId);
+              this.conversationInference?.foregroundStarted(JSON.stringify([id, input.turnId]));
+            }
+          } else {
+            this.endLocalTurn(id, input.turnId);
+          }
+          this.memory?.turn(id, { turnId: input.turnId, outcome, ...this.memoryContext?.(id) });
         } else {
           this.memory?.observe(id, actor.kind === 'user' && input.force === true);
         }
-        response.writeHead(202).end(JSON.stringify({ memoryEnabled: this.memory !== undefined }));
+        response.writeHead(202).end('{}');
         return;
       }
       if (request.url === '/v1/mcp/grant' || request.url === '/v1/mcp/revoke') {
@@ -732,6 +626,7 @@ export class RuntimeApi {
         if (typeof input.nativeAgentId !== 'string' || !input.nativeAgentId)
           throw new Error('A native agent identity is required.');
         if (request.url === '/v1/mcp/revoke') {
+          this.activation.revokeRepositoryIndex(input.nativeAgentId);
           await this.workspaceMcp?.revoke(input.nativeAgentId);
           response.writeHead(200).end('{}');
           return;
@@ -800,7 +695,7 @@ export class RuntimeApi {
         await this.handleEvals(request.url!, parsed, response);
         return;
       }
-      if (request.url === '/v1/session/open' && actor.kind !== 'user') {
+      if (sessionRoute === SESSION_OPEN_PATH && actor.kind !== 'user') {
         response.writeHead(403).end('{"error":"user authentication required"}');
         return;
       }
@@ -809,12 +704,24 @@ export class RuntimeApi {
         return;
       }
       const runtime = this.runtime;
-      if (request.url === '/v1/session/open') {
-        await this.handleSessionOpen(input, response);
+      if (sessionRoute) {
+        await handleSessionRoute(sessionRoute, parsed, response, actor, {
+          runtime,
+          activation: this.activation,
+          prepareSession: this.prepareSession,
+        });
         return;
       }
       if (!runtime) {
         response.writeHead(503).end('{"error":"LTCook runtime is not ready"}');
+        return;
+      }
+      if (toolRoute) {
+        await handleToolRoute(toolRoute, parsed, response, actor, {
+          runtime,
+          catalog: this.workspaceTools,
+          registeredWorkspace: (id) => this.activation.registeredWorkspace(id),
+        });
         return;
       }
       if (request.url === '/v1/model/catalog' || request.url === '/v1/model/resolve') {
@@ -830,424 +737,11 @@ export class RuntimeApi {
         response.writeHead(200).end(JSON.stringify(result));
         return;
       }
-      if (request.url === '/v1/session/prepare') {
-        if (actor.kind !== 'user') {
-          response.writeHead(403).end('{"error":"user authentication required"}');
-          return;
-        }
-        if (!this.prepareSession) throw new Error('Session preparation is not ready');
-        if (
-          !input.sessionId ||
-          !input.workspaceRoot ||
-          !input.teamSelection ||
-          input.leaderAgentId !== input.sessionId
-        )
-          throw new Error('Explicit Session Leader identity is required');
-        const snapshot = runtime.snapshot(input.sessionId);
-        const team = runtime
-          .teamCatalog()
-          .find(
-            (entry) =>
-              entry.selection === input.teamSelection || entry.teamId === input.teamSelection,
-          );
-        const leader = snapshot.members.find(
-          (item) => item.member.key === snapshot.definition.leaderKey,
-        );
-        if (
-          !team ||
-          snapshot.session.teamId !== team.teamId ||
-          canonicalWorkspace(input.workspaceRoot) !== snapshot.session.workspaceRoot ||
-          leader?.binding?.nativeAgentId !== input.leaderAgentId
-        )
-          throw new Error('Session preparation identity does not match its binding');
-        const prepared = await this.prepareSession({
-          sessionId: input.sessionId,
-          workspaceRoot: snapshot.session.workspaceRoot,
-          teamSelection: input.teamSelection,
-          leaderAgentId: input.leaderAgentId!,
-          ...(Object.hasOwn(parsed, 'savedModel')
-            ? {
-                savedModel: ResolvedModelSchema.parse(
-                  (parsed as Record<string, unknown>).savedModel,
-                ),
-              }
-            : {}),
-          shellEnvironment: this.startupShellEnvironment,
-        });
-        response.writeHead(200).end(JSON.stringify(prepared));
-        return;
-      }
-      if (request.url === '/v1/team/catalog' || request.url === '/v1/session/list') {
-        if (actor.kind !== 'user') {
-          response.writeHead(403).end('{"error":"user authentication required"}');
-          return;
-        }
-        if (request.url === '/v1/team/catalog') {
-          response.writeHead(200).end(JSON.stringify({ teams: runtime.teamCatalog() }));
-        } else {
-          if (!input.workspaceRoot) throw new Error('workspaceRoot is required');
-          const catalog = runtime.teamCatalog();
-          const sessions = runtime
-            .listSessions(input.workspaceRoot, input.teamSelection)
-            .map((session) => {
-              const selected = catalog.find((team) => team.teamId === session.teamId);
-              if (selected?.status !== 'installed')
-                return {
-                  sessionId: session.id,
-                  teamId: session.teamId,
-                  workspaceRoot: session.workspaceRoot,
-                  createdAt: session.createdAt,
-                  leaderAgentId: null,
-                  blocker: `Saved Team ${session.teamId} is unavailable or invalid; rebuild or reinstall its local package before resuming this Session.`,
-                };
-              const snapshot = runtime.snapshot(session.id);
-              const leader = snapshot.members.find(
-                (item) => item.member.key === snapshot.definition.leaderKey,
-              )?.binding;
-              return {
-                sessionId: session.id,
-                teamId: session.teamId,
-                workspaceRoot: session.workspaceRoot,
-                createdAt: session.createdAt,
-                leaderAgentId: leader?.nativeAgentId ?? null,
-                ...(leader?.state !== 'bound' || !leader.nativeAgentId
-                  ? {
-                      blocker:
-                        leader?.blocker ??
-                        'Leader binding is unavailable; inspect this Session before starting a replacement.',
-                    }
-                  : {}),
-              };
-            });
-          response.writeHead(200).end(JSON.stringify({ sessions }));
-        }
-        return;
-      }
-      if (request.url === '/v1/workspace-tool') {
-        const toolName = input.toolName;
-        const repositorySearch = isRepositoryTool(toolName);
-        if (
-          actor.kind !== 'agent' ||
-          !input.sessionId ||
-          !this.workspaceMcp ||
-          !(
-            repositorySearch ||
-            isWebTool(toolName) ||
-            toolName === SESSION_MEMORY_TOOL_NAME ||
-            toolName === WORKTREE_TOOL_NAME
-          ) ||
-          !input.toolArgs ||
-          typeof input.toolArgs !== 'object' ||
-          Array.isArray(input.toolArgs)
-        ) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const session = runtime.snapshot(input.sessionId);
-        if (
-          !session.members.some(
-            (member) =>
-              member.binding?.nativeAgentId === actor.nativeAgentId &&
-              member.binding.state === 'bound',
-          )
-        ) {
-          response.writeHead(403).end('{}');
-          return;
-        }
-        const authorization = runtime.authorizeTool(
-          input.sessionId,
-          actor.nativeAgentId,
-          toolName,
-          input.toolArgs as Record<string, unknown>,
-        );
-        if (!authorization.allowed) {
-          response.writeHead(403).end(JSON.stringify({ error: authorization.reason }));
-          return;
-        }
-        const controller = new AbortController();
-        const cancel = () => controller.abort();
-        response.once('close', cancel);
-        try {
-          const timeoutMs =
-            toolName === SESSION_MEMORY_TOOL_NAME
-              ? 5_000
-              : repositorySearch
-                ? REPO_SEARCH_TIMEOUT_MS + 5_000
-                : 120_000;
-          const result = await this.workspaceMcp.invokeTool(toolName, input.toolArgs, {
-            agentId: actor.nativeAgentId,
-            workspaceRoot: session.session.workspaceRoot,
-            sessionId: input.sessionId,
-            workspaceFileAccess: false,
-            repositorySearchAccess: repositorySearch,
-            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]),
-          });
-          response.writeHead(200).end(JSON.stringify(result));
-        } finally {
-          response.off('close', cancel);
-        }
-        return;
-      }
-      if (request.url === '/v1/ried') {
-        if (!input.sessionId) throw new Error('RIED requires a Session');
-        const {
-          sessionId: _sessionId,
-          nativeAgentId: _nativeAgentId,
-          ...toolArgs
-        } = parsed as Record<string, unknown>;
-        const inventoryRequest = validateRiedRequest(toolArgs);
-        const session = runtime.snapshot(input.sessionId);
-        if (actor.kind === 'agent') {
-          if (
-            !session.members.some(
-              (member) =>
-                member.binding?.nativeAgentId === actor.nativeAgentId &&
-                member.binding.state === 'bound',
-            )
-          ) {
-            response.writeHead(403).end('{"error":"native agent is not bound to this session"}');
-            return;
-          }
-        } else if (
-          this.sessions.get(input.sessionId) !== canonicalWorkspace(session.session.workspaceRoot)
-        ) {
-          response.writeHead(403).end('{"error":"session is not active in this runtime"}');
-          return;
-        }
-        const value = await runtime.ried(input.sessionId, inventoryRequest);
-        response.writeHead(200).end(JSON.stringify({ value }));
-        return;
-      }
-      if (request.url === '/v1/snapshot') {
-        if (actor.kind === 'user') {
-          const requestedWorkspace = input.workspaceRoot
-            ? canonicalWorkspace(input.workspaceRoot)
-            : undefined;
-          const sessionId = input.sessionId;
-          if (!sessionId) {
-            response
-              .writeHead(404)
-              .end('{"error":"No session found for workspace","code":"SESSION_NOT_FOUND"}');
-            return;
-          }
-          const registeredWorkspace = this.sessions.get(sessionId);
-          if (!registeredWorkspace) {
-            if (
-              !requestedWorkspace ||
-              typeof input.teamSelection !== 'string' ||
-              !input.teamSelection ||
-              typeof input.leaderAgentId !== 'string' ||
-              !input.leaderAgentId
-            )
-              throw new Error('Session is not active in this runtime');
-            const snapshot = runtime.snapshot(sessionId);
-            const selected = runtime
-              .teamCatalog()
-              .find(
-                (team) =>
-                  team.status === 'installed' &&
-                  (team.selection === input.teamSelection || team.teamId === input.teamSelection),
-              );
-            const leader = snapshot.members.find(
-              (member) => member.member.key === snapshot.definition.leaderKey,
-            );
-            if (
-              selected?.teamId !== snapshot.session.teamId ||
-              requestedWorkspace !== canonicalWorkspace(snapshot.session.workspaceRoot) ||
-              leader?.binding?.state !== 'bound' ||
-              leader.binding.nativeAgentId !== input.leaderAgentId
-            )
-              throw new Error('Saved Session identity does not match its native Leader');
-            // > History reads retain metadata without activating or reconciling native agents.
-            response.writeHead(200).end(JSON.stringify(snapshot));
-            return;
-          }
-          if (requestedWorkspace && registeredWorkspace !== requestedWorkspace)
-            throw new Error('Session does not belong to the requested workspace');
-          const snapshot = runtime.snapshot(sessionId);
-          if (canonicalWorkspace(snapshot.session.workspaceRoot) !== registeredWorkspace)
-            throw new Error('Session does not belong to its registered workspace');
-          response.writeHead(200).end(JSON.stringify(snapshot));
-          return;
-        }
-        if (!input.sessionId) throw new Error('Agent snapshot requires a bound session');
-        const snapshot: SessionSnapshot = runtime.snapshot(input.sessionId);
-        if (
-          !snapshot.members.some(
-            (member) =>
-              member.binding?.nativeAgentId === actor.nativeAgentId &&
-              member.binding.state === 'bound',
-          )
-        ) {
-          throw new Error('Native agent is not bound to this session');
-        }
-        response.writeHead(200).end(JSON.stringify(snapshot));
-        return;
-      }
-      if (request.url === '/v1/tool/authorize') {
-        if (
-          actor.kind !== 'agent' ||
-          !input.sessionId ||
-          typeof input.toolName !== 'string' ||
-          !input.input ||
-          typeof input.input !== 'object' ||
-          Array.isArray(input.input)
-        )
-          throw new Error('Bound agent, Session, toolName and input mapping required');
-        const authorization = runtime.authorizeTool(
-          input.sessionId,
-          actor.nativeAgentId,
-          input.toolName,
-          input.input as Record<string, unknown>,
-        );
-        response.writeHead(200).end(JSON.stringify(authorization));
-        return;
-      }
-      if (!input.sessionId || !isRuntimeCommand(input.command))
-        throw new Error('sessionId and a valid runtime command are required');
-      const metadataRecovery =
-        actor.kind === 'user' &&
-        ['planning.show', 'planning.questions', 'decision.answer'].includes(input.command.type);
-      const sessionSnapshot = runtime.snapshot(input.sessionId);
-      if (metadataRecovery && !this.sessions.has(input.sessionId))
-        this.setSession(sessionSnapshot.session.workspaceRoot, input.sessionId);
-      if (actor.kind === 'agent') {
-        const member = sessionSnapshot.members.find(
-          (candidate) =>
-            candidate.binding?.nativeAgentId === actor.nativeAgentId &&
-            candidate.binding.state === 'bound',
-        );
-        if (!member) {
-          response.writeHead(403).end('{"error":"native agent is not bound to this session"}');
-          return;
-        }
-      } else if (
-        this.sessions.get(input.sessionId) !==
-        canonicalWorkspace(sessionSnapshot.session.workspaceRoot)
-      ) {
-        response.writeHead(403).end('{"error":"session is not active in this runtime"}');
-        return;
-      }
-      const value = await runtime.execute(input.sessionId, actor, input.command);
-      response.writeHead(200).end(JSON.stringify({ value }));
     } catch (error) {
       response
         .writeHead(400)
         .end(JSON.stringify({ error: error instanceof Error ? error.message : 'request failed' }));
     }
-  }
-  private async handleSessionOpen(
-    input: {
-      workspaceRoot?: string;
-      sessionId?: string;
-      teamSelection?: string;
-      leaderAgentId?: string;
-      shellEnvironment?: unknown;
-    },
-    response: import('node:http').ServerResponse,
-  ): Promise<void> {
-    const runtime = this.runtime;
-    const openWorkspace = this.openWorkspace;
-    if (!runtime || !openWorkspace) {
-      response.writeHead(503).end('{"error":"Runtime session activation is not ready"}');
-      return;
-    }
-    const shell = input.shellEnvironment;
-    if (
-      typeof input.workspaceRoot !== 'string' ||
-      !input.workspaceRoot ||
-      typeof input.sessionId !== 'string' ||
-      !input.sessionId ||
-      typeof input.teamSelection !== 'string' ||
-      !input.teamSelection ||
-      (shell !== undefined &&
-        (!shell ||
-          typeof shell !== 'object' ||
-          Array.isArray(shell) ||
-          !Object.values(shell).every((value) => typeof value === 'string')))
-    ) {
-      response
-        .writeHead(400)
-        .end(
-          '{"error":"workspaceRoot, sessionId and teamSelection are required; shellEnvironment must be a string mapping when supplied"}',
-        );
-      return;
-    }
-    const workspaceRoot = canonicalWorkspace(input.workspaceRoot);
-    const registeredWorkspace = this.sessions.get(input.sessionId);
-    if (registeredWorkspace && registeredWorkspace !== workspaceRoot) {
-      response.writeHead(409).end('{"error":"Session is already bound to a different workspace"}');
-      return;
-    }
-    let snapshot: SessionSnapshot | undefined;
-    if (registeredWorkspace) {
-      const existing = runtime.snapshot(input.sessionId);
-      if (
-        existing.session.teamId !==
-        runtime
-          .teamCatalog()
-          .find(
-            (team) => team.selection === input.teamSelection || team.teamId === input.teamSelection,
-          )?.teamId
-      )
-        throw new Error('Session Team is immutable');
-      if (!input.leaderAgentId) snapshot = existing;
-    }
-    if (!snapshot) {
-      let entry = input.leaderAgentId ? undefined : this.pendingSessions.get(input.sessionId);
-      if (entry && entry.workspaceRoot !== workspaceRoot) {
-        response
-          .writeHead(409)
-          .end('{"error":"Session initialization is already requested for a different workspace"}');
-        return;
-      }
-      if (!entry) {
-        const pending = openWorkspace({
-          workspaceRoot,
-          sessionId: input.sessionId,
-          teamSelection: input.teamSelection,
-          ...(input.leaderAgentId ? { leaderAgentId: input.leaderAgentId } : {}),
-          shellEnvironment: captureShellEnvironment(
-            shell === undefined ? this.startupShellEnvironment : (shell as Record<string, string>),
-          ),
-        });
-        entry = { workspaceRoot, pending };
-        if (!input.leaderAgentId) this.pendingSessions.set(input.sessionId, entry);
-      }
-      try {
-        snapshot = await entry.pending;
-      } finally {
-        if (this.pendingSessions.get(input.sessionId) === entry)
-          this.pendingSessions.delete(input.sessionId);
-      }
-      if (
-        snapshot.session.id !== input.sessionId ||
-        canonicalWorkspace(snapshot.session.workspaceRoot) !== workspaceRoot
-      ) {
-        response.writeHead(409).end('{"error":"Runtime opened a different workspace session"}');
-        return;
-      }
-      const selected = runtime
-        .teamCatalog()
-        .find(
-          (team) => team.selection === input.teamSelection || team.teamId === input.teamSelection,
-        );
-      if (!selected || snapshot.session.teamId !== selected.teamId)
-        throw new Error('Session Team is immutable');
-      this.setSession(workspaceRoot, snapshot.session.id);
-    }
-    response.writeHead(200).end(
-      JSON.stringify({
-        sessionId: snapshot.session.id,
-        workspaceRoot: snapshot.session.workspaceRoot,
-        teamId: snapshot.session.teamId,
-        teamInstanceId: snapshot.session.teamInstanceId,
-        leaderAgentId:
-          snapshot.members.find((item) => item.member.key === snapshot.definition.leaderKey)
-            ?.binding?.nativeAgentId ?? null,
-      }),
-    );
-    return;
   }
   private async handleEvals(
     url: string,
@@ -1284,7 +778,8 @@ export class RuntimeApi {
           if (
             canonicalWorkspace(session.workspaceRoot) !==
               canonicalWorkspace(request.workspaceRoot) ||
-            this.sessions.get(request.sessionId) !== canonicalWorkspace(request.workspaceRoot)
+            this.activation.registeredWorkspace(request.sessionId) !==
+              canonicalWorkspace(request.workspaceRoot)
           )
             throw new Error('Evaluation Session does not match the registered workspace');
           const team = this.runtime

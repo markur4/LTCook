@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import defaultTeam from '@ltcook/team-default';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
-import { SessionMemory } from '../../../runtime/src/session-memory/service.js';
+import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
 import { CoordinationStore } from '../../../runtime/src/storage/coordination.js';
 import team from '@ltcook/team-default-minimal';
 import {
@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe('approved Pass scheduling', () => {
-  async function fixture(selected = defaultTeam, memory?: SessionMemory) {
+  async function fixture(selected = defaultTeam, memory?: ConversationRecords) {
     const directory = mkdtempSync(join(tmpdir(), 'ltcook-scheduler-'));
     temporaryDirectories.push(directory);
     const agents = new FakeAgents();
@@ -100,15 +100,12 @@ describe('approved Pass scheduling', () => {
   }
 
   test('canceling a Pass during the Memory lookup prevents its pending dispatch', async () => {
-    const memory = new SessionMemory({
+    const memory = new ConversationRecords({
       databasePath: ':memory:',
       source: {
         async read() {
           return { epoch: 'fixture', latest: -1, through: -1, reset: false, messages: [] };
         },
-      },
-      async summarize(type) {
-        return { type, text: '', complete: false, elapsedMs: 0 };
       },
     });
     const f = await fixture(defaultTeam, memory);
@@ -140,6 +137,71 @@ describe('approved Pass scheduling', () => {
       loaded.resolve();
       await f.runtime.close();
       await memory.close();
+    }
+  });
+
+  test('a blocking decision recorded during assignee selection prevents dispatch', async () => {
+    const selecting = new Gate();
+    const resumeSelection = new Gate();
+    const f = await fixture({
+      ...defaultTeam,
+      async selectAssignee({ workType }) {
+        if (workType === 'task.execute') {
+          selecting.resolve();
+          await resumeSelection.wait();
+        }
+        return defaultTeam.definition.routing[workType];
+      },
+    });
+    let releasing: Promise<void> | undefined;
+    let recording: Promise<unknown> | undefined;
+    try {
+      const task = await f.create('blocked-during-selection');
+      const snapshot = f.runtime.snapshot(f.id);
+      const plan = snapshot.planning.find(({ passId }) => passId === f.pass.id)!;
+      const sendsBefore = f.agents.sends.length;
+      releasing = f.release();
+      await selecting.wait();
+      recording = f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        {
+          type: 'decision.create',
+          planId: plan.id,
+          category: 'other',
+          prompt: 'Confirm the new requirement?',
+          blocking: true,
+        },
+      );
+      expect(
+        f.runtime
+          .snapshot(f.id)
+          .decisions.some(
+            ({ prompt, blocking, answer }) =>
+              prompt === 'Confirm the new requirement?' && blocking && answer === undefined,
+          ),
+      ).toBe(true);
+      resumeSelection.resolve();
+      await releasing;
+      const decision = (await recording) as { id: string };
+      expect(f.runtime.snapshot(f.id).assignments.some(({ taskId }) => taskId === task.id)).toBe(
+        false,
+      );
+      expect(f.agents.sends).toHaveLength(sendsBefore);
+
+      await f.runtime.execute(
+        f.id,
+        { kind: 'user' },
+        { type: 'decision.answer', planId: plan.id, decisionId: decision.id, answer: 'Proceed' },
+      );
+      expect(
+        f.runtime.snapshot(f.id).assignments.filter(({ taskId }) => taskId === task.id),
+      ).toHaveLength(1);
+      expect(f.agents.sends).toHaveLength(sendsBefore + 1);
+    } finally {
+      resumeSelection.resolve();
+      await Promise.allSettled([releasing, recording]);
+      await f.runtime.close();
     }
   });
 

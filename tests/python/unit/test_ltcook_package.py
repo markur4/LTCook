@@ -49,19 +49,29 @@ def _asset_source(root: Path) -> Path:
     (root / "runtime/src/workflow-api/commands.ts").write_text(
         "export {};", encoding="utf-8"
     )
+    contracts = root / "runtime/src/models/contracts"
+    (contracts / "dist").mkdir(parents=True)
+    (contracts / "package.json").write_text(
+        '{"name":"@ltcook/model-contracts"}', encoding="utf-8"
+    )
+    (contracts / "index.ts").write_text("export {};", encoding="utf-8")
+    (contracts / "dist/index.js").write_text("export {};", encoding="utf-8")
     for resource in ("rules/planning.md", "skills/ltcook-planning/SKILL.md"):
         path = root / "runtime/resources" / resource
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("required Core guidance", encoding="utf-8")
     web_ui = root / "runtime/dist/paseo-web"
     for name in (
-        "index.html",
         "ltcook-paseo-build.json",
         "_expo/static/js/web/fixture.js",
     ):
         asset = web_ui / name
         asset.parent.mkdir(parents=True, exist_ok=True)
         asset.write_text("patched Paseo asset", encoding="utf-8")
+    (web_ui / "index.html").write_text("<!doctype html><html><head></head></html>")
+    check = root / "paseo-patches/build-check.js"
+    check.parent.mkdir()
+    check.write_text("// update notice fixture\n", encoding="utf-8")
     plugin = root / "runtime/dist/paseo-plugin"
     for name in (
         "paseo-plugin.json",
@@ -125,6 +135,9 @@ def test_bundle_archive_is_deterministic_and_excludes_development_installs(
     assert "runtime/dist/tools/web-mcp.js" in names
     assert "runtime/dist/tools/pi-web-access.LICENSE" in names
     assert "runtime/dist/workflow-api/index.js" in names
+    assert "runtime/src/models/contracts/package.json" in names
+    assert "runtime/src/models/contracts/index.ts" in names
+    assert "runtime/src/models/contracts/dist/index.js" in names
     assert "runtime/resources/skills/ltcook-planning/SKILL.md" in names
     assert "teams/default-minimal/dist/index.js" in names
     assert all("node_modules" not in name for name in names)
@@ -133,6 +146,34 @@ def test_bundle_archive_is_deterministic_and_excludes_development_installs(
         assert all(
             info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist()
         )
+
+
+def test_bundle_exposes_the_build_loaded_by_the_paseo_page(tmp_path: Path) -> None:
+    """A plugin-only refresh gets a new browser identity and matching markup."""
+    from ltcook_dev.packaging.package_assets import archive_assets
+
+    root = _asset_source(tmp_path / "source")
+    web = "runtime/dist/paseo-web"
+    (root / web / "index.html.gz").write_bytes(b"previous unmodified HTML")
+    (root / web / "index.html.br").write_bytes(b"previous unmodified HTML")
+    destination = tmp_path / "bundle.zip"
+
+    def packaged_build() -> str:
+        archive_assets(root, destination)
+        with zipfile.ZipFile(destination) as archive:
+            build = json.loads(archive.read(f"{web}/ltcook-build.json"))["build"]
+            html = archive.read(f"{web}/index.html").decode()
+            assert f'name="ltcook-web-build" content="{build}"' in html
+            assert f"ltcook-build-check.js?v={build}" in html
+            assert f"{web}/index.html.gz" not in archive.namelist()
+            assert f"{web}/index.html.br" not in archive.namelist()
+            return build
+
+    before = packaged_build()
+    (root / "runtime/dist/paseo-plugin/index.client.tsx").write_text(
+        "// updated plugin"
+    )
+    assert packaged_build() != before
 
 
 def test_bundle_includes_all_local_team_workspaces(tmp_path: Path) -> None:

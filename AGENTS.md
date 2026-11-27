@@ -3,6 +3,12 @@
 Before making changes, read [Contributing](CONTRIBUTING.md) and follow its shared
 conventions. Consult the relevant [Development](docs/Development.md) guides.
 
+## Agent workflow
+
+- Use the fixed [Pass and Task definitions](docs/Explanations.md#domain-terminology) in all LTCook instructions, skills, plans, and reports. Keep acceptance and requirements for reporting Done in the workflow.
+- Use one branch, worktree, and draft PR per Pass in this repository. Every Task, including review, shares that checkout. If integration is blocked, keep the same Pass and checkout, and leave integration and its dependent Tasks pending.
+- Develop and test instructions and skills in Codex, with Codex in Paseo as the integration target. Settle the policy in guidance first. Defer new Pi runtime enforcement until the guidance is settled and the behavior still needs enforcement. See [prototype workflow](docs/Development.md#prototype-workflow).
+
 ## Release policy
 - Treat the committed `RELEASE_PYPI` value in `justfile` as a hard gate. When it is `"false"`, do not recommend or run a manual PyPI publish or retry command.
 - Treat the committed `RELEASE_REQUIRE_CI` value independently from PyPI. Require successful local checks and artifact verification. When the value is `true`, also wait for hosted CI on the exact prepared tag and commit.

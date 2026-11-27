@@ -1,5 +1,5 @@
 import { Type, type Static } from 'typebox';
-import { REPO_SEARCH_TOOL_NAME } from '../paseo-plugin/shared/workspace-tools.js';
+import { REPO_SEARCH_TOOL_NAME } from './workspace-tools.js';
 import { RepositorySourceReader } from '../repository/evidence.js';
 import { assertRepositoryPathVisible, isRepositoryPathVisible } from '../repository/filesystem.js';
 import { COLGREP_MAX_RESULTS, createColgrepProvider } from '../repository/providers/colgrep.js';
@@ -18,10 +18,7 @@ import {
 import { openRepositoryWorkspace, type RepositoryWorkspace } from '../repository/workspace.js';
 import { defineTool, type ToolContext } from './types.js';
 
-export {
-  REPO_SEARCH_TIMEOUT_MS,
-  REPO_SEARCH_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
+export { REPO_SEARCH_TIMEOUT_MS, REPO_SEARCH_TOOL_NAME } from './workspace-tools.js';
 
 export const repositoryEvidenceGuidance =
   ' Cite the exact supporting numbered lines for each claim. Search again only to close a specific evidence gap. A ready, complete empty response means this search found no matches. Partial, unavailable, or indexing results can leave the evidence unresolved.';
@@ -78,6 +75,12 @@ export async function openAuthorizedSearchWorkspace(
   return workspace;
 }
 
+function fallbackPattern(query: string, pattern: string | undefined): string | undefined {
+  if (pattern) return pattern;
+  const words = query.match(/[\p{L}\p{N}_]{3,}/gu);
+  return words ? [...new Set(words)].slice(0, 6).join('|') : undefined;
+}
+
 export function createRepoSearchTool(
   colgrep = createColgrepProvider(),
   ripgrep = createRipgrepProvider(),
@@ -90,6 +93,7 @@ export function createRepoSearchTool(
       source?: RepositorySourceReader;
       collection?: RipgrepCollection;
       priority?: RepositorySearchPriority;
+      updateIndex?: boolean;
     } = {},
   ): Promise<Static<typeof RepositorySearchOutputSchema>> {
     signal.throwIfAborted();
@@ -110,14 +114,57 @@ export function createRepoSearchTool(
         : await repositorySearchPriority(workspace, input.base, signal));
     const prioritize = priority?.prioritize;
     const collection = prioritize ? { ...options.collection, prioritize } : options.collection;
-    const { value, ...metadata } = await (lexical
+    let retrieval = await (lexical
       ? ripgrep.search(workspace, { query, mode, paths, limit }, signal, source, collection)
       : colgrep.search(
           workspace,
-          { query, mode, pattern, paths, limit: prioritize ? COLGREP_MAX_RESULTS : limit },
+          {
+            query,
+            mode,
+            pattern,
+            paths,
+            limit: prioritize ? COLGREP_MAX_RESULTS : limit,
+            updateIndex: options.updateIndex,
+          },
           signal,
           source,
         ));
+    if (
+      !lexical &&
+      mode !== 'semantic' &&
+      options.updateIndex !== false &&
+      retrieval.value.status !== 'ready' &&
+      retrieval.diagnostics.some(({ code }) =>
+        ['indexing', 'index-unavailable', 'index-recovery'].includes(code),
+      )
+    ) {
+      const queryPattern = fallbackPattern(query, pattern);
+      if (queryPattern) {
+        const fallback = await ripgrep.search(
+          workspace,
+          { query: queryPattern, mode: 'regex', paths, limit },
+          signal,
+          source,
+          collection,
+        );
+        if (fallback.value.status === 'ready') {
+          retrieval = {
+            ...fallback,
+            partial: true,
+            diagnostics: [
+              ...retrieval.diagnostics,
+              ...fallback.diagnostics,
+              {
+                source: 'repository',
+                code: 'lexical-fallback',
+                message: 'Ranked search is unavailable. These are approximate lexical matches.',
+              },
+            ],
+          };
+        }
+      }
+    }
+    const { value, ...metadata } = retrieval;
     const { status, kind, hits } = value;
     const results = hits.filter(({ path }) => isRepositoryPathVisible(path));
     if (results.length < hits.length) {

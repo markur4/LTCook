@@ -7,9 +7,9 @@ All notable changes to `ltcook` will be documented in this file.
 > This changelog follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) and
 > [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0/).
 >
-> Keep one cumulative section per target version. Start with `## [X.Y.Z] - YYYY-MM-DD (b1)`,
-> update the date, entries, and marker for `rc1`, and remove the marker for
-> stable. The notes describe what ships since the previous stable version.
+> Keep one cumulative section per target version. Use `## [X.Y.Z] - YYYY-MM-DD`
+> for stable and append `(b1)` or `(rc1)` for an optional preview. The notes
+> describe what ships since the previous stable version.
 > Link the section to that stable tag once one exists. Include only stable
 > `X.Y.0` releases in the table of contents.
 >
@@ -51,6 +51,38 @@ All notable changes to `ltcook` will be documented in this file.
   seconds. The bundled Turn Speed component marks estimated token rates and
   offers a breakdown of the current turn.
 
+- **Clarify** in the bundled Paseo web app rewrites an individual completed
+  reply on demand and saves the result against that exact source.
+- **Tracked Items** in the Explorer sidebar maintains a conversation-specific
+  notebook with configurable Trackers, original evidence, manual editing,
+  and extraction coverage. When a message blocks extraction, the affected
+  Tracker resumes in message order after recovery. Coverage gives users retry
+  and skip controls and keeps skipped messages visible as incomplete.
+
+- Workspace Organizer maintains the standard Feature, Bugfix, CSC, and Research
+  labels in blue, red, amber, and violet. It classifies new workspaces and
+  rechecks changed workspaces every 12 hours, preserving other labels, with one
+  bounded retry when content changes during the first classification.
+  Its optional 14-day archive policy protects pinned workspaces, active or
+  pending work, and incomplete activity. Automatic archival preserves working
+  directories and skips project teardown, including for Paseo-owned worktrees.
+
+- Renamer refreshes changed workspace and agent-session titles at most every
+  30 minutes, with limits of 20 and 15 visible characters respectively. Global
+  AppRC switches independently control workspace renaming, agent-tab renaming,
+  and automatic archival. Both services run in the existing runtime and use
+  `@tiny` only for category and title proposals. Read-only cards in
+  **Workspace Services** and **Activity → Services** show operation failures,
+  recovery status, and archive-protection diagnostics.
+
+- The glossary and shared agent instructions distinguish Paseo projects,
+  workspaces, sessions, tabs, and AppRC workspaces. The documented default is one
+  main user-facing session per Paseo workspace, with supporting tabs and extra
+  sessions when useful.
+
+- LTCook guides agents to prefer its web search and source-reading tools when
+  available, with a fallback for missing capabilities or incomplete evidence.
+
 - Linux and WSL can queue an LTCook restart until Paseo finishes active and
   queued turns. Check or cancel the queued job from the CLI, or request it
   through an agent that supports Paseo's approval dialog. An optional update
@@ -62,27 +94,18 @@ All notable changes to `ltcook` will be documented in this file.
 
 - A Paseo Explorer **Activity** panel shows direct subagents, running and recent
   tools, observed skill loads, model context usage, ColGREP index status, and
-  Session Memory summaries and delivery evidence. On desktop, Activity opens on
-  the first agent chat in each workspace. The Explorer **+** menu offers
-  **Activity**, **Team**, and **Tasks** on demand.
-  Activity groups repeated tool calls and shows background summaries and
-  acknowledged delegation handoffs in the Session Memory card. Select
-  **Stored for this agent** to inspect summary timings, token estimates, and
-  source positions. The **Stored Summaries** tab shows the storage path and
-  syntax-colored JSON with clipboard export. **Show summary** in the chat
-  reveals the passage summary and can open its complete entry. The Session
-  Memory card shows live tokens per second during generation.
+  delegation delivery evidence. On desktop, Activity opens on the first agent
+  chat in each workspace. The Explorer **+** menu also offers **Workspace
+  Services**, **Tracked Items**, **Team**, and **Tasks**.
 
 - Activity links individual tool and skill occurrences to their chat rows in
   LTCook's Paseo web app. The details header opens skill documents in a workspace
   tab, and each turn offers inline previews of its observed skills.
 
 - `ltcook restart` stops the local runtime and reopens Paseo. On Linux and macOS,
-  `--update` applies the registered AppRC update before starting.
-
-- Session Memory summarizes completed Discussions and related Agent Actions
-  in the background. Authorized agents can search summaries and original
-  messages, retrieve cited sources, and opt into Session Memory for delegation.
+  `--update` applies the registered AppRC update and verifies the replacement
+  build. A failed update reports its result separately from runtime recovery.
+  Open bundled Paseo tabs show when a newer web build is available.
 
 - Paseo's **Paste as attachment** composer control keeps reference text in a
   separate attachment. LTCook stores submitted content on the daemon host
@@ -115,7 +138,10 @@ All notable changes to `ltcook` will be documented in this file.
 - Explicit GitHub Release workflow for beta, release candidate, and stable
   versions. Release preparation uses cumulative changelog notes. Publishing
   stages and verifies Linux assets locally, with a separately configurable
-  hosted CI gate.
+  hosted CI gate. GitHub keeps the latest beta, the latest release candidate,
+  and all stable releases. Routine CI runs on pull requests and main with
+  Python 3.13. Release candidates and stable tags without equivalent candidate
+  results receive extended checks.
 
 - Shared model aliases for Teams, Paseo, and the native Pi and Codex launcher.
   Paseo saves the effective model and reasoning with each new conversation.
@@ -226,19 +252,15 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🛠️ Changed
 
-- Activity can pause Session Memory generation and ColGREP index updates independently.
-  The device picker gives the selected device more room on narrow sidebars.
+- **Breaking:** 💥 LTCook requires Python 3.13 or newer. Create the checkout
+  environment with Python 3.13 before registering an editable installation.
+  Native setup provisions Python 3.13. The local release check uses Python 3.13
+  as its sole test environment.
 
-- **Breaking:** 💥 Session Memory starts a fresh v4 derived database for parsed
-  summary content and device identities. The compact **Inference device** picker
-  shows Ollama-discovered GPUs where supported. **Stored Summaries** and
-  **Copy JSON** expose summary parts as nested JSON. See the
-  [Session Memory storage and reset guidance](docs/Development.md#session-memory-qualification).
-
-- Session Memory uses Immediate Context with current Task instructions and one
-  relevant completed UAMP. The production rolling-window budget settings were
-  removed. Chronological summaries remain available for retrieval.
-
+- **Breaking:** 💥 The shared Spark model alias is now `@local-tiny`. Use that
+  spelling in Team and launch selections. The shared list includes `@local-CPU`
+  and `@local-evals`. `@tiny` now defaults to low reasoning, including for
+  Hosted Clarify and Tracker.
 
 - Repository Locate groups verified definitions, calls, tests, and references,
   and adds short source excerpts to exact matches where context helps.
@@ -247,12 +269,6 @@ All notable changes to `ltcook` will be documented in this file.
   in Pi launches, Paseo sessions, and hosted evaluations. If needed, sign in
   through `ltcook auth login openai-codex` for ChatGPT or
   `ltcook auth login openai --api-key` for Platform API key mode.
-
-- **Breaking:** 💥 Session Memory stores chronological UAMP and AAB summaries
-  in a new derived store. It uses LFM3 QAD Q4 with reasoning disabled and
-  bounded historical summaries for context. Ollama uses GPU acceleration
-  when available and falls back to CPU. Original histories remain searchable.
-  Earlier extractive cache entries are superseded.
 
 <br>
 
@@ -364,31 +380,29 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🔥 Removed
 
+- **Breaking:** 💥 Continuous Session Memory summaries and redo controls
+  are replaced by Clarify and Tracker. Fresh stores hold deterministic
+  conversation evidence and product state. Native Paseo history and pasted
+  attachments remain available. Delegation uses authorized originals.
+
 <br>
 
 ### 🐛 Fixed
 
+- ColGREP indexing recovers in the background for active worktrees, independently
+  of query deadlines. A compatible completed index survives ordinary updates and
+  WSL remounts, and remains searchable while a refresh builds its replacement.
+  Activity shows progress and retry details. Hybrid search offers labeled
+  lexical results while a first index builds. 💥 The new cache layout rebuilds
+  each worktree once automatically.
+
+- Background inference validates the selected model and credentials through
+  the service's own provider. Corrected configuration or authentication makes
+  blocked work eligible again. Temporary failures retry with backoff.
+
 - Changed files start collapsed when reviewing a linked worktree in Paseo.
 
 - Activity can show observed Codex skill reads in idle and active chats.
-
-- Session Memory delegation sends compact, Task-scoped evidence followed by the
-  latest applicable original user instruction. Historical tool outcomes are
-  identified separately from the assignment's required verification.
-
-- **Breaking:** 💥 The Session Memory tool replaces `incomplete` with
-  `status.summariesPending`, `status.resultsTruncated`, and
-  `status.originalHistory`. Tool consumers can distinguish a successful
-  original lookup from pending summarization, bounded results, or unavailable
-  history by reading the corresponding status field. Exact source lookups
-  report `lookup` and, when known, `latestSequence`.
-
-- Session Memory includes attachments from initiating instructions in Agent
-  Action Batch summaries and preserves their source citations. Short tool
-  results use a compact prompt that keeps exact check outcomes together.
-
-- Session Memory delegation preserves explicit named tool outcomes and cites
-  original messages for relevant identifiers omitted by summaries.
 
 - Pi and Codex chats on the LTCook Paseo host receive repository tool guidance
   at launch so they can choose Search or Locate before tool discovery.

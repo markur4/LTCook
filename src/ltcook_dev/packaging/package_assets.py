@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -27,7 +28,13 @@ REQUIRED_RUNTIME_ENTRIES = (
     "dist/guidance-api/index.js",
     "dist/workflow-api/index.js",
 )
+REQUIRED_MODEL_CONTRACT_ASSETS = (
+    "runtime/src/models/contracts/package.json",
+    "runtime/src/models/contracts/index.ts",
+    "runtime/src/models/contracts/dist/index.js",
+)
 REQUIRED_PASEO_WEB_ASSETS = ("index.html", "ltcook-paseo-build.json")
+PACKAGED_WEB_BUILD_ASSETS = ("ltcook-build.json", "ltcook-build-check.js")
 REQUIRED_PASEO_PLUGIN_ASSETS = (
     "turn-speed/paseo-plugin.json",
     "turn-speed/index.client.tsx",
@@ -99,6 +106,43 @@ def _team_packages(root: Path) -> tuple[Path, ...]:
     return tuple(packages)
 
 
+def _stage_web_build(root: Path, staging: Path) -> None:
+    """Give each served page the identity of the assets it was built with."""
+    web = staging / "runtime/dist/paseo-web"
+    script = root / "paseo-patches/build-check.js"
+    _no_links(script)
+    shutil.copyfile(script, web / "ltcook-build-check.js")
+    digest = hashlib.sha256()
+    for asset in sorted((staging / "runtime").rglob("*")):
+        if asset.is_file():
+            with asset.open("rb") as contents:
+                asset_digest = hashlib.file_digest(contents, "sha256").hexdigest()
+            digest.update(
+                f"{asset.relative_to(staging).as_posix()}\0{asset_digest}\n".encode()
+            )
+    build = digest.hexdigest()
+    index = web / "index.html"
+    html = index.read_text(encoding="utf-8")
+    if html.count("</head>") != 1:
+        raise ValueError(
+            "Paseo web entry point has no unique head for its build metadata."
+        )
+    index.write_text(
+        html.replace(
+            "</head>",
+            f'<meta name="ltcook-web-build" content="{build}" />\n'
+            f'<script src="/ltcook-build-check.js?v={build}" defer></script>\n</head>',
+        ),
+        encoding="utf-8",
+    )
+    # > A compressed copy of the original HTML would serve the previous markup.
+    for suffix in (".br", ".gz"):
+        (web / f"index.html{suffix}").unlink(missing_ok=True)
+    (web / "ltcook-build.json").write_text(
+        json.dumps({"build": build}), encoding="utf-8"
+    )
+
+
 def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
     """Atomically stage runtime, native plugin sources, teams, services and declarations.
 
@@ -129,6 +173,13 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
         if path.is_symlink() or not path.is_file():
             raise FileNotFoundError(
                 f"Compiled runtime entry is required before staging: {entry}"
+            )
+    for asset in REQUIRED_MODEL_CONTRACT_ASSETS:
+        path = root / asset
+        _no_links(path)
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Required model contract asset is missing: {asset}"
             )
     web_directory = root / "runtime/dist/paseo-web"
     for name in REQUIRED_PASEO_WEB_ASSETS:
@@ -179,9 +230,14 @@ def stage_assets(root: Path, destination: Path) -> tuple[Path, ...]:
                 staging / "runtime/src" / boundary,
                 required=True,
             )
+        for asset in REQUIRED_MODEL_CONTRACT_ASSETS:
+            target = staging / asset
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(root / asset, target)
         _copy_tree(
             root / "runtime/resources", staging / "runtime/resources", required=True
         )
+        _stage_web_build(root, staging)
         launcher = staging / "runtime/dist/integrations/pi-rpc.js"
         launcher.chmod(launcher.stat().st_mode | 0o111)
         for source in _team_packages(root):
@@ -234,8 +290,12 @@ def validate_bundle(archive: Path) -> tuple[str, ...]:
         ),
         "runtime/src/workflow-api/commands.ts",
         *(f"runtime/{entry}" for entry in REQUIRED_RUNTIME_ENTRIES),
+        *REQUIRED_MODEL_CONTRACT_ASSETS,
         *(f"runtime/dist/paseo-plugin/{name}" for name in REQUIRED_PASEO_PLUGIN_ASSETS),
-        *(f"runtime/dist/paseo-web/{name}" for name in REQUIRED_PASEO_WEB_ASSETS),
+        *(
+            f"runtime/dist/paseo-web/{name}"
+            for name in (*REQUIRED_PASEO_WEB_ASSETS, *PACKAGED_WEB_BUILD_ASSETS)
+        ),
         "services/compose.yaml",
     }
     try:

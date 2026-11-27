@@ -45,6 +45,59 @@ const catalogEntry = {
 };
 
 describe('Paseo Team RPC', () => {
+  test('forwards workspace activity and status through user-authenticated service routes', async () => {
+    const restoreEnvironment = runtimeEnvironment();
+    const originalFetch = globalThis.fetch;
+    const received: Array<{ url: string; init: RequestInit }> = [];
+    const service = {
+      enabled: true,
+      running: false,
+      lastRunAt: null,
+      lastSuccessAt: null,
+      processed: 0,
+    };
+    const status = {
+      organizer: service,
+      renamer: service,
+      autoArchive: true,
+      renameWorkspaces: true,
+      renameTabs: true,
+      archiveBlocked: [],
+    };
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      received.push({ url, init: init ?? {} });
+      return Response.json(url.endsWith('/workspace-touch') ? { recorded: true } : status);
+    }) as typeof fetch;
+    const { handlers, dispose } = await registerHandlers();
+    try {
+      const touch = handlers.get('ltcook.workspace.activity');
+      const read = handlers.get('ltcook.workspace.services');
+      expect(touch).toBeDefined();
+      expect(read).toBeDefined();
+      expect(await touch!({ workspaceId: 'workspace-1' } as never)).toEqual({ recorded: true });
+      expect(await read!({} as never)).toEqual(status);
+      expect(received.map(({ url }) => url)).toEqual([
+        'http://runtime.invalid/v1/activity/workspace-touch',
+        'http://runtime.invalid/v1/activity/workspace-services',
+      ]);
+      expect(received.map(({ init }) => JSON.parse(String(init.body)))).toEqual([
+        { workspaceId: 'workspace-1' },
+        {},
+      ]);
+      for (const { init } of received) {
+        expect(init.headers).toEqual({
+          authorization: 'Bearer private-runtime-token',
+          'content-type': 'application/json',
+        });
+      }
+    } finally {
+      dispose();
+      globalThis.fetch = originalFetch;
+      restoreEnvironment();
+    }
+  });
+
   test('registers native lifecycle hooks and loads the local catalog with server credentials', async () => {
     const restoreEnvironment = runtimeEnvironment();
     const originalFetch = globalThis.fetch;

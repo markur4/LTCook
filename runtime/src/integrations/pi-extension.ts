@@ -8,6 +8,8 @@ import { pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { riedToolDefinition } from '../tools/ried.js';
 import { RiedService } from '../repository/discovery.js';
+import { createColgrepProvider } from '../repository/providers/colgrep.js';
+import { openRepositoryWorkspace } from '../repository/workspace.js';
 import type { RiedRequest } from '../repository/requests.js';
 import { createRepoSearchTool } from '../tools/repo-search.js';
 import { createRepoLocateTool } from '../tools/repo-locate.js';
@@ -20,7 +22,7 @@ import {
   SESSION_MEMORY_TOOL_NAME,
   WORKTREE_TOOL_DESCRIPTION,
   WORKTREE_TOOL_NAME,
-} from '../paseo-plugin/shared/workspace-tools.js';
+} from '../tools/workspace-tools.js';
 import { sessionMemoryDescription, sessionMemoryInput } from '../tools/session-memory.js';
 import { worktreeToolInput } from '../tools/session-worktree.js';
 import { isWebTool, webDefinitions } from '../tools/web.js';
@@ -93,7 +95,7 @@ export default async function activate(
       body: JSON.stringify({ sessionId, nativeAgentId, ...payload }),
     });
   const evaluation = Boolean(process.env.LTCOOK_EVAL_ARM);
-  const memoryEnabled = !evaluation && process.env.LTCOOK_SESSION_MEMORY_THRESHOLD !== '0';
+  const memoryEnabled = !evaluation;
   if (memoryEnabled) {
     pi.on('session_before_compact', () => {
       void rpc('/v1/session-memory/observe', { force: true }).catch(() => {});
@@ -381,7 +383,7 @@ export default async function activate(
   pi.on('tool_call', async (event, ctx) => {
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
-    // > The shared HTTP endpoint authorizes these calls once for every native caller.
+    // > Repository and web tools use their existing invocation-time authorization.
     if (isWebTool(event.toolName) || isRepositoryTool(event.toolName)) return;
     try {
       // > Native new/resume may change cwd; authorize exactly the path the tool will use.
@@ -516,7 +518,17 @@ export default async function activate(
       async execute(_id, input, signal) {
         const response = await invokeWorkspaceTool(SESSION_MEMORY_TOOL_NAME, input, signal, 5000);
         const result: unknown = await response.json();
-        if (!response.ok) throw new Error(`Session Memory unavailable (${response.status}).`);
+        if (!response.ok) {
+          const reason =
+            response.status === 403 && result && typeof result === 'object' && 'error' in result
+              ? result.error
+              : undefined;
+          throw new Error(
+            typeof reason === 'string'
+              ? reason
+              : `Session Memory unavailable (${response.status}).`,
+          );
+        }
         return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
       },
     });
@@ -584,8 +596,8 @@ export default async function activate(
   await activateOptionalBrowser(pi);
 }
 
-function repositoryTools() {
-  const search = createRepoSearchTool();
+function repositoryTools(colgrep?: ReturnType<typeof createColgrepProvider>) {
+  const search = createRepoSearchTool(colgrep);
   return [search, createRepoLocateTool(search)] as const;
 }
 
@@ -623,7 +635,17 @@ export function activateStandaloneRepoSearch(
   } catch {
     return;
   }
-  for (const tool of repositoryTools()) {
+  const colgrep = createColgrepProvider({ background: true });
+  const indexing = openRepositoryWorkspace(root)
+    .then((workspace) => {
+      if (workspace.root === root) return colgrep.indexService.activate(workspace);
+    })
+    .catch(() => undefined);
+  pi.on('session_shutdown', async () => {
+    (await indexing)?.();
+    await colgrep.indexService.close();
+  });
+  for (const tool of repositoryTools(colgrep)) {
     registerRepositoryTool(pi, tool, (input, signal) =>
       tool.invoke(input, {
         agentId: sessionId,

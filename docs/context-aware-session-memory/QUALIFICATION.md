@@ -1,5 +1,11 @@
 # Context-aware Session Memory qualification
 
+This is historical evidence for continuous Session Memory. The evaluation
+commands refer to the code and fixtures at
+[the final Session Memory revision](https://github.com/markur4/LTCook/tree/b500ce32c8d2e3291aced42d2651fd5459fc1b29).
+The current verification guide covers
+[Clarify and Tracker](../Development.md#clarify-and-tracker-verification).
+
 The initial runtime passed local verification and was integrated ahead of
 model qualification. Rolling history remains below the critical-retention
 target. The retention follow-up was reviewed and merged with live verification
@@ -908,3 +914,395 @@ current summary. Production inference was restored after both attempts.
 No variant passed the manifest gate, so validation on the remaining fixtures
 and LFM3 was not triggered. Production prompts, processing and thresholds
 stayed frozen.
+
+### Context-independent summarization
+
+The experimental arms run through the existing record store and delegation
+assembly. They remove all earlier Discussions and Task text from the model
+request, while preserving the current original messages, attachments and
+the provenance used by storage. One arm keeps the existing Markdown system
+message, and the other uses the supplied local bullet prompt. The control
+uses the frozen Immediate Context behavior. All arms use the same seed,
+CPU isolation, deterministic AAB policy and 256-token skip threshold.
+
+For the manifest and skipped-Discussion fixtures, the current approval is
+graded as a reference to an earlier proposal. The earlier record must still
+retain the exact implementation and the original proposal status. The handoff
+gate separately requires both generated records in sequence and the skipped
+UAMP originals. A neutral delegation query uses the final user request
+without supplying the expected implementation symbol. All handoff evidence
+is graded before compensatory original-source recovery. The native Pi worker
+then receives only the rendered handoff and the evaluation question.
+
+#### Manifest approval
+
+| Model | Arm | Generated / stored / handoff facts | CPU s | Input / output tokens | Summary / handoff bytes |
+| --- | --- | ---: | ---: | ---: | ---: |
+| MNN-Pocket Q8_0 | Immediate Context | 4/4 / 4/4 / 4/4 † | 6.485 | 1,483 / 414 | 2,121 / 4,079 |
+| MNN-Pocket Q8_0 | Local, existing template | 4/4 / 4/4 / 4/4 | 5.695 | 1,054 / 412 | 2,161 / 4,119 |
+| MNN-Pocket Q8_0 | Local, simple bullets | 4/4 / 4/4 / 4/4 | 6.407 | 746 / 507 | 2,503 / 4,455 |
+| LFM3 | Immediate Context | 4/4 / 4/4 / 4/4 | 21.789 | 1,524 / 517 | 2,495 / 4,473 |
+| LFM3 | Local, existing template | 4/4 / 4/4 / 4/4 † | 28.987 | 1,076 / 773 | 3,767 / 5,388 |
+| LFM3 | Local, simple bullets | 4/4 / 4/4 / 4/4 † | 16.278 | 758 / 348 | 1,817 / 3,763 |
+
+† The fact count measures retention. A contradiction still fails the gate.
+MNN-Pocket with Immediate Context repeated the old pending status. LFM3
+with the local template reported execution of an approved refresh. LFM3
+with local bullets attributed today's rebuild to the proposed method.
+The last two contradictions were found by reading the output and added
+to the experimental grader. Neither local LFM3 handoff advanced to the
+manifest worker check.
+
+Both local MNN-Pocket arms preserved the user's approval by reference.
+The existing handoff included the prior named proposal (#1–#2), the skipped
+clarification (#3–#4), and the current approval (#5–#6) in source order.
+Those two passes opened the follow-up with both summarizers.
+
+#### Follow-up fixtures
+
+| Model | Arm | Export discovery | Retry correction | Approval after skips |
+| --- | --- | ---: | ---: | ---: |
+| MNN-Pocket Q8_0 | Immediate Context | 4/4 | 3/3 | 3/5 |
+| MNN-Pocket Q8_0 | Local, existing template | 2/4 | 3/3 | 3/5 |
+| MNN-Pocket Q8_0 | Local, simple bullets | 4/4 | 3/3 | 0/5 |
+| LFM3 | Immediate Context | 4/4 | 3/3 | 5/5 |
+| LFM3 | Local, existing template | 4/4 | 3/3 | 1/5 |
+| LFM3 | Local, simple bullets | 4/4 | 2/3 | 4/5 |
+
+The table shows automated generated-summary retention. For every row the
+stored-record and generated handoff evidence counts matched the summary
+count. Manual inspection found that the MNN-Pocket retry control and local
+bullets described the planned notes distinction as already present. Both
+retained all three facts and fail the contradiction gate. The experimental
+grader now applies this check to fresh comparisons and archived retry
+handoffs.
+
+The skipped-Discussion control stored both short exchanges. The neutral
+Task query omitted them from every rendered handoff. It selected the earlier
+and later summaries where they had relevant terms. Its per-entry relevance
+filter dropped the generic skipped lines, even for LFM3 Immediate Context
+at 5/5. The handoff evidence gate therefore failed for all six arms.
+MNN-Pocket's local template also hit the 2,048-token cap on the proposal.
+Its local bullets omitted the proposal and the current decision. LFM3's
+local template returned an empty current summary. LFM3's local bullets
+preserved the proposal and constraints and weakened the historical reference
+to a generic request to implement a feature.
+
+Across these four fixtures, local bullets cut input tokens by 42% for
+both models. The summed CPU request time fell from 51.80 to 23.17 s for
+MNN-Pocket and from 60.46 to 45.86 s for LFM3. Those totals include failed
+and incomplete summaries. The local-template totals rose to 69.47 and
+70.20 s respectively. Average prompt size alone did not establish qualified
+speed gains.
+
+#### Receiving-agent decisions
+
+Native Pi ran GPT-6 Luna with high reasoning and no tools. It correctly
+named `reuseExportManifest` from both local MNN-Pocket manifest handoffs,
+cited the earlier proposal and current approval, preserved the stable API
+and rejected deletion, and reported that implementation was pending. It
+also resolved the manifest reference from the LFM3 Immediate Context
+handoff. Only the selected handoff and the question went to the receiver.
+
+Eleven of the thirteen initial answers were factually verified. Two used
+equivalent citation shapes that the original checker rejected. The checker
+now accepts the same source sequence as an integer, a `#` citation or a
+single-item array. The eleven include two correct MNN-Pocket retry answers
+from handoffs whose summaries claimed the notes were already updated. Those
+two receiver runs provide diagnostic evidence only. Two LFM3 export replies
+did not parse and their raw text was unavailable. A focused diagnostic reran
+only those two handoffs with raw output retained. Both returned the exact
+reader, path and test results. No skipped-Discussion handoff was eligible
+for the receiver check.
+
+The manifest result supports delegation-time reference resolution when
+the prior record reaches the handoff. The follow-up did not qualify either
+local arm across the fixtures or the two summarizers. Production inference
+was restored, and the Immediate Context implementation and LFM3 stay in
+production.
+
+### MNN-Pocket with chronological handoffs
+
+Q8_0 ran at temperature 0.8 and seed 17 using the chronological handoff at
+`bbc9a3`. Production inference was suspended and restored. Both candidates
+stopped at approval after skipped Discussions. The handoff included all four
+original skipped messages in order. Neither candidate retained the required
+generated proposal and approval summaries, so no receiving-agent or later
+fixture was run.
+
+| Prompt | Generated and stored facts | CPU wall s | Input / output tokens | Prefill / generation s | Peak runner MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Existing Markdown template | 3/5 | 42.011 | 1,505 / 2,489 | 1.512 / 39.693 | 709 |
+| Simple bullets | 0/5 | 4.489 | 1,197 / 240 | 1.395 / 2.567 | 671 |
+
+The template proposal repeated itself until the 2,048-token output limit and
+claimed verification had occurred without source evidence.
+The bullet proposal produced an empty Markdown fence, and the approval
+summary repeated an unrelated instruction instead of retaining the decision.
+The template's incomplete proposal was not stored as a completed summary.
+Zero reported reasoning tokens and CPU placement were verified for every
+request. Loaded model size was 670 MiB. The handoff had the preceding
+original user message, but the generated-summary gate requires the proposal
+record before any compensatory recovery.
+
+The private audit's revision field still says `e7f1d60` because that label
+was corrected after the run. The pre-request source comparison and the
+handoff-specific comparison both checked `bbc9a3`.
+
+The fixture deliberately repeats the same instruction fourteen times in
+each long exchange. Collapsing those repetitions in a diagnostic copy would
+lower the estimated UAMP sizes from 552 to 93 tokens for the proposal and
+from 529 to 69 for the approval. Both would fall below the existing
+256-token threshold and be retained without inference. This identifies the
+repetition as a concrete stressor, but the transformed inputs would exercise
+the skip path instead of qualifying summarization. The original acceptance
+fixture remains unchanged.
+
+### Realistic skipped Discussions
+
+The repetition case above remains the separate stress test. The realistic
+fixture uses a 308-token proposal and a 289-token approval. Its two skipped
+Discussions are 10 and 15 tokens and retain their original dialogue. The
+same five critical facts, source sequences and Task transition apply.
+
+Both context-independent prompts used the Q8_0 checkpoint at the established
+sampling settings and seed 17. Production inference was suspended during the
+CPU run. All requests completed with CPU placement verified and zero reasoning
+tokens. The table reports generated facts, with matching counts in stored
+records and handoff evidence. A contradiction still fails the gate.
+
+| Fixture | Prompt | Facts | CPU wall s | Prefill / generation s | Peak runner MiB |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Realistic skipped Discussions | Template | 4/5 | 3.810 | 0.839 / 2.442 | 667 |
+| Realistic skipped Discussions | Bullets | 5/5 | 6.294 | 0.711 / 5.057 | 662 |
+| Export discovery | Template | 2/4 | 2.602 | 0.567 / 1.516 | 659 |
+| Export discovery | Bullets | 4/4 | 3.353 | 0.393 / 2.439 | 652 |
+| Retry correction | Template | 3/3 | 3.541 | 0.562 / 2.462 | 659 |
+| Retry correction | Bullets | 3/3, contradiction | 1.896 | 0.397 / 0.982 | 652 |
+| Manifest approval | Template | 4/4 | 5.805 | 1.030 / 4.246 | 669 |
+| Manifest approval | Bullets | 4/4 | 6.430 | 0.789 / 5.112 | 661 |
+
+On the realistic fixture, both handoffs retained the skipped Discussions
+in sequence. The template returned an empty Markdown fence for the
+proposal. The bullets retained all five facts largely by copying the
+message bodies. The template lost the exact export reader path and symbol.
+The bullets treated a planned retry notes update as complete, which failed
+the contradiction gate. Neither prompt qualified.
+
+The eval reports incomplete-summary fallback separately. It projects a failed
+record into the existing source-reference reader and grades the reopened
+originals as fallback evidence. It does not rewrite the failed record or
+count the originals as generated summary facts. The injected-failure
+regression recovered the exact user and agent messages from the saved
+references and left the stored record incomplete. The live Q8 run had no
+incomplete responses, so it recorded zero fallbacks. An empty answer that
+Ollama marks complete is still a factual failure and does not trigger this
+probe. A production fallback would need an explicit record status that
+remains distinct from both a short skipped Discussion and a summary.
+
+GPT-6 Luna high resolved the snapshot proposal from the realistic bullet
+handoff and cited the original proposal and approval sequences. All five
+eligible handoffs yielded the expected factual fields on inspection. Only
+the retry template passed the strict receiver format check. The other four
+replies prefixed correct JSON with prose, including the realistic approval.
+
+### Extractive Markdown screen
+
+Run the screen with `bun evals/session-memory-live.ts --qualify-mnn-extractive --production-suspended`.
+
+MNN-Pocket Q8_0 ran the supplied extractive prompt on retry correction
+at temperature 0.8 and seed 17 with reasoning disabled. The corrected
+chronological handoff and current-only UAMP input were pinned at
+`bbc9a3`. Production summarization was suspended and restored.
+
+The response alternated source labels without selecting a sentence and
+exhausted the 2,048-token output cap. It retained 0/3 facts as a generated
+summary. The 2,048-byte response was 180% of the 1,138-byte original UAMP,
+an 80% expansion. CPU wall time was 26.500 s, including 0.400 s of prefill
+and 25.577 s of generation. The request used 379 input tokens and runner
+RSS peaked at 653 MiB. The failed gate stopped the remaining three fixtures.
+
+The evaluator validates complete sentences against the source named by
+the author label or source sequence, including attached reference text.
+It permits Markdown list and heading markers outside the excerpt, ignores
+surrounding whitespace, and preserves internal spaces and line breaks.
+It counts attribution and markup in the output byte total. Invalid excerpts and
+outputs that are at least as large as the original exchange are rejected.
+Focused tests cover valid compression, changed wording, wrong authorship,
+lost negation and a full copy.
+
+The existing fallback probe reopened both original messages by their
+saved references and retained all 3/3 critical facts as fallback evidence.
+The incomplete summary stayed failed with zero stored summary bytes.
+
+### Work-status instruction and proportional output cap
+
+Run the prompt screen and the separate cap probe while production
+summarization is suspended:
+
+```shell
+bun evals/session-memory-live.ts --qualify-mnn-work-status --production-suspended
+bun evals/session-memory-live.ts --probe-mnn-output-cap --production-suspended
+```
+
+The prompt screen added only the instruction to retain required, planned,
+in-progress and completed work to the original simple bullets. All four
+rendered user inputs matched the prior run. MNN-Pocket Q8_0 used the same
+weights, native template, sampling, seed 17 and 2,048-token cap. Every
+request used CPU and reported zero reasoning tokens. The production
+summarizer was already suspended and its setting stayed as found.
+
+| Fixture | Generated facts | CPU wall s | Output tokens |
+| --- | ---: | ---: | ---: |
+| Retry correction | 3/3 | 3.960 | 246 |
+| Realistic skipped Discussions | 4/5 | 5.977 | 119 + 250 |
+| Export discovery | 0/4 | 39.886 | 2,048 |
+| Manifest approval | 3/4 | 6.502 | 94 + 250 |
+
+Retry correction preserved the planned notes update and passed the
+contradiction gate. Its stored response copied most of the exchange in
+source JSON and used 1,175 bytes for a 1,138-byte original. The two
+approval fixtures lost the earlier proposal's pending status. Export
+discovery reached the cap while repeating source labels. Its failed
+record used the fallback probe to recover four facts from the originals.
+The prompt retained 10/16 generated facts with zero flagged critical
+contradictions and failed overall qualification.
+
+The cap probe used the original simple bullets with identical rendered
+prompts. It rounded up half of the original UAMP's estimated tokens,
+bounded by the existing 2,048-token ceiling. It used the same
+attachment-aware source count as the short-UAMP gate. The two originals
+estimated at 308 and 289 tokens received caps of 154 and 145. Both
+responses reached their caps and were recorded as incomplete. The
+existing source-reference fallback reopened both exchanges and recovered
+5/5 critical facts separately. The two requests produced zero stored
+summary bytes.
+
+Output dropped from 514 to 299 tokens across the two requests, while
+isolated CPU wall time was 6.829 s compared with 6.294 s in the prior
+single run. The cap bounded generation but truncated both previously
+complete summaries on this fixture. The 50% ratio remains an evaluation
+setting. The probe exercised one request per UAMP and does not establish
+a total cap for UAMPs split across requests.
+
+### Asymmetric UAMP screen
+
+Run the focused comparison while production summarization is suspended:
+
+```shell
+bun evals/session-memory-live.ts --probe-mnn-asymmetric --production-suspended
+```
+
+The two fixtures contain a read-only technical discovery and an exchange
+that distinguishes a completed test fixture from a proposed runtime change.
+The agent replies were 397 and 407 estimated tokens. Both arms received
+identical source messages, confined to the current UAMP. The baseline used
+the existing simple bullet prompt and the reply-only arm used the requested
+role-specific prompt. The experiment reopened the original user messages
+through their source references and verified an exact match in each fixture.
+The reply-only arm uses the original agent reply's estimated length to
+select the source-only path below 256 tokens. Both measured replies
+exceeded that threshold.
+
+MNN-Pocket Q8_0 ran at temperature 0.8, top-k 20, top-p 0.8, repetition
+penalty 1, presence penalty 0, min-p 0 and seed 17, with reasoning disabled.
+Each measured arm made one request with the existing 2,048-token cap. CPU
+placement and zero reasoning tokens were verified for all four requests.
+Peak memory is the Ollama runner's RSS high-water mark.
+
+| Fixture | Prompt | Reply facts | Input / output tokens | CPU wall s | Peak MiB | Output / original reply bytes | Original user + output bytes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Technical discovery | Simple bullets | 5/5 | 518 / 392 | 6.344 | 658 | 1,933 / 1,587 (122%) | 2,200 |
+| Technical discovery | Reply only | 2/5, contradiction | 548 / 210 | 3.892 | 660 | 1,068 / 1,587 (67%) | 1,335 |
+| Planning and execution | Simple bullets | 5/5 | 541 / 401 | 6.311 | 660 | 1,933 / 1,626 (119%) | 2,238 |
+| Planning and execution | Reply only | 5/5, contradiction | 571 / 205 | 3.759 | 661 | 1,004 / 1,626 (62%) | 1,309 |
+
+The original user-plus-reply sizes were 1,854 and 1,931 bytes. The final
+column counts the retained user text plus the raw generated output for both
+arms, with provenance metadata excluded. Both baseline outputs repeated
+the user and agent source content and failed the compression gate. Both
+reply-only outputs met the chosen 30% reduction threshold. The discovery
+output dropped the exact path, symbol and named check results while calling
+a workaround a resolution. The planning output claimed the proposed runtime
+check was already implemented. All requests completed at the provider.
+
+The saved outputs were regraded after tightening the fixture rules for
+unsupported completion and avoiding a false positive when a reply says
+the production queue was untouched. The probe reopened both exact original
+replies as fallback evidence. Both generated reply outcomes remained
+failed. Broader semantic and delegation qualification stopped at this gate.
+The source-retention evidence comes from lookups against fixture
+transcripts. Receiving-agent behavior is outside the scope of this probe.
+Production processing, AAB recording and handoff retrieval stayed as configured.
+
+### Hosted Session Memory qualification
+
+The results below measured the earlier bullets prompt and no reasoning.
+Current qualification uses the structured Markdown prompt and low reasoning.
+Saved runs must match the current prompt and requested reasoning to replay.
+
+From the repository root, regrade the saved asymmetric probe and then run the
+hosted semantic suite. Use the path to the private archive for
+`$SAVED_LUNA_ASYMMETRIC_REPORT`.
+
+```shell
+bun evals/session-memory-live.ts --regrade-hosted-asymmetric="$SAVED_LUNA_ASYMMETRIC_REPORT"
+bun evals/session-memory-live.ts --qualify-hosted-memory
+```
+
+The first command grades the saved replies against the original sources and
+recomputes compression without inference. The second requires an authenticated
+Codex ChatGPT session. It uses a disposable Session Memory database, the
+current production prompt and the hosted provider adapter. The
+`@tiny` alias resolves to `openai-codex/gpt-6-luna` with reasoning set to
+`low`. The report records the request tier, returned model, token usage and
+facts retained at generation, storage and delegation.
+
+The suite runs realistic skipped Discussions, export discovery, retry
+correction and manifest approval. Each handoff uses the final user request as
+its query. The suite reopens exact originals and grades handoffs before
+compensatory source recovery. Once the skipped-Discussions handoff passes the
+evidence gate, a tool-free GPT-6 Luna high session in Pi receives the rendered
+handoff and a question about the approved work and its source sequences.
+Add `--audit-output` to the hosted command to include rendered prompts,
+summaries, handoffs and the receiving agent's reply. Keep that output local.
+
+If the provider produced a complete audited run, replay the saved responses to
+verify corrections to grading or handoff assembly without sending the summaries
+again. Replay requires the same rendered prompts and verified hosted request and
+response metadata. It can run the receiving agent when the handoff qualifies.
+
+```shell
+bun evals/session-memory-live.ts --replay-hosted-memory="$SAVED_HOSTED_QUALIFICATION_REPORT"
+```
+
+The saved asymmetric probe regraded at 10/10 in each arm with no
+contradictions. Its Pi session added working-directory metadata. The
+production provider call verified the exact system and current-UAMP text
+at the wire boundary.
+
+The hosted suite issued six summary requests, taking 23.588 s combined.
+The provider reported GPT-6 Luna, the Standard tier, 2,193 input tokens,
+zero cached input tokens, 769 output tokens and zero reasoning tokens.
+The outbound preflight rejected a malformed local validator expectation
+before any requests were submitted. No summarizer calls were repeated.
+
+The two approval fixtures contained correct facts in wording the matcher
+missed. The restart summary preserved the signature and response. The
+historical manifest summary described the proposal as unapproved. After
+adding regressions for those forms, replay graded the original outputs
+and rebuilt the stored evidence and handoff without further summarization.
+
+| Hosted fixture | Generated facts | Stored facts | Handoff facts |
+| --- | ---: | ---: | ---: |
+| Realistic skipped Discussions | 5/5 | 5/5 | 5/5 |
+| Export discovery | 4/4 | 4/4 | 4/4 |
+| Retry correction | 3/3 | 3/3 | 3/3 |
+| Manifest approval | 4/4 | 4/4 | 4/4 |
+
+No critical contradictions or additional original-source recovery were
+reported. The skipped-Discussions handoff retained the intervening
+messages in chronological order. The receiving agent resolved
+`selectWorkspaceSnapshot` from proposal #1 and approval #7, preserved the
+API, rejected automatic rebuild and reported no completed work. Its one
+request took 14.950 s. Production wasn't switched during qualification.

@@ -4,7 +4,7 @@ import {
   SettingsManager,
   formatSkillsForPrompt,
 } from '@earendil-works/pi-coding-agent';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { NativeGuidance } from '../../../runtime/src/integrations/native-guidance.js';
@@ -234,6 +234,22 @@ test('Core and Team activate without any User guidance directory', async () => {
       .agentsFiles.some((item) => item.content === 'Standing Core requirement.'),
   ).toBe(true);
   expect(managed.inspection.resources.some((item) => item.scope === 'user')).toBe(false);
+});
+
+test('production workspace terminology enters managed standing context from its required resource', async () => {
+  const f = fixture();
+  const core = path.resolve(import.meta.dir, '../../../runtime/resources');
+  const managed = new NativeGuidance(minimal, 'leader', f.user, core, false, f.shared);
+  const loader = await f.load(managed);
+  const resource = path.join(core, 'rules/workspace-terminology.md');
+  expect(loader.getAgentsFiles().agentsFiles.find((item) => item.path === resource)?.content).toBe(
+    readFileSync(resource, 'utf8'),
+  );
+  expect(managed.inspection.resources.find((item) => item.path === resource)).toMatchObject({
+    scope: 'core',
+    kind: 'rule',
+    loaded: true,
+  });
 });
 
 test('User clear writing and shared named skills load independently of Core methods', async () => {

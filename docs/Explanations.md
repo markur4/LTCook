@@ -18,10 +18,13 @@
   - [Pi and Paseo](#pi-and-paseo)
   - [Pi authentication](#pi-authentication)
   - [Domain terminology](#domain-terminology)
+    - [Paseo and AppRC terminology](#paseo-and-apprc-terminology)
   - [Interchangeable teams](#interchangeable-teams)
   - [Guidance and planning](#guidance-and-planning)
-  - [Context-aware Session Memory](#context-aware-session-memory)
+    - [Instruction sources in Codex and Pi](#instruction-sources-in-codex-and-pi)
+  - [Clarify, Tracker, and conversation evidence](#clarify-tracker-and-conversation-evidence)
   - [Coordination and recovery](#coordination-and-recovery)
+  - [Workspace Organizer and Renamer](#workspace-organizer-and-renamer)
   - [Web services and diagnostics](#web-services-and-diagnostics)
 
 This page explains LTCook's configuration boundary and its native agent runtime.
@@ -59,7 +62,8 @@ installation receipt cannot enable an undeclared path.
 
 Config sections group settings by component and environment prefix. The
 [`LtcookConfig`](../src/ltcook/config/bundle.py) exposes `app`, `runtime`,
-`paseo`, `pi`, provider sections (`anthropic`, `openai`, `google`, `openrouter`),
+`paseo`, `pi`, `workspace_organizer`, `renamer`, provider sections
+(`anthropic`, `openai`, `google`, `openrouter`),
 `context7`, `agent_browser`, and web-service sections (`web`, `searxng`,
 `crawl4ai`, `podman`, `container`, `playwright`). The native environment names
 remain those declared by each field; for example, `LtcookConfig` exposes
@@ -111,8 +115,9 @@ immutable `<deployment>/app` tree; `PI_CODING_AGENT_DIR` must resolve inside
 the deployment. An invalid path is rejected with its variable name. The Node
 host is the sole writer of `<PASEO_HOME>/config.json`; it uses the final
 AppRC-resolved `PASEO_HOME`, even when `LTCOOK_JS_ROOT` points to source.
-Python's `write-native-config` command writes only the private
-`<PI_CODING_AGENT_DIR>/web-search.json`; it does not write Paseo configuration.
+Python's `write-native-config` command writes the private `models.json` and
+`web-search.json` inside `PI_CODING_AGENT_DIR`. Native startup and web-tool
+bootstrap use the same Python writer.
 
 The mutable Paseo home defaults to `<LTCOOK_DEPLOYMENT_DIR>/paseo`, outside the
 replaceable `<LTCOOK_DEPLOYMENT_DIR>/app` bundle. Pi homes default to
@@ -236,20 +241,25 @@ WebSocket password.
 
 ## Domain terminology
 
-These terms describe work, not ten separate workflow engines or database tables:
+These LTCook terms describe work, not ten separate workflow engines or database
+tables. Qualify Project and Workspace with the component name when discussing
+Paseo or AppRC; their meanings differ as described [below](#paseo-and-apprc-terminology).
 
 | Term | Meaning |
 | --- | --- |
 | Project | A logical collection of declared roots, repositories, Sessions, and Goals. It is not a filesystem sandbox. |
 | Session | A user-facing chat with its own native conversation history and bindings. |
 | Discussion | A conversation between a user and an agent within a Session. |
+| Agent>User Message Pair (AUMP) | A user message and, where available, the agent reply it follows. The user message triggers Tracker. Earlier originals can supply evidence for explicit references. |
+| Tracker | An enabled or disabled natural-language instruction for maintaining a collection of Tracked Items in a Discussion. |
+| Tracked Item | A concise statement maintained by a Tracker or edited by the user. It can cite original conversation evidence. |
 | User>Agent Message Pair (UAMP) | A user message and its corresponding completed agent response. Native steering messages are additional sources. |
 | Agent Action (AA) | An operation performed by an agent and recorded as an Action by native Pi or Paseo history. |
 | Agent Action Batch (AAB) | Related AAs grouped for deterministic recording. Known Plan, Pass, Task, and Step identifiers apply to the AAB. |
 | Request | The native initiating message for work; a Task may reference its native message identifier. |
 | Plan | A document specifying intended work and integration strategy. LTCook references it rather than storing a second plan history. |
-| Pass | An explicitly created integration unit with a title and an optional Plan reference. |
-| Task | An owned piece of work, optionally associated with a Pass; standalone Tasks do not create a Pass. |
+| Pass | A Pass starts when the user requests implementation, continues while its Tasks are worked on, and ends when the agent or runtime stops because all its Tasks are finished. |
+| Task | A Task is an owned unit of work with an expected result. Tasks can stand alone or belong to a Pass. Review is a Task whenever review is required. |
 | Step | Persisted, ordered progress within a Task. |
 | Action | A tool call, message, or other action recorded by native Pi/Paseo history, not a second LTCook transcript. |
 | Goal | A completion criterion spanning Passes and potentially multiple Sessions. |
@@ -265,14 +275,53 @@ workspace root. Several Sessions can share that TeamInstance while retaining
 separate native agents and histories. Starting a chat does not create a new
 logical workspace team, and sharing a team must not merge chats.
 
-Worktree isolation belongs to a Task or Pass when the work needs it; a Project
-does not imply one shared sandbox. Phase names classify work rather than
+Pass and Task are reserved terms. Keep their meanings fixed across instructions,
+skills, plans, reports, and runtime adapters. Map native record labels to these
+terms. Never redefine them or treat a larger Task or checkpoint as a new Pass.
+The workflow owns Task acceptance and the requirements for reporting Done.
+
+Each Pass uses one shared branch and worktree per repository it changes. Its
+Tasks, including review, share that checkout. A checkpoint or integration delay
+leaves the Pass and its checkout in place. Phase names classify work rather than
 orchestrate it: `implementation` changes intended behavior, `review` examines
 work, `verification` runs checks, and `integration` combines completed changes.
 The fix phases identify what prompted a correction: `review-fix` addresses review
 findings, `verification-fix` addresses check failures, `integration-fix` resolves
 integration differences, and `system-fix` addresses a failure observed in the
 running system. These classifications do not grant approval or bypass review.
+
+### Paseo and AppRC terminology
+
+| Term | Meaning |
+| --- | --- |
+| Paseo project | A registered root and sidebar grouping, usually a repository, containing Paseo workspaces. An ordinary directory can also be a project. |
+| Paseo workspace | A task container within a Paseo project. It references a working directory and can contain several agent sessions and supporting tabs. |
+| Agent session | One agent's native conversation history, identity, and runtime state. An LTCook Session can bind several native agent sessions, including its Leader and supporting Team members. |
+| Tab | A view inside a Paseo workspace, such as an agent or subagent conversation, terminal, browser, file, or diff. A tab is not necessarily an agent session. |
+| Working directory | The filesystem directory used by a workspace or process. Several Paseo workspaces can share it. |
+| Git worktree | An optional separate Git checkout with its own working directory. It isolates files; creating a Paseo workspace does not inherently require creating a worktree. |
+| Host | The computer running a Paseo daemon and its agent sessions. Choose the host for the work; a project has no LTCook-assigned preferred host. |
+| AppRC workspace | A selected working directory and its configuration scope. Registration can give that root a name and saved selection. This is not a Paseo workspace container. |
+
+When AppRC selects a repository root, **the Paseo project's root and the AppRC
+workspace's root are the same directory**. This is the common shorthand behind
+“Paseo Project = AppRC Workspace”. It is not a universal identity: AppRC can
+select a worktree directory instead, and several Paseo workspaces can share one
+selected root. LTCook's logical Project and Session remain the concepts in the
+table above.
+
+The organizational default is **one Paseo workspace = one main user-facing
+session**, with additional sessions when useful. Keep related subagents and
+supporting views, such as plans, files, diffs, and summaries, in that workspace's
+tabs. This is a working convention, not a session limit or an automatic
+worktree-creation rule. A separate worktree follows the work's isolation needs
+and the Pass checkout policy above.
+
+See Paseo's [workspaces](https://paseo.sh/docs/workspaces) and
+[worktrees](https://paseo.sh/docs/worktrees) documentation, and AppRC's
+[workspace explanation](https://github.com/HisQu/apprc/blob/main/docs/Explanations.md#workspaces).
+LTCook's [workspace terminology rule](../runtime/resources/rules/workspace-terminology.md)
+supplies the same distinction to ordinary Paseo agents and managed Team members.
 
 ## Interchangeable teams
 
@@ -320,12 +369,26 @@ Only authenticated CLI operations or correlated native user dialog responses can
 answer or approve. Agent reports, recommendations, cancellation and timeouts do
 not count as consent. Interrupted dialogs remain pending for CLI recovery.
 
-Before approval, native tools permit read-only investigation and writing the
-Design/Plan files in designated directories. Project edits, arbitrary shell
-execution and other mutations are blocked. After approval, an active Pass permits
-execution while member read-only restrictions remain. Unavailable runtime
-authorization fails closed. These controls are native tool/API boundaries; they
-are not an operating-system sandbox.
+In a managed Pi Session, before approval native tools permit read-only investigation
+and writing the Design/Plan files in designated directories. The guard blocks
+project edits, arbitrary shell execution and other mutations. After approval, an
+active Pass permits execution within member restrictions. Unavailable runtime
+authorization fails closed at the native tool and API boundaries.
+
+### Instruction sources in Codex and Pi
+
+| Source | Concrete inputs and owner | Where it applies |
+| --- | --- | --- |
+| Project and shared skills | The repository's [`AGENTS.md`](../AGENTS.md) points to [`CONTRIBUTING.md`](../CONTRIBUTING.md) and the development guides. Native loaders discover project skills and shared user skills from `~/.agents/skills`. A skill's instructions live in its `SKILL.md` and linked references. | Both harnesses, according to their native discovery and trust rules. |
+| Codex user guidance and overrides | Codex reads `AGENTS.md` or `AGENTS.override.md` in its home (usually `~/.codex`), then the applicable project instructions from the repository root through the launch directory. Codex resolves native command permissions from inputs including `config.toml` and the active session. | Standalone Codex and ordinary Codex in Paseo. |
+| Paseo launch and LTCook workspace tools | LTCook's [Paseo integration](../runtime/src/integrations/paseo.ts) supplies `daemon.appendSystemPrompt` for workspace terminology and workspace-tool usage. Paseo's Codex adapter starts `codex app-server` and forwards launch guidance in `developerInstructions` along with mode overrides. The [LTCook plugin](../runtime/src/paseo-plugin/index.server.ts) attaches scoped workspace tools. | The daemon prompt and plugin apply to ordinary chats in LTCook's Paseo host. Codex resolves and enforces its command permissions. |
+| Managed Pi guidance | [`NativeGuidance`](../runtime/src/integrations/native-guidance.ts) composes [Core rules and skills](../runtime/resources/catalog.json), the selected Team's `definition.resources` filtered by member, and AppRC User guidance from `guidance/rules` and `guidance/skills`. The [Pi RPC integration](../runtime/src/integrations/pi-rpc.ts) passes these to Pi's native loader alongside native project guidance. | Managed LTCook Team sessions in Pi. The [guidance inspector](References.md#guidance-api) shows applicable and loaded resources. |
+| Managed workflow state | The [Pass scheduler](../runtime/src/core/pass-scheduler.ts) dispatches declared Tasks with acceptance criteria and checks dependencies and recorded user approvals. The [Pi tool-call hook](../runtime/src/integrations/pi-extension.ts) requests runtime authorization for guarded native tools. | Managed LTCook Team sessions in Pi. |
+
+The [worktree tool](How-To-User-Guides.md#run-the-first-command)
+reports the active checkout so Paseo's Changes view can follow it. Git creates
+and removes the checkout through the harness's native tools. The one-worktree
+policy currently relies on instructions and skills.
 
 ### Repository Core and RIED
 
@@ -353,10 +416,27 @@ types give providers a common boundary for future composition. See the
 
 Repository Core's ColGREP provider searches code locally with a managed
 LateOn-Code-edge model and ONNX Runtime. The repository search tool forwards
-authorized ranked requests to that provider. It builds and updates an index on demand under the AppRC
-cache, with separate storage for each canonical workspace identity. ColGREP
-uses its native file discovery and ignore rules. The process runs on the host
-with LTCook's filesystem access.
+authorized ranked requests to that provider. A runtime service schedules one
+native build or refresh at a time for active, authorized worktrees. It checks
+for changes periodically, including branch switches, and automatically resumes
+after workspace authorization is restored. Closing or cancelling a search
+releases that query's generation without cancelling indexing.
+
+The AppRC cache keys compatible indexes by canonical worktree path and
+directory incarnation. The runtime also checks live directory identity for
+authorization. On filesystems with reliable directory birth time, an ordinary
+update or WSL remount can reuse a compatible index. Where directory birth
+time is unavailable, the cache can be reused within the owning process.
+Repository refresh checks use Git ignore rules when ripgrep is available.
+ColGREP applies its native file discovery and ignore rules when it builds an
+index and runs on the host with LTCook's filesystem access.
+
+The service builds a private candidate and publishes it after the native
+command succeeds and ColGREP can search it. Search pins one completed
+generation through native process exit. A refresh can seed its candidate from
+the published generation, and a failed refresh leaves the published
+generation searchable. A shared cache catalog coordinates publication,
+reader lifetimes, and cleanup across the runtime and standalone Pi.
 
 Repository Core verifies each candidate against its current workspace file
 before returning an excerpt. A hit names a workspace-relative path and a
@@ -391,8 +471,8 @@ source outlines, and file summarization. LTCook binds the connection to the
 canonical workspace and applies each tool's path checks. Native editors and
 shells use the harness's own permissions and any Team execution rules.
 
-LTCook setup prepares the optional ColGREP assets. Indexing starts on the first
-ranked search.
+LTCook setup prepares the optional ColGREP assets. Indexing starts when a
+worktree is activated with repository search access.
 
 ## Coordination and recovery
 
@@ -402,15 +482,19 @@ assignment attempts, Task dependencies and gates, reports, whole-Pass reviews,
 scoped approvals, and native bindings.
 It is not a configuration database or transcript mirror.
 
-A Pass can reference a Plan document through `planRef`. Completing a Task does
-not require a separate reviewer. Completing a Pass requires its Tasks completed
-and, where the team's review policy requires it, an accepted review of the current
-whole-Pass revision. Task, Step, and report changes invalidate an earlier revision's
-approval. The full team requires independent review; the minimal team permits
-self-review without representing it as independent.
-A completed Pass is final and cannot be reopened or mutated; create another
-explicit Pass for later work. Starting a new Pass does not itself create a Plan
-or Task.
+The runtime's `pass.create` record tracks a Pass and can reference a Plan
+document through `planRef`. For a scheduled Pass, the runtime dispatches review
+after every other Task recorded for that Pass finishes. It completes the
+coordination record after those Tasks and the Team's review requirements are
+satisfied. Task, Step, and report changes invalidate an earlier revision's
+review. The full Team requires independent review, and the minimal Team permits
+self-review. A completed record is final.
+
+The current scheduler has no post-review delivery stage. The Leader tracks
+delivery Tasks such as target integration and cleanup in the Pass checklist.
+The workflow owns those Tasks and the criteria for reporting Done. If the
+agreed delivery route is blocked, keep the workflow Pass open and report the
+blocker.
 
 Scheduled Pass Tasks have stable request IDs, optional assignees, dependency IDs,
 named verification requirements, and exact approval scopes. Dependencies may
@@ -428,10 +512,9 @@ dependents. A linked correction followed by Leader's explicit retry creates a ne
 attempt at the original Task. Identical duplicate requests, results, retries, and
 review responses are idempotent; conflicting repeats fail.
 
-One Pass-wide review starts when all execution Tasks finish. Requested changes
-can lead to a correction and another attempt at that same gate. Independent
-review uses a declared eligible reviewer; optional self-inspection under the
-minimal Team is never recorded as independent review. Standalone Tasks and
+Requested changes can lead to a correction and another review attempt for the
+same Pass. Independent review uses a declared eligible reviewer. The minimal
+Team records its optional self-inspection as self-review. Standalone Tasks and
 planning assignments retain their manual status and assignment behavior.
 
 Only the requested Session is initialized. Concurrent requests for that Session
@@ -447,49 +530,124 @@ state when starting a new store. No conversion, compatibility layer or
 chat-history import is performed. Native Pi/Paseo histories and authentication
 remain separate from coordination state.
 
-## Context-aware Session Memory
+<a id="context-aware-session-memory"></a>
 
-The runtime records completed UAMPs as Discussion and groups observed AAs at
-execution boundaries and an estimated token threshold. A UAMP includes its user
-messages, final agent replies and supplied attachment text. When their combined
-size is below 256 estimated tokens, the runtime records references to the
-originals. Larger UAMPs receive a Markdown summary. Portions that exceed the
-input budget are summarized separately under the same UAMP.
+## Clarify, Tracker, and conversation evidence
 
-AAB records contain bounded previews, counts, and references to the original
-actions and intermediate messages. Their compact tool projection preserves
-typed outcomes, file paths, exit codes, and recognized verification lines.
-Paseo supplies original details on demand, including tool types that have no
-specialized projection. AABs that span native turns are shown once. Session
-Memory continues recording AABs and short UAMPs while generation is paused.
+Paseo owns the original conversation. LTCook reads its canonical timeline and
+records deterministic Agent Action Batches (AABs) with Task scope, tool
+outcomes, and references to originals. AAB recording and authorized source
+retrieval work independently of inference. The opt-in delegation handoff uses
+bounded original evidence and reports when access is partial. Evidence links
+identify the conversation epoch and original sequence.
 
-Native user messages remain authoritative for goals and decisions. An opt-in
-delegation handoff uses stored records and can recover additional evidence
-from authorized original history. Current Task scope guides the selection.
-The latest applicable original user instruction follows the older evidence.
-Tool outcomes describe historical work. Source references identify the agent,
-conversation epoch, and original sequence. Session Memory search reports
-pending summaries, result truncation, and original-history availability.
+**Clarify** rewrites a selected completed reply for readability. It uses the
+exact reply and can include a relevant excerpt from earlier conversation
+history. It carries forward the agent's stated rationale, predictions,
+caveats, and reported outcomes. The saved clarification belongs to that exact
+reply and becomes invalid when its source changes.
 
-Immediate Context supplies the current Task objective and acceptance criteria.
-It uses up to 512 estimated supplementary tokens for Task context and relevant
-preceding Discussion when the current material leaves room. The current
-summary can resolve a reference using one preceding UAMP and original
-messages from subsequent skipped UAMPs. When there are skipped exchanges
-after a summarized UAMP, Markdown summarization uses that preceding UAMP’s
-original messages when available. Its generated summary remains the fallback. The runtime can use
-Discussion from the same Session and compatible Plan and Pass when work enters
-a Task. Prior context helps resolve references. Approval and execution claims
-must come from the current sources.
+**Tracker** processes genuine user messages in order for each conversation.
+An AUMP can provide the preceding agent reply. Bounded earlier evidence
+helps resolve explicit references, and a decision accepted by reference cites
+both the acceptance and the proposal. Each enabled Tracker receives the new
+message and its active items. An inference result can add, update, or retire
+items, or leave them as they are. The runtime reports incomplete coverage
+when an affected Tracker's evidence exceeds the input budget. Attachment
+references are available while attached document contents stay out of Tracker
+requests.
 
-Recognized headings and bullets supply individually retrievable statements.
-The raw Markdown remains available for reading and retrieval when formatting
-varies. The original attachment supplied to a tool-only turn stays citable
-through the AAB's reference to the initiating instruction.
+Tracker revisions let LTCook reverse conversation-derived changes on rewind.
+Manual deletions survive replay. A manually edited item's text survives as a
+manual item if its original evidence disappears. The sidebar shows current
+items and processing coverage, including pending, incomplete, failed, and
+paused events.
 
-Rewind invalidates affected summaries and receipts that were tied to the
-replaced history. The runtime rebuilds from authorized original messages.
-Paseo still owns the original conversation and the native lifecycle metadata.
+Clarify and Tracker share inference transport and scheduling. Hosted uses the
+Codex subscription and `@tiny`, which defaults to GPT-6 Luna with low reasoning.
+Hosted requests can run during an agent turn. Local requests yield to foreground
+Local work. Clarify has priority among queued requests. See [Use Clarify and
+Tracked Items](How-To-User-Guides.md#use-clarify-and-tracked-items).
+
+## Workspace Organizer and Renamer
+
+Workspace Organizer and Renamer run inside LTCook's existing runtime on each
+Paseo host. They use the host's native workspace and agent records. Their
+[AppRC settings](References.md#workspace-service-settings) are global to that
+installation; project overrides cannot change the host's policy. Both services
+start enabled and resume their persisted schedules when the runtime starts.
+
+Workspace Organizer maintains four standard native Paseo labels:
+
+| Label | Color | Purpose |
+| --- | --- | --- |
+| Feature | Blue | Add or change intended behavior. |
+| Bugfix | Red | Correct unintended behavior. |
+| CSC | Amber | Clean up code structure while preserving intended behavior. |
+| Research | Violet | Investigate a question, compare options, or develop a design. |
+
+It chooses one of these labels when a workspace first has conversation content.
+After that it checks classification every 12 hours, and only when conversation
+content or the observed Git revision has changed. If the first valid proposal
+becomes stale while the conversation changes, it may retry once after at least
+60 seconds while the workspace is idle. That retry keeps the original 12-hour
+deadline. It preserves other labels. Renaming or relabeling a workspace does not
+trigger another classification. The labels use
+Paseo's existing label and filter controls; they do not create directories or
+another sidebar hierarchy. Paseo's native default places newly created
+workspaces first within a project. Existing client sorting preferences remain
+in effect.
+
+Renamer proposes a workspace title and agent-session titles from conversation
+content. Its first eligible update runs without waiting 30 minutes; subsequent
+updates are at least 30 minutes apart and require changed content. A workspace
+revision includes conversation and observed Git changes; each agent title follows
+that agent's conversation. Titles are limited to 20 visible characters for a
+workspace and 15 for an agent tab, counted
+as Unicode grapheme clusters. Workspace and agent-tab renaming have independent
+switches. Supporting file, diff, terminal, browser, and native provider-subagent
+views retain their native titles.
+
+Both services ask the configured `@tiny` model with low reasoning for bounded
+label or title proposals from conversation excerpts. They do not read project
+file contents into the model prompt. These are independent inference requests
+without a persistent helper chat. The runtime owns schedules, validates the
+proposals, rechecks the target, and applies native updates. An unsuccessful model
+request leaves the current labels or titles in place. Deterministic inactivity and archive
+decisions do not require a model.
+
+Workspace Organizer can archive a workspace after 14 days without meaningful
+use. A workspace first discovered by the service, or restored after archival,
+gets a fresh 14-day observation period. Conversation activity, observed Git
+revisions and tracked or untracked file changes, and interaction in LTCook's
+bundled Paseo web app count as use. External-only edits in ordinary-directory
+projects, changes only to ignored files, and service-generated labels and titles
+do not. Other Paseo clients do not report focus-only use to this service. Pin a
+workspace if you use another Paseo client or edit files that the service does
+not observe.
+
+Pins, active or queued work, waiting for user input, live terminals, incomplete
+activity information, and unavailable archive support prevent automatic archival.
+Empty workspaces remain active because native History exposes conversations.
+LTCook's automatic archive always keeps the working directory, including
+modified, untracked, and ignored files, and skips project teardown commands.
+This also applies to Paseo-owned worktrees; archival does not require a clean
+checkout, a named branch, or a remote push. The runtime uses a dedicated HTTP
+archive operation only after verifying that the connected daemon supports this
+behavior. Missing support pauses automatic archival and reports that LTCook
+needs a restart. Paseo's manual archive action retains its native behavior and
+can remove a Paseo-owned worktree directory.
+
+The archive is native Paseo state on the host, not another filesystem folder.
+Archived conversations remain accessible through **History**. See the
+[organization and recovery guide](How-To-User-Guides.md#organize-workspaces-and-find-the-archive)
+for restoring a conversation and changing the service settings.
+
+**Activity → Services** shows each service's current state, latest check and
+change, and diagnostics, including reasons workspaces are protected from
+archival. The private `workspace-organizer.json` and `renamer.json` files under
+`LTCOOK_RUNTIME_STATE_DIR` persist observation and attempt schedules. AppRC owns
+the service settings separately; the status cards are read-only.
 
 ## Web services and diagnostics
 

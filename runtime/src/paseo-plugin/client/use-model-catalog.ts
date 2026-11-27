@@ -5,7 +5,7 @@ import {
   ModelCatalogRequestSchema,
   ModelCatalogResponseSchema,
   type ModelCatalogResponse,
-} from '../shared/models';
+} from '@ltcook/model-contracts';
 
 const modelCatalogRpc = defineRpc({
   name: 'ltcook.model.catalog',

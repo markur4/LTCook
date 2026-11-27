@@ -1,6 +1,10 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type { PaseoApi } from '@getpaseo/client';
-import type { MemoryCursor, MemorySource } from '../session-memory/service.js';
+import {
+  MemoryHistoryUnavailableError,
+  type MemoryCursor,
+  type MemorySource,
+} from '../session-memory/conversation.js';
 import type { MemorySourceMessage } from '../session-memory/units.js';
 import type { PastedDocuments } from '../session-memory/pasted-documents.js';
 import { readMemoryMessages } from '../paseo-plugin/server/memory-source.js';
@@ -47,13 +51,13 @@ export function createPaseoMemorySource(
           event.type === 'replacement' ||
           event.type === 'subscription_restored' ||
           (event.type === 'timeline' &&
-            event.item.type === 'tool_call' &&
-            event.item.status !== 'running')
+            (event.item.type === 'user_message' ||
+              (event.item.type === 'tool_call' && event.item.status !== 'running')))
         )
           notify();
       });
       void unsubscribe.ready.catch(() => {});
-      return unsubscribe;
+      return () => unsubscribe.release();
     },
     async read(agentId: string, cursor?: MemoryCursor, direction = 'after') {
       const timeline = api.agents.ref(agentId).timeline;
@@ -63,7 +67,7 @@ export function createPaseoMemorySource(
           projection: 'canonical',
           limit: 1,
         });
-        if (tail.error || !tail.agent) throw new Error('Session Memory history is unavailable.');
+        if (tail.error || !tail.agent) throw new MemoryHistoryUnavailableError();
         if (!tail.entries.length)
           return { epoch: tail.epoch, latest: -1, through: -1, reset: false, messages: [] };
         cursor = { epoch: tail.epoch, seq: Math.max(0, tail.window.minSeq - 1) };
@@ -74,7 +78,7 @@ export function createPaseoMemorySource(
         cursor,
         limit: 48,
       });
-      if (page.error || !page.agent) throw new Error('Session Memory history is unavailable.');
+      if (page.error || !page.agent) throw new MemoryHistoryUnavailableError();
       const messages = readMemoryMessages(
         page.entries,
         (id) => promptAuthor(id, agentId, secret),

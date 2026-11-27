@@ -9,7 +9,10 @@ import {
   retrievalKeywords,
   retrievalObservationFailed,
 } from '../../../evals/repository-retrieval.js';
-import type { RetrievalQuestion } from '../../../evals/repository-retrieval-fixtures.js';
+import {
+  retrievalCorpus,
+  type RetrievalQuestion,
+} from '../../../evals/repository-retrieval-fixtures.js';
 import type { RepositoryRetrieval } from '../../../runtime/src/repository/results.js';
 
 const files = new Map([
@@ -255,4 +258,86 @@ test('an answerless question requires a completed empty response', () => {
     });
     expect(retrievalObservationFailed(grade)).toBe(true);
   }
+});
+
+test('lifecycle labels grade against post-edit, rename, and delete source snapshots', () => {
+  const corpus = retrievalCorpus(
+    new Map([
+      ['runtime/src/repository/workspace.ts', 'path.relative(absolute, actual) !=='],
+      ['runtime/src/repository/filesystem.ts', 'export async function readRepositoryMap('],
+      ['runtime/src/repository/discovery.ts', 'const map = await readRepositoryMap('],
+      [
+        'src/ltcook_dev/packaging/package_assets.py',
+        'if any(part.is_symlink() for part in (path, *path.parents))',
+      ],
+    ]),
+  );
+  const snapshot = new Map(corpus.files);
+  const beforeEdit = corpus.questions.find(({ id }) => id === 'before-edits')!;
+  const beforeHit = beforeEdit.expected[0]!;
+  const beforeSource = snapshot.get(beforeHit.path)!.split(/\r?\n/);
+  const beforeGrade = gradeRepositoryRetrieval(
+    beforeEdit,
+    result([
+      {
+        ...beforeHit,
+        excerpt: beforeSource.slice(beforeHit.startLine - 1, beforeHit.endLine).join('\n'),
+      },
+    ]),
+    snapshot,
+  );
+  expect(beforeGrade).toMatchObject({ status: 'ready', invalidEvidence: 0, recallAtK: 1 });
+
+  for (const transition of corpus.transitions) {
+    if (transition.kind === 'modify') {
+      snapshot.set(transition.path, transition.contents);
+    } else if (transition.kind === 'rename') {
+      snapshot.set(transition.destination, snapshot.get(transition.path)!);
+      snapshot.delete(transition.path);
+    } else {
+      snapshot.delete(transition.path);
+    }
+
+    for (const question of transition.questions) {
+      const hits = question.expected.map((range) => {
+        const source = snapshot.get(range.path);
+        if (source === undefined)
+          throw new Error(`Missing post-refresh fixture path: ${range.path}`);
+        return {
+          ...range,
+          excerpt: source
+            .split(/\r?\n/)
+            .slice(range.startLine - 1, range.endLine)
+            .join('\n'),
+        };
+      });
+      const grade = gradeRepositoryRetrieval(question, result(hits), snapshot);
+      if (question.expected.length) {
+        expect(grade).toMatchObject({ status: 'ready', invalidEvidence: 0, recallAtK: 1 });
+      } else {
+        expect(grade).toMatchObject({ status: 'ready', cleanNegative: true, invalidEvidence: 0 });
+      }
+    }
+  }
+});
+
+test('plausible hits from an in-progress index remain an operational failure', () => {
+  const retrieved = result([
+    {
+      path: 'src/ledger.ts',
+      startLine: 2,
+      endLine: 2,
+      excerpt: 'export function allocate() {',
+    },
+  ]);
+  retrieved.value.status = 'indexing';
+
+  const grade = gradeRepositoryRetrieval(question, retrieved, files);
+  expect(grade).toMatchObject({
+    status: 'indexing',
+    incomplete: true,
+    invalidEvidence: 0,
+    recallAtK: 0.5,
+  });
+  expect(retrievalObservationFailed(grade)).toBe(true);
 });

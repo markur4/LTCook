@@ -6,6 +6,7 @@ import errno
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -13,8 +14,8 @@ import urllib.error
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated
-from uuid import uuid4
+from typing import Annotated, NotRequired, TypedDict
+from uuid import UUID, uuid4
 
 import typer
 from apprc import ResolvedConfig
@@ -30,6 +31,7 @@ from ltcook._runtime_client import (
 )
 from ltcook.config.bundle import LtcookConfig
 from ltcook.config.pi_config import (
+    PiConfigPublication,
     resolve_config,
     resolve_global_config,
     write_pi_config,
@@ -47,6 +49,36 @@ class LaunchConfig:
     environment: dict[str, str]
     configuration: LtcookConfig
     workspace_root: Path | None
+
+
+class NativeInputGuard(TypedDict):
+    """Filesystem identity and optional content or directory-entry version."""
+
+    identity: tuple[str, str, str, str, str]
+    version: NotRequired[tuple[str, str, str]]
+
+
+def _input_guard(
+    observed: os.stat_result | None, *, versioned: bool = True
+) -> NativeInputGuard | None:
+    if observed is None:
+        return None
+    guard: NativeInputGuard = {
+        "identity": (
+            str(observed.st_dev),
+            str(observed.st_ino),
+            str(observed.st_mode),
+            str(observed.st_uid),
+            str(observed.st_gid),
+        )
+    }
+    if versioned:
+        guard["version"] = (
+            str(observed.st_size),
+            str(observed.st_mtime_ns),
+            str(observed.st_ctime_ns),
+        )
+    return guard
 
 
 @dataclass
@@ -93,6 +125,72 @@ class NativePreparationInputs:
             absolute = path.expanduser().absolute()
             self.identity_paths.add(absolute)
             self.identity_paths.update(absolute.parents)
+
+    def observe(self) -> dict[Path, os.stat_result | None] | None:
+        """Capture source metadata and reject observed links or special files."""
+        if not self.reusable:
+            return None
+        self.guard_ancestors()
+        observations: dict[Path, os.stat_result | None] = {}
+        for path in sorted(
+            self.dependencies | self.identity_paths,
+            key=lambda item: (len(item.parts), str(item)),
+        ):
+            if not path.is_absolute() or ".." in path.parts:
+                return None
+            try:
+                observed = path.lstat()
+            except FileNotFoundError:
+                observations[path] = None
+                continue
+            except OSError:
+                return None
+            if not (stat.S_ISREG(observed.st_mode) or stat.S_ISDIR(observed.st_mode)):
+                return None
+            observations[path] = observed
+        return observations
+
+    def attest(
+        self,
+        initial: NativePreparationInputs,
+        before: Mapping[Path, os.stat_result | None],
+    ) -> dict[str, NativeInputGuard | None] | None:
+        """Attest a resolution bracketed by unchanged input observations.
+
+        :param initial: Dependency and identity paths from the discovery pass.
+        :param before: Source observations taken before the authoritative read.
+        :return: Guards to check after publication, or None if reuse is unsafe.
+        """
+        after = self.observe()
+        if (
+            after is None
+            or self.dependencies != initial.dependencies
+            or self.identity_paths != initial.identity_paths
+            or after.keys() != before.keys()
+        ):
+            return None
+        if any(
+            _input_guard(after[path]) != _input_guard(entry)
+            for path, entry in before.items()
+        ):
+            return None
+        # > An absent file may appear and disappear without leaving its own stamp.
+        # > Keep the nearest existing directory's version until Node checks reuse.
+        versioned_dirs: set[Path] = set()
+        for path, entry in before.items():
+            if entry is None:
+                for ancestor in path.parents:
+                    if before[ancestor] is not None:
+                        versioned_dirs.add(ancestor)
+                        break
+        return {
+            str(path): _input_guard(
+                entry,
+                versioned=entry is not None
+                and (not stat.S_ISDIR(entry.st_mode) or path in versioned_dirs),
+            )
+            for path, entry in before.items()
+        }
 
 
 def _shell_environment(environment: Mapping[str, str]) -> dict[str, str]:
@@ -155,7 +253,9 @@ def resolve_launch(
         for snapshot in (resolved, global_resolved):
             preparation_inputs.capture(snapshot)
         if workspace_root is not None:
-            workspace_path = Path(workspace_root).expanduser().resolve()
+            requested_path = Path(workspace_root).expanduser().absolute()
+            workspace_path = requested_path.resolve()
+            preparation_inputs.identity_paths.add(requested_path)
             preparation_inputs.identity_paths.add(workspace_path)
             marker = workspace_path / resolved.schema.workspace_dotenv_filename
             preparation_inputs.dependencies.add(marker)
@@ -164,6 +264,12 @@ def resolve_launch(
             )
     environment = dict(shell)
     for section in config.__dict__.values():
+        environment.update(
+            section.current_env_mapping(prefixed=True, include_empty=True)
+        )
+    # > Runtime services maintain the whole host, so project overlays cannot
+    # > replace their user settings. Deliberate shell exports still apply.
+    for section in (global_config.workspace_organizer, global_config.renamer):
         environment.update(
             section.current_env_mapping(prefixed=True, include_empty=True)
         )
@@ -178,20 +284,22 @@ def resolve_launch(
     )
     environment["LTCOOK_OLLAMA_ENDPOINT"] = global_config.runtime.ollama_endpoint
     environment["LTCOOK_MODEL_TINY_LOCAL"] = global_config.runtime.tiny_local_model
+    environment["LTCOOK_MODEL_LOCAL_CPU"] = global_config.runtime.local_cpu_model
+    environment["LTCOOK_MODEL_LOCAL_EVALS"] = global_config.runtime.local_evals_model
     environment["LTCOOK_SUMMARIZER_KEEP_ALIVE"] = str(
         global_config.runtime.summarizer_keep_alive
     )
     environment["LTCOOK_SUMMARIZER_GENERATION"] = (
         global_config.runtime.summarizer_generation
     )
-    environment["LTCOOK_SESSION_MEMORY_THRESHOLD"] = str(
-        global_config.runtime.session_memory_threshold
+    environment["LTCOOK_CONVERSATION_LOCAL_MODEL"] = (
+        global_config.runtime.conversation_local_model
     )
-    environment["LTCOOK_SESSION_MEMORY_MODEL"] = (
-        global_config.runtime.session_memory_model
+    environment["LTCOOK_CONVERSATION_INFERENCE"] = (
+        global_config.runtime.conversation_inference
     )
-    environment["LTCOOK_SESSION_MEMORY_INPUT_TOKENS"] = str(
-        global_config.runtime.session_memory_input_tokens
+    environment["LTCOOK_CONVERSATION_INPUT_TOKENS"] = str(
+        global_config.runtime.conversation_input_tokens
     )
     environment["LTCOOK_SESSION_MEMORY_DELEGATION"] = str(
         global_config.runtime.session_memory_delegation
@@ -389,7 +497,7 @@ def launch_model(
                 "Runtime prerequisites are not prepared; re-run the LTCook installer."
             )
         if harness == "pi":
-            pi_paths = _write_launch_pi_config(launch)
+            pi_paths = _write_launch_pi_config(launch).output_hashes
             models_path = next(path for path in pi_paths if path.name == "models.json")
             environment["LTCOOK_PI_MODELS_PATH"] = str(models_path)
         completed = subprocess.run(
@@ -470,7 +578,11 @@ def _open_existing_runtime(
 
 
 def _run_foreground_runtime(
-    launch: LaunchConfig, shell: Mapping[str, str], *, verbose: bool = False
+    launch: LaunchConfig,
+    shell: Mapping[str, str],
+    *,
+    verbose: bool = False,
+    restart_instance_id: UUID | None = None,
 ) -> int:
     """Run explicit server-only startup while preserving terminal output and Ctrl+C."""
     child = start_runtime(
@@ -478,6 +590,7 @@ def _run_foreground_runtime(
         workspace_root=launch.workspace_root,
         shell_environment=shell,
         detached=False,
+        restart_instance_id=restart_instance_id,
     )
     try:
         status = wait_for_runtime(launch.environment, child)
@@ -491,6 +604,10 @@ def _run_foreground_runtime(
                     "The owned runtime did not stop after startup interruption; inspect its backend log."
                 ) from error
         return 130
+    if restart_instance_id is not None and status.instance_id != str(
+        restart_instance_id
+    ):
+        raise RuntimeClientError("Another runtime won the restart launch race.")
     if child.process.poll() == 75:
         if launch.workspace_root is None:
             typer.echo("Reusing LTCook runtime.")
@@ -518,10 +635,14 @@ def launch_runtime(
     verbose: Annotated[
         bool, typer.Option("--verbose", help="Show complete runtime diagnostics.")
     ] = False,
+    restart_instance_id: Annotated[
+        UUID | None, typer.Option("--restart-instance-id", hidden=True)
+    ] = None,
 ) -> None:
     """Start the global runtime or explicitly open a project session.
 
     :param workspace: Optional project directory to open when starting.
+    :param restart_instance_id: Identify the sole owner candidate for a registered restart.
     :return: None.
     """
     shell = _shell_environment(os.environ)
@@ -529,6 +650,10 @@ def launch_runtime(
     launch = resolve_launch(workspace, original_environment=shell)
     try:
         status = probe_runtime(launch.environment)
+        if restart_instance_id is not None and status is not None:
+            raise RuntimeClientError(
+                "Another runtime appeared before the restart launch."
+            )
         if status == "starting":
             status = wait_for_runtime(launch.environment, None)
         if isinstance(status, RuntimeStatus) and (
@@ -543,7 +668,11 @@ def launch_runtime(
                     follow_runtime_logs(launch.environment, status, verbose=True)
                 )
             return
-        raise typer.Exit(_run_foreground_runtime(launch, shell, verbose=verbose))
+        raise typer.Exit(
+            _run_foreground_runtime(
+                launch, shell, verbose=verbose, restart_instance_id=restart_instance_id
+            )
+        )
     except RuntimeClientError as error:
         raise typer.BadParameter(str(error)) from error
 
@@ -676,7 +805,7 @@ def write_native_command(
     """Generate Pi model and web-access files in the AppRC-owned deployment."""
     launch = resolve_launch(workspace, original_environment=os.environ)
     try:
-        paths = _write_launch_pi_config(launch)
+        paths = _write_launch_pi_config(launch).output_hashes
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(json.dumps([str(path) for path in paths]))
@@ -688,13 +817,26 @@ def prepare_native_command(
 ) -> None:
     """Resolve one workspace and write its owned native configuration together."""
     inputs = NativePreparationInputs()
+    environment = dict(os.environ)
     launch = resolve_launch(
-        workspace, original_environment=os.environ, preparation_inputs=inputs
+        workspace, original_environment=environment, preparation_inputs=inputs
     )
+    input_guards = None
+    before = inputs.observe()
+    if before is not None:
+        resolved_inputs = NativePreparationInputs()
+        launch = resolve_launch(
+            workspace,
+            original_environment=environment,
+            preparation_inputs=resolved_inputs,
+        )
+        input_guards = resolved_inputs.attest(inputs, before)
+        inputs = resolved_inputs
     try:
-        outputs = _write_launch_pi_config(launch)
+        publication = _write_launch_pi_config(launch)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
+    outputs = publication.output_hashes
     inputs.dependencies.update(outputs)
     inputs.guard_ancestors()
     typer.echo(
@@ -704,13 +846,18 @@ def prepare_native_command(
                 "environment": launch.environment,
                 "dependencies": sorted(map(str, inputs.dependencies)),
                 "identityPaths": sorted(map(str, inputs.identity_paths)),
-                "reusable": inputs.reusable,
+                "outputHashes": {str(path): digest for path, digest in outputs.items()},
+                "inputGuards": input_guards
+                if not publication.waited_for_lock
+                else None,
+                "reusable": input_guards is not None
+                and not publication.waited_for_lock,
             }
         )
     )
 
 
-def _write_launch_pi_config(launch: LaunchConfig) -> tuple[Path, ...]:
+def _write_launch_pi_config(launch: LaunchConfig) -> PiConfigPublication:
     """Write native files from the same effective settings sent to Pi."""
     environment = launch.environment
     return write_pi_config(
