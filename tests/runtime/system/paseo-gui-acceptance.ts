@@ -23,6 +23,7 @@ import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js'
 import { agentBearer, RuntimeApi } from '../../../runtime/src/integrations/runtime-api.js';
 import { SessionActivation } from '../../../runtime/src/integrations/session-activation.js';
 import { ActivityPreferences } from '../../../runtime/src/integrations/activity-preferences.js';
+import { BugScanService } from '../../../runtime/src/services/bugscan.js';
 import {
   createWorktreeScopeResolver,
   SessionWorktrees,
@@ -1284,6 +1285,52 @@ try {
     const agents = await Promise.all([optedOutDraft.refresh(), optedOutExisting.refresh()]);
     if (agents.every((result) => result?.agent.status === 'idle')) break;
     await Bun.sleep(50);
+  }
+
+  stage = 'native-bughunter-tab';
+  const scan = new BugScanService({
+    logPath: path.join(directory, 'bughunter.events.jsonl'),
+    scopeFor: () => workspace,
+    resolveSource: async () => undefined,
+    investigate: async () => ({ findings: [] }),
+    load: () => ({
+      cursor: null,
+      pending: [],
+      hunts: [
+        {
+          id: 'browser-fixture-hunt',
+          scope: workspace,
+          createdAt: Date.now(),
+          automatic: true,
+          status: 'completed',
+          groups: [{ id: 'browser-group', component: 'repository-index', evidence: [] }],
+          findings: [
+            {
+              groupIds: ['browser-group'],
+              confidence: 'demonstrated',
+              violatedExpectation: 'Fixture indexing completes.',
+              mechanism: 'A held fixture lease blocks refresh.',
+              cause: 'Fixture lease remains held after a refresh error.',
+              contributingConditions: [],
+              evidence: ['Replayed fixture checkout.'],
+              technicalDebt: [],
+            },
+          ],
+          checkpoints: {},
+          elapsedMs: 100,
+        },
+      ],
+    }),
+    save: () => undefined,
+  });
+  try {
+    api.setBugScan(scan, workspace, false);
+    await openActivityPanel();
+    await clickButton('Open BugHunter');
+    await browser('wait', '--text', 'Fixture lease remains held after a refresh error.');
+    assert((await browser('snapshot')).includes('repository-index'));
+  } finally {
+    await scan.close();
   }
 
   stage = 'native-idle-restart';

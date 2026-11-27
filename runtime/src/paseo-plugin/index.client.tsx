@@ -14,6 +14,7 @@ import { TeamStatus } from './client/screens/TeamStatus';
 import { TurnSkills } from './client/components/TurnSkills';
 import { TURN_SKILLS_TIMELINE_KIND, TurnSkillsTimelineSchema } from './shared/activity';
 import { ActivityPanel } from './client/screens/ActivityPanel';
+import { BUG_HUNTER_PANEL_ID, BugHunter } from './client/screens/BugHunter';
 import {
   clearPendingRepositoryQueries,
   REPOSITORY_QUERY_PANEL_ID,
@@ -151,6 +152,13 @@ export default function contribute(client: PluginClientContext) {
       icon: 'Activity',
       locations: ['explorer'],
       Component: (props) => <ActivityPanel {...props} client={client} />,
+    }),
+    client.addWorkspacePanel({
+      id: BUG_HUNTER_PANEL_ID,
+      title: 'BugHunter',
+      icon: 'Bug',
+      locations: ['workspace'],
+      Component: BugHunter,
     }),
     client.addWorkspacePanel({
       id: workspaceServicesPanelId,

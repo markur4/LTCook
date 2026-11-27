@@ -33,6 +33,9 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### ✨ Added
 
+- BugHunter opens from the Activity sidebar into a workspace tab with hunt
+  history, findings, repair progress, and live agent conversations.
+
 - When enabled, BugHunter automatically queues read-only investigations for
   critical failures, repeated errors, and a single repository indexing stall.
   Recovery for managed indexing requires a fresh, usable generation on the

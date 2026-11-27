@@ -145,15 +145,63 @@ export class RuntimeController implements RuntimeControllerContract {
     });
   }
 
+  private bugScanSessionId(workspaceRoot: string): string {
+    return `bugscan-${createHash('sha256').update(workspaceRoot).digest('hex')}`;
+  }
+
   private bugScanSession(workspaceRoot: string): Session {
     this.assertOpen();
     if (this.evaluationSessionId) throw new Error('This runtime is reserved for evaluation');
     const root = canonicalWorkspace(workspaceRoot);
-    const id = `bugscan-${createHash('sha256').update(root).digest('hex')}`;
+    const id = this.bugScanSessionId(root);
     const session = this.loadOrCreateSession(id, root, bugHunterTeamId);
     if (session.teamId !== bugHunterTeamId || session.workspaceRoot !== root)
       throw new Error('BugScan Session identity does not match the authorized scope');
     return session;
+  }
+
+  /** Resolve native conversations through the service's durable assignment records. */
+  bugHunterConversations(scope: string, hunts: readonly { id: string; fixId?: string }[]) {
+    const requests = this.store.records<{
+      id: string;
+      sessionId: string;
+      taskId: string;
+      huntId?: string;
+    }>(this.bugScanSessionId(scope), 'bugscan-native-task');
+    const assignments = new Map<string, ReturnType<CoordinationStore['listAssignments']>>();
+    function describe(
+      items: ReturnType<CoordinationStore['listAssignments']>,
+      stage: 'scan' | 'fix',
+    ) {
+      return items.flatMap(({ nativeAgentId, memberKey }) => {
+        const member = bugHunterTeam.definition.members.find(({ key }) => key === memberKey);
+        return member ? [{ id: nativeAgentId, role: member.name, stage }] : [];
+      });
+    }
+    const read = (sessionId: string) => {
+      const cached = assignments.get(sessionId);
+      if (cached) return cached;
+      const rows = this.store.listAssignments(sessionId);
+      assignments.set(sessionId, rows);
+      return rows;
+    };
+    return new Map(
+      hunts.map(({ id, fixId }) => {
+        const scan = requests.flatMap((request) => {
+          const matches =
+            request.huntId === id ||
+            (!request.huntId &&
+              (request.id.startsWith(`${id}:`) ||
+                (fixId !== undefined && request.id === `${fixId}:failure-report`)));
+          return matches
+            ? read(request.sessionId).filter(({ taskId }) => taskId === request.taskId)
+            : [];
+        });
+        const fix = fixId ? read(this.bugFixSessionId(scope, fixId)) : [];
+        const conversations = [...describe(scan, 'scan'), ...describe(fix, 'fix')];
+        return [id, [...new Map(conversations.map((item) => [item.id, item])).values()]];
+      }),
+    );
   }
 
   /** Keep one service checkpoint in the existing coordination owner. */
@@ -837,6 +885,7 @@ ${redactDiagnosticText(changes)}`;
         id: input.requestId,
         sessionId: session.id,
         taskId: task.id,
+        ...(input.huntId ? { huntId: input.huntId } : {}),
       });
       this.store.updateTask(session.id, { taskId: task.id, status: 'running' });
       const activeAssignment = assignment;

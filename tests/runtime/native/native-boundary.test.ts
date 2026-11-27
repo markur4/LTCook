@@ -39,6 +39,8 @@ import { createRepoLocateTool } from '../../../runtime/src/tools/repo-locate.js'
 import { createWebTools, type WebToolService } from '../../../runtime/src/tools/web.js';
 import { captureShellEnvironment } from '../../../runtime/src/integrations/shell-environment.js';
 import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
+import { BugScanService, type BugScanState } from '../../../runtime/src/services/bugscan.js';
+import { bugHunterDetailsSchema } from '../../../runtime/src/paseo-plugin/shared/bughunter.js';
 
 const directories: string[] = [];
 afterEach(() => {
@@ -144,6 +146,7 @@ describe('native runtime boundary', () => {
       for (const route of [
         'toggle',
         'services',
+        'bughunter',
         'workspace-touch',
         'workspace-services',
         'repository-query',
@@ -164,6 +167,76 @@ describe('native runtime boundary', () => {
       });
     } finally {
       await api.close();
+    }
+  });
+
+  test('BugHunter history is available only for its configured workspace', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ltcook-bughunter-panel-')));
+    directories.push(root);
+    const workspaceRoot = join(root, 'repository');
+    mkdirSync(workspaceRoot);
+    const secret = 'activity-history-fixture';
+    const api = new RuntimeApi(
+      undefined,
+      secret,
+      `127.0.0.1:${await freePort()}`,
+      new SessionActivation(),
+    );
+    const scan = new BugScanService({
+      logPath: join(root, 'diagnostics'),
+      load: (): BugScanState => ({
+        cursor: null,
+        pending: [],
+        hunts: [
+          {
+            id: 'hunt',
+            scope: workspaceRoot,
+            createdAt: 1,
+            automatic: true,
+            status: 'completed',
+            groups: [{ id: 'g', component: 'repository-index', evidence: [] }],
+            findings: [],
+            checkpoints: {},
+            elapsedMs: 15,
+          },
+        ],
+      }),
+      save: () => undefined,
+      scopeFor: () => workspaceRoot,
+      resolveSource: async () => undefined,
+      investigate: async () => ({ findings: [] }),
+    });
+    api.setBugScan(scan, workspaceRoot, true);
+    const endpoint = await api.listen();
+    const history = async (workspaceRoot: string) => {
+      const response = await fetch(`${endpoint}/v1/activity/bughunter`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceRoot }),
+      });
+      expect(response.status).toBe(200);
+      return bugHunterDetailsSchema.parse(await response.json());
+    };
+    try {
+      expect(await history(root)).toEqual({ available: false, hunts: [] });
+      expect(await history(workspaceRoot)).toEqual({
+        available: true,
+        enabled: true,
+        hunts: [
+          {
+            id: 'hunt',
+            createdAt: 1,
+            automatic: true,
+            status: 'completed',
+            components: ['repository-index'],
+            findings: [],
+            conversations: [],
+          },
+        ],
+      });
+    } finally {
+      await api.close();
+      await scan.close();
     }
   });
 

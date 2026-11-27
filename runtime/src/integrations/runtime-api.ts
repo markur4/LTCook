@@ -621,6 +621,8 @@ export class RuntimeApi {
           activity: this.services.activity,
           bugScan: this.bugScan,
           bugFix: this.bugFix?.service,
+          bugHunterConversations: (scope, hunts) =>
+            this.runtime?.bugHunterConversations(scope, hunts) ?? new Map(),
           catalog: this.workspaceTools,
           workspaceServices: this.workspaceServices,
           lastDelivered: (sessionId, agentId) => this.memory?.lastDelivered(sessionId, agentId),
