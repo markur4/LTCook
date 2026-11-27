@@ -115,7 +115,7 @@ def last_restart_result(
             raise ValueError("The restart result is not a regular file.")
         result = json.loads(target.read_text(encoding="utf-8"))
         if not isinstance(result, dict):
-            raise ValueError("The restart result is invalid.")
+            raise TypeError("The restart result must be an object.")
         if result.get("generation") != str(installed.generation):
             return None
         fields = (
@@ -136,7 +136,7 @@ def last_restart_result(
             raise ValueError("The restart result exit code is invalid.")
         recorded["update_exit"] = exit_code
         return recorded
-    except (KeyError, OSError, ValueError, SetupError) as error:
+    except (KeyError, OSError, TypeError, ValueError, SetupError) as error:
         raise RuntimeClientError(
             "Could not read the last LTCook restart result."
         ) from error
