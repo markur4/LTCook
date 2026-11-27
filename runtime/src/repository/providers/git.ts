@@ -9,6 +9,7 @@ import {
 } from '../process.js';
 import type { RepositoryResult } from '../results.js';
 import type { RepositoryWorkspace } from '../workspace.js';
+import type { RepositoryFilter } from '../filter.js';
 
 export interface GitChangedFile {
   path: string;
@@ -338,11 +339,13 @@ export async function readGit(
     includeWorktreePaths = false,
     base,
     signal,
+    filter,
   }: {
     detailed?: boolean;
     includeWorktreePaths?: boolean;
     base?: string;
     signal?: AbortSignal;
+    filter?: RepositoryFilter;
   } = {},
 ): Promise<RepositoryResult<GitDiscovery>> {
   const capturedAt = new Date().toISOString();
@@ -441,8 +444,16 @@ export async function readGit(
   if (branchRef) value.branch = branchName(branchRef);
   else if (branch !== undefined && value.head) value.branch = '(detached)';
   if (status) {
-    value.changed = status.changedFiles.length;
-    value.untracked = status.untrackedFiles.length;
+    const changedFiles = filter
+      ? status.changedFiles.filter(({ path }) => filter.allowsPath(path))
+      : status.changedFiles;
+    const untrackedFiles = filter
+      ? status.untrackedFiles.filter((path) => filter.allowsPath(path))
+      : status.untrackedFiles;
+    value.changed = changedFiles.length;
+    value.untracked = untrackedFiles.length;
+    status.changedFiles = changedFiles;
+    status.untrackedFiles = untrackedFiles;
   }
   const worktreeEntries = parseWorktrees(worktrees ?? '');
   value.worktrees = worktreeEntries.length;
@@ -488,6 +499,10 @@ export async function readGit(
   if (base !== undefined) {
     const comparison = await compareBase(query, base, value.head, report);
     if (comparison) {
+      if (filter)
+        comparison.changedFiles = comparison.changedFiles.filter(({ path }) =>
+          filter.allowsPath(path),
+        );
       value.base = { ...comparison, changedFiles: bounded(comparison.changedFiles, 'base-files') };
     }
   }

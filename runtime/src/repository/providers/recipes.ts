@@ -9,6 +9,7 @@ import {
 } from '../process.js';
 import type { RepositoryResult } from '../results.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from '../workspace.js';
+import type { RepositoryFilter } from '../filter.js';
 
 export type RepositoryRecipes = { source: 'just'; items: { name: string; module: string }[] };
 
@@ -40,7 +41,10 @@ async function justfiles(
   relative: string,
   includeModFile: boolean,
   budget: { entries: number },
+  filter?: RepositoryFilter,
+  onFilteredFile?: () => void,
 ): Promise<string[]> {
+  if (filter && !filter.allowsDirectory(relative)) return [];
   const directory = await recipeSource(workspace, relative);
   if (directory?.kind !== 'directory') return [];
   const output: string[] = [];
@@ -52,23 +56,27 @@ async function justfiles(
       !(includeModFile && entry.name === 'mod.just')
     )
       continue;
+    const file = path.posix.join(relative, entry.name);
+    if (filter && !filter.allowsPath(file)) {
+      if (entry.isFile()) onFilteredFile?.();
+      continue;
+    }
     if (entry.isSymbolicLink())
       throw new JustSourceError('source-scope', 'Just discovery omits linked source files');
-    if (entry.isFile()) output.push(path.posix.join(relative, entry.name));
+    if (entry.isFile()) output.push(file);
   }
   return output;
 }
 
 // > Just compiles imports and modules even for --dump. Only stage literal, in-scope sources.
 function justSources(source: Buffer, relative: string) {
-  const imports: { path: string; module: boolean; implicit: boolean }[] = [];
+  const imports: { path: string; module: boolean; implicit: boolean; optional: boolean }[] = [];
   for (const line of new TextDecoder('utf-8', { fatal: true }).decode(source).split(/\r?\n/)) {
     if (!/^(?:import|mod)(?![\w-])/.test(line) || /^(?:import|mod)[ \t]*:/.test(line)) continue;
-    const imported = /^import[ \t]*\??[ \t]*(['"])([^'"\\\0]+)\1[ \t]*(?:#.*)?$/.exec(line);
-    const module = /^mod[ \t]*\??[ \t]+([\w-]+)(?:[ \t]+(['"])([^'"\\\0]+)\2)?[ \t]*(?:#.*)?$/.exec(
-      line,
-    );
-    const input = imported?.[2] ?? module?.[3] ?? module?.[1];
+    const imported = /^import[ \t]*(\?)?[ \t]*(['"])([^'"\\\0]+)\2[ \t]*(?:#.*)?$/.exec(line);
+    const module =
+      /^mod[ \t]*(\?)?[ \t]+([\w-]+)(?:[ \t]+(['"])([^'"\\\0]+)\3)?[ \t]*(?:#.*)?$/.exec(line);
+    const input = imported?.[3] ?? module?.[4] ?? module?.[2];
     if (
       !input ||
       input.startsWith('~') ||
@@ -91,7 +99,8 @@ function justSources(source: Buffer, relative: string) {
     imports.push({
       path: resolved,
       module: Boolean(module),
-      implicit: Boolean(module && !module[3]),
+      implicit: Boolean(module && !module[4]),
+      optional: Boolean(imported?.[1] || module?.[1]),
     });
     if (imports.length > MAX_SOURCES)
       throw new JustSourceError('source-limit', 'Justfile references reached their source limit');
@@ -99,11 +108,16 @@ function justSources(source: Buffer, relative: string) {
   return imports;
 }
 
-async function stageJustSources(workspace: RepositoryWorkspace, stage: string): Promise<boolean> {
+async function stageJustSources(
+  workspace: RepositoryWorkspace,
+  stage: string,
+  filter?: RepositoryFilter,
+): Promise<{ found: boolean; missingFilteredDependency: boolean }> {
   const budget = { entries: 10000, references: MAX_SOURCES };
-  const files = new Set(await justfiles(workspace, '.', false, budget));
-  if (!files.size) return false;
+  const files = new Set(await justfiles(workspace, '.', false, budget, filter));
+  if (!files.size) return { found: false, missingFilteredDependency: false };
   let remaining = MAX_SOURCE_BYTES;
+  let missingFilteredDependency = false;
   for (const relative of files) {
     if (files.size > MAX_SOURCES)
       throw new JustSourceError('source-limit', 'Justfiles reached their source limit');
@@ -119,22 +133,38 @@ async function stageJustSources(workspace: RepositoryWorkspace, stage: string): 
         workspace,
         entry.implicit ? `${entry.path}.just` : entry.path,
       );
-      if (candidate?.kind === 'file') files.add(candidate.relative);
-      if (entry.module && (entry.implicit || candidate?.kind !== 'file')) {
-        for (const module of await justfiles(workspace, entry.path, true, budget))
-          files.add(module);
+      let filtered = false;
+      let available = false;
+      if (candidate?.kind === 'file') {
+        if (filter && !filter.allowsPath(candidate.relative)) filtered = true;
+        else {
+          available = true;
+          files.add(candidate.relative);
+        }
       }
+      if (entry.module && (entry.implicit || candidate?.kind !== 'file')) {
+        if (filter && !filter.allowsDirectory(entry.path)) filtered = true;
+        else {
+          const modules = await justfiles(workspace, entry.path, true, budget, filter, () => {
+            filtered = true;
+          });
+          available ||= modules.length > 0;
+          for (const module of modules) files.add(module);
+        }
+      }
+      missingFilteredDependency ||= filtered && !available && !entry.optional;
     }
     const destination = path.join(stage, source.relative);
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, data, { flag: 'wx', mode: 0o600 });
   }
-  return true;
+  return { found: true, missingFilteredDependency };
 }
 
 export async function readRecipes(
   workspace: RepositoryWorkspace,
   pathValue: string,
+  filter?: RepositoryFilter,
 ): Promise<RepositoryResult<RepositoryRecipes>> {
   const result: RepositoryResult<RepositoryRecipes> = {
     provider: 'just',
@@ -159,7 +189,17 @@ export async function readRecipes(
   try {
     stage = await mkdtemp(path.join(tmpdir(), 'ltcook-just-'));
     const staged = await openRepositoryWorkspace(stage);
-    if (!(await stageJustSources(workspace, staged.root))) return result;
+    const stagedSources = await stageJustSources(workspace, staged.root, filter);
+    if (!stagedSources.found) return result;
+    if (stagedSources.missingFilteredDependency) {
+      result.partial = true;
+      result.diagnostics.push({
+        source: 'just',
+        code: 'filtered-source-dependency',
+        message: 'Recipe discovery omitted imports or modules excluded by the path filter.',
+      });
+      return result;
+    }
     const listing = await runRepositoryCommand(
       executable,
       ['--dump', '--dump-format', 'json', '--no-dotenv'],

@@ -13,6 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import { delimiter, join, normalize } from 'node:path';
 import { readGit } from '../../../runtime/src/repository/providers/git.js';
+import { RepositoryFilter } from '../../../runtime/src/repository/filter.js';
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
 import { SessionWorktrees } from '../../../runtime/src/integrations/session-worktrees.js';
 
@@ -330,6 +331,47 @@ test('Git discovery marks a file inventory as truncated while retaining counts',
   expect(detail.partial).toBe(true);
   expect(detail.diagnostics).toContainEqual(
     expect.objectContaining({ code: 'untracked-files-limited' }),
+  );
+});
+
+test('Git path filters apply before changed-file counts, detail limits, and base-file limits', async () => {
+  const { root } = createRepository();
+  mkdirSync(join(root, 'src'));
+  mkdirSync(join(root, 'docs'));
+  writeFileSync(join(root, 'src', 'kept.ts'), 'initial');
+  writeFileSync(join(root, 'docs', 'dropped.md'), 'initial');
+  const base = commitAll(root, 'Initial');
+  writeFileSync(join(root, 'src', 'kept.ts'), 'changed');
+  writeFileSync(join(root, 'docs', 'dropped.md'), 'changed');
+  commitAll(root, 'Change both scopes');
+  writeFileSync(join(root, 'src', 'kept.ts'), 'unstaged');
+  writeFileSync(join(root, 'docs', 'dropped.md'), 'unstaged');
+  writeFileSync(join(root, 'src', 'new.ts'), 'new');
+  writeFileSync(join(root, 'docs', 'new.md'), 'new');
+
+  const detail = await readGit(await openRepositoryWorkspace(root), gitPath, {
+    detailed: true,
+    base,
+    filter: new RepositoryFilter({
+      includePaths: ['src/**'],
+    }),
+  });
+
+  expect(detail.value).toMatchObject({
+    changed: 1,
+    untracked: 1,
+    changedFiles: [{ path: 'src/kept.ts' }],
+    untrackedFiles: ['src/new.ts'],
+    base: {
+      changedFiles: [{ path: 'src/kept.ts', status: 'M' }],
+    },
+  });
+  expect(detail.value.changedFiles).not.toContainEqual(
+    expect.objectContaining({ path: 'docs/dropped.md' }),
+  );
+  expect(detail.value.untrackedFiles).not.toContain('docs/new.md');
+  expect(detail.value.base?.changedFiles).not.toContainEqual(
+    expect.objectContaining({ path: 'docs/dropped.md' }),
   );
 });
 
