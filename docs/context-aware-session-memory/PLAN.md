@@ -3,7 +3,7 @@
 This archived plan records the original implementation. The continuous
 summarization design and its evaluation scripts are recorded at
 [the final Session Memory revision](https://github.com/markur4/LTCook/tree/b500ce32c8d2e3291aced42d2651fd5459fc1b29).
-See the current [Clarify, Tracker, and conversation evidence](../Explanations.md#clarify-tracker-and-conversation-evidence).
+See the current [Tracker and conversation evidence](../Explanations.md#tracker-and-conversation-evidence).
 
 The approved goal is to replace production excerpt extraction with chronological
 UAMP and AAB summaries. Retain the native conversation as the source of

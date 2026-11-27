@@ -22,7 +22,7 @@
   - [Interchangeable teams](#interchangeable-teams)
   - [Guidance and planning](#guidance-and-planning)
     - [Instruction sources in Codex and Pi](#instruction-sources-in-codex-and-pi)
-  - [Clarify, Tracker, and conversation evidence](#clarify-tracker-and-conversation-evidence)
+  - [Tracker and conversation evidence](#tracker-and-conversation-evidence)
   - [Coordination and recovery](#coordination-and-recovery)
   - [Workspace Organizer and Renamer](#workspace-organizer-and-renamer)
   - [Web services and diagnostics](#web-services-and-diagnostics)
@@ -532,7 +532,7 @@ remain separate from coordination state.
 
 <a id="context-aware-session-memory"></a>
 
-## Clarify, Tracker, and conversation evidence
+## Tracker and conversation evidence
 
 Paseo owns the original conversation. LTCook reads its canonical timeline and
 records deterministic Agent Action Batches (AABs) with Task scope, tool
@@ -540,12 +540,6 @@ outcomes, and references to originals. AAB recording and authorized source
 retrieval work independently of inference. The opt-in delegation handoff uses
 bounded original evidence and reports when access is partial. Evidence links
 identify the conversation epoch and original sequence.
-
-**Clarify** rewrites a selected completed reply for readability. It uses the
-exact reply and can include a relevant excerpt from earlier conversation
-history. It carries forward the agent's stated rationale, predictions,
-caveats, and reported outcomes. The saved clarification belongs to that exact
-reply and becomes invalid when its source changes.
 
 **Tracker** processes genuine user messages in order for each conversation.
 An AUMP can provide the preceding agent reply. Bounded earlier evidence
@@ -563,11 +557,10 @@ manual item if its original evidence disappears. The sidebar shows current
 items and processing coverage, including pending, incomplete, failed, and
 paused events.
 
-Clarify and Tracker share inference transport and scheduling. Hosted uses the
-Codex subscription and `@tiny`, which defaults to GPT-6 Luna with low reasoning.
-Hosted requests can run during an agent turn. Local requests yield to foreground
-Local work. Clarify has priority among queued requests. See [Use Clarify and
-Tracked Items](How-To-User-Guides.md#use-clarify-and-tracked-items).
+Tracker's Hosted inference uses the Codex subscription and `@tiny`, which
+defaults to GPT-6 Luna with low reasoning. Hosted requests can run during an
+agent turn. Local requests yield to foreground Local work. See
+[Use Tracked Items](How-To-User-Guides.md#use-tracked-items).
 
 ## Workspace Organizer and Renamer
 

@@ -6,7 +6,7 @@
   - [Install a release](#install-a-release)
   - [Install from a checkout](#install-from-a-checkout)
   - [Run the first command](#run-the-first-command)
-  - [Use Clarify and Tracked Items](#use-clarify-and-tracked-items)
+  - [Use Tracked Items](#use-tracked-items)
   - [Use workspace tools in Pi or Codex](#use-workspace-tools-in-pi-or-codex)
     - [Search conversation evidence](#search-conversation-evidence)
     - [Attach pasted text](#attach-pasted-text)
@@ -250,14 +250,7 @@ work. Standalone Pi owns its indexing preference for its process.
 and number of action batches represented. The agent card shows model context
 usage when Paseo reports it.
 
-## Use Clarify and Tracked Items
-
-In LTCook's bundled Paseo web app, select **Clarify** below a completed
-reply to read a clearer version. In Hosted mode, the control shows which
-content will be sent to OpenAI and asks you to confirm generation. You can
-hide and reopen the saved clarification from the same reply. The original
-reply stays available above it. The additive reply control is supplied by the
-bundled web app.
+## Use Tracked Items
 
 Open **Tracked Items** in the Explorer sidebar for the focused conversation.
 Expand **Design Decisions** to see decisions you've made or explicitly
@@ -358,8 +351,8 @@ Search has access to the current conversation and authorized conversations in
 the same managed TeamInstance and workspace.
 
 Set `LTCOOK_SESSION_MEMORY_DELEGATION=true` in global AppRC and restart LTCook
-to add relevant original evidence to automatic handoffs. This works while
-Tracker is paused and before any clarifications are generated.
+to add relevant original evidence to automatic handoffs, even while Tracker
+is paused.
 
 ### Attach pasted text
 

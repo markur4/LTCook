@@ -12,7 +12,6 @@ import path from 'node:path';
 import { createRuntime } from '../../../runtime/src/core/runtime.js';
 import { createPaseoMemorySource } from '../../../runtime/src/integrations/paseo-memory.js';
 import { ConversationRecords } from '../../../runtime/src/session-memory/conversation.js';
-import { ClarifyService } from '../../../runtime/src/session-memory/clarify.js';
 import { ConversationInference } from '../../../runtime/src/session-memory/inference.js';
 import { openConversationProductStore } from '../../../runtime/src/session-memory/product-store.js';
 import { TrackerService } from '../../../runtime/src/session-memory/tracker.js';
@@ -882,14 +881,9 @@ try {
 
   const evidence = createPaseoMemorySource(host.api, secret);
   products = openConversationProductStore(path.join(directory, 'conversation-products.sqlite'));
-  let clarificationRequests = 0;
   inference = new ConversationInference(
     {
-      hosted: async (product, prompt) => {
-        if (product === 'clarify') {
-          clarificationRequests++;
-          return { text: 'The public cursor hides its storage layout.', complete: true };
-        }
+      hosted: async (prompt) => {
         const decoded = JSON.parse(prompt.input) as {
           current: { seq: number; text: string };
           trackers: { id: string }[];
@@ -919,7 +913,6 @@ try {
   tracker.observe(mobileSession.id, { baseline: true });
   await tracker.settled();
   api.setConversationInference(inference);
-  api.setClarify(new ClarifyService(products, evidence, inference, 8000));
   api.setTracker(tracker);
   memory = new ConversationRecords({
     databasePath: path.join(directory, 'activity-conversation.sqlite'),
@@ -965,44 +958,9 @@ try {
   );
   assert.equal(colgrep.isIndexingEnabled(), true);
   await browser('click', '[aria-label^="RAG Index,"]');
-  stage = 'conversation-products';
+  stage = 'tracked-items';
   await hiddenLeader.send('Use an opaque public cursor.', { clientMessageId: randomUUID() });
   await hiddenLeader.waitForFinish(30_000);
-  await browser(
-    'wait',
-    '--fn',
-    `document.querySelectorAll('[data-testid="ltcook-clarify-reply"]').length > 1`,
-  );
-  const original = (await evidence.read(mobileSession.id, undefined, 'tail')).messages.findLast(
-    ({ author }) => author === 'agent',
-  );
-  assert(original);
-  assert.equal(clarificationRequests, 0);
-  const clarifyButton = `[data-testid="ltcook-clarify-source-${original.seq}"] [data-testid="ltcook-clarify-reply"]`;
-  const clickClarify = async () => {
-    await browser('wait', clarifyButton);
-    await browser(
-      'eval',
-      `document.querySelector(${JSON.stringify(clarifyButton)})?.scrollIntoView({ block: 'center' })`,
-    );
-    await browser('click', clarifyButton);
-  };
-  await clickClarify();
-  await browser('wait', '--text', 'Clarify with Hosted inference');
-  assert.equal(clarificationRequests, 0);
-  await clickClarify();
-  await browser('wait', '--text', 'The public cursor hides its storage layout.');
-  assert.equal(clarificationRequests, 1);
-  await clickClarify();
-  await clickClarify();
-  await browser('wait', '--text', 'The public cursor hides its storage layout.');
-  assert.equal(clarificationRequests, 1);
-  assert.deepEqual(
-    (await evidence.read(mobileSession.id, undefined, 'tail')).messages.findLast(
-      ({ author }) => author === 'agent',
-    ),
-    original,
-  );
   await openExplorerPanel('Tracked Items');
   await browser('wait', '--text', 'Design Decisions (1)');
   await clickButton('Design Decisions (1)');

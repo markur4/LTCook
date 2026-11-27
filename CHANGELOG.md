@@ -51,8 +51,6 @@ All notable changes to `ltcook` will be documented in this file.
   seconds. The bundled Turn Speed component marks estimated token rates and
   offers a breakdown of the current turn.
 
-- **Clarify** in the bundled Paseo web app rewrites an individual completed
-  reply on demand and saves the result against that exact source.
 - **Tracked Items** in the Explorer sidebar maintains a conversation-specific
   notebook with configurable Trackers, original evidence, manual editing,
   and extraction coverage. When a message blocks extraction, the affected
@@ -260,7 +258,7 @@ All notable changes to `ltcook` will be documented in this file.
 - **Breaking:** 💥 The shared Spark model alias is now `@local-tiny`. Use that
   spelling in Team and launch selections. The shared list includes `@local-CPU`
   and `@local-evals`. `@tiny` now defaults to low reasoning, including for
-  Hosted Clarify and Tracker.
+  Hosted Tracker.
 
 - Repository Locate groups verified definitions, calls, tests, and references,
   and adds short source excerpts to exact matches where context helps.
@@ -380,10 +378,12 @@ All notable changes to `ltcook` will be documented in this file.
 
 ### 🔥 Removed
 
-- **Breaking:** 💥 Continuous Session Memory summaries and redo controls
-  are replaced by Clarify and Tracker. Fresh stores hold deterministic
-  conversation evidence and product state. Native Paseo history and pasted
-  attachments remain available. Delegation uses authorized originals.
+- **Breaking:** 💥 Removed the Clarify reply button. Saved rewrites are no
+  longer accessible. The original replies remain available in Paseo.
+- **Breaking:** 💥 Tracked Items replaces continuous Session Memory summaries
+  and redo controls. Fresh stores hold deterministic conversation evidence
+  and Tracker state. Native Paseo history and pasted attachments remain
+  available. Delegation uses authorized originals.
 
 <br>
 

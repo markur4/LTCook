@@ -17,7 +17,7 @@ layout, packaging boundary, verification limits, and current release workflow.
 - [Verify and release](#verify-and-release)
   - [Verification](#verification)
   - [Local Ollama and Agent Evals](#local-ollama-and-agent-evals)
-    - [Clarify and Tracker verification](#clarify-and-tracker-verification)
+    - [Tracker verification](#tracker-verification)
   - [Repository retrieval evaluation](#repository-retrieval-evaluation)
   - [Asset packaging](#asset-packaging)
   - [Integration and system procedures](#integration-and-system-procedures)
@@ -461,29 +461,26 @@ the three agent cases still use their original attempts.
 
 <a id="session-memory-qualification"></a>
 
-### Clarify and Tracker verification
+### Tracker verification
 
 Use the existing Traditional Test suite for deterministic history, AAB
 recording, attachment handling, authorization, delegation, and concurrent
 inference. The focused tests for Tracker exercise manual edits and deletions,
 rewind, restart, pause gaps, input-budget outcomes, and independently valid
-changes across Trackers. Clarify tests cover exact reply identity, cache reuse,
-rewind during inference, and earlier context boundaries.
+changes across Trackers.
 
-Run the focused Hosted Agent Evals with a Codex subscription sign-in and
+Run the focused Hosted Agent Eval with a Codex subscription sign-in and
 `@tiny` resolving to GPT-6 Luna with low reasoning.
 
 ```shell
-bun evals/conversation-products.ts
+bun evals/tracker.ts
 ```
 
-The fixtures use synthetic conversations. Tracker is graded on false approvals,
-older proposal citations, and correct decision replacements. Clarify is graded
-on stated facts, caveats, predictions, and earlier outcomes. Review the returned
-clarification for readability as well as fidelity.
+The eval uses a synthetic conversation to check that Tracker avoids false
+approvals, cites earlier proposals, and replaces superseded decisions.
 
 The fresh `conversation-records-v1.sqlite` holds deterministic receipts and
-AABs. `conversation-products-v1.sqlite` holds Clarify and Tracker state. Both
+AABs. `conversation-products-v1.sqlite` holds Tracker state. Both
 are in runtime state. Preserve native Paseo history and the separate
 `pasted-documents` store. The application starts these databases fresh and
 ignores the old Session Memory records.

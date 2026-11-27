@@ -60,7 +60,6 @@ one main user-facing session per Paseo workspace.
 | Launch helper | `ltcook.launch.resolve_launch()` | Resolves global settings or optional project overrides from original shell inputs. |
 | `ltcook` CLI | `ltcook.cli.app.app` | Exposes AppRC commands, runtime launch, and native Pi authentication. |
 | Runtime | `runtime/src/main.ts` | Starts the idle Paseo host and opens project Sessions on explicit user request. |
-| Clarify | `runtime/src/session-memory/clarify.ts` | Rewrites a completed reply on demand and saves the result against the original. |
 | Tracker | `runtime/src/session-memory/tracker.ts` | Extracts and maintains user-configured Tracked Items from new user messages. |
 | Workspace Organizer | `runtime/src/services/workspace-organizer.ts` | Maintains standard workspace labels and eligible automatic archival. |
 | Renamer | `runtime/src/services/renamer.ts` | Maintains short workspace and agent-session titles. |
