@@ -10,6 +10,7 @@ export const MODEL_ALIASES = [
   'local-CPU',
   'local-tiny',
   'local-evals',
+  'medium',
   'smart',
   'plan',
   'expensive',

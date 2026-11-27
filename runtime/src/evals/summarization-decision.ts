@@ -102,14 +102,7 @@ export async function prepareHostedPiEvaluation(
     throw new Error('This hosted Pi evaluation requires the Codex subscription sign-in.');
 
   const provider = authMethod === 'apikey' ? 'openai' : 'openai-codex';
-  const modelRuntime = useCodexOpenAiAuth(
-    await ModelRuntime.create({
-      authPath: path.join(directory, 'auth.json'),
-      modelsPath: null,
-      modelsStorePath: path.join(directory, 'model-store.json'),
-      refreshOnCreate: false,
-    }),
-  );
+  const modelRuntime = await hostedPiModelRuntime(directory, null);
   const model = modelRuntime.getModel(provider, modelId);
   if (!model) throw new Error(`The Codex-authenticated Pi catalog cannot resolve ${modelId}.`);
   return Object.assign(
@@ -119,11 +112,43 @@ export async function prepareHostedPiEvaluation(
   );
 }
 
+/** Use the managed Codex sign-in and exact AppRC model registration for a disposable case. */
+export async function createHostedPiEvaluationSession(
+  input: PiEvaluationSessionOptions & {
+    modelsPath: string;
+    provider: 'openai-codex';
+    modelId: string;
+    thinking: 'high' | 'xhigh';
+  },
+) {
+  const modelRuntime = await hostedPiModelRuntime(input.directory, input.modelsPath);
+  const model = modelRuntime.getModel(input.provider, input.modelId);
+  if (!model?.reasoning || model.thinkingLevelMap?.[input.thinking] === null)
+    throw new Error('Pi cannot resolve the requested hosted evaluation model and reasoning.');
+  const result = await createPiEvaluationSession(input, modelRuntime, model, input.thinking);
+  if (result.session.thinkingLevel !== input.thinking) {
+    result.session.dispose();
+    throw new Error('Pi did not retain the requested evaluation reasoning level.');
+  }
+  return result;
+}
+
+async function hostedPiModelRuntime(directory: string, modelsPath: string | null) {
+  return useCodexOpenAiAuth(
+    await ModelRuntime.create({
+      authPath: path.join(directory, 'auth.json'),
+      modelsPath,
+      modelsStorePath: path.join(directory, 'model-store.json'),
+      refreshOnCreate: false,
+    }),
+  );
+}
+
 async function createPiEvaluationSession(
   { directory, cwd = directory, instructions, tools, customTools }: PiEvaluationSessionOptions,
   modelRuntime: ModelRuntime,
   model: NonNullable<CreateAgentSessionOptions['model']>,
-  thinkingLevel: 'off' | 'low' | 'high',
+  thinkingLevel: 'off' | 'low' | 'high' | 'xhigh',
 ) {
   await mkdir(directory, { recursive: true });
   const settings = SettingsManager.inMemory({ retry: { enabled: false } });

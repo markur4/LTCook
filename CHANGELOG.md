@@ -36,6 +36,9 @@ All notable changes to `ltcook` will be documented in this file.
 - Hosted Decision Tracker Agent Evals verify persisted decisions, budgeting,
   evidence, and recovery. The opt-in baseline runs both setups under one deadline.
 
+- BugHunter can collect diagnostics and run an opt-in, read-only BugScan.
+  Activity → Services shows findings, proposed remedies, and deferred work.
+
 - **Breaking:** 💥 Search, Locate, traces, and applicable RIED discovery share
   query-time repository filters. Tool callers can replace `paths` with
   `filter.includePaths` globs and ranked Search's `pattern` with

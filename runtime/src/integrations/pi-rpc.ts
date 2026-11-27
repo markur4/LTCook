@@ -12,6 +12,7 @@ import { ReasoningEffortSchema } from '@ltcook/model-contracts';
 import { ResolvedModelSchema } from '../models/aliases.js';
 import { piThinking } from '../models/adapters.js';
 import { useCodexOpenAiAuth } from './codex-auth.js';
+import { bugHunterTeamId } from '../services/bughunter-team.js';
 import { WORKSPACE_MCP_SERVER } from '../paseo-plugin/shared/workspace-tools.js';
 import { REPO_SEARCH_TIMEOUT_MS } from '../tools/workspace-tools.js';
 import {
@@ -165,7 +166,8 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
       'Managed LTCook sessions require Core extensions, skills, and standing context.',
     );
   const cwd = process.cwd();
-  const mcpServers = loadMcpServerConfigs(mcpConfigPaths, cwd);
+  const bugScan = managed && process.env.LTCOOK_TEAM_ID === bugHunterTeamId;
+  const mcpServers = bugScan ? [] : loadMcpServerConfigs(mcpConfigPaths, cwd);
   const injectedWorkspaceTools =
     !managed &&
     !parsed.noExtensions &&
@@ -242,7 +244,7 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
       settingsManager,
       extensionFlagValues: parsed.unknownFlags,
       resourceLoaderOptions: {
-        additionalExtensionPaths: extensionPaths,
+        additionalExtensionPaths: bugScan ? undefined : extensionPaths,
         additionalSkillPaths: [...(skillPaths ?? []), ...(guidance?.skillPaths ?? [])],
         skillsOverride: guidance?.skillsOverride,
         agentsFilesOverride: guidance?.agentsFilesOverride,
@@ -301,8 +303,8 @@ export async function createPiRpcRuntime(argv: string[]): Promise<AgentSessionRu
             ? [paseoMcpExtension]
             : []),
         ],
-        noExtensions: Boolean(process.env.LTCOOK_EVAL_ARM) || parsed.noExtensions,
-        disabledBuiltinExtensions: parsed.noMcp ? ['mcp'] : undefined,
+        noExtensions: bugScan || Boolean(process.env.LTCOOK_EVAL_ARM) || parsed.noExtensions,
+        disabledBuiltinExtensions: bugScan || parsed.noMcp ? ['mcp'] : undefined,
         noSkills: parsed.noSkills,
         noPromptTemplates: parsed.noPromptTemplates,
         noThemes: parsed.noThemes,

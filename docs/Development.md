@@ -367,6 +367,18 @@ formerly failing behavior on the repaired running build.
 See the [BugHunter diagnostics coverage assessment](bughunter-diagnostics/PLAN.md)
 for the current inventory and known evidence gaps.
 
+BugScan reads this diagnostic stream into the existing coordination database.
+An explicit host-wide BugHunter setting enables the service and can name the
+checkout to investigate. Open Activity → Services for that scope and use
+**Run BugScan** to investigate the pending evidence. The card shows the current
+status, supported causes or hypotheses, remedies, and explicit immediate or
+deferred architecture decisions. Native builds include the source revision in
+their verified deployment assets. A clean checkout running the runtime directly
+can also provide a source revision. BugScan looks up that commit in the
+authorized repository and reads tracked content from its snapshot. Where
+provenance is unavailable, it reports the gap and limits source conclusions.
+Automatic model dispatch remains gated by model usage qualification.
+
 ## Local Ollama and Agent Evals
 
 Normal LTCook application setup detects a local Ollama installation or uses the

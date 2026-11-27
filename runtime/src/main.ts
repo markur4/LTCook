@@ -34,6 +34,7 @@ import { openConversationProductStore } from './session-memory/product-store.js'
 import { PastedDocuments } from './session-memory/pasted-documents.js';
 import { catalogModelAliases, resolveModel } from './models/aliases.js';
 import { redactDiagnosticText, Telemetry } from './diagnostics/telemetry.js';
+import { cleanSourceRevision, startBugScan } from './services/bugscan-integration.js';
 const EX_TEMPFAIL = 75;
 const restartResult = z.looseObject({ state: z.string(), message: z.string() });
 function isListenAddressInUse(error: unknown): boolean {
@@ -182,6 +183,8 @@ async function run(): Promise<void> {
   let tracker: TrackerService | undefined;
   let workspaceServices: PaseoWorkspaceServices | undefined;
   let repositoryIndex: RepositoryIndexService | undefined;
+  let bugScan: Awaited<ReturnType<typeof startBugScan>> | undefined;
+  let bugScanTimer: ReturnType<typeof setInterval> | undefined;
   let initialSnapshot: SessionSnapshot | undefined;
   let stopping = false;
   const nativePreparation = new AbortController();
@@ -220,6 +223,8 @@ async function run(): Promise<void> {
         }),
       );
       if (workspaceServices) await attempt(() => workspaceServices!.close());
+      if (bugScanTimer !== undefined) clearInterval(bugScanTimer);
+      if (bugScan) await attempt(() => bugScan!.service.close());
       if (repositoryIndex) await attempt(() => repositoryIndex!.close());
       if (tracker) await attempt(() => tracker!.close());
       if (conversationInference) await attempt(() => conversationInference!.close());
@@ -275,16 +280,28 @@ async function run(): Promise<void> {
       );
     if (installedRuntime && receipt.app !== appRoot)
       throw new Error('The installed runtime receipt belongs to a different deployment.');
-    const buildFingerprint = installedRuntime
+    const deployedBuild = installedRuntime
       ? await verifyDeployedBuild(appRoot, fileURLToPath(import.meta.url), receipt.fingerprint)
       : undefined;
+    const buildFingerprint = deployedBuild?.fingerprint;
     const entrypointDigest = buildFingerprint
       ? undefined
       : createHash('sha256')
           .update(await fs.readFile(fileURLToPath(import.meta.url)))
           .digest('hex');
+    const executingSource =
+      sourceRuntime &&
+      fileURLToPath(import.meta.url) === path.join(appRoot, 'runtime', 'src', 'main.ts');
+    const sourceRevision = executingSource
+      ? await cleanSourceRevision(await fs.realpath(appRoot))
+      : deployedBuild?.sourceRevision;
     telemetry.setBuildIdentity(
-      buildFingerprint ? `deployment:${buildFingerprint}` : `entrypoint:${entrypointDigest}`,
+      buildFingerprint
+        ? `deployment:${buildFingerprint}`
+        : sourceRevision
+          ? `source:${sourceRevision}`
+          : `entrypoint:${entrypointDigest}`,
+      sourceRevision,
     );
     let summarizerModel = '';
     try {
@@ -588,6 +605,57 @@ async function run(): Promise<void> {
       disconnectPlanning();
     };
     api.setRuntime(runtimeController);
+    if (process.env.LTCOOK_BUGHUNTER_ENABLED === 'true') {
+      try {
+        const configuredWorkspace = process.env.LTCOOK_BUGHUNTER_WORKSPACE || undefined;
+        if (configuredWorkspace && !path.isAbsolute(configuredWorkspace))
+          throw new Error('BugHunter workspace must be an absolute authorized directory.');
+        bugScan = await startBugScan({
+          runtime: runtimeController,
+          logPath: path.resolve(logs),
+          stateDirectory: await fs.realpath(stateDirectory),
+          configuredWorkspace,
+          resolveSessionWorkspace: (id) => {
+            const current = activation.registeredWorkspace(id);
+            if (current) return current;
+            try {
+              return runtimeController.snapshot(id).session.workspaceRoot;
+            } catch {
+              return undefined;
+            }
+          },
+        });
+        api.setBugScan(bugScan.service, bugScan.scope, configuredWorkspace !== undefined);
+        const poll = () => {
+          void bugScan?.service
+            .ingest()
+            .catch((error: unknown) =>
+              telemetry.record({
+                code: 'bugscan.intake-failed',
+                component: 'bugscan',
+                severity: 'error',
+                outcome: 'failure',
+                message: 'BugScan diagnostic intake could not advance.',
+                cause: error,
+              }),
+            )
+            .catch(() => {});
+        };
+        poll();
+        bugScanTimer = setInterval(poll, 15_000);
+      } catch (error) {
+        await telemetry
+          .record({
+            code: 'bugscan.setup-blocked',
+            component: 'bugscan',
+            severity: 'warn',
+            outcome: 'blocked',
+            message: 'BugScan could not start for the configured scope.',
+            cause: error,
+          })
+          .catch(() => {});
+      }
+    }
     if (workspaceRoot && sessionId) {
       workspaceShellEnvironments.set(sessionId, captureShellEnvironment(process.env));
       try {

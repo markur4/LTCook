@@ -10,8 +10,9 @@ import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { riedToolDefinition } from '../tools/ried.js';
 import { RiedService } from '../repository/discovery.js';
 import { createColgrepProvider } from '../repository/providers/colgrep.js';
-import { Telemetry } from '../diagnostics/telemetry.js';
+import { redactDiagnosticText, Telemetry } from '../diagnostics/telemetry.js';
 import { repositoryIndexDiagnosticEvent } from '../services/repository-index.js';
+import { bugHunterTeamId } from '../services/bughunter-team.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
 import type { RiedRequest } from '../repository/requests.js';
 import { createRepoSearchTool } from '../tools/repo-search.js';
@@ -84,6 +85,7 @@ export default async function activate(
   const team = await loadTeam(teamSelection);
   if (team.definition.id !== teamId)
     throw new Error('Selected native team does not match the active session');
+  const bugScan = teamId === bugHunterTeamId;
   const rpc = async (
     pathname: string,
     payload: Record<string, unknown>,
@@ -384,6 +386,8 @@ export default async function activate(
     }
   });
   pi.on('tool_call', async (event, ctx) => {
+    if (bugScan && event.toolName !== 'read' && event.toolName !== 'ltcook_team')
+      return { block: true, reason: 'BugScan permits only approved source reads and reports.' };
     if (!nativeToolAllowed(member.readOnly, event.toolName))
       return { block: true, reason: 'This team member is restricted to read-only exploration.' };
     // > Repository and web tools use their existing invocation-time authorization.
@@ -391,9 +395,10 @@ export default async function activate(
     try {
       // > Native new/resume may change cwd; authorize exactly the path the tool will use.
       const input =
-        ['write', 'edit'].includes(event.toolName) &&
+        (['write', 'edit'].includes(event.toolName) || (bugScan && event.toolName === 'read')) &&
         'path' in event.input &&
         typeof event.input.path === 'string' &&
+        !(bugScan && /^[@~]/.test(event.input.path)) &&
         !path.isAbsolute(event.input.path)
           ? { ...event.input, path: path.resolve(ctx.cwd, event.input.path) }
           : event.input;
@@ -414,6 +419,22 @@ export default async function activate(
     }
     return undefined;
   });
+  if (bugScan) {
+    pi.on('tool_result', (event) => {
+      if (event.toolName !== 'read') return;
+      const content = event.content.flatMap((item) =>
+        item.type === 'text' ? [{ ...item, text: redactDiagnosticText(item.text) }] : [],
+      );
+      if (!content.length && event.content.length) {
+        return {
+          content: [{ type: 'text', text: 'BugScan can only inspect text source.' }],
+          details: null,
+          isError: true,
+        };
+      }
+      return { content, details: null };
+    });
+  }
   pi.registerTool({
     name: 'ltcook_team',
     label: 'Team coordination',
@@ -596,7 +617,7 @@ export default async function activate(
       },
     });
   }
-  await activateOptionalBrowser(pi);
+  if (!bugScan) await activateOptionalBrowser(pi);
 }
 
 function repositoryTools(colgrep?: ReturnType<typeof createColgrepProvider>) {

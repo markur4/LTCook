@@ -73,14 +73,16 @@ export interface DiagnosticEvent {
 export class Telemetry {
   private traceEvents: Array<Record<string, unknown>> = [];
   private pendingLog: Promise<void> = Promise.resolve();
+  private sourceRevision?: string;
   constructor(
     private readonly logsPath: string,
     private readonly tracePath: string,
     private buildIdentity?: string,
   ) {}
 
-  setBuildIdentity(buildIdentity: string): void {
+  setBuildIdentity(buildIdentity: string, sourceRevision?: string): void {
     this.buildIdentity = buildIdentity;
+    this.sourceRevision = sourceRevision;
   }
 
   log(level: DiagnosticSeverity, event: string, fields: object = {}): Promise<void> {
@@ -101,6 +103,7 @@ export class Telemetry {
       level: diagnostic.severity,
       event: diagnostic.code,
       buildIdentity: this.buildIdentity,
+      sourceRevision: this.sourceRevision,
     };
     const write = this.pendingLog.then(async () => {
       await mkdir(path.dirname(this.logsPath), { recursive: true, mode: 0o700 });

@@ -19,6 +19,7 @@ import {
   type NativeInputGuard,
 } from '../../../runtime/src/integrations/workspace-preparation.js';
 import { createPaseoAgentBackend } from '../../../runtime/src/integrations/paseo.js';
+import { bugHunterTeam, bugHunterTeamId } from '../../../runtime/src/services/bughunter-team.js';
 import team from '@ltcook/team-default-minimal';
 
 const sha256 = (content: string) => createHash('sha256').update(content).digest('hex');
@@ -158,6 +159,9 @@ test.skipIf(process.platform === 'win32')(
             PI_CODING_AGENT_DIR: piHomeAlias,
             LTCOOK_MODEL_SMART: 'fixture/smart-model',
             LTCOOK_MODEL_SMOL: 'fixture/small-model',
+            LTCOOK_MODEL_MEDIUM: 'fixture/medium-model',
+            LTCOOK_CONTEXT7_ENABLED: 'true',
+            LTCOOK_CONTEXT7_URL: 'https://context7.example.test',
             PATH: process.env.PATH,
           },
           dependencies: [dependency, models, web],
@@ -184,7 +188,7 @@ test.skipIf(process.platform === 'win32')(
         extensionPath: extension,
         appNodeModules: modules,
         deploymentNode: process.execPath,
-        browserAvailable: false,
+        browserAvailable: true,
         workspacePreparationSignal: shutdown.signal,
         identity: (id) => ({ agentId: id, token: `token-${id}` }),
       });
@@ -205,6 +209,15 @@ test.skipIf(process.platform === 'win32')(
       expect(first.env.PI_CODING_AGENT_DIR).toBe(piHome);
       expect(first.model).toMatchObject({ provider: 'fixture', model: 'smart-model' });
       expect(second.model).toMatchObject({ provider: 'fixture', model: 'small-model' });
+      expect(first.env.LTCOOK_BROWSER_ENABLED).toBe('true');
+      expect(first.mcpServers?.context7).toBeDefined();
+      const investigation = await backend.prepare(
+        { ...options, teamId: bugHunterTeamId, member: bugHunterTeam.definition.members[0]! },
+        'bugscan',
+      );
+      expect(investigation.env.LTCOOK_BROWSER_ENABLED).toBe('false');
+      expect(investigation.env.PI_OFFLINE).toBe('1');
+      expect(investigation.mcpServers).toBeUndefined();
       writeFileSync(dependency, 'two');
       // > This response still describes the previous version of the input.
       expect((await backend.prepare(options, 'three')).model.model).toBe('smart-model');
