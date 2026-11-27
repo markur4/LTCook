@@ -15,6 +15,7 @@ import { SessionActivation } from '../../../runtime/src/integrations/session-act
 import { WorkspaceMcp } from '../../../runtime/src/integrations/mcp.js';
 import { ollamaEndpoint } from '../../../runtime/src/integrations/ollama.js';
 import { createTools, ToolCatalog } from '../../../runtime/src/tools/catalog.js';
+import type { RepositoryFilterInput } from '../../../runtime/src/repository/filter.js';
 import { RiedService } from '../../../runtime/src/repository/discovery.js';
 import { createColgrepProvider } from '../../../runtime/src/repository/providers/colgrep.js';
 import { openRepositoryWorkspace } from '../../../runtime/src/repository/workspace.js';
@@ -91,13 +92,13 @@ function verifyLocateDefinition(content: string) {
   assert.match(content, /if \(channel === 'preview'\) return 48;/);
 }
 
-function verifyCodexRetryEvidence(content: string) {
+function verifyCodexRetryEvidence(content: string, lines: number[]) {
   const result: unknown = JSON.parse(content.replace(/^Wall time:[^\n]*\nOutput:\n/, ''));
   const search = Value.Check(RepositoryLocateOutputSchema, result) ? result.searches[0] : result;
   assert(Value.Check(RepositorySearchOutputSchema, search));
   assert.equal(search.provider, 'ripgrep');
   assert.equal(search.status, 'ready');
-  for (const line of [2, 3]) {
+  for (const line of lines) {
     assert(
       search.results.some(
         (hit) =>
@@ -109,6 +110,10 @@ function verifyCodexRetryEvidence(content: string) {
       `Missing verified evidence for ${retryPath}:${line}.`,
     );
   }
+  assert.deepEqual(
+    search.results.map(({ startLine }) => startLine),
+    lines,
+  );
 }
 
 const provider = createServer(async (request, response) => {
@@ -401,13 +406,13 @@ async function start() {
           const call: LiveCall = { tool: tool.name, searches: [] };
           recorded.push(call);
           const output = await tool.invoke(input, context);
-          const request = input as { paths?: string[]; query?: string };
+          const request = input as { filter?: RepositoryFilterInput; query?: string };
           const observe = (result: LiveSearch, query: string | undefined) => ({
             ...result,
             relevantToNegative:
               result.kind === 'exhaustive' &&
               query === absentSymbol &&
-              (request.paths ?? []).every((value) => value === '.'),
+              Object.values(request.filter ?? {}).every((rules) => rules.length === 0),
           });
           if (Value.Check(RepositorySearchOutputSchema, output)) {
             call.searches.push(observe(output, request.query));
@@ -528,10 +533,10 @@ async function exercise(
   toolInput?:
     | { path: string }
     | { text: string }
-    | { symbol: string; paths?: string[] }
+    | { symbol: string; filter?: RepositoryFilterInput }
     | { location: { path: string; line: number } }
     | { trace: { question: string; mode: 'semantic' } }
-    | { query: string; mode?: 'exact' | 'semantic'; pattern?: string; paths?: string[] },
+    | { query: string; mode?: 'exact' | 'semantic'; filter?: RepositoryFilterInput },
   verifyResult?: (content: string) => void,
 ) {
   tool =
@@ -585,13 +590,13 @@ try {
     await exercise(
       ordinaryPi,
       'pi_locate_ripgrep',
-      { symbol: 'releaseRetryLimit', paths: [retryPath] },
+      { symbol: 'releaseRetryLimit', filter: { includePaths: [retryPath] } },
       verifyLocateDefinition,
     );
     await exercise(
       ordinaryPi,
       'pi_searches_ripgrep',
-      { query: 'channel', mode: 'exact', paths: ['channel-retries.ts'] },
+      { query: 'channel', mode: 'exact', filter: { includePaths: [retryPath] } },
       verifyRetryEvidence,
     );
     await exercise(
@@ -618,7 +623,10 @@ try {
     await exercise(
       ordinaryPi,
       'pi_searches_repository',
-      { query: 'calculate the release checksum', pattern: 'computeReleaseChecksum' },
+      {
+        query: 'calculate the release checksum',
+        filter: { includeRegex: ['\\bcomputeReleaseChecksum\\b'] },
+      },
       (content) => {
         assert.match(content, /"provider"\s*:\s*"colgrep"/);
         assert.match(content, /checksum\.ts/);
@@ -649,14 +657,18 @@ try {
     await exercise(
       ordinaryCodex,
       'codex_locate_ripgrep',
-      { symbol: 'releaseRetryLimit', paths: [retryPath] },
+      { symbol: 'releaseRetryLimit', filter: { includePaths: [retryPath] } },
       verifyLocateDefinition,
     );
     await exercise(
       ordinaryCodex,
       'codex_searches_ripgrep',
-      { query: 'channel', mode: 'exact', paths: [retryPath] },
-      verifyCodexRetryEvidence,
+      {
+        query: 'channel',
+        mode: 'exact',
+        filter: { includePaths: [retryPath], includeText: ['return 48'] },
+      },
+      (content) => verifyCodexRetryEvidence(content, [3]),
     );
   }
   await stop();

@@ -339,7 +339,11 @@ and shells use their harness permissions for operations in other checkouts.
 - Use `ltcook_repo_search` for source evidence. Ask for an
   exact identifier to use ripgrep or ask a question by meaning to use ColGREP.
   Choose **Semantic** in Query Repo or use `mode: "semantic"` when common words
-  bring in irrelevant keyword matches. Add a relative path to narrow results.
+  bring in irrelevant keyword matches. In **Query Repo**, open **Filters** to
+  enter one path glob, literal, or regex per line in the corresponding field.
+  To skip generated sources and Python entry-point boilerplate, enter
+  `**/generated/**` under **Exclude paths** and `__main__` under
+  **Exclude literal text**. Other matches in the same file can still appear.
   While the first index is building,
   hybrid search can offer approximate lexical results labeled with the
   `lexical-fallback` diagnostic. Check **RAG Index** for progress or details
@@ -361,7 +365,8 @@ and shells use their harness permissions for operations in other checkouts.
   semantic, hybrid, exact, and literal leads. For Search and Locate, name a
   local Git base to prioritize changed files and related tests. Reopen the
   chat through Paseo after launching the updated runtime. See the
-  [Locate contract](References.md#repository-locate).
+  [Locate contract](References.md#repository-locate) and
+  [filter rules](References.md#repository-filtering).
 - Ask for a summary using `ltcook_summarize`. Supply text or ask to summarize
   one regular UTF-8 file from the selected workspace, up to 24 KiB. An optional
   focus tells the summarizer what to emphasize. Check consequential details

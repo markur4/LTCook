@@ -122,9 +122,15 @@ export class RepositorySourceReader {
 
   /** Verify the provider's text at a reported range before returning any source evidence. */
   async verify(
-    input: { path: string; excerpt: string; ranges: readonly SourceRange[]; contextAfter?: number },
+    input: {
+      path: string;
+      excerpt: string;
+      ranges: readonly SourceRange[];
+      contextAfter?: number;
+      allowsText?: (text: string) => boolean;
+    },
     signal: AbortSignal,
-  ): Promise<RepositoryHit | EvidenceFailure> {
+  ): Promise<RepositoryHit | EvidenceFailure | 'filtered'> {
     const source = await this.read(input.path, signal);
     if (typeof source === 'string') return source;
     const excerpt = input.excerpt.replaceAll('\r\n', '\n');
@@ -133,6 +139,7 @@ export class RepositorySourceReader {
       if (startLine < 1 || endLine < startLine || endLine > source.lines.length) continue;
       const current = source.lines.slice(startLine - 1, endLine).join('\n');
       if (excerpt !== current && excerpt !== `${current}\n`) continue;
+      if (input.allowsText && !input.allowsText(current)) return 'filtered';
       const contextEnd = Math.min(source.lines.length, endLine + (input.contextAfter ?? 0));
       return sourceExcerpt(source, { startLine, endLine: contextEnd, name });
     }

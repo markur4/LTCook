@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { RepositoryResult } from './results.js';
 import { openRepositoryWorkspace, type RepositoryWorkspace } from './workspace.js';
+import type { RepositoryFilter } from './filter.js';
 
 const excludedDirectories = new Set([
   '.git',
@@ -36,12 +37,12 @@ function excluded(name: string): boolean {
 
 type TreeEntry = { path: string; kind: 'directory' | 'file' };
 
-type WalkOptions = { maxDepth: number; maxEntries: number };
+type WalkOptions = { maxDepth: number; maxEntries: number; filter?: RepositoryFilter };
 
 async function walk(
   workspace: RepositoryWorkspace,
   target: string,
-  { maxDepth, maxEntries }: WalkOptions,
+  { maxDepth, maxEntries, filter }: WalkOptions,
 ): Promise<{ entries: TreeEntry[]; truncated: boolean; partial: boolean }> {
   const entries: TreeEntry[] = [];
   let partial = false;
@@ -50,6 +51,7 @@ async function walk(
   const directories = [{ relative: target, depth: 0 }];
 
   scan: for (const { relative, depth } of directories) {
+    if (filter && !filter.allowsDirectory(relative)) continue;
     try {
       const directory = await workspace.resolvePath(relative, {
         kind: 'directory',
@@ -67,6 +69,11 @@ async function walk(
         }
         const child = relative === '.' ? entry.name : `${relative}/${entry.name}`;
         const kind = entry.isDirectory() ? 'directory' : 'file';
+        if (
+          filter &&
+          !(kind === 'directory' ? filter.allowsDirectory(child) : filter.allowsPath(child))
+        )
+          continue;
         entries.push({ path: child, kind });
         if (kind === 'directory') directories.push({ relative: child, depth: depth + 1 });
       }
@@ -91,11 +98,31 @@ export async function readRepositoryMap(
   workspace: RepositoryWorkspace,
   target: string,
   options: WalkOptions,
-): Promise<RepositoryResult<{ target: string; entries: TreeEntry[] }>> {
+): Promise<
+  RepositoryResult<{ target: string; entries: TreeEntry[] }> & {
+    filter?: ReturnType<RepositoryFilter['report']>;
+  }
+> {
   const capturedAt = new Date().toISOString();
   const { relative } = await workspace.resolvePath(target, { kind: 'directory', allowRoot: true });
   assertRepositoryPathVisible(relative);
-  const { entries, partial, truncated: scanTruncated } = await walk(workspace, relative, options);
+  const walkResult = await walk(workspace, relative, options);
+  const { partial, truncated: scanTruncated } = walkResult;
+  const { filter } = options;
+  let entries = walkResult.entries;
+  if (filter?.hasPathRules) {
+    const retained = new Set<string>();
+    for (const entry of entries) {
+      if (entry.kind === 'directory' && !filter.matchesPath(entry.path)) continue;
+      for (
+        let parent = entry.path;
+        parent !== relative && parent !== '.' && !retained.has(parent);
+        parent = path.posix.dirname(parent)
+      )
+        retained.add(parent);
+    }
+    entries = entries.filter((entry) => retained.has(entry.path) || filter.allowsPath(entry.path));
+  }
   entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   let bytes = 0;
   let truncated = scanTruncated;
@@ -132,6 +159,7 @@ export async function readRepositoryMap(
           ]
         : []),
     ],
+    ...(options.filter && { filter: options.filter.report(truncated) }),
   };
 }
 
@@ -183,6 +211,7 @@ export async function stageRepositoryFiles(
     maxFileBytes = 4 * 1024 * 1024,
     maxBytes = 24 * 1024 * 1024,
     extensions,
+    filter,
   }: {
     target?: string;
     maxDepth?: number;
@@ -191,6 +220,7 @@ export async function stageRepositoryFiles(
     maxFileBytes?: number;
     maxBytes?: number;
     extensions?: ReadonlySet<string>;
+    filter?: RepositoryFilter;
   } = {},
 ): Promise<{
   workspace: RepositoryWorkspace;
@@ -209,7 +239,7 @@ export async function stageRepositoryFiles(
           truncated: false,
           partial: false,
         }
-      : await walk(workspace, selected.relative, { maxDepth, maxEntries });
+      : await walk(workspace, selected.relative, { maxDepth, maxEntries, filter });
   let { truncated, partial } = scan;
   const stage = await mkdtemp(path.join(tmpdir(), 'ltcook-repository-'));
   const dispose = () => rm(stage, { recursive: true, force: true });
@@ -219,6 +249,7 @@ export async function stageRepositoryFiles(
     let bytes = 0;
     for (const entry of scan.entries) {
       if (entry.kind !== 'file') continue;
+      if (filter && !filter.allowsPath(entry.path)) continue;
       if (extensions && !extensions.has(path.extname(entry.path).toLowerCase())) continue;
       if (fileCount >= maxFiles || bytes >= maxBytes) {
         truncated = true;

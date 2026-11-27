@@ -334,7 +334,11 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
     );
     const deniedSearch = await unscoped.sdk.callTool({
       name: 'ltcook_repo_search',
-      arguments: { query: 'otherWorkspace', mode: 'exact', paths: ['other.ts'] },
+      arguments: {
+        query: 'otherWorkspace',
+        mode: 'exact',
+        filter: { includePaths: ['other.ts'] },
+      },
     });
     expect(deniedSearch.isError).toBe(true);
     expect(deniedSearch.content).toEqual([{ type: 'text', text: 'Unknown LTCook tool.' }]);
@@ -350,9 +354,19 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
         arguments: { symbol: 'otherWorkspace', ...args },
       });
     expect((await locate(unscoped.sdk)).isError).toBe(true);
-    expect((await locate(two.sdk, { paths: ['../first/source.ts'] })).isError).toBe(true);
-    expect((await locate(two.sdk, { paths: ['escape.ts'] })).isError).toBe(true);
-    expect((await locate(two.sdk, { paths: ['private.pem'] })).isError).toBe(true);
+    expect(
+      (await locate(two.sdk, { filter: { includePaths: ['../first/source.ts'] } })).isError,
+    ).toBe(true);
+    for (const path of ['escape.ts', 'private.pem']) {
+      expect(
+        (
+          await two.sdk.callTool({
+            name: 'ltcook_repo_locate',
+            arguments: { location: { path, line: 1 } },
+          })
+        ).isError,
+      ).toBe(true);
+    }
     const search = (args: Record<string, unknown>) =>
       two.sdk.callTool({
         name: 'ltcook_repo_search',
@@ -366,13 +380,32 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
       ...(Bun.which('rg')
         ? {
             status: 'ready',
-            partial: true,
             results: [{ path: 'other.ts', startLine: 1, endLine: 1 }],
-            diagnostics: [{ code: 'excluded-path' }],
           }
         : { status: 'unavailable', diagnostics: [{ code: 'missing-executable' }] }),
     });
-    const located = await locate(two.sdk, { paths: ['other.ts'] });
+    const scopeFilter = {
+      includePaths: ['other.ts'],
+      includeText: ['true'],
+      excludeText: ['false'],
+    };
+    if (Bun.which('rg')) {
+      const scoped = await search({ filter: scopeFilter });
+      expect(scoped.structuredContent).toMatchObject({
+        status: 'ready',
+        filter: { effective: scopeFilter },
+        results: [{ path: 'other.ts' }],
+      });
+      for (const path of ['escape.ts', '.env', 'private.pem']) {
+        expect(
+          (await search({ filter: { includePaths: [path] } })).structuredContent,
+        ).toMatchObject({
+          status: 'ready',
+          results: [],
+        });
+      }
+    }
+    const located = await locate(two.sdk, { filter: scopeFilter });
     expect(located.isError).not.toBe(true);
     expect(located.structuredContent).toMatchObject({
       followUp: 'not-needed',
@@ -388,7 +421,7 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
             question: 'Find the workspace marker.',
             leads: [{ mode: 'exact', query: 'otherWorkspace' }],
           },
-          paths: ['other.ts'],
+          filter: scopeFilter,
         },
       });
     expect((await trace(unscoped.sdk)).isError).toBe(true);
@@ -405,15 +438,19 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
       ]);
     }
     for (const args of [
-      { paths: ['../first/source.ts'] },
-      { paths: [path.join(first, 'source.ts')] },
-      { paths: ['escape.ts'] },
-      { paths: ['.env'] },
-      { paths: ['private.pem'] },
+      { filter: { includePaths: ['../first/source.ts'] } },
+      { filter: { includePaths: [path.join(first, 'source.ts')] } },
+      { filter: { excludeRegex: ['['] } },
       { workspaceRoot: first },
+      { paths: ['other.ts'] },
       { pattern: 'otherWorkspace' },
     ])
       expect((await search(args)).isError).toBe(true);
+    const invalidRule = await search({ filter: { includeText: [''] } });
+    expect(invalidRule.isError).toBe(true);
+    expect(invalidRule.content).toEqual([
+      { type: 'text', text: expect.stringContaining('filter.includeText[0]') },
+    ]);
     const previousSession = one.transport.sessionId;
     const reconnected = await client(firstToken);
     expect(reconnected.transport.sessionId).not.toBe(previousSession);
@@ -520,7 +557,7 @@ test('ordinary Pi and Codex share workspace tool access across reconnect and enf
       (await resumed.sdk.callTool({ name: 'ltcook_ried', arguments: { operation: 'refresh' } }))
         .structuredContent,
     ).toMatchObject({ value: { workspaceRoot: second } });
-    expect((await locate(resumed.sdk, { paths: ['other.ts'] })).isError).not.toBe(true);
+    expect((await locate(resumed.sdk, { filter: scopeFilter })).isError).not.toBe(true);
     const authorizedToken = await grant('pi-two', second, 'pi');
     expect(await grant('pi-two', second, 'codex')).toBe(authorizedToken);
     const unscopedToken = await grant('pi-two', second);

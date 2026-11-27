@@ -1,4 +1,5 @@
 import { Type, type Static } from 'typebox';
+import type { RepositoryFilter } from '../repository/filter.js';
 import { sourceExcerpt, type RepositorySourceReader } from '../repository/evidence.js';
 import {
   MAX_SOURCE_EXCERPT,
@@ -226,12 +227,14 @@ export async function traceRepository(
   {
     reader,
     allows,
+    filter,
     search,
     callerSignal,
     deadline,
   }: {
     reader: RepositorySourceReader;
     allows: (path: string) => boolean;
+    filter?: RepositoryFilter;
     search: (
       lead: TraceLead,
       signal: AbortSignal,
@@ -242,7 +245,7 @@ export async function traceRepository(
 ): Promise<TraceResult> {
   const leads = traceLeads(request);
   const signal = AbortSignal.any([callerSignal, deadline]);
-  const navigation = createSourceNavigation(reader, signal, allows);
+  const navigation = createSourceNavigation(reader, signal, allows, filter);
 
   async function lookup(lead: TraceLead): Promise<Candidates> {
     const gaps = new Set<string>();
@@ -251,6 +254,8 @@ export async function traceRepository(
       const result = await search(lead, signal);
       if (result.status !== 'ready') gaps.add(result.status);
       if (result.partial) gaps.add('search-partial');
+      if (result.diagnostics.some(({ code }) => code === 'filter-budget-exhausted'))
+        gaps.add('filter-budget-exhausted');
       if (result.freshness === 'stale') gaps.add('search-stale');
       if (result.truncated) gaps.add('search-truncated');
       const hits = result.results ?? [];
@@ -347,6 +352,7 @@ export async function traceRepository(
       await Promise.all(primaryEvidence.values());
       const evidence = candidates.filter((hit): hit is RepositoryHit => hit !== undefined);
       const connections: TraceConnection[] = anchors.flatMap((anchor) => anchor.connections);
+      if (filter?.exhaustedContentBudget) gaps.add('filter-budget-exhausted');
       const literalConnection = lead.mode === 'literal' && sharedLiteral(lead.query, evidence);
       if (literalConnection) connections.push(literalConnection);
       return { evidence, connections, gaps, ids: new Set<number>() };

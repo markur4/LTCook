@@ -1,5 +1,6 @@
 import type { Static, TObject } from 'typebox';
 import { Value } from 'typebox/value';
+import { invalidRepositoryFilterArgument } from '../repository/filter.js';
 import type { RepositoryWorkspace } from '../repository/workspace.js';
 
 export interface ToolContext {
@@ -32,7 +33,11 @@ export function defineTool<I extends TObject, O extends TObject>(definition: {
     ...definition,
     async invoke(input: unknown, context: ToolContext): Promise<Record<string, unknown>> {
       if (!Value.Check(definition.inputSchema, input)) {
-        throw new Error('Invalid tool arguments.');
+        throw (
+          (Object.hasOwn(definition.inputSchema.properties, 'filter') &&
+            invalidRepositoryFilterArgument(input)) ||
+          new Error('Invalid tool arguments.')
+        );
       }
       context.signal.throwIfAborted();
       const output = await definition.execute(input, context);

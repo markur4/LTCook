@@ -11,6 +11,7 @@ import {
 } from '@babel/types';
 import { parser as pythonParser } from '@lezer/python';
 import { posix } from 'node:path';
+import type { RepositoryFilter } from './filter.js';
 import { sourceExcerpt, type RepositorySourceReader, type SourceSnapshot } from './evidence.js';
 import type { RepositoryHit } from './results.js';
 
@@ -279,6 +280,7 @@ export function createSourceNavigation(
   reader: RepositorySourceReader,
   signal: AbortSignal,
   allows: (path: string) => boolean,
+  filter?: RepositoryFilter,
 ) {
   const programs = new WeakMap<SourceSnapshot, Program | undefined>();
   const bindingsByProgram = new WeakMap<Program, BindingEvidence>();
@@ -595,7 +597,7 @@ export function createSourceNavigation(
   async function verifyConnection(
     source: SourceSnapshot,
     { kind, from, target }: Edge,
-  ): Promise<SourceConnection | undefined> {
+  ): Promise<SourceConnection | null | undefined> {
     if (from.endLine - from.startLine >= MAX_CONNECTION_LINES) return;
     const origin = sourceExcerpt(source, from);
     const destination =
@@ -603,11 +605,13 @@ export function createSourceNavigation(
         ? await importedSource(source, target.module, target.name)
         : sourceExcerpt(source, target.range);
     if (!destination || origin.excerptTruncated || destination.excerptTruncated) return;
+    const allowsText = filter && ((unit: string) => filter.allowsText(unit));
     const [checkedFrom, checkedTo] = await Promise.all(
       [origin, destination].map((hit) =>
-        reader.verify({ path: hit.path, excerpt: hit.excerpt, ranges: [hit] }, signal),
+        reader.verify({ path: hit.path, excerpt: hit.excerpt, ranges: [hit], allowsText }, signal),
       ),
     );
+    if (checkedFrom === 'filtered' || checkedTo === 'filtered') return null;
     if (typeof checkedFrom === 'string' || typeof checkedTo === 'string') return;
     return { kind, from: checkedFrom, to: checkedTo };
   }
@@ -674,6 +678,7 @@ export function createSourceNavigation(
           return { ...result, incomplete: true };
         seen.add(key);
         const connection = await verifyConnection(source, edge);
+        if (connection === null) continue;
         if (!connection) {
           result.incomplete = true;
           continue;

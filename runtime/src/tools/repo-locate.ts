@@ -1,7 +1,12 @@
 import { Type, type Static } from 'typebox';
 import { REPO_LOCATE_TOOL_NAME, REPO_SEARCH_TIMEOUT_MS } from './workspace-tools.js';
 import { RepositorySourceReader } from '../repository/evidence.js';
-import { assertRepositoryPathVisible, isRepositoryPathVisible } from '../repository/filesystem.js';
+import { isRepositoryPathVisible } from '../repository/filesystem.js';
+import {
+  compileRepositoryFilter,
+  RepositoryFilterReportSchema,
+  RepositoryFilterSchema,
+} from '../repository/filter.js';
 import {
   MAX_SOURCE_EXCERPT,
   RepositoryHitSchema,
@@ -15,7 +20,6 @@ import {
   repositoryEvidenceGuidance,
   RepositorySearchBaseSchema,
   RepositorySearchOutputSchema,
-  RepositorySearchPathsSchema,
 } from './repo-search.js';
 import {
   REPOSITORY_TRACE_TIMEOUT_MS,
@@ -177,6 +181,7 @@ export const RepositoryLocateOutputSchema = Type.Object({
     }),
   ),
   trace: Type.Optional(RepositoryTraceOutputSchema),
+  filter: Type.Optional(RepositoryFilterReportSchema),
   searches: Type.Array(LocateSearch),
   followUp: Type.Union([
     Type.Literal('not-needed'),
@@ -195,7 +200,7 @@ export function createRepoLocateTool(
     name: REPO_LOCATE_TOOL_NAME,
     description:
       'Use trace {question, mode?, leads?} for verified source, connections, and gaps across files. Supply up to four leads {mode, query}: hybrid for combined ranking, semantic for ranking by meaning without keyword scoring, exact for symbols, and literal for routes and settings. Set trace.mode to semantic to generate semantic leads from the question instead of supplying leads.' +
-      ' For quick lookups use symbol, symbols, query, or location {path, line, maxLines}. Set mode to semantic with query to skip lexical search and exact follow-up. Set follow to true on a symbol lookup for one verified local connection. Optionally supply base (a local Git ref) to prioritize changed paths and their tests.' +
+      ' For quick lookups use symbol, symbols, query, or location {path, line, maxLines}. Set mode to semantic with query to skip lexical search and exact follow-up. Use filter to scope paths and verified source units. Prefer includeText and excludeText for literal content. Set follow to true on a symbol lookup for one verified local connection. Optionally supply base (a local Git ref) to prioritize changed paths and their tests.' +
       ' Ranked trace leads use an existing complete index. Run a ranked repository search to build or resume it.' +
       repositoryEvidenceGuidance,
     inputSchema: Type.Object(
@@ -210,7 +215,7 @@ export function createRepoLocateTool(
         base: Type.Optional(RepositorySearchBaseSchema),
         query: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
         mode: Type.Optional(Type.Union([Type.Literal('hybrid'), Type.Literal('semantic')])),
-        paths: Type.Optional(RepositorySearchPathsSchema),
+        filter: Type.Optional(RepositoryFilterSchema),
       },
       { additionalProperties: false },
     ),
@@ -243,23 +248,14 @@ export function createRepoLocateTool(
       const signal = AbortSignal.any([context.signal, deadline]);
       const workspace = await openAuthorizedSearchWorkspace(context);
       const reader = new RepositorySourceReader(workspace);
-      const scopes = await Promise.all(
-        (input.paths ?? []).map(async (path) => {
-          const target = await workspace.resolvePath(path, { allowRoot: true });
-          assertRepositoryPathVisible(target.relative);
-          return target;
-        }),
+      const filter = compileRepositoryFilter(
+        input.filter,
+        input.location ? 'Locate location' : 'Locate',
+        input.location ? 'none' : 'all',
       );
       const allows = (path: string) =>
-        isRepositoryPathVisible(path) &&
-        (!scopes.length ||
-          scopes.some(
-            ({ relative, kind }) =>
-              relative === '.' ||
-              path === relative ||
-              (kind === 'directory' && path.startsWith(relative + '/')),
-          ));
-      const navigation = createSourceNavigation(reader, signal, allows);
+        isRepositoryPathVisible(path) && (!filter || filter.allowsPath(path));
+      const navigation = createSourceNavigation(reader, signal, allows, filter);
       if (input.location) {
         const { path, line, maxLines = 24 } = input.location;
         if (input.base !== undefined || input.follow !== undefined)
@@ -274,6 +270,8 @@ export function createRepoLocateTool(
         signal.throwIfAborted();
         return { source: opened, searches: [], followUp: 'not-needed' };
       }
+      let filterBudgetExhausted = false;
+      const reportedFilter = () => (filter ? { filter: filter.report(filterBudgetExhausted) } : {});
       const searches: Static<typeof LocateSearch>[] = [];
       const priority =
         input.base === undefined
@@ -290,6 +288,7 @@ export function createRepoLocateTool(
         const trace = await traceRepository(input.trace, {
           reader,
           allows,
+          filter,
           callerSignal: context.signal,
           deadline,
           async search({ mode, query }, traceSignal) {
@@ -305,31 +304,34 @@ export function createRepoLocateTool(
                           ? 'javascript'
                           : 'other'
                 : classify;
-            const result = await search(
-              workspace,
-              { query, mode, paths: input.paths },
-              traceSignal,
-              {
-                source: reader,
-                priority,
-                updateIndex: false,
-                ...(group && { collection: { group, perGroup: HITS_PER_ROLE } }),
-              },
+            const result = await search(workspace, { query, mode }, traceSignal, {
+              source: reader,
+              filter,
+              priority,
+              updateIndex: false,
+              ...(group && { collection: { group, perGroup: HITS_PER_ROLE } }),
+            });
+            filterBudgetExhausted ||= result.diagnostics.some(
+              ({ code }) => code === 'filter-budget-exhausted',
             );
             return classify ? await groupEvidence(reader, result, classify, traceSignal) : result;
           },
         });
         await workspace.assertUnchanged();
-        return { searches, followUp: 'not-needed', trace };
+        return { searches, followUp: 'not-needed', trace, ...reportedFilter() };
       }
       const run = async (mode: Static<typeof LocateSearch>['mode'], query: string) => {
         const symbol = mode === 'exact' ? query : undefined;
         const classify = symbol ? classifySymbol(symbol) : undefined;
-        const result = await search(workspace, { query, mode, paths: input.paths }, signal, {
+        const result = await search(workspace, { query, mode }, signal, {
           source: reader,
+          filter,
           priority,
           ...(classify ? { collection: { group: classify, perGroup: HITS_PER_ROLE } } : {}),
         });
+        filterBudgetExhausted ||= result.diagnostics.some(
+          ({ code }) => code === 'filter-budget-exhausted',
+        );
         const grouped = await groupEvidence(reader, result, classify, signal);
         const connections =
           input.follow && symbol ? await navigation.connections(symbol, grouped.results ?? []) : [];
@@ -355,25 +357,30 @@ export function createRepoLocateTool(
           searches.push(stage.value.stage);
         }
         if (failure) throw failure.reason;
-        if (mode === 'exact') return { searches, followUp: 'not-needed' };
+        if (mode === 'exact') return { searches, ...reportedFilter(), followUp: 'not-needed' };
         initial = first!.result;
       } catch (error) {
         context.signal.throwIfAborted();
         if (!deadline.aborted) throw error;
         await workspace.assertUnchanged();
-        return { searches, followUp: 'deadline' };
+        return { searches, ...reportedFilter(), followUp: 'deadline' };
       }
-      if (initial.status !== 'ready') return { searches, followUp: 'initial-unavailable' };
-      if (mode === 'semantic') return { searches, followUp: 'not-needed' };
+      if (initial.status !== 'ready')
+        return { searches, ...reportedFilter(), followUp: 'initial-unavailable' };
+      if (mode === 'semantic') return { searches, ...reportedFilter(), followUp: 'not-needed' };
       const identifier = verifiedIdentifier(initial.results ?? []);
-      if (!identifier) return { searches, followUp: 'no-verified-symbol' };
+      if (!identifier) return { searches, ...reportedFilter(), followUp: 'no-verified-symbol' };
       try {
         searches.push((await run('exact', identifier)).stage);
-        return { searches, followUp: 'attempted' };
+        return { searches, ...reportedFilter(), followUp: 'attempted' };
       } catch {
         context.signal.throwIfAborted();
         await workspace.assertUnchanged();
-        return { searches, followUp: deadline.aborted ? 'deadline' : 'failed' };
+        return {
+          searches,
+          ...reportedFilter(),
+          followUp: deadline.aborted ? 'deadline' : 'failed',
+        };
       }
     },
   });

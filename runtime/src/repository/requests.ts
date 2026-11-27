@@ -1,5 +1,6 @@
 import { Type, type Static } from 'typebox';
 import { Value } from 'typebox/value';
+import { invalidRepositoryFilterArgument, RepositoryFilterSchema } from './filter.js';
 
 export const riedInputSchema = Type.Object(
   {
@@ -22,6 +23,7 @@ export const riedInputSchema = Type.Object(
     maxDepth: Type.Optional(Type.Integer({ minimum: 1, maximum: 8 })),
     maxEntries: Type.Optional(Type.Integer({ minimum: 1, maximum: 256 })),
     base: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+    filter: Type.Optional(RepositoryFilterSchema),
   },
   { additionalProperties: false },
 );
@@ -29,8 +31,9 @@ export const riedInputSchema = Type.Object(
 export type RiedRequest = Static<typeof riedInputSchema>;
 
 export function validateRiedRequest(input: unknown): RiedRequest {
-  if (!Value.Check(riedInputSchema, input)) throw new Error('Invalid RIED arguments');
-  const { operation, section, target, maxDepth, maxEntries, base } = input;
+  if (!Value.Check(riedInputSchema, input))
+    throw invalidRepositoryFilterArgument(input) ?? new Error('Invalid RIED arguments');
+  const { operation, section, target, maxDepth, maxEntries, base, filter } = input;
   if ((operation === 'section') !== Boolean(section))
     throw new Error('RIED section is required only for section requests');
   if (operation === 'outline' && !target)
@@ -40,5 +43,20 @@ export function validateRiedRequest(input: unknown): RiedRequest {
   if ((maxDepth || maxEntries) && operation !== 'map')
     throw new Error('RIED depth and entry limits are supported only for maps');
   if (base && section !== 'git') throw new Error('A RIED base reference requires the Git section');
+  if (filter) {
+    const pathOnly = (Object.keys(filter) as (keyof typeof filter)[]).every(
+      (field) => field === 'includePaths' || field === 'excludePaths',
+    );
+    if (!pathOnly)
+      throw new Error('RIED supports filter.includePaths and filter.excludePaths only.');
+    const supported =
+      operation === 'map' ||
+      (operation === 'outline' && Boolean(target)) ||
+      (operation === 'section' && ['repository', 'recipes', 'git'].includes(section ?? ''));
+    if (!supported)
+      throw new Error(
+        `RIED ${operation}${section ? ` section ${section}` : ''} does not support filter.`,
+      );
+  }
   return input;
 }

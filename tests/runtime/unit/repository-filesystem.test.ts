@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { RiedService } from '../../../runtime/src/repository/discovery.js';
+import { RepositoryFilter } from '../../../runtime/src/repository/filter.js';
 import {
   readRepositoryMap,
   stageRepositoryFiles,
@@ -75,6 +76,49 @@ test('repository maps are bounded and omit links, sensitive files, and generated
     await expect(workspace.resolvePath(`src/${oddPath}`, { kind: 'file' })).resolves.toMatchObject({
       relative: `src/${oddPath}`,
     });
+  } finally {
+    await rm(home, { force: true, recursive: true });
+  }
+});
+
+test('repository maps prune excluded subtrees and traverse only paths that can match includes', async () => {
+  const home = await mkdtemp(path.join(tmpdir(), 'ltcook-repository-map-filter-'));
+  try {
+    const root = path.join(home, 'workspace');
+    await mkdir(path.join(root, 'src', 'generated'), { recursive: true });
+    await mkdir(path.join(root, 'tests'), { recursive: true });
+    await mkdir(path.join(root, 'notes'), { recursive: true });
+    await writeFile(path.join(root, 'src', 'wanted.ts'), 'wanted');
+    await writeFile(path.join(root, 'src', 'generated', 'built.ts'), 'built');
+    await writeFile(path.join(root, 'tests', 'wanted.test.ts'), 'test');
+    const workspace = await openRepositoryWorkspace(root);
+    const tree = await readRepositoryMap(workspace, '.', {
+      maxDepth: 4,
+      maxEntries: 20,
+      filter: new RepositoryFilter({
+        includePaths: ['src/**/*.ts'],
+        excludePaths: ['**/generated/**'],
+      }),
+    });
+
+    expect(tree.value.entries.map(({ path: entry }) => entry)).toEqual(['src', 'src/wanted.ts']);
+    expect(tree.filter).toMatchObject({
+      effective: {
+        includePaths: ['src/**/*.ts'],
+        excludePaths: ['**/generated/**'],
+      },
+      rejectedPaths: 3,
+      budgetExhausted: false,
+    });
+    const wildcard = await readRepositoryMap(workspace, '.', {
+      maxDepth: 4,
+      maxEntries: 20,
+      filter: new RepositoryFilter({ includePaths: ['**/wanted.ts'] }),
+    });
+    expect(wildcard.value.entries.map(({ path: entry }) => entry)).toEqual([
+      'src',
+      'src/wanted.ts',
+    ]);
   } finally {
     await rm(home, { force: true, recursive: true });
   }

@@ -63,10 +63,6 @@ test.skipIf(process.platform === 'win32')(
         `#!${process.execPath}
 const fs = await import('node:fs/promises');
 const path = await import('node:path');
-if (process.argv.includes('--pattern=[')) {
-  console.error('regex parse error: unclosed character class');
-  process.exit(2);
-}
 if (process.argv[2] === 'init') {
   const arguments_ = process.argv.slice(3);
   const model = arguments_[arguments_.indexOf('--model') + 1];
@@ -116,6 +112,10 @@ if (process.argv[2] === 'init') {
 } else if (process.argv.includes('checkpoint file')) {
   const { unit } = await Bun.file(path.join(process.env.COLGREP_DATA_DIR, 'fixture-index', 'record.json')).json();
   console.log(JSON.stringify([{ unit }]));
+} else if (process.argv.includes('filter budget')) {
+  const native = await Bun.file(${JSON.stringify(path.join(root, 'native.json'))}).json();
+  const limit = Number(process.argv[process.argv.indexOf('--results') + 1]);
+  console.log(JSON.stringify(Array.from({ length: limit }, () => native[5])));
 } else if (process.argv.includes('large output')) {
   console.log('x'.repeat(4 * 1024 * 1024 + 1));
 } else if (process.argv.includes('large diagnostics')) {
@@ -295,6 +295,37 @@ if (process.argv[2] === 'init') {
         activity: 'idle',
       });
 
+      const filterGeneration = (await observer.readStatus(workspace)).generation;
+      const filtered = await tool.invoke(
+        {
+          query: 'cache',
+          limit: 1,
+          filter: { excludeText: ['class Cache'] },
+        },
+        context,
+      );
+      expect(filtered).toMatchObject({
+        results: [{ path: 'b.ts' }],
+        filter: { rejectedUnits: 1, budgetExhausted: false },
+      });
+      const exhausted = await tool.invoke(
+        {
+          query: 'filter budget',
+          limit: 1,
+          filter: { excludeText: ['class Cache'] },
+        },
+        context,
+      );
+      expect(exhausted).toMatchObject({
+        status: 'ready',
+        partial: true,
+        truncated: true,
+        results: [],
+        filter: { budgetExhausted: true },
+        diagnostics: [{ code: 'filter-budget-exhausted' }],
+      });
+      expect((await observer.readStatus(workspace)).generation).toBe(filterGeneration);
+
       const beforeRejectedQueries = await observer.readStatus(workspace);
       for (const [query, code] of [
         ['large output', 'output-limit'],
@@ -310,9 +341,9 @@ if (process.argv[2] === 'init') {
         });
         expect(unavailable.results).toBeUndefined();
       }
-      await expect(tool.invoke({ query: 'cache', pattern: '[' }, context)).rejects.toThrow(
-        'ColGREP could not search with the supplied regular expression.',
-      );
+      await expect(
+        tool.invoke({ query: 'cache', filter: { includeRegex: ['['] } }, context),
+      ).rejects.toThrow('filter.includeRegex[0] must be a valid RE2 regular expression');
       expect(await observer.readStatus(workspace)).toEqual(beforeRejectedQueries);
 
       provider.setIndexingEnabled(false);

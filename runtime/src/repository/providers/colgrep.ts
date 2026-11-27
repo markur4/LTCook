@@ -8,6 +8,8 @@ import { Type } from 'typebox';
 import { Value } from 'typebox/value';
 import { isWithin } from '../../path-containment.js';
 import { RepositorySourceReader } from '../evidence.js';
+import { isRepositoryPathVisible } from '../filesystem.js';
+import type { RepositoryFilter } from '../filter.js';
 import type { RepositoryDiagnostic, RepositoryRetrieval } from '../results.js';
 import type { RepositoryWorkspace } from '../workspace.js';
 import { REPO_SEARCH_TIMEOUT_MS } from '../../tools/workspace-tools.js';
@@ -37,6 +39,7 @@ export interface ColgrepStatus extends ColgrepIndexActivity {
 }
 
 export const COLGREP_MAX_RESULTS = 20;
+const MAX_FILTER_CANDIDATES = 80;
 const MAX_STDOUT = 4 * 1024 * 1024;
 const MAX_STDERR = 64 * 1024;
 const CHECKPOINT_GRACE_MS = 4000;
@@ -79,8 +82,7 @@ interface RepositorySearchRequest {
   query: string;
   mode?: 'hybrid' | 'semantic';
   updateIndex?: boolean;
-  pattern?: string;
-  paths?: string[];
+  filter?: RepositoryFilter;
   limit?: number;
 }
 
@@ -98,8 +100,6 @@ class ColgrepCommandLimitError extends Error {
     );
   }
 }
-
-class ColgrepPatternError extends Error {}
 
 function confinedPath(root: string, relative: string): string {
   const candidate = path.resolve(root, relative);
@@ -200,33 +200,6 @@ async function loadAssets(
   }
 }
 
-interface SearchPath {
-  absolute: string;
-  filter: string;
-  directory: boolean;
-}
-
-async function searchPaths(
-  workspace: RepositoryWorkspace,
-  requested: string[],
-): Promise<SearchPath[]> {
-  return Promise.all(
-    requested.map(async (relative) => {
-      if (/[\u0000*?{}\[\]\\:]/.test(relative)) {
-        throw new Error(
-          'Search paths must be literal workspace-relative paths using forward slashes.',
-        );
-      }
-      const selected = await workspace.resolvePath(relative, { allowRoot: true });
-      return {
-        absolute: selected.absolute,
-        filter: selected.relative === '.' ? '' : selected.relative,
-        directory: selected.kind === 'directory',
-      };
-    }),
-  );
-}
-
 function execute(
   assets: Awaited<ReturnType<typeof loadAssets>>,
   args: string[],
@@ -307,17 +280,12 @@ function execute(
   });
 }
 
-function searchFailure(stderr: string, pattern?: string): Error {
+function searchFailure(stderr: string): Error {
   if (
     /index lock|permission denied|read.only file system|not a directory|no space left/i.test(stderr)
   ) {
     return new Error(
       'ColGREP could not access its index or lock. Check AppRC cache permissions, disk space, and competing searches.',
-    );
-  }
-  if (pattern && /regex|regular expression|look.around/i.test(stderr)) {
-    return new ColgrepPatternError(
-      'ColGREP could not search with the supplied regular expression. Check the pattern.',
     );
   }
   if (/onnx|model|dll|shared librar/i.test(stderr)) {
@@ -439,7 +407,7 @@ function report(result: RepositoryRetrieval, code: string, message: string) {
 async function normalizeResults(
   stdout: string,
   workspace: RepositoryWorkspace,
-  paths: SearchPath[],
+  filter: RepositoryFilter | undefined,
   limit: number,
   candidateLimit: number,
   signal: AbortSignal,
@@ -474,13 +442,8 @@ async function normalizeResults(
       );
       continue;
     }
-    if (
-      paths.length &&
-      !paths.some(
-        ({ absolute, directory }) => absolute === file || (directory && isWithin(absolute, file)),
-      )
-    )
-      continue;
+    const relative = path.relative(workspace.root, file).split(path.sep).join('/');
+    if (!isRepositoryPathVisible(relative) || (filter && !filter.allowsPath(relative))) continue;
 
     // > Native JSON can give a unit's context range and its best match's narrower range.
     const ranges = [hit.matches?.[0], hit.unit].flatMap((range) =>
@@ -488,12 +451,17 @@ async function normalizeResults(
     );
     const evidence = await source.verify(
       {
-        path: path.relative(workspace.root, file),
+        path: relative,
         excerpt: hit.unit.code,
         ranges,
+        allowsText: filter && ((text) => filter.allowsText(text)),
       },
       signal,
     );
+    if (evidence === 'filtered') {
+      if (filter?.exhaustedContentBudget) break;
+      continue;
+    }
     if (typeof evidence === 'string') {
       if (evidence !== 'source-unavailable') result.freshness = 'stale';
       report(
@@ -508,6 +476,12 @@ async function normalizeResults(
     result.value.hits.push(evidence);
     result.truncated ||= evidence.excerptTruncated === true;
   }
+  if (filter && value.length >= candidateLimit && result.value.hits.length < limit)
+    report(
+      result,
+      'filter-budget-exhausted',
+      'The ranked candidate budget ended before all filtered results could be collected.',
+    );
 }
 
 /** Build and query separate native index generations for an authorized worktree. */
@@ -703,17 +677,10 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       source = new RepositorySourceReader(workspace),
     ): Promise<RepositoryRetrieval> {
       callerSignal.throwIfAborted();
-      if (!input.query.trim() || input.query.includes('\0') || input.pattern?.includes('\0')) {
-        throw new Error('ColGREP queries and regular expressions must be nonempty text.');
-      }
-      // > With --pattern, ColGREP treats path-shaped query text as another search root.
-      if (input.pattern && (/^[.~]/.test(input.query) || /[/\\]/.test(input.query))) {
-        throw new Error(
-          'Use a descriptive query and put file or directory restrictions in paths when using a regular expression.',
-        );
-      }
+      if (!input.query.trim() || input.query.includes('\0'))
+        throw new Error('ColGREP queries must be nonempty text.');
       await workspace.assertUnchanged();
-      const paths = await searchPaths(workspace, input.paths ?? []);
+      const { filter } = input;
       const limit = input.limit ?? 8;
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > COLGREP_MAX_RESULTS)
         throw new Error('ColGREP result limit is outside the supported range.');
@@ -722,9 +689,8 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       const outcome = rankedResult();
       let queriedStore: ColgrepIndexStore | undefined;
       try {
-        // > ColGREP also matches globs below the root. Verify exact literal scope on every hit.
-        const filters = paths.some(({ filter }) => !filter) ? [] : paths;
-        const candidateLimit = (filters.length ? COLGREP_MAX_RESULTS : limit) + 1;
+        const filtered = filter?.hasPathRules || filter?.hasContentRules;
+        const candidateLimit = filtered ? MAX_FILTER_CANDIDATES : limit + 1;
         const assets = await loadAssets(deployment, verifiedFiles, signal);
         const store = await ColgrepIndexStore.open(cache, workspace, assets.compatibility, false);
         signal.throwIfAborted();
@@ -754,6 +720,21 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
             await retireDamagedIndex();
             throw new Error('ColGREP could not open the published index.');
           }
+          // > ColGREP can match literal includes below the root. Recheck exact scope below.
+          const includes = filter?.effective.includePaths ?? [];
+          const nativeIncludes = includes.every((glob) => /^[\w./-]+(?:\/\*\*)?$/.test(glob))
+            ? includes
+            : [];
+          // > Plain one-line alternatives have the same matching semantics in both engines.
+          // > Other expressions are evaluated only against verified source.
+          const positiveRegex = filter?.effective.includeRegex ?? [];
+          const nativePattern =
+            !/^[.~]|[/\\]/.test(input.query) &&
+            positiveRegex.length &&
+            positiveRegex.every((rule) => /^[\w-]+(?:\|[\w-]+)*$/.test(rule))
+              ? positiveRegex.join('|')
+              : undefined;
+          if (nativeIncludes.length || nativePattern) filter?.noteProviderPruning();
           const args = [
             'search',
             '--json',
@@ -763,10 +744,8 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
             '--results',
             String(candidateLimit),
             ...(input.mode === 'semantic' ? ['--semantic-only'] : []),
-            ...(input.pattern ? [`--pattern=${input.pattern}`] : []),
-            ...filters.map(
-              ({ filter, directory }) => `--include=${filter}${directory ? '/**' : ''}`,
-            ),
+            ...(nativePattern ? ['--case-sensitive', `--pattern=${nativePattern}`] : []),
+            ...nativeIncludes.map((glob) => `--include=${glob}`),
             '--',
             input.query,
             workspace.root,
@@ -776,13 +755,13 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
           signal.throwIfAborted();
           if (result.code !== 0) {
             if (nativeIndexFailure(result.stderr)) await retireDamagedIndex();
-            throw searchFailure(result.stderr, input.pattern);
+            throw searchFailure(result.stderr);
           }
           await workspace.assertUnchanged();
           await normalizeResults(
             result.stdout,
             workspace,
-            filters,
+            filter,
             limit,
             candidateLimit,
             signal,
@@ -798,7 +777,6 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
         queriedStore = store;
       } catch (error) {
         callerSignal.throwIfAborted();
-        if (error instanceof ColgrepPatternError) throw error;
         if (!outcome.value.hits.length) {
           outcome.value.status = 'unavailable';
           outcome.freshness = 'unknown';
@@ -817,6 +795,17 @@ export function createColgrepProvider(options: ColgrepOptions = {}) {
       }
       await workspace.assertUnchanged();
       callerSignal.throwIfAborted();
+      if (
+        filter &&
+        (filter.exhaustedContentBudget ||
+          outcome.diagnostics.some(({ code }) => code === 'timeout' || code === 'output-limit'))
+      ) {
+        report(
+          outcome,
+          'filter-budget-exhausted',
+          'The ranked candidate budget ended before all filtered results could be collected.',
+        );
+      }
       queriedStore?.recordActivity('query');
       outcome.capturedAt = new Date().toISOString();
       return outcome;

@@ -2,12 +2,13 @@ import { Type } from 'typebox';
 import type { RiedService } from '../repository/discovery.js';
 import { riedInputSchema } from '../repository/requests.js';
 import { RepositoryDiagnosticSchema, RepositoryFreshnessSchema } from '../repository/results.js';
+import { RepositoryFilterReportSchema } from '../repository/filter.js';
 import { defineTool } from './types.js';
 
 export const riedToolDefinition = {
   name: 'ltcook_ried',
   description:
-    'Read workspace inventory, current Git details, a bounded directory map, or a targeted source outline. Only the outline reads source contents for the response.',
+    'Read workspace inventory, current Git details, a bounded directory map, or a targeted source outline. On maps, directory outlines, repository or recipe sections, and detailed Git sections, filter supports includePaths and excludePaths with workspace-relative globs.',
   inputSchema: riedInputSchema,
   outputSchema: Type.Object({
     value: Type.Object(
@@ -22,6 +23,7 @@ export const riedToolDefinition = {
         status: Type.Union([Type.Literal('fresh'), Type.Literal('partial'), Type.Literal('stale')]),
         diagnostics: Type.Array(Type.String()),
         diagnosticDetails: Type.Array(RepositoryDiagnosticSchema),
+        filter: Type.Optional(RepositoryFilterReportSchema),
       },
       { additionalProperties: true },
     ),
