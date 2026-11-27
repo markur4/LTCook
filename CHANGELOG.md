@@ -40,6 +40,10 @@ All notable changes to `ltcook` will be documented in this file.
   Search still supports independent `mode: "regex"`.
   [#110](https://github.com/markur4/LTCook/issues/110)
 
+- Repository indexing reports correlated failures, retries, and a stalled refresh
+  in the runtime diagnostics. Startup failures before the owner process launches
+  are recorded in the private backend log.
+
 - Add an issue template and acceptance workflow for the issue-backed backlog.
   The contribution guide explains scheduling and changelog maintenance.
 

@@ -1067,6 +1067,24 @@ def test_start_runtime_appends_private_capture_and_original_provenance(
         assert capture.stat().st_mode & 0o777 == 0o600
 
 
+def test_start_runtime_retains_missing_prerequisite_evidence(tmp_path):
+    from ltcook import _runtime_client as client
+
+    environment = _runtime_environment(tmp_path)
+    environment.update(
+        {
+            "LTCOOK_NODE_EXECUTABLE": str(tmp_path / "missing-node"),
+            "LTCOOK_JS_ROOT": str(tmp_path / "app"),
+        }
+    )
+    with pytest.raises(client.RuntimeClientError, match="prerequisites"):
+        client.start_runtime(
+            environment, workspace_root=None, shell_environment={}, detached=True
+        )
+    capture = tmp_path / "deployment" / "logs" / "backend.log"
+    assert "[launcher.prerequisites-missing]" in capture.read_text()
+
+
 def test_start_runtime_refuses_linked_capture(monkeypatch, tmp_path):
     from ltcook import _runtime_client as client
 

@@ -1,14 +1,17 @@
 import type { GuidanceInspection } from '../guidance-api/index.js';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { realpathSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync, realpathSync } from 'node:fs';
 import { setTimeout } from 'node:timers';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AgentRuntimeCommandInputSchema } from '../workflow-api/commands.js';
 import { riedToolDefinition } from '../tools/ried.js';
 import { RiedService } from '../repository/discovery.js';
 import { createColgrepProvider } from '../repository/providers/colgrep.js';
+import { Telemetry } from '../diagnostics/telemetry.js';
+import { repositoryIndexDiagnosticEvent } from '../services/repository-index.js';
 import { openRepositoryWorkspace } from '../repository/workspace.js';
 import type { RiedRequest } from '../repository/requests.js';
 import { createRepoSearchTool } from '../tools/repo-search.js';
@@ -629,18 +632,55 @@ export function activateStandaloneRepoSearch(
   sessionId: string,
 ): void {
   if (!process.env.LTCOOK_COLGREP_DEPLOYMENT || !process.env.LTCOOK_COLGREP_CACHE_DIR) return;
+  const logPath = process.env.LTCOOK_LOGS;
+  const tracePath = process.env.LTCOOK_TRACES;
+  const telemetry =
+    logPath && tracePath && path.isAbsolute(logPath) && path.isAbsolute(tracePath)
+      ? new Telemetry(
+          logPath,
+          tracePath,
+          `pi-extension:${createHash('sha256')
+            .update(readFileSync(fileURLToPath(import.meta.url)))
+            .digest('hex')}`,
+        )
+      : undefined;
+  const reportBlocked = (cause: unknown) => {
+    const operationId = randomUUID();
+    return telemetry
+      ?.record({
+        component: 'repository-index',
+        code: 'repository-index.activation-blocked',
+        severity: 'warn',
+        outcome: 'blocked',
+        operationId,
+        correlationId: operationId,
+        message: 'The standalone Pi workspace could not be opened for indexing.',
+        cause,
+        context: { sessionId },
+      })
+      .catch(() => {});
+  };
   let root: string;
   try {
     root = realpathSync(workspaceRoot);
-  } catch {
+  } catch (error) {
+    void reportBlocked(error);
     return;
   }
-  const colgrep = createColgrepProvider({ background: true });
+  const colgrep = createColgrepProvider({
+    background: true,
+    onIndexDiagnostic: (event) => telemetry?.record(repositoryIndexDiagnosticEvent(event)),
+  });
   const indexing = openRepositoryWorkspace(root)
     .then((workspace) => {
-      if (workspace.root === root) return colgrep.indexService.activate(workspace);
+      if (workspace.root !== root)
+        throw new Error('The authorized Pi workspace changed before indexing could start.');
+      return colgrep.indexService.activate(workspace);
     })
-    .catch(() => undefined);
+    .catch(async (error: unknown) => {
+      await reportBlocked(error);
+      return undefined;
+    });
   pi.on('session_shutdown', async () => {
     (await indexing)?.();
     await colgrep.indexService.close();
