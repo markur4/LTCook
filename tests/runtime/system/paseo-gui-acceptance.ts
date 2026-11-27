@@ -506,6 +506,12 @@ try {
   assert(!nativeChat.includes('Team Overview'), 'No intermediary Team Overview replaces the chat');
   await inspectStage('native-leader-chat');
 
+  stage = 'native-turn-speed-breakdown';
+  await browser('find', 'role', 'button', 'click', '--name', 'Turn speed');
+  await browser('wait', '--text', 'whole turn');
+  await browser('wait', '--text', 'tokens');
+  await browser('press', 'Escape');
+
   stage = 'native-explorer-defaults';
   await browser('wait', '--text', 'Recent conversation activity');
   assert.equal(
