@@ -191,6 +191,8 @@ export async function startBugFix(input: {
     activeNative.set(batch.id, native);
     return native;
   }
+  const correctionRequestId = (batch: BugFixBatch, stage: BugFixStage) =>
+    `${batch.id}:${stage.attempt ?? 1}`;
   function finishIntegration(batch: BugFixBatch, result: BugFixActionResult) {
     if (
       result.status === 'completed' &&
@@ -213,7 +215,7 @@ export async function startBugFix(input: {
     targetRevision: delivery.targetRevision,
     revalidate: delivery.revalidate,
     async reconcile(batch, stage, signal) {
-      if (stage.kind === 'implement' || stage.kind === 'review') {
+      if (stage.kind === 'implement' || stage.kind === 'correct' || stage.kind === 'review') {
         if (!batch.checkout)
           return { state: 'uncertain', evidence: 'The expected shared checkout is unavailable.' };
         const recorded = runtime.observeBugFixPass({
@@ -221,6 +223,8 @@ export async function startBugFix(input: {
           requestId: batch.id,
           workspaceRoot: batch.checkout,
           reviewedTree: batch.verifiedTree,
+          correctionRequestId:
+            stage.kind === 'correct' ? correctionRequestId(batch, stage) : undefined,
         });
         if (stage.kind === 'implement') {
           if (!recorded)
@@ -233,6 +237,17 @@ export async function startBugFix(input: {
                 evidence: 'Reconciled the persisted native repair Task outcomes.',
                 sessionId: recorded.sessionId,
                 passId: recorded.passId,
+              },
+            };
+        } else if (stage.kind === 'correct') {
+          if (recorded && !recorded.correctionRecorded)
+            return { state: 'not-applied', evidence: 'No native correction was prepared.' };
+          if (recorded?.correction)
+            return {
+              state: 'applied',
+              result: {
+                status: recorded.correction,
+                evidence: 'Reconciled the persisted native correction Task outcomes.',
               },
             };
         } else if (recorded && !recorded.reviewRecorded) {
@@ -285,7 +300,7 @@ export async function startBugFix(input: {
         const result = await runtime.retryBugFixImplementation(
           batch.sessionId,
           batch.passId,
-          `${batch.id}:${stage.attempt ?? 1}`,
+          correctionRequestId(batch, stage),
           signal,
           prior?.stage.kind === 'review'
             ? 'review'

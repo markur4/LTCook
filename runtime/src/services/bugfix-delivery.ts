@@ -895,6 +895,34 @@ export function createBugFixDelivery(options: DeliveryOptions) {
     try {
       const origin = await repository(batch, signal);
       switch (action.kind) {
+        case 'prepare': {
+          const directory = checkoutPath(batch);
+          const ref = checkRef(branch(batch));
+          const [hasDirectory, existingRef, worktrees] = await Promise.all([
+            lstat(directory).then(
+              () => true,
+              (error: NodeJS.ErrnoException) => {
+                if (error.code === 'ENOENT') return false;
+                throw error;
+              },
+            ),
+            invoke('git', ['show-ref', '--verify', '--quiet', ref], batch.scope, signal),
+            read('git', ['worktree', 'list', '--porcelain', '-z'], batch.scope, signal),
+          ]);
+          const registrations = worktrees.split('\0');
+          if (
+            !hasDirectory &&
+            existingRef.code === 1 &&
+            !registrations.includes(`worktree ${directory}`) &&
+            !registrations.includes(`branch ${ref}`)
+          )
+            return {
+              state: 'not-applied',
+              evidence:
+                'The expected repair branch, directory, and worktree registration are absent.',
+            };
+          break;
+        }
         case 'commit': {
           const directory = await checkout(batch, signal);
           const [tip, parents, subject] = (

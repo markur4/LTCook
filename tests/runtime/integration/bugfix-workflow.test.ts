@@ -181,6 +181,12 @@ test('uses one Pass for bounded writes, correction and current-tree independent 
     await sendReport(firstCorrection);
     await sendReport(secondCorrection);
     expect(await correction).toMatchObject({ completed: true });
+    expect(
+      runtime.observeBugFixPass({ ...input, correctionRequestId: 'correction-1' }),
+    ).toMatchObject({
+      correctionRecorded: true,
+      correction: 'completed',
+    });
 
     writeFileSync(primary, 'export const value = 2;\n');
     git(['add', '--', 'app/primary.ts']);

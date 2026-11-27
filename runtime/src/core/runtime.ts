@@ -294,6 +294,7 @@ export class RuntimeController implements RuntimeControllerContract {
     requestId: string;
     workspaceRoot: string;
     reviewedTree?: string;
+    correctionRequestId?: string;
   }) {
     const sessionId = this.bugFixSessionId(input.recordWorkspaceRoot, input.requestId);
     const session = this.store.listSessions().find(({ id }) => id === sessionId);
@@ -310,15 +311,24 @@ export class RuntimeController implements RuntimeControllerContract {
     const allTerminal =
       tasks.length > 0 &&
       tasks.every(({ status }) => ['completed', 'failed', 'cancelled', 'blocked'].includes(status));
+    const outcome = allTerminal
+      ? tasks.every(({ status }) => status === 'completed')
+        ? ('completed' as const)
+        : ('failed' as const)
+      : undefined;
+    const correction = this.store
+      .records<{ id: string; passId: string; phase: 'preparing' | 'ready' }>(
+        sessionId,
+        'bugfix-correction',
+      )
+      .find(({ id, passId }) => id === input.correctionRequestId && passId === pass.id);
     const reviewTree = this.bugFixReviewTree(sessionId, pass.id);
     return {
       sessionId,
       passId: pass.id,
-      implementation: allTerminal
-        ? tasks.every(({ status }) => status === 'completed')
-          ? ('completed' as const)
-          : ('failed' as const)
-        : undefined,
+      implementation: outcome,
+      correctionRecorded: correction !== undefined,
+      correction: correction?.phase === 'ready' ? outcome : undefined,
       reviewRecorded: reviewTree !== undefined,
       review:
         input.reviewedTree && reviewTree === input.reviewedTree
@@ -472,6 +482,11 @@ End of diff evidence.`;
     const reviewedTree = this.bugFixReviewTree(sessionId, passId);
     if (reviewedTree && mode !== 'review')
       throw new Error('An existing review remains attached to its verified tree');
+    this.store.putRecord(sessionId, 'bugfix-correction', {
+      id: requestId,
+      passId,
+      phase: 'preparing',
+    });
     if (mode === 'review') {
       const review = this.store
         .listReviews(sessionId)
@@ -526,6 +541,11 @@ End of diff evidence.`;
       )
         this.store.retryTask(sessionId, { taskId: task.id, requestId: `${requestId}:${task.id}` });
     }
+    this.store.putRecord(sessionId, 'bugfix-correction', {
+      id: requestId,
+      passId,
+      phase: 'ready',
+    });
     return this.awaitBugFixImplementation(sessionId, passId, signal);
   }
 

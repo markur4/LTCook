@@ -49,6 +49,7 @@ async function createFixture(root: string) {
     head: base,
     status: ' M code.ts\0',
     targetStatus: '',
+    registeredRepair: false,
     hooks: path.join(root, 'hooks'),
     sandboxAvailable: true,
     remote: undefined as string | undefined,
@@ -73,6 +74,10 @@ async function createFixture(root: string) {
         return { code: 1, stdout: '', stderr: '' };
       }
       if (args[0] === 'remote') return output(state.remote ? 'origin\n' : '');
+      if (args[0] === 'show-ref')
+        return { code: state.registeredRepair ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'worktree')
+        return output(state.registeredRepair ? `branch refs/heads/bughunter/${id}\0` : '');
       if (args[0] === 'symbolic-ref')
         return output(cwd === worktree ? `refs/heads/bughunter/${id}\n` : 'refs/heads/main\n');
       if (args[0] === 'status') return output(cwd === worktree ? state.status : state.targetStatus);
@@ -189,5 +194,19 @@ test('refuses unrelated edits and preserves uncertain worktree preparations', as
       state: 'uncertain',
     });
     expect(calls.some((call) => call.startsWith('just worktree-create'))).toBe(false);
+  });
+});
+
+test('reconciles unstarted preparation while preserving a partial linked worktree', async () => {
+  await fixture(async ({ batch, delivery, state }) => {
+    const proposed = { ...batch, checkout: undefined };
+    const stage = { kind: 'prepare' as const };
+    expect(await delivery.reconcile(proposed, stage, signal)).toMatchObject({ state: 'uncertain' });
+    await rm(batch.checkout!, { recursive: true });
+    expect(await delivery.reconcile(proposed, stage, signal)).toMatchObject({
+      state: 'not-applied',
+    });
+    state.registeredRepair = true;
+    expect(await delivery.reconcile(proposed, stage, signal)).toMatchObject({ state: 'uncertain' });
   });
 });
