@@ -14,7 +14,6 @@ import {
   repositoryQueryWorkspaceSubscription,
 } from '../../shared/repository-query';
 import { Action, Card, Label, type Theme } from '../components/PanelChrome';
-import type { RepositoryFilterInput } from '../../../repository/filter';
 
 export const REPOSITORY_QUERY_PANEL_ID = 'rag-repository-query';
 export const WORKSPACE_QUERY_PANEL_ID = 'workspace-repository-query';
@@ -67,7 +66,8 @@ const filterFields = [
   { key: 'includeRegex', label: 'Include regex', placeholder: '\\bsession\\b' },
   { key: 'excludeRegex', label: 'Exclude regex', placeholder: '^import ' },
 ] as const;
-type FilterDraft = Partial<Record<keyof RepositoryFilterInput, string>>;
+type FilterField = (typeof filterFields)[number]['key'];
+type FilterDraft = Partial<Record<FilterField, string>>;
 const toolArgumentsSchema = z.record(z.string(), z.json());
 type RepositoryTool = (typeof tools)[number]['value'];
 type SearchMode = (typeof searchModes)[number]['value'];
@@ -169,7 +169,7 @@ function QueryForm({
   const hasInput = (lexical ? value : value.trim()).length > 0;
 
   function simpleInput() {
-    const filter: RepositoryFilterInput = {};
+    const filter: Partial<Record<FilterField, string[]>> = {};
     for (const { key } of filterFields) {
       const rules = filterDraft[key]?.split(/\r?\n/).filter((rule) => rule.length > 0);
       if (rules?.length) filter[key] = rules;
