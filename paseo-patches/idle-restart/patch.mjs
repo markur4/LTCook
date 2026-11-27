@@ -43,7 +43,7 @@ function importNaming(
   source,
   { gateUrl, namingUrl = new URL('./workspace-naming.mjs', gateUrl).href },
 ) {
-  return `import { workspaceNaming, configureWorkspaceNaming, workspaceNamingPath, workspaceNamingMetadata, workspacePreference, manualWorkspaceTitle, agentTitleMetadata } from ${JSON.stringify(namingUrl)};
+  return `import { workspaceNaming, configureWorkspaceNaming, workspaceNamingPath, workspaceNamingMetadata, workspacePreference, manualWorkspaceTitle, agentTitleMetadata, withoutNamingMetadata, workspaceCreationMetadata } from ${JSON.stringify(namingUrl)};
 ${source}`;
 }
 
@@ -127,6 +127,15 @@ ${anchor}`,
     `        if (metadata) agent.metadata = applyRecordPatch(agent.metadata, metadata);
 ${titleWrite}`,
   );
+  const importedTitle = '        configTitle: config.title,\n        initialPrompt,';
+  source = replaceOnce(source, importedTitle, `${importedTitle}\n        importedHistory: true,`);
+  const rejected =
+    '                if (options?.clientMessageId) {\n                    this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "rejected", {';
+  source = replaceOnce(
+    source,
+    rejected,
+    `                this.recordNamingPrompt(agent, prompt, options?.clientMessageId, false);\n${rejected}`,
+  );
   const accepted =
     '            if (options?.clientMessageId) {\n                this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "accepted", {';
   source = replaceOnce(
@@ -134,11 +143,10 @@ ${titleWrite}`,
     accepted,
     `            this.recordNamingPrompt(agent, prompt, options?.clientMessageId);\n${accepted}`,
   );
-  const steer = '        this.recordSubmittedPrompt(agent, prompt, clientMessageId, "accepted", {';
-  source = replaceOnce(
+  source = addAtOpening(
     source,
-    steer,
-    `        this.recordNamingPrompt(agent, prompt, clientMessageId);\n${steer}`,
+    '    async recordAcceptedSteer(agent, prompt, clientMessageId, expectedTurnId, providerMessageId)',
+    '        this.recordNamingPrompt(agent, prompt, clientMessageId);',
   );
   const outOfBand =
     '        if (options?.clientMessageId) {\n            this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "accepted");';
@@ -151,12 +159,12 @@ ${titleWrite}`,
   source = replaceOnce(
     source,
     record,
-    `    recordNamingPrompt(agent, prompt, clientMessageId) {
+    `    recordNamingPrompt(agent, prompt, clientMessageId, accepted = true) {
         workspaceNaming?.recordPrompt(agent, projectAgentMessages({
             type: "user_message",
             text: submittedPromptText(prompt),
             clientMessageId,
-        }), clientMessageId);
+        }), clientMessageId, accepted);
     }
 ${record}`,
   );
@@ -432,6 +440,19 @@ ${workspaceNamingAnchor}`,
       return importNaming(source, options);
     },
   },
+  'dist/server/server/agent/create-agent-title.js': {
+    sha256: 'dbc6e6455698593208c69753f2774f13727b24f2d09c411308ec819110b26587',
+    apply(source, options) {
+      return importNaming(
+        replaceOnce(
+          source,
+          '    const trimmedPrompt = options.initialPrompt?.trim();',
+          '    const trimmedPrompt = !workspaceNaming || options.importedHistory ? options.initialPrompt?.trim() : undefined;',
+        ),
+        options,
+      );
+    },
+  },
   'dist/server/server/workspace-auto-name.js': {
     sha256: '7e8f1e88ab8becd201b64aea59cdc0055e323f962a2c73b26ddf43816141f7ce',
     apply(source, options) {
@@ -444,6 +465,57 @@ ${workspaceNamingAnchor}`,
         source,
         '            if (!title || (input.promptTitle && title === input.promptTitle)) {',
         '            if (!workspaceNaming && (!title || (input.promptTitle && title === input.promptTitle))) {',
+      );
+      return importNaming(source, options);
+    },
+  },
+  'dist/server/server/plugins/lifecycle/index.js': {
+    sha256: '4ce6d45426e5017566a5e3503bac8b0b6c6197bb4164467ced2b514dc7f25d91',
+    apply(source, options) {
+      return importNaming(
+        replaceOnce(
+          source,
+          '        metadata: workspace.metadata,',
+          '        metadata: withoutNamingMetadata(workspace.metadata),',
+        ),
+        options,
+      );
+    },
+  },
+  'dist/server/server/session/workspace-provisioning/workspace-provisioning-service.js': {
+    sha256: 'e67c66009afeb9bfdf57881efa5c2d00463bf5b6578233bf7cdcc5031e9a7a6b',
+    apply(source, options) {
+      source = replaceOnce(
+        source,
+        '                metadata: context?.metadata,',
+        '                metadata: workspaceCreationMetadata(context?.metadata, title),',
+      );
+      source = replaceOnce(
+        source,
+        '            metadata: input.metadata,',
+        '            metadata: workspaceCreationMetadata(input.metadata, input.title),',
+      );
+      source = replaceOnce(
+        source,
+        `        if (next)
+            await workspaceRegistry.upsert(next);`,
+        `        if (next) {
+            next = await workspaceRegistry.update(workspace.workspaceId, (current) => ({
+                ...next,
+                title: current.title,
+                metadata: current.metadata,
+            })) ?? next;
+        }`,
+      );
+      source = replaceOnce(
+        source,
+        `        await workspaceRegistry.upsert(update.workspace);
+        return update.workspace;`,
+        `        return await workspaceRegistry.update(workspace.workspaceId, (current) => ({
+            ...update.workspace,
+            title: current.title,
+            metadata: current.metadata,
+        })) ?? workspace;`,
       );
       return importNaming(source, options);
     },
@@ -487,6 +559,11 @@ ${workspaceNamingAnchor}`,
         source,
         '            metadata: workspace.metadata,',
         '            metadata: workspaceNamingMetadata(workspace.metadata),',
+      );
+      source = replaceOnce(
+        source,
+        '            metadata: result.workspace.metadata,',
+        '            metadata: workspaceNamingMetadata(result.workspace.metadata),',
       );
       source = replaceOnce(
         source,

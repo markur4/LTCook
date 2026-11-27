@@ -11,12 +11,27 @@ export function configureWorkspaceNaming(dependencies) {
   workspaceNaming = createWorkspaceNaming(dependencies);
 }
 
+export function withoutNamingMetadata(metadata) {
+  if (!Object.hasOwn(metadata ?? {}, stateKey)) return metadata;
+  const { [stateKey]: state, ...visible } = metadata;
+  return visible;
+}
+
+function isNamingJob(entry) {
+  return typeof entry === 'object' && entry !== null;
+}
+
+export function workspaceCreationMetadata(metadata, explicitTitle) {
+  const visible = withoutNamingMetadata(metadata);
+  return explicitTitle?.trim() ? { ...visible, [stateKey]: { seen: true, agents: {} } } : visible;
+}
+
 export function workspaceNamingMetadata(metadata) {
-  const { [stateKey]: state, ...publicMetadata } = metadata ?? {};
+  const state = metadata?.[stateKey];
   return {
-    ...publicMetadata,
+    ...withoutNamingMetadata(metadata),
     'ltcook.autoRenameSupported': true,
-    'ltcook.namingPending': Object.values(state?.agents ?? {}).some((job) => job !== true),
+    'ltcook.namingPending': Object.values(state?.agents ?? {}).some(isNamingJob),
   };
 }
 
@@ -46,7 +61,12 @@ export function workspacePreference(metadata, enabled) {
       ? {
           [stateKey]: {
             ...state,
-            agents: Object.fromEntries(Object.keys(state.agents).map((id) => [id, true])),
+            agents: Object.fromEntries(
+              Object.entries(state.agents).map(([id, entry]) => [
+                id,
+                isNamingJob(entry) ? true : entry,
+              ]),
+            ),
           },
         }
       : {}),
@@ -72,15 +92,17 @@ export function createWorkspaceNaming({
   const workspacesEnabled = renamerEnabled && enabled('LTCOOK_RENAMER_WORKSPACES');
   const tabsEnabled = renamerEnabled && enabled('LTCOOK_RENAMER_TABS');
   const operations = new Map();
-  // Existing sessions with conversation history retain their titles on first activation.
+  // > The old timestamp lacks provenance. Exclude known non-human or rejected activity below.
   const priorHistory = agentStorage.listAll().then((records) => {
-    const agents = records.filter(
-      (agent) => !agent.internal && !agent.background && agent.lastUserMessageAt,
-    );
-    return {
-      agents: new Set(agents.map(({ id }) => id)),
-      workspaces: new Set(agents.map(({ workspaceId }) => workspaceId)),
-    };
+    const byWorkspace = new Map();
+    for (const agent of records) {
+      if (!agent.workspaceId || agent.internal || agent.background || !agent.lastUserMessageAt)
+        continue;
+      const agents = byWorkspace.get(agent.workspaceId) ?? [];
+      agents.push(agent.id);
+      byWorkspace.set(agent.workspaceId, agents);
+    }
+    return byWorkspace;
   });
   void priorHistory.catch(() => {});
 
@@ -95,43 +117,56 @@ export function createWorkspaceNaming({
     return result;
   }
 
-  function recordPrompt(agent, messages, clientMessageId) {
+  function recordPrompt(agent, messages, clientMessageId, accepted = true) {
     const { id: agentId, workspaceId } = agent;
-    if (!workspaceId || agent.internal || agent.background || (!workspacesEnabled && !tabsEnabled))
-      return;
+    if (!workspaceId || agent.internal || agent.background) return;
+    const submitted = messages.find(({ type }) => type === 'user_message');
+    if (!submitted) return;
     const marker = 'ltcook-runtime-';
     const secret = environment.LTCOOK_RUNTIME_USER_TOKEN;
+    let runtime = false;
     if (secret && clientMessageId?.startsWith(marker)) {
       const [nonce, signature] = clientMessageId.slice(marker.length).split('.');
-      if (
-        nonce &&
+      runtime =
+        Boolean(nonce) &&
         signature ===
           createHmac('sha256', secret)
             .update(JSON.stringify([agentId, nonce]))
-            .digest('base64url')
-      )
-        return;
+            .digest('base64url');
     }
-    const human = messages.find(({ type }) => type === 'user_message');
-    if (!human) return;
-    const prompt = human.text.trim().slice(0, 2500);
+    const humanAccepted = accepted && !runtime;
+    const prompt = humanAccepted ? submitted.text.trim().slice(0, 2500) : '';
     void serialize(workspaceId, async () => {
-      const previous = await priorHistory;
+      const previous = (await priorHistory).get(workspaceId) ?? [];
       const workspace = await registry.get(workspaceId);
       if (!workspace || workspace.archivedAt) return;
-      if (Object.hasOwn(workspace.metadata?.[stateKey]?.agents ?? {}, agentId)) return;
+      const existing = workspace.metadata?.[stateKey]?.agents[agentId];
+      if (existing !== undefined && !(existing === false && humanAccepted)) return;
+      if (!humanAccepted && previous.includes(agentId)) return;
       const id = randomUUID();
       const updated = await registry.update(workspaceId, (current) => {
         if (current.archivedAt) return current;
         const state = current.metadata?.[stateKey] ?? { seen: false, agents: {} };
-        if (Object.hasOwn(state.agents, agentId)) return current;
+        // > A false entry records traffic that advanced Paseo's timestamp without a human acceptance.
+        if (!humanAccepted) {
+          return {
+            ...current,
+            metadata: {
+              ...current.metadata,
+              [stateKey]: { ...state, agents: { ...state.agents, [agentId]: false } },
+            },
+          };
+        }
         const allowed = current.metadata?.[preferenceKey] !== false;
         const nameWorkspace =
-          allowed && workspacesEnabled && !state.seen && !previous.workspaces.has(workspaceId);
+          allowed &&
+          workspacesEnabled &&
+          !state.seen &&
+          !previous.some((id) => state.agents[id] !== false);
         const nameTab =
           allowed &&
           tabsEnabled &&
-          !previous.agents.has(agentId) &&
+          !(previous.includes(agentId) && state.agents[agentId] !== false) &&
           agent.metadata?.[manualTabKey] !== true;
         const job =
           nameWorkspace || nameTab
@@ -243,9 +278,7 @@ export function createWorkspaceNaming({
           const workspace = await registry.get(workspaceId);
           const jobs =
             workspace && !workspace.archivedAt && workspace.metadata?.[preferenceKey] !== false
-              ? Object.values(workspace.metadata?.[stateKey]?.agents ?? {}).filter(
-                  (job) => job !== true,
-                )
+              ? Object.values(workspace.metadata?.[stateKey]?.agents ?? {}).filter(isNamingJob)
               : [];
           response.json({ jobs });
         } else if (

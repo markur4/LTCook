@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View } from 'react-native';
+import { useWindowDimensions } from 'react-native';
 import { ScrollView, SidebarRow } from '@getpaseo/plugin/client/ui';
 import type { PluginClientContext, PluginSidebarItemProps } from '@getpaseo/plugin/client';
 import { TeamsBrowser } from './client/screens/TeamsBrowser';
@@ -37,8 +37,9 @@ function loadedWebBuild(): string | undefined {
   return build && /^[a-f0-9]{64}$/.test(build) ? build.slice(0, 12) : undefined;
 }
 
-function ServicesSidebar({ theme }: PluginSidebarItemProps) {
+function ServicesSidebar({ theme, layout }: PluginSidebarItemProps) {
   const [open, setOpen] = useState(false);
+  const { height } = useWindowDimensions();
   return (
     <>
       <SidebarRow
@@ -46,9 +47,13 @@ function ServicesSidebar({ theme }: PluginSidebarItemProps) {
         onPress={() => setOpen((value) => !value)}
       />
       {open && (
-        <View testID="ltcook-sidebar-workspace-services">
+        <ScrollView
+          testID="ltcook-sidebar-workspace-services"
+          style={layout.compact ? { maxHeight: Math.floor(height * 0.4) } : undefined}
+          nestedScrollEnabled
+        >
           <WorkspaceServices theme={theme} />
-        </View>
+        </ScrollView>
       )}
     </>
   );

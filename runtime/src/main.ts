@@ -522,7 +522,7 @@ async function run(): Promise<void> {
     const backend = await createPaseoAgentBackend({
       telemetry,
       api: host.api,
-      ...(memory ? { memoryProvenanceSecret: apiToken } : {}),
+      memoryProvenanceSecret: apiToken,
       python,
       runtimeApiUrl: apiUrl,
       piHome,
