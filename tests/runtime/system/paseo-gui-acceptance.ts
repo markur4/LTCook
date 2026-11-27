@@ -1091,6 +1091,8 @@ try {
   );
   assert.equal(modelCalls, modelCallsBeforeQuery, 'The repository tool runs without a model turn');
   await browser('click', '[aria-label^="RAG Index,"]');
+  await clickButton(mobileLeader.agent.title);
+  await waitForComposer(mobileLeader.agent.title);
   stage = 'tracked-items';
   await hiddenLeader.send('Use an opaque public cursor.', { clientMessageId: randomUUID() });
   await hiddenLeader.waitForFinish(30_000);
