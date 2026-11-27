@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { View } from 'react-native';
 import { useRpc } from '@getpaseo/plugin/client';
 import {
   workspaceServicesRpc,
@@ -17,7 +18,7 @@ function servicePresentation(
   if (diagnostic || service.diagnostic) return { label: 'Attention', tone: 'warning' as const };
   if (!service.enabled) return { label: 'Off', tone: 'muted' as const };
   if (service.running) return { label: 'Running', tone: 'running' as const };
-  if (service.lastRunAt === null) return { label: 'Checking', tone: 'muted' as const };
+  if (service.lastRunAt === null) return { label: 'Ready', tone: 'muted' as const };
   return { label: 'Ready', tone: 'success' as const };
 }
 
@@ -85,6 +86,8 @@ export function WorkspaceServices({ theme }: { theme: Theme }) {
   const [error, setError] = useState<string>();
   const [organizerOpen, setOrganizerOpen] = useState(false);
   const [renamerOpen, setRenamerOpen] = useState(false);
+  const [taggerOpen, setTaggerOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -121,83 +124,95 @@ export function WorkspaceServices({ theme }: { theme: Theme }) {
   }
 
   return (
-    <>
-      <ActivityCard
-        theme={theme}
-        title="Workspace Organizer"
-        icon="Tags"
-        status={organizer.label}
-        statusTone={organizer.tone}
-        open={organizerOpen}
-        onToggle={() => setOrganizerOpen(!organizerOpen)}
-        summaryLabel="Feature, Bugfix, CSC, Research"
-        summary={
-          <ActivityText theme={theme} tone="muted" size={10}>
-            Feature · Bugfix · CSC · Research
-          </ActivityText>
-        }
-      >
-        <ActivityField theme={theme} label="Labels">
-          On creation; then every 12 hours when content changes.
-        </ActivityField>
-        <ActivityField theme={theme} label="Auto-archive">
-          {!status
-            ? 'Unavailable'
-            : status.organizer.enabled && status.autoArchive
-              ? 'After 14 inactive days'
-              : 'Off'}
-        </ActivityField>
-        <ActivityField theme={theme} label="Default sort">
-          Newest created first
-        </ActivityField>
-        <ActivityField theme={theme} label="Archive">
-          Paseo History → open conversation → Unarchive or Restore
-        </ActivityField>
-        {blocked.size > 0 && (
-          <>
-            <ActivityText theme={theme} tone="warning" strong>
-              {`${status!.archiveBlocked.length} ${status!.archiveBlocked.length === 1 ? 'workspace kept' : 'workspaces kept'} active`}
+    <ActivityCard
+      theme={theme}
+      title="Workspace Organizer"
+      icon="Tags"
+      summary={null}
+      summaryLabel="Labels, titles, and archival"
+      status={status ? 'Ready' : error ? 'Unavailable' : 'Loading'}
+      open={organizerOpen}
+      onToggle={() => setOrganizerOpen((open) => !open)}
+    >
+      <View style={{ gap: 5 }}>
+        <ActivityCard
+          theme={theme}
+          title="Tagger"
+          icon="Tag"
+          summary={null}
+          summaryLabel="Workspace labels"
+          status={organizer.label}
+          statusTone={organizer.tone}
+          open={taggerOpen}
+          onToggle={() => setTaggerOpen((open) => !open)}
+        >
+          <ActivityField theme={theme} label="Labels">
+            Feature, Bugfix, CSC, Research
+          </ActivityField>
+          <ActivityField theme={theme} label="Checks">
+            On creation, then every 12 hours when content changes.
+          </ActivityField>
+          <ServiceObservations theme={theme} service={status?.organizer} diagnostic={diagnostic} />
+        </ActivityCard>
+        <ActivityCard
+          theme={theme}
+          title="Renamer"
+          icon="TextCursorInput"
+          summary={null}
+          summaryLabel="First prompt"
+          status={renamer.label}
+          statusTone={renamer.tone}
+          open={renamerOpen}
+          onToggle={() => setRenamerOpen((open) => !open)}
+        >
+          <ActivityField theme={theme} label="Timing">
+            On the first prompt
+          </ActivityField>
+          <ActivityField theme={theme} label="Workspace names">
+            {!status
+              ? 'Unavailable'
+              : status.renamer.enabled && status.renameWorkspaces
+                ? 'On · maximum 20 characters'
+                : 'Off'}
+          </ActivityField>
+          <ActivityField theme={theme} label="Agent tab names">
+            {!status
+              ? 'Unavailable'
+              : status.renamer.enabled && status.renameTabs
+                ? 'On · maximum 15 characters'
+                : 'Off'}
+          </ActivityField>
+          <ServiceObservations theme={theme} service={status?.renamer} diagnostic={diagnostic} />
+        </ActivityCard>
+        <ActivityCard
+          theme={theme}
+          title="Auto-archive"
+          icon="Archive"
+          summary={null}
+          summaryLabel="Inactive workspaces"
+          status={
+            !status ? 'Unavailable' : status.organizer.enabled && status.autoArchive ? 'On' : 'Off'
+          }
+          open={archiveOpen}
+          onToggle={() => setArchiveOpen((open) => !open)}
+        >
+          <ActivityField theme={theme} label="Archive">
+            {!status
+              ? 'Unavailable'
+              : status.organizer.enabled && status.autoArchive
+                ? 'After 14 inactive days'
+                : 'Off'}
+          </ActivityField>
+          <ActivityField theme={theme} label="Recovery">
+            Paseo History → open conversation → Unarchive or Restore
+          </ActivityField>
+          {[...blocked].map(([reason, count]) => (
+            <ActivityText key={reason} theme={theme} tone="warning">
+              {`${count} · ${reason}`}
             </ActivityText>
-            {[...blocked].map(([reason, count]) => (
-              <ActivityText key={reason} theme={theme} tone="muted">
-                {`${count} · ${reason}`}
-              </ActivityText>
-            ))}
-          </>
-        )}
-        <ServiceObservations theme={theme} service={status?.organizer} diagnostic={diagnostic} />
-      </ActivityCard>
-      <ActivityCard
-        theme={theme}
-        title="Renamer"
-        icon="TextCursorInput"
-        status={renamer.label}
-        statusTone={renamer.tone}
-        open={renamerOpen}
-        onToggle={() => setRenamerOpen(!renamerOpen)}
-        summaryLabel="Every 30 minutes"
-        summary={
-          <ActivityText theme={theme} tone="muted" size={10}>
-            Every 30 minutes
-          </ActivityText>
-        }
-      >
-        <ActivityField theme={theme} label="Workspace names">
-          {!status
-            ? 'Unavailable'
-            : status.renamer.enabled && status.renameWorkspaces
-              ? 'On · maximum 20 characters'
-              : 'Off'}
-        </ActivityField>
-        <ActivityField theme={theme} label="Agent tab names">
-          {!status
-            ? 'Unavailable'
-            : status.renamer.enabled && status.renameTabs
-              ? 'On · maximum 15 characters'
-              : 'Off'}
-        </ActivityField>
-        <ServiceObservations theme={theme} service={status?.renamer} diagnostic={diagnostic} />
-      </ActivityCard>
-    </>
+          ))}
+        </ActivityCard>
+      </View>
+    </ActivityCard>
   );
 }

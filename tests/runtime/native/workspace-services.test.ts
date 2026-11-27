@@ -273,8 +273,7 @@ function nativeFixture(environment: NodeJS.ProcessEnv = {}) {
     options,
     calls,
     services,
-    emitWorkspaceUpdate: () =>
-      workspaceListener?.({} as Parameters<NonNullable<typeof workspaceListener>>[0]),
+    emitWorkspaceUpdate: () => workspaceListener?.({ kind: 'upsert', workspace }),
     setQueued: (value: boolean) => {
       queued = value;
     },
@@ -637,4 +636,53 @@ test('An invalid Renamer setting reports its correction while Organizer continue
     },
   ]);
   expect(f.workspace.labels).toContain('Bugfix');
+});
+
+test('A new naming job can apply while Organizer is blocked in classification', async () => {
+  const f = nativeFixture({ LTCOOK_RENAMER_ENABLED: 'true' });
+  const started = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<{ category: string }>();
+  f.options.generator!.classify = async () => {
+    started.resolve();
+    return finish.promise;
+  };
+  f.options.generator!.rename = async () => ({
+    workspaceTitle: 'Repair login',
+    agents: [{ id: f.agent.id, title: 'Login crash' }],
+  });
+  const job = {
+    id: 'one',
+    workspaceId: f.workspace.id,
+    agentId: f.agent.id,
+    prompt: 'Repair a login crash',
+    nameWorkspace: true,
+    nameTab: true,
+    workspaceTitle: f.workspace.title ?? '',
+    agentTitle: f.agent.title ?? '',
+  };
+  const applied = Promise.withResolvers<void>();
+  const services = new PaseoWorkspaceServices({
+    ...f.options,
+    naming: {
+      async pending() {
+        return [job];
+      },
+      async apply(_job, titles) {
+        expect(titles).toEqual({ workspaceTitle: 'Repair login', agentTitle: 'Login crash' });
+        applied.resolve();
+        return true;
+      },
+    },
+  });
+  activeServices.push(services);
+  services.start();
+  try {
+    await started.promise;
+    f.workspace.metadata = { 'ltcook.namingPending': true };
+    f.emitWorkspaceUpdate();
+    await applied.promise;
+  } finally {
+    finish.resolve({ category: 'Bugfix' });
+    await services.close();
+  }
 });

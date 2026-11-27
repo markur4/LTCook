@@ -23,6 +23,13 @@ worktree subscription from LTCook. The **Worktree** picker lets the user pin a
 checkout or resume following. When the panel shows a linked checkout, the inline
 diff uses its directory and provides read-only controls.
 
+`workspace-auto-rename.patch` adds **Auto-rename** to the workspace menu in
+the bundled web app. The managed daemon publishes the saved switch state and
+applies automatic titles only while the workspace and agent tab are eligible.
+The same pinned module loader used for idle restart installs the naming patch.
+The runtime retrieves pending first prompts and submits title proposals through
+the authenticated loopback workspace-naming endpoint.
+
 ## Build the web assets
 
 Run the builder from the LTCook repository with Node, npm, curl, tar, Git, and
